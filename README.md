@@ -1,5 +1,8 @@
 [![Traverse](https://github.com/user-attachments/assets/aeafaaf8-650d-4489-bf5e-bd386f0bcaf0)](https://enricopiovesan.com/)
 
+
+# Traverse
+
 [![CI](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml/badge.svg)](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml)
 [![Spec Governed](https://img.shields.io/badge/spec-governed-blueviolet)](specs/governance/approved-specs.json)
@@ -7,7 +10,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
 [![Version](https://img.shields.io/badge/version-v0.1--rc-lightgrey)](https://github.com/enricopiovesan/Traverse/releases)
 
-# Traverse
+
 
 **Run one governed business capability across browser, edge, and cloud without rewriting it.**
 
