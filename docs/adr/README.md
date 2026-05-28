@@ -2,6 +2,8 @@
 
 This directory stores Architecture Decision Records (ADRs) for material technical choices in Traverse.
 
+For the consolidated product and architecture roadmap decisions that connect multiple specs and issues, see [../decision-log.md](../decision-log.md).
+
 ## When to Write an ADR
 
 Create an ADR for decisions that materially affect:
