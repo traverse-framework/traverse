@@ -1457,7 +1457,7 @@ fn handle_connection<E: LocalExecutor + Clone>(
         .map(|a| a.ip())
         .unwrap_or(IpAddr::from([127, 0, 0, 1]));
 
-    if request.path != "/v1/health" && !state.allow_unauthenticated && !peer_ip.is_loopback() {
+    if request.path != "/healthz" && !state.allow_unauthenticated && !peer_ip.is_loopback() {
         let has_bearer = request
             .headers
             .get("authorization")
@@ -1474,7 +1474,7 @@ fn handle_connection<E: LocalExecutor + Clone>(
     }
 
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/v1/health") => handle_health(&mut stream),
+        ("GET", "/healthz") => handle_health(&mut stream, peer_ip.is_loopback()),
         ("GET", "/v1/capabilities") => {
             handle_list_capabilities(&mut stream, &request, state, peer_ip.is_loopback())
         }
@@ -1510,8 +1510,25 @@ fn handle_connection<E: LocalExecutor + Clone>(
 // Route handlers (pub(crate) so tests can call them directly)
 // ---------------------------------------------------------------------------
 
-fn handle_health<W: Write>(w: &mut W) -> Result<(), String> {
-    write_json(w, 200, "OK", &json!({"status": "ok"}))
+fn handle_health<W: Write>(w: &mut W, loopback: bool) -> Result<(), String> {
+    let auth_mode = if loopback {
+        "dev-loopback"
+    } else {
+        "bearer-required"
+    };
+
+    write_json(
+        w,
+        200,
+        "OK",
+        &json!({
+            "status": "ok",
+            "version": env!("CARGO_PKG_VERSION"),
+            "api_version": "v1",
+            "workspace_default": "local-default",
+            "auth_mode": auth_mode,
+        }),
+    )
 }
 
 fn handle_list_capabilities<W: Write, E: LocalExecutor + Clone>(
@@ -2585,12 +2602,31 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn health_endpoint_returns_status_ok() {
+    fn health_endpoint_returns_dev_loopback_envelope_for_loopback_callers() {
         let mut out = Vec::new();
-        handle_health(&mut out).expect("health must succeed");
+        handle_health(&mut out, true).expect("health must succeed");
 
         assert_eq!(response_status(&out), 200);
-        assert_eq!(parse_response_body(&out)["status"], "ok");
+        let body = parse_response_body(&out);
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(body["api_version"], "v1");
+        assert_eq!(body["workspace_default"], "local-default");
+        assert_eq!(body["auth_mode"], "dev-loopback");
+    }
+
+    #[test]
+    fn health_endpoint_returns_bearer_required_envelope_for_non_loopback_callers() {
+        let mut out = Vec::new();
+        handle_health(&mut out, false).expect("health must succeed");
+
+        assert_eq!(response_status(&out), 200);
+        let body = parse_response_body(&out);
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(body["api_version"], "v1");
+        assert_eq!(body["workspace_default"], "local-default");
+        assert_eq!(body["auth_mode"], "bearer-required");
     }
 
     // ------------------------------------------------------------------

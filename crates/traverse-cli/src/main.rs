@@ -648,7 +648,7 @@ fn help_serve() -> String {
   Purpose:
     Start a long-running HTTP/JSON API server on 0.0.0.0:<port>. Exposes three
     endpoints under /v1/:
-      GET  /v1/health                  Returns {\"status\":\"ok\"}.
+      GET  /healthz                    Returns the spec 033 health envelope.
       GET  /v1/capabilities            Returns JSON array of registered capabilities.
       POST /v1/capabilities/execute    Accepts RuntimeRequest JSON, returns trace + result.
 
