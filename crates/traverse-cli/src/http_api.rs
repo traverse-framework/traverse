@@ -16,7 +16,7 @@ use traverse_registry::{
 };
 use traverse_runtime::{
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
-    parse_runtime_request,
+    RuntimeTrace, parse_runtime_request,
 };
 
 const MAX_REQUEST_BODY: usize = 4 * 1024 * 1024; // 4 MiB
@@ -67,6 +67,7 @@ struct WorkspaceState<E> {
     persisted: PersistedWorkspaceRegistryV1,
     loaded_from_disk: bool,
     executions: HashMap<String, ExecutionStatusRecord>,
+    traces: HashMap<String, RuntimeTrace>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +145,12 @@ struct ApiError {
     message: String,
 }
 
+enum WorkspaceOperation {
+    Execute(String),
+    ExecutionStatus(String, String),
+    Trace(String, String),
+}
+
 /// Start the HTTP/JSON API server, blocking until the listener fails.
 ///
 /// # Errors
@@ -203,6 +210,7 @@ where
             },
             loaded_from_disk: true,
             executions: HashMap::new(),
+            traces: HashMap::new(),
         },
     );
 
@@ -315,6 +323,7 @@ where
                 },
                 loaded_from_disk: false,
                 executions: HashMap::new(),
+                traces: HashMap::new(),
             },
         );
 
@@ -407,6 +416,7 @@ where
                 },
                 loaded_from_disk: false,
                 executions: HashMap::new(),
+                traces: HashMap::new(),
             });
 
         if !entry.loaded_from_disk {
@@ -1478,6 +1488,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             },
             loaded_from_disk: false,
             executions: HashMap::new(),
+            traces: HashMap::new(),
         });
 
     ensure_workspace_loaded(state, workspace_id, ws)?;
@@ -1593,46 +1604,14 @@ fn handle_connection<E: LocalExecutor + Clone>(
         ("POST", "/v1/capabilities/execute") => {
             handle_execute(&mut stream, &request, state, peer_ip.is_loopback())
         }
-        ("POST", path) if workspace_execute_path(path).is_some() => {
-            let Some(workspace_id) = workspace_execute_path(path) else {
-                return write_json(
-                    &mut stream,
-                    404,
-                    "Not Found",
-                    &error_envelope("not_found", "route not found"),
-                );
-            };
-            handle_execute_workspace(
-                &mut stream,
-                &request,
-                state,
-                peer_ip.is_loopback(),
-                &workspace_id,
-            )
+        (method, path) if workspace_operation_path(method, path).is_some() => {
+            handle_workspace_operation(&mut stream, &request, state, peer_ip.is_loopback())
         }
         ("POST", "/v1/workflows/register") => {
             handle_register_workflow(&mut stream, &request, state, peer_ip.is_loopback())
         }
         ("GET", "/v1/workflows") => {
             handle_list_workflows(&mut stream, &request, state, peer_ip.is_loopback())
-        }
-        ("GET", path) if workspace_execution_status_path(path).is_some() => {
-            let Some((workspace_id, execution_id)) = workspace_execution_status_path(path) else {
-                return write_json(
-                    &mut stream,
-                    404,
-                    "Not Found",
-                    &error_envelope("not_found", "route not found"),
-                );
-            };
-            handle_execution_status(
-                &mut stream,
-                &request,
-                state,
-                peer_ip.is_loopback(),
-                &workspace_id,
-                &execution_id,
-            )
         }
         ("GET", path) if path.starts_with("/v1/workflows/") => handle_get_workflow(
             &mut stream,
@@ -1647,6 +1626,34 @@ fn handle_connection<E: LocalExecutor + Clone>(
             "Not Found",
             &error_envelope("not_found", "route not found"),
         ),
+    }
+}
+
+fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+) -> Result<(), String> {
+    let Some(operation) = workspace_operation_path(&request.method, &request.path) else {
+        return write_json(
+            w,
+            404,
+            "Not Found",
+            &error_envelope("not_found", "route not found"),
+        );
+    };
+
+    match operation {
+        WorkspaceOperation::Execute(workspace_id) => {
+            handle_execute_workspace(w, request, state, loopback, &workspace_id)
+        }
+        WorkspaceOperation::ExecutionStatus(workspace_id, execution_id) => {
+            handle_execution_status(w, request, state, loopback, &workspace_id, &execution_id)
+        }
+        WorkspaceOperation::Trace(workspace_id, execution_id) => {
+            handle_trace_fetch(w, request, state, loopback, &workspace_id, &execution_id)
+        }
     }
 }
 
@@ -1991,6 +1998,12 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
         "succeeded"
     };
     record_execution_status(state, workspace_id, &outcome.result.execution_id, status)?;
+    record_execution_trace(
+        state,
+        workspace_id,
+        &outcome.result.execution_id,
+        outcome.trace.clone(),
+    )?;
 
     write_json(
         w,
@@ -2056,9 +2069,34 @@ fn workspace_execute_path(path: &str) -> Option<String> {
     Some(workspace_id.to_string())
 }
 
+fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperation> {
+    match method {
+        "POST" => workspace_execute_path(path).map(WorkspaceOperation::Execute),
+        "GET" => workspace_execution_status_path(path)
+            .map(|(workspace_id, execution_id)| {
+                WorkspaceOperation::ExecutionStatus(workspace_id, execution_id)
+            })
+            .or_else(|| {
+                workspace_trace_path(path).map(|(workspace_id, execution_id)| {
+                    WorkspaceOperation::Trace(workspace_id, execution_id)
+                })
+            }),
+        _ => None,
+    }
+}
+
 fn workspace_execution_status_path(path: &str) -> Option<(String, String)> {
     let suffix = path.strip_prefix("/v1/workspaces/")?;
     let (workspace_id, tail) = suffix.split_once("/executions/")?;
+    if workspace_id.trim().is_empty() || tail.trim().is_empty() || tail.contains('/') {
+        return None;
+    }
+    Some((workspace_id.to_string(), tail.to_string()))
+}
+
+fn workspace_trace_path(path: &str) -> Option<(String, String)> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let (workspace_id, tail) = suffix.split_once("/traces/")?;
     if workspace_id.trim().is_empty() || tail.trim().is_empty() || tail.contains('/') {
         return None;
     }
@@ -2111,6 +2149,18 @@ fn record_execution_status<E: LocalExecutor + Clone>(
                 updated_at: now,
             },
         );
+        Ok(())
+    })
+}
+
+fn record_execution_trace<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    execution_id: &str,
+    trace: RuntimeTrace,
+) -> Result<(), String> {
+    state.with_workspace_mut(workspace_id, |ws| {
+        ws.traces.insert(execution_id.to_string(), trace);
         Ok(())
     })
 }
@@ -2173,6 +2223,110 @@ fn handle_execution_status<W: Write, E: LocalExecutor + Clone>(
             "links": execution_links(workspace_id, execution_id, true),
         }),
     )
+}
+
+fn handle_trace_fetch<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+    execution_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let trace =
+        state.with_workspace_mut(workspace_id, |ws| Ok(ws.traces.get(execution_id).cloned()))?;
+    let Some(trace) = trace else {
+        return write_json(
+            w,
+            404,
+            "Not Found",
+            &error_envelope("not_found", "trace was not found"),
+        );
+    };
+
+    write_json(w, 200, "OK", &public_trace_envelope(workspace_id, &trace))
+}
+
+fn public_trace_envelope(workspace_id: &str, trace: &RuntimeTrace) -> Value {
+    let spans: Vec<Value> = trace
+        .state_transitions
+        .iter()
+        .enumerate()
+        .map(|(index, transition)| {
+            json!({
+                "span_id": format!("{}:span:{index}", trace.trace_id),
+                "name": "runtime.state_transition",
+                "from_state": transition.from_state,
+                "to_state": transition.to_state,
+                "reason_code": transition.reason_code,
+                "occurred_at": transition.occurred_at,
+            })
+        })
+        .collect();
+
+    let mut events: Vec<Value> = trace
+        .state_progression
+        .state_events
+        .iter()
+        .map(|event| {
+            json!({
+                "type": "runtime_state",
+                "event_id": event.event_id,
+                "state": event.state,
+                "entered_at": event.entered_at,
+            })
+        })
+        .collect();
+
+    events.extend(trace.emitted_events.iter().map(|event| {
+        json!({
+            "type": "emitted_event",
+            "event_id": event.event_id,
+            "version": event.version,
+        })
+    }));
+
+    json!({
+        "api_version": "v1",
+        "execution_id": trace.execution_id,
+        "trace_id": trace.trace_id,
+        "status": if trace.result.status == RuntimeResultStatus::Error {
+            "failed"
+        } else {
+            "succeeded"
+        },
+        "spans": spans,
+        "events": events,
+        "links": {
+            "self": format!("/v1/workspaces/{workspace_id}/traces/{}", trace.execution_id),
+            "execution": format!("/v1/workspaces/{workspace_id}/executions/{}", trace.execution_id),
+        },
+    })
 }
 
 fn handle_register_workflow<W: Write, E: LocalExecutor + Clone>(
@@ -2830,6 +2984,7 @@ mod tests {
                 },
                 loaded_from_disk: true,
                 executions: HashMap::new(),
+                traces: HashMap::new(),
             },
         );
 
@@ -2860,6 +3015,7 @@ mod tests {
                 },
                 loaded_from_disk: true,
                 executions: HashMap::new(),
+                traces: HashMap::new(),
             },
         );
 
@@ -3479,6 +3635,91 @@ mod tests {
         let mut out = Vec::new();
         handle_execution_status(&mut out, &req, &state, true, "ws-test", "exec_missing")
             .expect("status lookup must write a response");
+
+        assert_eq!(response_status(&out), 404);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["error"]["code"], "not_found");
+    }
+
+    #[test]
+    fn trace_fetch_endpoint_returns_public_trace_envelope() {
+        let body = make_runtime_request_body("test.api.do-something");
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let execute_req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+        let mut execute_out = Vec::new();
+        handle_execute_workspace(&mut execute_out, &execute_req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/traces/exec_test-req-001",
+            Vec::new(),
+        );
+        let mut out = Vec::new();
+        handle_trace_fetch(&mut out, &req, &state, true, "ws-test", "exec_test-req-001")
+            .expect("trace lookup must write a response");
+
+        assert_eq!(response_status(&out), 200);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["api_version"], "v1");
+        assert_eq!(resp["execution_id"], "exec_test-req-001");
+        assert_eq!(resp["trace_id"], "trace_exec_test-req-001");
+        assert_eq!(resp["status"], "succeeded");
+        assert!(
+            resp["spans"]
+                .as_array()
+                .is_some_and(|spans| !spans.is_empty())
+        );
+        assert!(
+            resp["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+        );
+        assert_eq!(
+            resp["links"]["execution"],
+            "/v1/workspaces/ws-test/executions/exec_test-req-001"
+        );
+    }
+
+    #[test]
+    fn trace_fetch_endpoint_does_not_expose_internal_runtime_trace_fields() {
+        let body = make_runtime_request_body("test.api.do-something");
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let execute_req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+        let mut execute_out = Vec::new();
+        handle_execute_workspace(&mut execute_out, &execute_req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/traces/exec_test-req-001",
+            Vec::new(),
+        );
+        let mut out = Vec::new();
+        handle_trace_fetch(&mut out, &req, &state, true, "ws-test", "exec_test-req-001")
+            .expect("trace lookup must write a response");
+
+        let body = std::str::from_utf8(&out).expect("response must be utf-8");
+        assert!(!body.contains("\"request\""));
+        assert!(!body.contains("\"input\""));
+        assert!(!body.contains("\"output\""));
+        assert!(!body.contains("\"candidate_collection\""));
+        assert!(!body.contains("\"decision_evidence\""));
+        assert!(!body.contains("\"state_machine_validation\""));
+    }
+
+    #[test]
+    fn trace_fetch_endpoint_returns_not_found_for_missing_trace() {
+        let state = empty_state();
+        let req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/traces/exec_missing",
+            Vec::new(),
+        );
+
+        let mut out = Vec::new();
+        handle_trace_fetch(&mut out, &req, &state, true, "ws-test", "exec_missing")
+            .expect("trace lookup must write a response");
 
         assert_eq!(response_status(&out), 404);
         let resp = parse_response_body(&out);
