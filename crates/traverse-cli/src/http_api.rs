@@ -1570,7 +1570,17 @@ fn handle_connection<E: LocalExecutor + Clone>(
     mut stream: TcpStream,
     state: &ApiState<E>,
 ) -> Result<(), String> {
-    let request = read_http_request(&mut stream)?;
+    let request = match read_http_request(&mut stream) {
+        Ok(request) => request,
+        Err(message) => {
+            let (status, reason, code) = if message.contains("too large") {
+                (413, "Payload Too Large", "payload_too_large")
+            } else {
+                (400, "Bad Request", "invalid_request")
+            };
+            return write_json(&mut stream, status, reason, &error_envelope(code, &message));
+        }
+    };
 
     let peer_ip = stream
         .peer_addr()
@@ -1591,6 +1601,15 @@ fn handle_connection<E: LocalExecutor + Clone>(
                 &error_envelope("unauthorized", "Bearer token required"),
             );
         }
+    }
+
+    if let Some(err) = unsupported_media_type_error(&request) {
+        return write_json(
+            &mut stream,
+            err.status,
+            err.reason,
+            &error_envelope(err.code, &err.message),
+        );
     }
 
     match (request.method.as_str(), request.path.as_str()) {
@@ -1655,6 +1674,30 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
             handle_trace_fetch(w, request, state, loopback, &workspace_id, &execution_id)
         }
     }
+}
+
+fn unsupported_media_type_error(request: &HttpRequest) -> Option<ApiError> {
+    if !matches!(request.method.as_str(), "POST" | "PUT" | "PATCH") || request.body.is_empty() {
+        return None;
+    }
+
+    let content_type = request.headers.get("content-type")?;
+
+    let media_type = content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+    if media_type.eq_ignore_ascii_case("application/json") {
+        return None;
+    }
+
+    Some(ApiError {
+        status: 415,
+        reason: "Unsupported Media Type",
+        code: "unsupported_media_type",
+        message: "request body content-type must be application/json".to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1839,12 +1882,7 @@ fn handle_register_capability<W: Write, E: LocalExecutor + Clone>(
                 w,
                 status,
                 reason,
-                &json!({
-                    "error": {
-                        "code": code,
-                        "message": render_registry_failure_as_string(failure),
-                    }
-                }),
+                &error_envelope(code, &render_registry_failure_as_string(failure)),
             )
         }
     }
@@ -2401,12 +2439,7 @@ fn handle_register_workflow<W: Write, E: LocalExecutor + Clone>(
             let rendered = render_workflow_failure_as_string(failure.clone());
             let (status, code, reason, extra) =
                 map_workflow_failure_http(&failure, &definition_for_errors);
-            let mut body = json!({
-                "error": {
-                    "code": code,
-                    "message": rendered,
-                }
-            });
+            let mut body = error_envelope(code, &rendered);
             if let (Some(extra), Value::Object(root)) = (extra, &mut body) {
                 root.insert("details".to_string(), extra);
             }
@@ -2635,7 +2668,13 @@ fn serialize_outcome(outcome: &RuntimeExecutionOutcome) -> Result<String, String
 }
 
 pub(crate) fn error_envelope(code: &str, message: &str) -> Value {
-    json!({"error": {"code": code, "message": message}})
+    json!({
+        "type": format!("https://traverse.dev/problems/{code}"),
+        "title": "",
+        "status": 0,
+        "detail": message,
+        "traverse_code": code,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2759,9 +2798,22 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 }
 
 fn write_json<W: Write>(w: &mut W, status: u16, reason: &str, body: &Value) -> Result<(), String> {
+    let mut body = body.clone();
+    let content_type = if status >= 400 && body.get("traverse_code").is_some() {
+        if let Value::Object(root) = &mut body {
+            root.insert("title".to_string(), Value::String(reason.to_string()));
+            root.insert(
+                "status".to_string(),
+                Value::Number(serde_json::Number::from(status)),
+            );
+        }
+        "application/problem+json"
+    } else {
+        "application/json"
+    };
     let bytes =
-        serde_json::to_vec(body).map_err(|e| format!("failed to serialize response: {e}"))?;
-    write_raw(w, status, reason, "application/json", &bytes)
+        serde_json::to_vec(&body).map_err(|e| format!("failed to serialize response: {e}"))?;
+    write_raw(w, status, reason, content_type, &bytes)
 }
 
 fn write_json_raw<W: Write>(
@@ -3143,6 +3195,13 @@ mod tests {
             .expect("status code must be numeric")
     }
 
+    fn response_content_type(response: &[u8]) -> String {
+        let text = std::str::from_utf8(response).expect("response must be UTF-8");
+        text.lines()
+            .find_map(|line| line.strip_prefix("Content-Type: ").map(ToString::to_string))
+            .expect("content-type header must be present")
+    }
+
     // ------------------------------------------------------------------
     // health endpoint
     // ------------------------------------------------------------------
@@ -3274,7 +3333,7 @@ mod tests {
 
         assert_eq!(response_status(&out), 400);
         let body = parse_response_body(&out);
-        assert_eq!(body["error"]["code"], "workspace_id_required");
+        assert_eq!(body["traverse_code"], "workspace_id_required");
     }
 
     #[test]
@@ -3346,8 +3405,9 @@ mod tests {
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
 
         assert_eq!(response_status(&out), 403);
+        assert_eq!(response_content_type(&out), "application/problem+json");
         let body = parse_response_body(&out);
-        assert_eq!(body["error"]["code"], "unauthorized_workspace");
+        assert_eq!(body["traverse_code"], "unauthorized_workspace");
     }
 
     #[test]
@@ -3393,7 +3453,7 @@ mod tests {
 
         assert_eq!(response_status(&out), 403);
         let body = parse_response_body(&out);
-        assert_eq!(body["error"]["code"], "insufficient_privileges");
+        assert_eq!(body["traverse_code"], "insufficient_privileges");
     }
 
     #[test]
@@ -3637,8 +3697,9 @@ mod tests {
             .expect("status lookup must write a response");
 
         assert_eq!(response_status(&out), 404);
+        assert_eq!(response_content_type(&out), "application/problem+json");
         let resp = parse_response_body(&out);
-        assert_eq!(resp["error"]["code"], "not_found");
+        assert_eq!(resp["traverse_code"], "not_found");
     }
 
     #[test]
@@ -3723,7 +3784,7 @@ mod tests {
 
         assert_eq!(response_status(&out), 404);
         let resp = parse_response_body(&out);
-        assert_eq!(resp["error"]["code"], "not_found");
+        assert_eq!(resp["traverse_code"], "not_found");
     }
 
     // ------------------------------------------------------------------
@@ -3770,8 +3831,43 @@ mod tests {
         let resp = parse_response_body(&out);
 
         assert_eq!(status, 400);
-        assert!(resp["error"]["code"].as_str().is_some());
-        assert!(resp["error"]["message"].as_str().is_some());
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        assert_eq!(
+            resp["type"],
+            "https://traverse.dev/problems/invalid_request"
+        );
+        assert_eq!(resp["title"], "Bad Request");
+        assert_eq!(resp["status"], 400);
+        assert!(resp["traverse_code"].as_str().is_some());
+        assert!(resp["detail"].as_str().is_some());
+    }
+
+    #[test]
+    fn register_capability_validation_failure_returns_problem_details() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/capabilities/register",
+            json!({
+                "workspace_id": "ws-test",
+                "contract": {
+                    "kind": "capability_contract"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+
+        let mut out = Vec::new();
+        handle_register_capability(&mut out, &req, &state, true)
+            .expect("register must write a response");
+
+        assert_eq!(response_status(&out), 422);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["title"], "Unprocessable Entity");
+        assert_eq!(resp["status"], 422);
+        assert_eq!(resp["traverse_code"], "contract_validation_failed");
     }
 
     #[test]
@@ -3784,8 +3880,9 @@ mod tests {
         handle_execute(&mut out, &req, &state, true).expect("handle_execute must write a response");
 
         assert_eq!(response_status(&out), 400);
+        assert_eq!(response_content_type(&out), "application/problem+json");
         let resp = parse_response_body(&out);
-        assert_eq!(resp["error"]["code"], "workspace_id_required");
+        assert_eq!(resp["traverse_code"], "workspace_id_required");
     }
 
     #[test]
@@ -3810,8 +3907,92 @@ mod tests {
         handle_execute(&mut out, &req, &state, true).expect("handle_execute must write a response");
 
         assert_eq!(response_status(&out), 401);
+        assert_eq!(response_content_type(&out), "application/problem+json");
         let resp = parse_response_body(&out);
-        assert_eq!(resp["error"]["code"], "token_expired");
+        assert_eq!(resp["traverse_code"], "token_expired");
+    }
+
+    #[test]
+    fn unauthenticated_request_returns_problem_details() {
+        let body = make_runtime_request_body("test.api.do-something");
+        let mut state = test_state_with("test.api.do-something", "1.0.0");
+        state.allow_unauthenticated = false;
+        let req = with_workspace_query(
+            make_http_request("POST", "/v1/capabilities/execute", body),
+            "ws-test",
+        );
+
+        let mut out = Vec::new();
+        handle_execute(&mut out, &req, &state, false).expect("execute must write a response");
+
+        assert_eq!(response_status(&out), 401);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["title"], "Unauthorized");
+        assert_eq!(resp["status"], 401);
+        assert_eq!(resp["traverse_code"], "unauthorized");
+    }
+
+    #[test]
+    fn unsupported_media_type_returns_problem_details() {
+        let mut req = make_http_request("POST", "/v1/workspaces/ws-test/execute", b"{}".to_vec());
+        req.headers
+            .insert("content-type".to_string(), "text/plain".to_string());
+        let err = unsupported_media_type_error(&req).expect("media type must be rejected");
+
+        let mut out = Vec::new();
+        write_json(
+            &mut out,
+            err.status,
+            err.reason,
+            &error_envelope(err.code, &err.message),
+        )
+        .expect("problem response must serialize");
+
+        assert_eq!(response_status(&out), 415);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["title"], "Unsupported Media Type");
+        assert_eq!(resp["status"], 415);
+        assert_eq!(resp["traverse_code"], "unsupported_media_type");
+    }
+
+    #[test]
+    fn payload_too_large_returns_problem_details() {
+        let mut out = Vec::new();
+        write_json(
+            &mut out,
+            413,
+            "Payload Too Large",
+            &error_envelope("payload_too_large", "HTTP request body too large"),
+        )
+        .expect("problem response must serialize");
+
+        assert_eq!(response_status(&out), 413);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["title"], "Payload Too Large");
+        assert_eq!(resp["status"], 413);
+        assert_eq!(resp["traverse_code"], "payload_too_large");
+    }
+
+    #[test]
+    fn conflict_returns_problem_details() {
+        let mut out = Vec::new();
+        write_json(
+            &mut out,
+            409,
+            "Conflict",
+            &error_envelope("immutable_version_conflict", "version is immutable"),
+        )
+        .expect("problem response must serialize");
+
+        assert_eq!(response_status(&out), 409);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["title"], "Conflict");
+        assert_eq!(resp["status"], 409);
+        assert_eq!(resp["traverse_code"], "immutable_version_conflict");
     }
 
     // ------------------------------------------------------------------
@@ -3843,7 +4024,8 @@ mod tests {
     #[test]
     fn error_envelope_has_correct_json_shape() {
         let env = error_envelope("unauthorized", "Bearer token required");
-        assert_eq!(env["error"]["code"], "unauthorized");
-        assert_eq!(env["error"]["message"], "Bearer token required");
+        assert_eq!(env["type"], "https://traverse.dev/problems/unauthorized");
+        assert_eq!(env["detail"], "Bearer token required");
+        assert_eq!(env["traverse_code"], "unauthorized");
     }
 }
