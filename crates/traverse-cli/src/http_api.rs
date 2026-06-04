@@ -181,6 +181,7 @@ enum WorkspaceOperation {
     Execute(String),
     RegisterCapability(String),
     RegisterEventContract(String),
+    RegisterWorkflow(String),
     ExecutionStatus(String, String),
     Trace(String, String),
 }
@@ -1615,6 +1616,37 @@ fn reject_unknown_event_registration_wrapper_fields(value: &Value) -> Result<(),
     Ok(())
 }
 
+fn reject_unknown_workflow_registration_wrapper_fields(value: &Value) -> Result<(), ApiError> {
+    let Some(object) = value.as_object() else {
+        return Err(ApiError {
+            status: 400,
+            reason: "Bad Request",
+            code: "invalid_request",
+            message: "workflow registration body must be a JSON object".to_string(),
+        });
+    };
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "workspace_id"
+                | "scope"
+                | "registry_scope"
+                | "workflow"
+                | "registered_at"
+                | "validator_version"
+        ) {
+            return Err(ApiError {
+                status: 400,
+                reason: "Bad Request",
+                code: "unknown_field",
+                message: format!("unknown workflow registration field `{key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn registration_workspace_id(
     value: &Value,
     path_workspace_id: Option<&str>,
@@ -1657,6 +1689,31 @@ fn registration_workspace_id(
 fn parse_workflow_register_body(
     body: &[u8],
 ) -> Result<(String, RegistrationScope, PersistedWorkflowRegistrationV1), ApiError> {
+    parse_workflow_register_body_with_workspace(body, None, false)
+}
+
+fn parse_workflow_register_body_for_workspace(
+    body: &[u8],
+    workspace_id: &str,
+) -> Result<(RegistrationScope, PersistedWorkflowRegistrationV1), ApiError> {
+    let (parsed_workspace_id, scope, registration) =
+        parse_workflow_register_body_with_workspace(body, Some(workspace_id), true)?;
+    if parsed_workspace_id != workspace_id {
+        return Err(ApiError {
+            status: 400,
+            reason: "Bad Request",
+            code: "invalid_workspace_id",
+            message: "body workspace_id must match URL workspace_id".to_string(),
+        });
+    }
+    Ok((scope, registration))
+}
+
+fn parse_workflow_register_body_with_workspace(
+    body: &[u8],
+    path_workspace_id: Option<&str>,
+    reject_unknown_wrapper_fields: bool,
+) -> Result<(String, RegistrationScope, PersistedWorkflowRegistrationV1), ApiError> {
     let body_str = std::str::from_utf8(body).map_err(|e| ApiError {
         status: 400,
         reason: "Bad Request",
@@ -1671,24 +1728,11 @@ fn parse_workflow_register_body(
         message: format!("invalid JSON body: {e}"),
     })?;
 
-    let workspace_id = value
-        .get("workspace_id")
-        .and_then(|v| v.as_str())
-        .filter(|ws| !ws.trim().is_empty())
-        .ok_or_else(|| ApiError {
-            status: 400,
-            reason: "Bad Request",
-            code: "missing_workspace_id",
-            message: "workspace_id is required".to_string(),
-        })?
-        .to_string();
+    if reject_unknown_wrapper_fields {
+        reject_unknown_workflow_registration_wrapper_fields(&value)?;
+    }
 
-    validate_workspace_id(&workspace_id).map_err(|message| ApiError {
-        status: 400,
-        reason: "Bad Request",
-        code: "invalid_workspace_id",
-        message,
-    })?;
+    let workspace_id = registration_workspace_id(&value, path_workspace_id)?;
 
     let scope = value
         .get("scope")
@@ -2086,6 +2130,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::RegisterEventContract(workspace_id) => {
             handle_register_workspace_event_contract(w, request, state, loopback, &workspace_id)
+        }
+        WorkspaceOperation::RegisterWorkflow(workspace_id) => {
+            handle_register_workspace_workflow(w, request, state, loopback, &workspace_id)
         }
         WorkspaceOperation::ExecutionStatus(workspace_id, execution_id) => {
             handle_execution_status(w, request, state, loopback, &workspace_id, &execution_id)
@@ -2673,6 +2720,95 @@ fn handle_register_workspace_event_contract<W: Write, E: LocalExecutor + Clone>(
     }
 }
 
+fn handle_register_workspace_workflow<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let (scope, persisted) =
+        match parse_workflow_register_body_for_workspace(&request.body, workspace_id) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+    let definition_for_errors = persisted.definition.clone();
+
+    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    match apply_workflow_registration(state, workspace_id, scope, persisted)? {
+        Ok(outcome) => {
+            let status = if outcome.already_registered { 200 } else { 201 };
+            let scope_name = match scope {
+                RegistrationScope::WorkspacePersisted => "workspace_persisted",
+                RegistrationScope::SessionEphemeral => "session_ephemeral",
+            };
+            write_json(
+                w,
+                status,
+                if status == 200 { "OK" } else { "Created" },
+                &json!({
+                    "api_version": "v1",
+                    "registered": !outcome.already_registered,
+                    "already_registered": outcome.already_registered,
+                    "artifact_type": "workflow",
+                    "artifact_id": outcome.workflow_id,
+                    "version": outcome.workflow_version,
+                    "digest": outcome.digest,
+                    "scope": scope_name,
+                    "links": {
+                        "self": format!(
+                            "/v1/workspaces/{workspace_id}/workflows/{}/{}",
+                            outcome.workflow_id,
+                            outcome.workflow_version
+                        )
+                    }
+                }),
+            )
+        }
+        Err(failure) => {
+            let rendered = render_workflow_failure_as_string(failure.clone());
+            let (status, code, reason, extra) =
+                map_workflow_failure_http(&failure, &definition_for_errors);
+            let mut body = error_envelope(code, &rendered);
+            if let (Some(extra), Value::Object(root)) = (extra, &mut body) {
+                root.insert("details".to_string(), extra);
+            }
+            write_json(w, status, reason, &body)
+        }
+    }
+}
+
 fn handle_execute<W: Write, E: LocalExecutor + Clone>(
     w: &mut W,
     request: &HttpRequest,
@@ -2926,6 +3062,15 @@ fn workspace_event_contracts_path(path: &str) -> Option<String> {
     Some(workspace_id.to_string())
 }
 
+fn workspace_workflows_path(path: &str) -> Option<String> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let workspace_id = suffix.strip_suffix("/workflows")?;
+    if workspace_id.trim().is_empty() || workspace_id.contains('/') {
+        return None;
+    }
+    Some(workspace_id.to_string())
+}
+
 fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperation> {
     match method {
         "POST" => workspace_execute_path(path)
@@ -2935,7 +3080,8 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
             })
             .or_else(|| {
                 workspace_event_contracts_path(path).map(WorkspaceOperation::RegisterEventContract)
-            }),
+            })
+            .or_else(|| workspace_workflows_path(path).map(WorkspaceOperation::RegisterWorkflow)),
         "GET" => workspace_execution_status_path(path)
             .map(|(workspace_id, execution_id)| {
                 WorkspaceOperation::ExecutionStatus(workspace_id, execution_id)
@@ -3842,6 +3988,7 @@ mod tests {
         ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
         CapabilityRegistration, ComposabilityMetadata, CompositionKind, CompositionPattern,
         ImplementationKind, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
+        WorkflowEdge, WorkflowNode, WorkflowNodeInput, WorkflowNodeOutput,
     };
     use traverse_runtime::{LocalExecutionFailure, LocalExecutionFailureCode};
 
@@ -4062,6 +4209,59 @@ mod tests {
             "scope": "workspace_persisted",
             "registry_scope": "private",
             "event_contract": test_event_contract(id, version)
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn test_workflow_definition(
+        id: &str,
+        version: &str,
+        capability_id: &str,
+    ) -> WorkflowDefinition {
+        let dot = id.rfind('.').unwrap_or(0);
+        WorkflowDefinition {
+            kind: "workflow_definition".to_string(),
+            schema_version: "1.0.0".to_string(),
+            id: id.to_string(),
+            name: id[dot + 1..].to_string(),
+            version: version.to_string(),
+            lifecycle: Lifecycle::Active,
+            owner: Owner {
+                team: "test-team".to_string(),
+                contact: "test@example.com".to_string(),
+            },
+            summary: "test workflow".to_string(),
+            inputs: SchemaContainer {
+                schema: json!({"type": "object"}),
+            },
+            outputs: SchemaContainer {
+                schema: json!({"type": "object"}),
+            },
+            nodes: vec![WorkflowNode {
+                node_id: "run_capability".to_string(),
+                capability_id: capability_id.to_string(),
+                capability_version: "1.0.0".to_string(),
+                input: WorkflowNodeInput {
+                    from_workflow_input: Vec::new(),
+                },
+                output: WorkflowNodeOutput {
+                    to_workflow_state: Vec::new(),
+                },
+            }],
+            edges: Vec::<WorkflowEdge>::new(),
+            start_node: "run_capability".to_string(),
+            terminal_nodes: vec!["run_capability".to_string()],
+            tags: vec!["test".to_string()],
+            governing_spec: "007-workflow-registry-traversal".to_string(),
+        }
+    }
+
+    fn valid_workflow_registration_body(id: &str, version: &str, capability_id: &str) -> Vec<u8> {
+        json!({
+            "scope": "workspace_persisted",
+            "registry_scope": "private",
+            "workflow": test_workflow_definition(id, version, capability_id)
         })
         .to_string()
         .into_bytes()
@@ -5367,6 +5567,149 @@ mod tests {
         assert_eq!(
             parse_response_body(&conflict_out)["traverse_code"],
             "registration_conflict"
+        );
+    }
+
+    #[test]
+    fn workspace_workflow_registration_succeeds_and_is_discoverable() {
+        let state = test_state_with("test.api.workflow-capability", "1.0.0");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            valid_workflow_registration_body(
+                "test.api.workflow-registered",
+                "1.0.0",
+                "test.api.workflow-capability",
+            ),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("workflow registration must write a response");
+
+        assert_eq!(response_status(&out), 201);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["api_version"], "v1");
+        assert_eq!(resp["registered"], true);
+        assert_eq!(resp["already_registered"], false);
+        assert_eq!(resp["artifact_type"], "workflow");
+        assert_eq!(resp["artifact_id"], "test.api.workflow-registered");
+
+        let list_req = with_workspace_query(
+            make_http_request("GET", "/v1/workflows", Vec::new()),
+            "ws-test",
+        );
+        let mut list_out = Vec::new();
+        handle_list_workflows(&mut list_out, &list_req, &state, true)
+            .expect("list workflows must write a response");
+        let listed = parse_response_body(&list_out);
+        assert!(listed.as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["id"] == "test.api.workflow-registered")
+        }));
+    }
+
+    #[test]
+    fn workspace_workflow_registration_rejects_invalid_workflow_without_storage() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            json!({
+                "scope": "workspace_persisted",
+                "registry_scope": "private",
+                "workflow": {
+                    "kind": "workflow_definition"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("workflow registration must write a response");
+
+        assert_eq!(response_status(&out), 422);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "invalid_workflow");
+
+        let list_req = with_workspace_query(
+            make_http_request("GET", "/v1/workflows", Vec::new()),
+            "ws-test",
+        );
+        let mut list_out = Vec::new();
+        handle_list_workflows(&mut list_out, &list_req, &state, true)
+            .expect("list workflows must write a response");
+        assert_eq!(
+            parse_response_body(&list_out)
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            0
+        );
+    }
+
+    #[test]
+    fn workspace_workflow_registration_handles_duplicate_and_conflict() {
+        let state = test_state_with("test.api.workflow-capability", "1.0.0");
+        let first_body = valid_workflow_registration_body(
+            "test.api.workflow-duplicate",
+            "1.0.0",
+            "test.api.workflow-capability",
+        );
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            first_body.clone(),
+        );
+        let second_req = make_http_request("POST", "/v1/workspaces/ws-test/workflows", first_body);
+
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("first workflow registration must write a response");
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("second workflow registration must write a response");
+
+        assert_eq!(response_status(&first_out), 201);
+        assert_eq!(response_status(&second_out), 200);
+        let duplicate = parse_response_body(&second_out);
+        assert_eq!(duplicate["registered"], false);
+        assert_eq!(duplicate["already_registered"], true);
+
+        let mut changed_definition = test_workflow_definition(
+            "test.api.workflow-duplicate",
+            "1.0.0",
+            "test.api.workflow-capability",
+        );
+        changed_definition.summary = "changed summary".to_string();
+        let conflict_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            json!({
+                "scope": "workspace_persisted",
+                "registry_scope": "private",
+                "workflow": changed_definition
+            })
+            .to_string()
+            .into_bytes(),
+        );
+
+        let mut conflict_out = Vec::new();
+        handle_workspace_operation(&mut conflict_out, &conflict_req, &state, true)
+            .expect("conflict workflow registration must write a response");
+
+        assert_eq!(response_status(&conflict_out), 409);
+        assert_eq!(
+            response_content_type(&conflict_out),
+            "application/problem+json"
+        );
+        assert_eq!(
+            parse_response_body(&conflict_out)["traverse_code"],
+            "immutable_version_conflict"
         );
     }
 
