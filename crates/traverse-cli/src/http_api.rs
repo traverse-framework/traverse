@@ -6,13 +6,13 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use traverse_contracts::{CapabilityContract, parse_contract};
+use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_registry::{
     ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
     CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, DiscoveryQuery, ImplementationKind, LookupScope, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowRegistration,
-    WorkflowRegistry,
+    CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
+    LookupScope, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
+    WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
 };
 use traverse_runtime::{
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
@@ -75,6 +75,7 @@ struct ApiState<E> {
 
 struct WorkspaceState<E> {
     runtime: traverse_runtime::Runtime<E>,
+    event_registry: EventRegistry,
     persisted: PersistedWorkspaceRegistryV1,
     loaded_from_disk: bool,
     executions: HashMap<String, ExecutionStatusRecord>,
@@ -104,6 +105,8 @@ struct PersistedWorkspaceRegistryV1 {
     schema_version: String,
     registrations: Vec<PersistedCapabilityRegistrationV1>,
     #[serde(default)]
+    events: Vec<PersistedEventRegistrationV1>,
+    #[serde(default)]
     workflows: Vec<PersistedWorkflowRegistrationV1>,
 }
 
@@ -113,6 +116,14 @@ struct PersistedCapabilityRegistrationV1 {
     contract: CapabilityContract,
     #[serde(default)]
     tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedEventRegistrationV1 {
+    registry_scope: String,
+    contract: EventContract,
+    registered_at: String,
+    validator_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +180,7 @@ struct ApiError {
 enum WorkspaceOperation {
     Execute(String),
     RegisterCapability(String),
+    RegisterEventContract(String),
     ExecutionStatus(String, String),
     Trace(String, String),
 }
@@ -225,9 +237,11 @@ where
         WorkspaceState {
             runtime: Runtime::new(config.capability_registry, config.executor.clone())
                 .with_workflow_registry(config.workflow_registry),
+            event_registry: EventRegistry::new(),
             persisted: PersistedWorkspaceRegistryV1 {
                 schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                 registrations: Vec::new(),
+                events: Vec::new(),
                 workflows: Vec::new(),
             },
             loaded_from_disk: true,
@@ -349,9 +363,11 @@ where
             WorkspaceState {
                 runtime: Runtime::new(config.capability_registry, config.executor.clone())
                     .with_workflow_registry(config.workflow_registry),
+                event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                     registrations: Vec::new(),
+                    events: Vec::new(),
                     workflows: Vec::new(),
                 },
                 loaded_from_disk: false,
@@ -447,9 +463,11 @@ where
             .or_insert_with(|| WorkspaceState {
                 runtime: Runtime::new(CapabilityRegistry::new(), self.executor.clone())
                     .with_workflow_registry(WorkflowRegistry::new()),
+                event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                     registrations: Vec::new(),
+                    events: Vec::new(),
                     workflows: Vec::new(),
                 },
                 loaded_from_disk: false,
@@ -467,6 +485,16 @@ where
                     .runtime
                     .register_capability(registration)
                     .map_err(render_registry_failure_as_string)?;
+            }
+            for persisted in entry.persisted.events.clone() {
+                let registration =
+                    derive_event_registration(workspace_id, &persisted).map_err(|e| {
+                        format!("persisted registry contains invalid event: {}", e.message)
+                    })?;
+                let _ = entry
+                    .event_registry
+                    .register(registration)
+                    .map_err(render_event_registry_failure_as_string)?;
             }
             for persisted in entry.persisted.workflows.clone() {
                 let registration = derive_workflow_registration(workspace_id, &persisted)
@@ -517,6 +545,7 @@ fn load_persisted_registry(
         return Ok(PersistedWorkspaceRegistryV1 {
             schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
             registrations: Vec::new(),
+            events: Vec::new(),
             workflows: Vec::new(),
         });
     }
@@ -568,6 +597,22 @@ fn persist_registry(
 }
 
 fn render_registry_failure_as_string(failure: traverse_registry::RegistryFailure) -> String {
+    use std::fmt::Write as _;
+
+    let mut rendered = String::new();
+    for err in failure.errors {
+        let _ = write!(
+            &mut rendered,
+            "{:?} at {}: {}; ",
+            err.code, err.target, err.message
+        );
+    }
+    rendered
+}
+
+fn render_event_registry_failure_as_string(
+    failure: traverse_registry::EventRegistryFailure,
+) -> String {
     use std::fmt::Write as _;
 
     let mut rendered = String::new();
@@ -1031,6 +1076,22 @@ fn map_registry_failure_http(
     (422, "registration_failed", "Unprocessable Entity")
 }
 
+fn map_event_registry_failure_http(
+    failure: &traverse_registry::EventRegistryFailure,
+) -> (u16, &'static str, &'static str) {
+    use traverse_registry::EventRegistryErrorCode;
+
+    if failure
+        .errors
+        .iter()
+        .any(|err| err.code == EventRegistryErrorCode::ImmutableVersionConflict)
+    {
+        return (409, "registration_conflict", "Conflict");
+    }
+
+    (422, "event_registration_failed", "Unprocessable Entity")
+}
+
 fn map_workflow_failure_http(
     failure: &traverse_registry::WorkflowFailure,
     definition: &WorkflowDefinition,
@@ -1251,6 +1312,38 @@ fn derive_registration(
     })
 }
 
+fn derive_event_registration(
+    workspace_id: &str,
+    persisted: &PersistedEventRegistrationV1,
+) -> Result<EventRegistration, ApiError> {
+    let registry_scope = match persisted.registry_scope.as_str() {
+        "public" => RegistryScope::Public,
+        "private" => RegistryScope::Private,
+        other => {
+            return Err(ApiError {
+                status: 422,
+                reason: "Unprocessable Entity",
+                code: "invalid_registry_scope",
+                message: format!("registry_scope must be public or private (got {other})"),
+            });
+        }
+    };
+
+    Ok(EventRegistration {
+        scope: registry_scope,
+        contract: persisted.contract.clone(),
+        contract_path: format!(
+            "workspaces/{workspace_id}/events/{}/{}@{}/event.json",
+            format!("{registry_scope:?}").to_lowercase(),
+            persisted.contract.id,
+            persisted.contract.version
+        ),
+        registered_at: persisted.registered_at.clone(),
+        governing_spec: "011-event-registry".to_string(),
+        validator_version: persisted.validator_version.clone(),
+    })
+}
+
 fn derive_workflow_registration(
     workspace_id: &str,
     persisted: &PersistedWorkflowRegistrationV1,
@@ -1303,6 +1396,79 @@ fn parse_register_body_for_workspace(
         });
     }
     Ok((scope, registration))
+}
+
+fn parse_event_register_body_for_workspace(
+    body: &[u8],
+    workspace_id: &str,
+) -> Result<(RegistrationScope, PersistedEventRegistrationV1), ApiError> {
+    let body_str = std::str::from_utf8(body).map_err(|e| ApiError {
+        status: 400,
+        reason: "Bad Request",
+        code: "invalid_request",
+        message: format!("request body is not valid UTF-8: {e}"),
+    })?;
+
+    let value: Value = serde_json::from_str(body_str).map_err(|e| ApiError {
+        status: 400,
+        reason: "Bad Request",
+        code: "invalid_request",
+        message: format!("invalid JSON body: {e}"),
+    })?;
+
+    reject_unknown_event_registration_wrapper_fields(&value)?;
+    let parsed_workspace_id = registration_workspace_id(&value, Some(workspace_id))?;
+    if parsed_workspace_id != workspace_id {
+        return Err(ApiError {
+            status: 400,
+            reason: "Bad Request",
+            code: "invalid_workspace_id",
+            message: "body workspace_id must match URL workspace_id".to_string(),
+        });
+    }
+
+    let scope = parse_registration_scope(value.get("scope")).map_err(|msg| ApiError {
+        status: 422,
+        reason: "Unprocessable Entity",
+        code: "invalid_scope",
+        message: msg,
+    })?;
+
+    let contract_value = value.get("event_contract").ok_or_else(|| ApiError {
+        status: 422,
+        reason: "Unprocessable Entity",
+        code: "invalid_event_contract",
+        message: "event_contract is required".to_string(),
+    })?;
+    let contract_json = serde_json::to_string(contract_value).map_err(|e| ApiError {
+        status: 422,
+        reason: "Unprocessable Entity",
+        code: "invalid_event_contract",
+        message: format!("failed to serialize event contract: {e}"),
+    })?;
+    let contract = parse_event_contract(&contract_json).map_err(|failure| ApiError {
+        status: 422,
+        reason: "Unprocessable Entity",
+        code: "event_contract_validation_failed",
+        message: format!("event contract could not be parsed: {failure:?}"),
+    })?;
+
+    let registry_scope = value
+        .get("registry_scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("private")
+        .to_string();
+    let registered_at = generated_registered_at().unwrap_or_else(|_| "unix:0".to_string());
+
+    Ok((
+        scope,
+        PersistedEventRegistrationV1 {
+            registry_scope,
+            contract,
+            registered_at,
+            validator_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    ))
 }
 
 fn parse_register_body_with_workspace(
@@ -1417,6 +1583,32 @@ fn reject_unknown_registration_wrapper_fields(value: &Value) -> Result<(), ApiEr
                 reason: "Bad Request",
                 code: "unknown_field",
                 message: format!("unknown registration field `{key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn reject_unknown_event_registration_wrapper_fields(value: &Value) -> Result<(), ApiError> {
+    let Some(object) = value.as_object() else {
+        return Err(ApiError {
+            status: 400,
+            reason: "Bad Request",
+            code: "invalid_request",
+            message: "event registration body must be a JSON object".to_string(),
+        });
+    };
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "workspace_id" | "scope" | "registry_scope" | "event_contract"
+        ) {
+            return Err(ApiError {
+                status: 400,
+                reason: "Bad Request",
+                code: "unknown_field",
+                message: format!("unknown event registration field `{key}`"),
             });
         }
     }
@@ -1587,6 +1779,14 @@ fn ensure_workspace_loaded<E: LocalExecutor + Clone>(
             .register_capability(registration)
             .map_err(render_registry_failure_as_string)?;
     }
+    for persisted in ws.persisted.events.clone() {
+        let registration = derive_event_registration(workspace_id, &persisted)
+            .map_err(|e| format!("persisted registry contains invalid event: {}", e.message))?;
+        let _ = ws
+            .event_registry
+            .register(registration)
+            .map_err(render_event_registry_failure_as_string)?;
+    }
     ws.loaded_from_disk = true;
     Ok(())
 }
@@ -1607,9 +1807,11 @@ fn apply_registration<E: LocalExecutor + Clone>(
         .or_insert_with(|| WorkspaceState {
             runtime: Runtime::new(CapabilityRegistry::new(), state.executor.clone())
                 .with_workflow_registry(WorkflowRegistry::new()),
+            event_registry: EventRegistry::new(),
             persisted: PersistedWorkspaceRegistryV1 {
                 schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                 registrations: Vec::new(),
+                events: Vec::new(),
                 workflows: Vec::new(),
             },
             loaded_from_disk: false,
@@ -1626,6 +1828,71 @@ fn apply_registration<E: LocalExecutor + Clone>(
                 persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
             }
             Ok(Ok(outcome))
+        }
+        Err(failure) => Ok(Err(failure)),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EventRegistrationHttpOutcome {
+    already_registered: bool,
+    event_id: String,
+    event_version: String,
+    digest: String,
+}
+
+fn apply_event_registration<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    scope: RegistrationScope,
+    persisted_registration: PersistedEventRegistrationV1,
+    registration: EventRegistration,
+) -> Result<Result<EventRegistrationHttpOutcome, traverse_registry::EventRegistryFailure>, String> {
+    let mut workspaces = state.workspaces.borrow_mut();
+    let ws = workspaces
+        .entry(workspace_id.to_string())
+        .or_insert_with(|| WorkspaceState {
+            runtime: Runtime::new(CapabilityRegistry::new(), state.executor.clone())
+                .with_workflow_registry(WorkflowRegistry::new()),
+            event_registry: EventRegistry::new(),
+            persisted: PersistedWorkspaceRegistryV1 {
+                schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
+                registrations: Vec::new(),
+                events: Vec::new(),
+                workflows: Vec::new(),
+            },
+            loaded_from_disk: false,
+            executions: HashMap::new(),
+            traces: HashMap::new(),
+        });
+
+    ensure_workspace_loaded(state, workspace_id, ws)?;
+
+    let lookup_scope = match registration.scope {
+        RegistryScope::Public => LookupScope::PublicOnly,
+        RegistryScope::Private => LookupScope::PreferPrivate,
+    };
+    let existing = ws.event_registry.find_exact(
+        lookup_scope,
+        &registration.contract.id,
+        &registration.contract.version,
+    );
+
+    match ws.event_registry.register(registration) {
+        Ok(outcome) => {
+            let already_registered = existing.is_some_and(|existing| {
+                existing.record.contract_digest == outcome.record.contract_digest
+            });
+            if scope == RegistrationScope::WorkspacePersisted && !already_registered {
+                ws.persisted.events.push(persisted_registration);
+                persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
+            }
+            Ok(Ok(EventRegistrationHttpOutcome {
+                already_registered,
+                event_id: outcome.record.id,
+                event_version: outcome.record.version,
+                digest: outcome.record.contract_digest,
+            }))
         }
         Err(failure) => Ok(Err(failure)),
     }
@@ -1816,6 +2083,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::RegisterCapability(workspace_id) => {
             handle_register_workspace_capability(w, request, state, loopback, &workspace_id)
+        }
+        WorkspaceOperation::RegisterEventContract(workspace_id) => {
+            handle_register_workspace_event_contract(w, request, state, loopback, &workspace_id)
         }
         WorkspaceOperation::ExecutionStatus(workspace_id, execution_id) => {
             handle_execution_status(w, request, state, loopback, &workspace_id, &execution_id)
@@ -2298,6 +2568,111 @@ fn handle_register_workspace_capability<W: Write, E: LocalExecutor + Clone>(
     }
 }
 
+fn handle_register_workspace_event_contract<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let (scope, persisted_registration) =
+        match parse_event_register_body_for_workspace(&request.body, workspace_id) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let registration = match derive_event_registration(workspace_id, &persisted_registration) {
+        Ok(registration) => registration,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    match apply_event_registration(
+        state,
+        workspace_id,
+        scope,
+        persisted_registration,
+        registration,
+    )? {
+        Ok(outcome) => {
+            let status = if outcome.already_registered { 200 } else { 201 };
+            let scope_name = match scope {
+                RegistrationScope::WorkspacePersisted => "workspace_persisted",
+                RegistrationScope::SessionEphemeral => "session_ephemeral",
+            };
+            write_json(
+                w,
+                status,
+                if status == 200 { "OK" } else { "Created" },
+                &json!({
+                    "api_version": "v1",
+                    "registered": !outcome.already_registered,
+                    "already_registered": outcome.already_registered,
+                    "artifact_type": "event_contract",
+                    "artifact_id": outcome.event_id,
+                    "version": outcome.event_version,
+                    "digest": outcome.digest,
+                    "scope": scope_name,
+                    "links": {
+                        "self": format!(
+                            "/v1/workspaces/{workspace_id}/event-contracts/{}/{}",
+                            outcome.event_id,
+                            outcome.event_version
+                        )
+                    }
+                }),
+            )
+        }
+        Err(failure) => {
+            let (status, code, reason) = map_event_registry_failure_http(&failure);
+            write_json(
+                w,
+                status,
+                reason,
+                &error_envelope(code, &render_event_registry_failure_as_string(failure)),
+            )
+        }
+    }
+}
+
 fn handle_execute<W: Write, E: LocalExecutor + Clone>(
     w: &mut W,
     request: &HttpRequest,
@@ -2542,12 +2917,24 @@ fn workspace_capabilities_path(path: &str) -> Option<String> {
     Some(workspace_id.to_string())
 }
 
+fn workspace_event_contracts_path(path: &str) -> Option<String> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let workspace_id = suffix.strip_suffix("/event-contracts")?;
+    if workspace_id.trim().is_empty() || workspace_id.contains('/') {
+        return None;
+    }
+    Some(workspace_id.to_string())
+}
+
 fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperation> {
     match method {
         "POST" => workspace_execute_path(path)
             .map(WorkspaceOperation::Execute)
             .or_else(|| {
                 workspace_capabilities_path(path).map(WorkspaceOperation::RegisterCapability)
+            })
+            .or_else(|| {
+                workspace_event_contracts_path(path).map(WorkspaceOperation::RegisterEventContract)
             }),
         "GET" => workspace_execution_status_path(path)
             .map(|(workspace_id, execution_id)| {
@@ -3444,10 +3831,11 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use traverse_contracts::{
-        BinaryFormat as ContractBinaryFormat, CapabilityContract, Entrypoint, EntrypointKind,
-        Execution, ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess,
-        Lifecycle, NetworkAccess, Owner, Provenance, ProvenanceSource, SchemaContainer,
-        ServiceType, SideEffect, SideEffectKind,
+        BinaryFormat as ContractBinaryFormat, CapabilityContract, CapabilityReference, Entrypoint,
+        EntrypointKind, EventClassification, EventPayload, EventProvenance, EventProvenanceSource,
+        EventType, Execution, ExecutionConstraints, ExecutionTarget, FilesystemAccess,
+        HostApiAccess, IdReference, Lifecycle, NetworkAccess, Owner, PayloadCompatibility,
+        Provenance, ProvenanceSource, SchemaContainer, ServiceType, SideEffect, SideEffectKind,
     };
     use traverse_registry::ResolvedCapability;
     use traverse_registry::{
@@ -3614,6 +4002,71 @@ mod tests {
         .into_bytes()
     }
 
+    fn test_event_contract(id: &str, version: &str) -> EventContract {
+        let dot = id.rfind('.').unwrap_or(0);
+        let namespace = id[..dot].to_string();
+        let name = id[dot + 1..].to_string();
+        EventContract {
+            kind: "event_contract".to_string(),
+            schema_version: "1.0.0".to_string(),
+            id: id.to_string(),
+            namespace,
+            name,
+            version: version.to_string(),
+            lifecycle: Lifecycle::Active,
+            owner: Owner {
+                team: "test-team".to_string(),
+                contact: "test@example.com".to_string(),
+            },
+            summary: "test event".to_string(),
+            description: "test event for http_api unit tests".to_string(),
+            payload: EventPayload {
+                schema: json!({
+                    "type": "object",
+                    "required": ["event_id"],
+                    "properties": {
+                        "event_id": {"type": "string"}
+                    }
+                }),
+                compatibility: PayloadCompatibility::BackwardCompatible,
+            },
+            classification: EventClassification {
+                domain: "test".to_string(),
+                bounded_context: "api".to_string(),
+                event_type: EventType::Domain,
+                tags: vec!["test".to_string()],
+            },
+            publishers: vec![CapabilityReference {
+                capability_id: "test.api.publisher".to_string(),
+                version: "1.0.0".to_string(),
+            }],
+            subscribers: vec![CapabilityReference {
+                capability_id: "test.api.subscriber".to_string(),
+                version: "1.0.0".to_string(),
+            }],
+            policies: vec![IdReference {
+                id: "test-policy".to_string(),
+            }],
+            tags: vec!["test".to_string()],
+            provenance: EventProvenance {
+                source: EventProvenanceSource::Greenfield,
+                author: "test".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            evidence: Vec::new(),
+        }
+    }
+
+    fn valid_event_registration_body(id: &str, version: &str) -> Vec<u8> {
+        json!({
+            "scope": "workspace_persisted",
+            "registry_scope": "private",
+            "event_contract": test_event_contract(id, version)
+        })
+        .to_string()
+        .into_bytes()
+    }
+
     fn test_state_with(id: &str, version: &str) -> ApiState<TestExecutor> {
         let mut registry = CapabilityRegistry::new();
         registry
@@ -3631,9 +4084,11 @@ mod tests {
             WorkspaceState {
                 runtime: Runtime::new(registry, executor.clone())
                     .with_workflow_registry(WorkflowRegistry::new()),
+                event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                     registrations: Vec::new(),
+                    events: Vec::new(),
                     workflows: Vec::new(),
                 },
                 loaded_from_disk: true,
@@ -3665,9 +4120,11 @@ mod tests {
             WorkspaceState {
                 runtime: Runtime::new(CapabilityRegistry::new(), executor.clone())
                     .with_workflow_registry(WorkflowRegistry::new()),
+                event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
                     registrations: Vec::new(),
+                    events: Vec::new(),
                     workflows: Vec::new(),
                 },
                 loaded_from_disk: true,
@@ -4776,6 +5233,131 @@ mod tests {
         let mut conflict_out = Vec::new();
         handle_workspace_operation(&mut conflict_out, &conflict_req, &state, true)
             .expect("conflict registration must write a response");
+
+        assert_eq!(response_status(&conflict_out), 409);
+        assert_eq!(
+            response_content_type(&conflict_out),
+            "application/problem+json"
+        );
+        assert_eq!(
+            parse_response_body(&conflict_out)["traverse_code"],
+            "registration_conflict"
+        );
+    }
+
+    #[test]
+    fn workspace_event_contract_registration_succeeds() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            valid_event_registration_body("test.api.event-created", "1.0.0"),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("event registration must write a response");
+
+        assert_eq!(response_status(&out), 201);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["api_version"], "v1");
+        assert_eq!(resp["registered"], true);
+        assert_eq!(resp["already_registered"], false);
+        assert_eq!(resp["artifact_type"], "event_contract");
+        assert_eq!(resp["artifact_id"], "test.api.event-created");
+
+        let registered = state
+            .with_workspace_mut("ws-test", |ws| {
+                Ok(ws.event_registry.find_exact(
+                    LookupScope::PreferPrivate,
+                    "test.api.event-created",
+                    "1.0.0",
+                ))
+            })
+            .expect("workspace lookup must succeed");
+        assert!(registered.is_some());
+    }
+
+    #[test]
+    fn workspace_event_contract_registration_rejects_invalid_contract_without_storage() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            json!({
+                "scope": "workspace_persisted",
+                "registry_scope": "private",
+                "event_contract": {
+                    "kind": "event_contract"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("event registration must write a response");
+
+        assert_eq!(response_status(&out), 422);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "event_contract_validation_failed");
+
+        let registered = state
+            .with_workspace_mut("ws-test", |ws| {
+                Ok(ws.event_registry.find_exact(
+                    LookupScope::PreferPrivate,
+                    "test.api.event-created",
+                    "1.0.0",
+                ))
+            })
+            .expect("workspace lookup must succeed");
+        assert!(registered.is_none());
+    }
+
+    #[test]
+    fn workspace_event_contract_registration_handles_duplicate_and_conflict() {
+        let state = empty_state();
+        let first_body = valid_event_registration_body("test.api.event-duplicate", "1.0.0");
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            first_body.clone(),
+        );
+        let second_req =
+            make_http_request("POST", "/v1/workspaces/ws-test/event-contracts", first_body);
+
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("first event registration must write a response");
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("second event registration must write a response");
+
+        assert_eq!(response_status(&first_out), 201);
+        assert_eq!(response_status(&second_out), 200);
+        let duplicate = parse_response_body(&second_out);
+        assert_eq!(duplicate["registered"], false);
+        assert_eq!(duplicate["already_registered"], true);
+
+        let mut changed_contract = test_event_contract("test.api.event-duplicate", "1.0.0");
+        changed_contract.summary = "changed summary".to_string();
+        let conflict_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            json!({
+                "scope": "workspace_persisted",
+                "registry_scope": "private",
+                "event_contract": changed_contract
+            })
+            .to_string()
+            .into_bytes(),
+        );
+
+        let mut conflict_out = Vec::new();
+        handle_workspace_operation(&mut conflict_out, &conflict_req, &state, true)
+            .expect("conflict event registration must write a response");
 
         assert_eq!(response_status(&conflict_out), 409);
         assert_eq!(
