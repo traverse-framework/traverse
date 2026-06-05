@@ -35,6 +35,7 @@ const SCOPE_RUNTIME_EXECUTE: &str = "runtime:execute";
 const SCOPE_RUNTIME_TRACE_READ: &str = "runtime:trace:read";
 const SCOPE_REGISTRY_READ: &str = "registry:read";
 const SCOPE_REGISTRY_WRITE: &str = "registry:write";
+const SCOPE_GRANTS_APPROVE: &str = "grants:approve";
 
 /// Errors that can occur while serving the HTTP/JSON API.
 #[derive(Debug)]
@@ -84,6 +85,7 @@ struct WorkspaceState<E> {
     loaded_from_disk: bool,
     executions: HashMap<String, ExecutionStatusRecord>,
     traces: HashMap<String, RuntimeTrace>,
+    runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,25 @@ struct ExecutionStatusRecord {
     status: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RuntimeGrantLifetime {
+    Execution,
+    Session,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeGrantRecord {
+    grant_id: String,
+    capability_id: String,
+    grant_scope: String,
+    resource: String,
+    lifetime: RuntimeGrantLifetime,
+    approved_by: String,
+    granted_at: String,
+    expires_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +223,7 @@ enum WorkspaceOperation {
     RegisterEventContract(String),
     RegisterWorkflow(String),
     RegisterBundle(String),
+    ApproveRuntimeGrant(String),
     ExecutionStatus(String, String),
     Trace(String, String),
 }
@@ -268,6 +290,7 @@ where
             loaded_from_disk: true,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            runtime_grants: Vec::new(),
         },
     );
 
@@ -394,6 +417,7 @@ where
                 loaded_from_disk: false,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                runtime_grants: Vec::new(),
             },
         );
 
@@ -494,6 +518,7 @@ where
                 loaded_from_disk: false,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                runtime_grants: Vec::new(),
             });
 
         if !entry.loaded_from_disk {
@@ -662,7 +687,11 @@ fn render_workflow_failure_as_string(failure: traverse_registry::WorkflowFailure
 }
 
 fn generated_registered_at() -> Result<String, ApiError> {
-    let now_secs = std::time::SystemTime::now()
+    Ok(format!("unix:{}", current_unix_seconds()?))
+}
+
+fn current_unix_seconds() -> Result<u64, ApiError> {
+    let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| ApiError {
             status: 500,
@@ -671,7 +700,7 @@ fn generated_registered_at() -> Result<String, ApiError> {
             message: format!("failed to read system time: {e}"),
         })?
         .as_secs();
-    Ok(format!("unix:{now_secs}"))
+    Ok(seconds)
 }
 
 fn validate_workspace_id(workspace_id: &str) -> Result<(), String> {
@@ -2119,6 +2148,94 @@ fn reject_duplicate_bundle_key(
     Ok(())
 }
 
+fn parse_runtime_grant_request(body: &[u8]) -> Result<RuntimeGrantRecord, ApiError> {
+    let body_str = std::str::from_utf8(body).map_err(|e| ApiError {
+        status: 400,
+        reason: "Bad Request",
+        code: "invalid_request",
+        message: format!("request body is not valid UTF-8: {e}"),
+    })?;
+    let value: Value = serde_json::from_str(body_str).map_err(|e| ApiError {
+        status: 400,
+        reason: "Bad Request",
+        code: "invalid_request",
+        message: format!("invalid JSON body: {e}"),
+    })?;
+    reject_unknown_runtime_grant_fields(&value)?;
+
+    let capability_id = required_non_empty_string(&value, "capability_id")?;
+    let grant_scope = required_non_empty_string(&value, "grant_scope")?;
+    let resource = required_non_empty_string(&value, "resource")?;
+    let lifetime = match required_non_empty_string(&value, "lifetime")?.as_str() {
+        "execution" => RuntimeGrantLifetime::Execution,
+        "session" => RuntimeGrantLifetime::Session,
+        other => {
+            return Err(ApiError {
+                status: 422,
+                reason: "Unprocessable Entity",
+                code: "invalid_grant_lifetime",
+                message: format!("lifetime must be execution or session (got {other})"),
+            });
+        }
+    };
+    let expires_in_seconds = value
+        .get("expires_in_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(3600);
+    let now_secs = current_unix_seconds()?;
+    let expires_at = now_secs.saturating_add(expires_in_seconds);
+
+    Ok(RuntimeGrantRecord {
+        grant_id: String::new(),
+        capability_id,
+        grant_scope,
+        resource,
+        lifetime,
+        approved_by: String::new(),
+        granted_at: format!("unix:{now_secs}"),
+        expires_at: format!("unix:{expires_at}"),
+    })
+}
+
+fn reject_unknown_runtime_grant_fields(value: &Value) -> Result<(), ApiError> {
+    let Some(object) = value.as_object() else {
+        return Err(ApiError {
+            status: 400,
+            reason: "Bad Request",
+            code: "invalid_request",
+            message: "runtime grant body must be a JSON object".to_string(),
+        });
+    };
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "capability_id" | "grant_scope" | "resource" | "lifetime" | "expires_in_seconds"
+        ) {
+            return Err(ApiError {
+                status: 400,
+                reason: "Bad Request",
+                code: "unknown_field",
+                message: format!("unknown runtime grant field `{key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn required_non_empty_string(value: &Value, key: &str) -> Result<String, ApiError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| ApiError {
+            status: 422,
+            reason: "Unprocessable Entity",
+            code: "invalid_runtime_grant",
+            message: format!("{key} is required"),
+        })
+}
+
 fn ensure_workspace_loaded<E: LocalExecutor + Clone>(
     state: &ApiState<E>,
     workspace_id: &str,
@@ -2175,6 +2292,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             loaded_from_disk: false,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            runtime_grants: Vec::new(),
         });
 
     ensure_workspace_loaded(state, workspace_id, ws)?;
@@ -2222,6 +2340,7 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
             loaded_from_disk: false,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            runtime_grants: Vec::new(),
         });
 
     ensure_workspace_loaded(state, workspace_id, ws)?;
@@ -2556,6 +2675,111 @@ fn registration_outcome_value(
     })
 }
 
+fn approve_runtime_grant<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    identity: &DerivedIdentity,
+    mut grant: RuntimeGrantRecord,
+) -> Result<RuntimeGrantRecord, String> {
+    state.with_workspace_mut(workspace_id, |ws| {
+        let next_id = ws.runtime_grants.len() + 1;
+        grant.grant_id = format!("grant_{next_id}");
+        grant.approved_by = identity.subject_id.clone();
+        ws.runtime_grants.push(grant.clone());
+        Ok(grant)
+    })
+}
+
+fn active_runtime_grants_for_execution<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    capability_id: Option<&str>,
+) -> Result<Vec<RuntimeGrantRecord>, String> {
+    let now = current_unix_seconds().map_err(|e| e.message)?;
+    state.with_workspace_mut(workspace_id, |ws| {
+        ws.runtime_grants
+            .retain(|grant| grant_expiration_seconds(grant).is_none_or(|expires| expires > now));
+        let Some(capability_id) = capability_id else {
+            return Ok(Vec::new());
+        };
+        Ok(ws
+            .runtime_grants
+            .iter()
+            .filter(|grant| grant.capability_id == capability_id)
+            .cloned()
+            .collect())
+    })
+}
+
+fn consume_execution_runtime_grants<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    execution_grants: &[RuntimeGrantRecord],
+) -> Result<(), String> {
+    let consumed: HashSet<&str> = execution_grants
+        .iter()
+        .filter(|grant| grant.lifetime == RuntimeGrantLifetime::Execution)
+        .map(|grant| grant.grant_id.as_str())
+        .collect();
+    if consumed.is_empty() {
+        return Ok(());
+    }
+    state.with_workspace_mut(workspace_id, |ws| {
+        ws.runtime_grants
+            .retain(|grant| !consumed.contains(grant.grant_id.as_str()));
+        Ok(())
+    })
+}
+
+fn grant_expiration_seconds(grant: &RuntimeGrantRecord) -> Option<u64> {
+    grant.expires_at.strip_prefix("unix:")?.parse().ok()
+}
+
+fn runtime_grants_json(grants: &[RuntimeGrantRecord]) -> Value {
+    Value::Array(
+        grants
+            .iter()
+            .map(|grant| {
+                json!({
+                    "grant_id": grant.grant_id,
+                    "capability_id": grant.capability_id,
+                    "grant_scope": grant.grant_scope,
+                    "resource": grant.resource,
+                    "lifetime": grant.lifetime,
+                    "approved_by": grant.approved_by,
+                    "granted_at": grant.granted_at,
+                    "expires_at": grant.expires_at,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn static_permissions_json<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    capability_id: Option<&str>,
+    capability_version: Option<&str>,
+) -> Result<Value, String> {
+    let Some(capability_id) = capability_id else {
+        return Ok(Value::Array(Vec::new()));
+    };
+    let capability_version = capability_version.unwrap_or("1.0.0");
+    state.with_workspace_mut(workspace_id, |ws| {
+        let permissions = ws
+            .runtime
+            .capability_registry()
+            .find_exact(
+                LookupScope::PreferPrivate,
+                capability_id,
+                capability_version,
+            )
+            .map(|resolved| resolved.contract.permissions)
+            .unwrap_or_default();
+        Ok(json!(permissions))
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Connection handler
 // ---------------------------------------------------------------------------
@@ -2693,6 +2917,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::RegisterBundle(workspace_id) => {
             handle_register_workspace_bundle(w, request, state, loopback, &workspace_id)
+        }
+        WorkspaceOperation::ApproveRuntimeGrant(workspace_id) => {
+            handle_approve_runtime_grant(w, request, state, loopback, &workspace_id)
         }
         WorkspaceOperation::ExecutionStatus(workspace_id, execution_id) => {
             handle_execution_status(w, request, state, loopback, &workspace_id, &execution_id)
@@ -3473,6 +3700,72 @@ fn handle_register_workspace_bundle<W: Write, E: LocalExecutor + Clone>(
     }
 }
 
+fn handle_approve_runtime_grant<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_GRANTS_APPROVE,
+        false,
+    ) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let grant = match parse_runtime_grant_request(&request.body) {
+        Ok(grant) => grant,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+    let grant = approve_runtime_grant(state, workspace_id, &identity, grant)?;
+
+    write_json(
+        w,
+        201,
+        "Created",
+        &json!({
+            "api_version": "v1",
+            "approved": true,
+            "grant": grant,
+            "links": {
+                "workspace": format!("/v1/workspaces/{workspace_id}")
+            }
+        }),
+    )
+}
+
 fn handle_execute<W: Write, E: LocalExecutor + Clone>(
     w: &mut W,
     request: &HttpRequest,
@@ -3636,6 +3929,26 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
         return write_json(w, 202, "Accepted", &body);
     }
 
+    handle_sync_workspace_execution(w, request, state, workspace_id, runtime_request)
+}
+
+fn handle_sync_workspace_execution<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    workspace_id: &str,
+    runtime_request: RuntimeRequest,
+) -> Result<(), String> {
+    let capability_id = runtime_request.intent.capability_id.clone();
+    let capability_version = runtime_request.intent.capability_version.clone();
+    let runtime_grants =
+        active_runtime_grants_for_execution(state, workspace_id, capability_id.as_deref())?;
+    let static_permissions = static_permissions_json(
+        state,
+        workspace_id,
+        capability_id.as_deref(),
+        capability_version.as_deref(),
+    )?;
     let outcome: RuntimeExecutionOutcome =
         state.with_workspace_mut(workspace_id, |ws| Ok(ws.runtime.execute(runtime_request)))?;
     let status = if outcome.result.status == RuntimeResultStatus::Error {
@@ -3660,8 +3973,11 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
             "code": format!("{:?}", e.code).to_lowercase(),
             "message": e.message,
         })),
+        "static_permissions": static_permissions,
+        "runtime_grants": runtime_grants_json(&runtime_grants),
         "links": execution_links(workspace_id, &outcome.result.execution_id, false),
     });
+    consume_execution_runtime_grants(state, workspace_id, &runtime_grants)?;
     record_idempotent_success(
         request,
         state,
@@ -3756,6 +4072,15 @@ fn workspace_bundles_path(path: &str) -> Option<String> {
     Some(workspace_id.to_string())
 }
 
+fn workspace_runtime_grants_path(path: &str) -> Option<String> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let workspace_id = suffix.strip_suffix("/runtime-grants")?;
+    if workspace_id.trim().is_empty() || workspace_id.contains('/') {
+        return None;
+    }
+    Some(workspace_id.to_string())
+}
+
 fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperation> {
     match method {
         "POST" => workspace_execute_path(path)
@@ -3767,7 +4092,10 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
                 workspace_event_contracts_path(path).map(WorkspaceOperation::RegisterEventContract)
             })
             .or_else(|| workspace_workflows_path(path).map(WorkspaceOperation::RegisterWorkflow))
-            .or_else(|| workspace_bundles_path(path).map(WorkspaceOperation::RegisterBundle)),
+            .or_else(|| workspace_bundles_path(path).map(WorkspaceOperation::RegisterBundle))
+            .or_else(|| {
+                workspace_runtime_grants_path(path).map(WorkspaceOperation::ApproveRuntimeGrant)
+            }),
         "GET" => workspace_execution_status_path(path)
             .map(|(workspace_id, execution_id)| {
                 WorkspaceOperation::ExecutionStatus(workspace_id, execution_id)
@@ -4692,6 +5020,7 @@ mod tests {
 
     use super::*;
     use serde_json::Value;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use traverse_contracts::{
         BinaryFormat as ContractBinaryFormat, CapabilityContract, CapabilityReference, Entrypoint,
         EntrypointKind, EventClassification, EventPayload, EventProvenance, EventProvenanceSource,
@@ -4741,11 +5070,29 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn test_registry_root() -> PathBuf {
+        static NEXT_TEST_ROOT: AtomicU64 = AtomicU64::new(1);
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time must be valid")
             .as_nanos();
-        std::env::temp_dir().join(format!("traverse-cli-http-api-tests-{suffix}"))
+        let sequence = NEXT_TEST_ROOT.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("traverse-cli-http-api-tests-{suffix}-{sequence}"))
+    }
+
+    fn persist_test_workspace(registry_root: &Path, workspace_id: &str, owner_subject: &str) {
+        let metadata = WorkspaceMetadataV1 {
+            schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
+            workspace_id: workspace_id.to_string(),
+            owner_subject: owner_subject.to_string(),
+            shared: false,
+            members: Vec::new(),
+        };
+        persist_workspace_metadata(registry_root, workspace_id, &metadata)
+            .expect("test workspace metadata must persist");
+    }
+
+    fn persist_local_test_workspace(registry_root: &Path, workspace_id: &str) {
+        persist_test_workspace(registry_root, workspace_id, "local");
     }
 
     fn test_contract(id: &str, version: &str) -> CapabilityContract {
@@ -4813,6 +5160,12 @@ mod tests {
 
     fn test_registration(id: &str, version: &str) -> CapabilityRegistration {
         let contract = test_contract(id, version);
+        test_registration_from_contract(contract)
+    }
+
+    fn test_registration_from_contract(contract: CapabilityContract) -> CapabilityRegistration {
+        let id = contract.id.clone();
+        let version = contract.version.clone();
         CapabilityRegistration {
             scope: RegistryScope::Private,
             contract_path: format!("test/{id}/{version}/contract.json"),
@@ -4843,7 +5196,7 @@ mod tests {
             composability: ComposabilityMetadata {
                 kind: CompositionKind::Atomic,
                 patterns: vec![CompositionPattern::Sequential],
-                provides: vec![id.to_string()],
+                provides: vec![id.clone()],
                 requires: vec![],
             },
             governing_spec: "005-capability-registry".to_string(),
@@ -5012,6 +5365,24 @@ mod tests {
         .into_bytes()
     }
 
+    fn runtime_grant_body(
+        capability_id: &str,
+        grant_scope: &str,
+        resource: &str,
+        lifetime: &str,
+        expires_in_seconds: u64,
+    ) -> Vec<u8> {
+        json!({
+            "capability_id": capability_id,
+            "grant_scope": grant_scope,
+            "resource": resource,
+            "lifetime": lifetime,
+            "expires_in_seconds": expires_in_seconds
+        })
+        .to_string()
+        .into_bytes()
+    }
+
     fn test_state_with(id: &str, version: &str) -> ApiState<TestExecutor> {
         let mut registry = CapabilityRegistry::new();
         registry
@@ -5024,6 +5395,7 @@ mod tests {
 
         let mut workspaces = HashMap::new();
         let workspace_id = "ws-test";
+        persist_local_test_workspace(&registry_root, workspace_id);
         workspaces.insert(
             workspace_id.to_string(),
             WorkspaceState {
@@ -5039,6 +5411,58 @@ mod tests {
                 loaded_from_disk: true,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                runtime_grants: Vec::new(),
+            },
+        );
+
+        ApiState {
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            registry_root,
+            executor,
+            workspaces: RefCell::new(workspaces),
+            idempotency_records: RefCell::new(HashMap::new()),
+            idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+        }
+    }
+
+    fn test_state_with_permission(
+        id: &str,
+        version: &str,
+        permission_id: &str,
+    ) -> ApiState<TestExecutor> {
+        let mut contract = test_contract(id, version);
+        contract.permissions = vec![IdReference {
+            id: permission_id.to_string(),
+        }];
+        let mut registry = CapabilityRegistry::new();
+        registry
+            .register(test_registration_from_contract(contract))
+            .expect("test registration must succeed");
+
+        let executor = TestExecutor::ok(json!({"result": "ok"}));
+        let registry_root = test_registry_root();
+        std::fs::create_dir_all(&registry_root).expect("registry root must be created");
+
+        let mut workspaces = HashMap::new();
+        let workspace_id = "ws-test";
+        persist_local_test_workspace(&registry_root, workspace_id);
+        workspaces.insert(
+            workspace_id.to_string(),
+            WorkspaceState {
+                runtime: Runtime::new(registry, executor.clone())
+                    .with_workflow_registry(WorkflowRegistry::new()),
+                event_registry: EventRegistry::new(),
+                persisted: PersistedWorkspaceRegistryV1 {
+                    schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
+                    registrations: Vec::new(),
+                    events: Vec::new(),
+                    workflows: Vec::new(),
+                },
+                loaded_from_disk: true,
+                executions: HashMap::new(),
+                traces: HashMap::new(),
+                runtime_grants: Vec::new(),
             },
         );
 
@@ -5060,6 +5484,7 @@ mod tests {
 
         let mut workspaces = HashMap::new();
         let workspace_id = "ws-test";
+        persist_local_test_workspace(&registry_root, workspace_id);
         workspaces.insert(
             workspace_id.to_string(),
             WorkspaceState {
@@ -5075,6 +5500,7 @@ mod tests {
                 loaded_from_disk: true,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                runtime_grants: Vec::new(),
             },
         );
 
@@ -5618,6 +6044,168 @@ mod tests {
                 .as_array()
                 .expect("array")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn runtime_grant_approval_requires_grants_approve_scope() {
+        let state = empty_state();
+        let token = make_scoped_jwt("alice", future_exp(), &["runtime:execute"]);
+        let req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/runtime-grants",
+                runtime_grant_body(
+                    "test.api.do-something",
+                    "external.api.read",
+                    "resource:one",
+                    "execution",
+                    3600,
+                ),
+            ),
+            &token,
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, false)
+            .expect("grant approval must write a response");
+
+        assert_eq!(response_status(&out), 403);
+        assert_eq!(parse_response_body(&out)["traverse_code"], "unauthorized");
+    }
+
+    #[test]
+    fn runtime_grant_approval_returns_created_grant() {
+        let state = empty_state();
+        persist_test_workspace(&state.registry_root, "ws-test", "alice");
+        let token = make_scoped_jwt("alice", future_exp(), &["grants:approve"]);
+        let req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/runtime-grants",
+                runtime_grant_body(
+                    "test.api.do-something",
+                    "external.api.read",
+                    "resource:one",
+                    "execution",
+                    3600,
+                ),
+            ),
+            &token,
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, false)
+            .expect("grant approval must write a response");
+
+        assert_eq!(response_status(&out), 201);
+        let body = parse_response_body(&out);
+        assert_eq!(body["approved"], true);
+        assert_eq!(body["grant"]["grant_scope"], "external.api.read");
+        assert_eq!(body["grant"]["approved_by"], "alice");
+    }
+
+    #[test]
+    fn execution_runtime_grant_is_available_once_then_consumed() {
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        persist_test_workspace(&state.registry_root, "ws-test", "alice");
+        let approve_token = make_scoped_jwt("alice", future_exp(), &["grants:approve"]);
+        let approve_req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/runtime-grants",
+                runtime_grant_body(
+                    "test.api.do-something",
+                    "external.api.read",
+                    "resource:one",
+                    "execution",
+                    3600,
+                ),
+            ),
+            &approve_token,
+        );
+        let mut approve_out = Vec::new();
+        handle_workspace_operation(&mut approve_out, &approve_req, &state, false)
+            .expect("grant approval must write a response");
+        assert_eq!(response_status(&approve_out), 201);
+
+        let execute_token = make_scoped_jwt("alice", future_exp(), &["runtime:execute"]);
+        let first_req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/execute",
+                make_runtime_request_body("test.api.do-something"),
+            ),
+            &execute_token,
+        );
+        let second_req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/execute",
+                make_runtime_request_body("test.api.do-something"),
+            ),
+            &execute_token,
+        );
+
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, false)
+            .expect("first execute must write a response");
+        let first = parse_response_body(&first_out);
+        assert_eq!(response_status(&first_out), 200);
+        assert_eq!(first["runtime_grants"].as_array().map(Vec::len), Some(1));
+
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, false)
+            .expect("second execute must write a response");
+        let second = parse_response_body(&second_out);
+        assert_eq!(response_status(&second_out), 200);
+        assert_eq!(second["runtime_grants"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn expired_session_grant_is_pruned_and_static_permissions_remain() {
+        let state =
+            test_state_with_permission("test.api.permissioned", "1.0.0", "static.permission.read");
+        persist_test_workspace(&state.registry_root, "ws-test", "alice");
+        let approve_token = make_scoped_jwt("alice", future_exp(), &["grants:approve"]);
+        let approve_req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/runtime-grants",
+                runtime_grant_body(
+                    "test.api.permissioned",
+                    "external.api.read",
+                    "resource:expired",
+                    "session",
+                    0,
+                ),
+            ),
+            &approve_token,
+        );
+        let mut approve_out = Vec::new();
+        handle_workspace_operation(&mut approve_out, &approve_req, &state, false)
+            .expect("grant approval must write a response");
+        assert_eq!(response_status(&approve_out), 201);
+
+        let execute_token = make_scoped_jwt("alice", future_exp(), &["runtime:execute"]);
+        let execute_req = with_bearer(
+            make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/execute",
+                make_runtime_request_body("test.api.permissioned"),
+            ),
+            &execute_token,
+        );
+        let mut execute_out = Vec::new();
+        handle_workspace_operation(&mut execute_out, &execute_req, &state, false)
+            .expect("execute must write a response");
+
+        let body = parse_response_body(&execute_out);
+        assert_eq!(response_status(&execute_out), 200);
+        assert_eq!(body["runtime_grants"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            body["static_permissions"][0]["id"],
+            "static.permission.read"
         );
     }
 
