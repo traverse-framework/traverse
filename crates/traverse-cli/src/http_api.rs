@@ -31,6 +31,10 @@ const MIN_IDEMPOTENCY_RETENTION_SECONDS: u64 = 60;
 const CORS_ALLOW_METHODS: &str = "GET, POST, OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, Idempotency-Key, Prefer";
 const CORS_MAX_AGE_SECONDS: &str = "600";
+const SCOPE_RUNTIME_EXECUTE: &str = "runtime:execute";
+const SCOPE_RUNTIME_TRACE_READ: &str = "runtime:trace:read";
+const SCOPE_REGISTRY_READ: &str = "registry:read";
+const SCOPE_REGISTRY_WRITE: &str = "registry:write";
 
 /// Errors that can occur while serving the HTTP/JSON API.
 #[derive(Debug)]
@@ -175,6 +179,7 @@ struct WorkspaceMetadataV1 {
 struct DerivedIdentity {
     subject_id: String,
     is_admin: bool,
+    scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -735,13 +740,15 @@ fn subject_from_request(
         return Ok(DerivedIdentity {
             subject_id: token.clone(),
             is_admin: token == SYSTEM_ADMIN_SUBJECT,
+            scopes: Vec::new(),
         });
     }
 
-    if allow_unauthenticated || loopback {
+    if loopback && allow_unauthenticated {
         return Ok(DerivedIdentity {
             subject_id: "local".to_string(),
             is_admin: false,
+            scopes: Vec::new(),
         });
     }
 
@@ -870,7 +877,27 @@ fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiE
     Ok(Some(DerivedIdentity {
         subject_id,
         is_admin,
+        scopes: parse_jwt_scopes(&value),
     }))
+}
+
+fn parse_jwt_scopes(value: &Value) -> Vec<String> {
+    let mut scopes = Vec::new();
+    if let Some(scope) = value.get("scope").and_then(Value::as_str) {
+        scopes.extend(scope.split_whitespace().map(ToString::to_string));
+    }
+    for claim in ["scp", "scopes"] {
+        if let Some(items) = value.get(claim).and_then(Value::as_array) {
+            scopes.extend(items.iter().filter_map(|item| {
+                item.as_str()
+                    .filter(|scope| !scope.trim().is_empty())
+                    .map(ToString::to_string)
+            }));
+        }
+    }
+    scopes.sort();
+    scopes.dedup();
+    scopes
 }
 
 fn base64url_decode(input: &str) -> Result<Vec<u8>, String> {
@@ -1046,6 +1073,38 @@ fn ensure_workspace_access(
         code: "unauthorized_workspace",
         message: "subject is not authorized for workspace".to_string(),
     })
+}
+
+fn ensure_workspace_authorized(
+    registry_root: &Path,
+    workspace_id: &str,
+    identity: &DerivedIdentity,
+    required_scope: &str,
+    scopes_optional: bool,
+) -> Result<WorkspaceMetadataV1, ApiError> {
+    if !scopes_optional && !identity_has_scope(identity, required_scope) {
+        return Err(ApiError {
+            status: 403,
+            reason: "Forbidden",
+            code: "unauthorized",
+            message: format!("missing required scope `{required_scope}`"),
+        });
+    }
+    ensure_workspace_access(registry_root, workspace_id, identity)
+}
+
+fn identity_has_scope(identity: &DerivedIdentity, required_scope: &str) -> bool {
+    identity.is_admin
+        || identity.scopes.iter().any(|scope| scope == required_scope)
+        || identity.scopes.iter().any(|scope| scope == "*")
+}
+
+fn scopes_optional_for_request(
+    _allow_unauthenticated: bool,
+    loopback: bool,
+    identity: &DerivedIdentity,
+) -> bool {
+    loopback || identity.subject_id == "local"
 }
 
 fn parse_registration_scope(value: Option<&Value>) -> Result<RegistrationScope, String> {
@@ -2878,7 +2937,13 @@ fn handle_list_capabilities<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_REGISTRY_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -2945,7 +3010,13 @@ fn handle_register_capability<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3043,7 +3114,13 @@ fn handle_register_workspace_capability<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3149,7 +3226,13 @@ fn handle_register_workspace_event_contract<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3255,7 +3338,13 @@ fn handle_register_workspace_workflow<W: Write, E: LocalExecutor + Clone>(
         };
     let definition_for_errors = persisted.definition.clone();
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3342,7 +3431,13 @@ fn handle_register_workspace_bundle<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3440,7 +3535,13 @@ fn handle_execute<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EXECUTE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3496,7 +3597,13 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EXECUTE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3908,7 +4015,13 @@ fn handle_execution_status<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_TRACE_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -3968,7 +4081,13 @@ fn handle_trace_fetch<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_TRACE_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -4083,7 +4202,13 @@ fn handle_register_workflow<W: Write, E: LocalExecutor + Clone>(
     };
     let definition_for_errors = persisted.definition.clone();
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_REGISTRY_WRITE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -4163,7 +4288,13 @@ fn handle_list_workflows<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_REGISTRY_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -4256,7 +4387,13 @@ fn handle_get_workflow<W: Write, E: LocalExecutor + Clone>(
             }
         };
 
-    let _ = match ensure_workspace_access(&state.registry_root, &workspace_id, &identity) {
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        &workspace_id,
+        &identity,
+        SCOPE_REGISTRY_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
         Ok(metadata) => metadata,
         Err(err) => {
             return write_json(
@@ -5028,6 +5165,25 @@ mod tests {
         format!("{header}.{payload_b64}.sig")
     }
 
+    fn make_scoped_jwt(sub: &str, exp: i64, scopes: &[&str]) -> String {
+        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload = json!({
+            "sub": sub,
+            "exp": exp,
+            "scope": scopes.join(" ")
+        });
+        let payload_b64 = base64url_encode(payload.to_string().as_bytes());
+        format!("{header}.{payload_b64}.sig")
+    }
+
+    fn future_exp() -> i64 {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time must be valid")
+            .as_secs();
+        i64::try_from(now_secs).expect("time must fit i64") + 3600
+    }
+
     fn make_runtime_request_body(capability_id: &str) -> Vec<u8> {
         json!({
             "kind": "runtime_request",
@@ -5400,6 +5556,69 @@ mod tests {
         assert_eq!(response_status(&out), 200);
         let body = parse_response_body(&out);
         assert!(body.as_array().expect("array").is_empty());
+    }
+
+    #[test]
+    fn non_loopback_requires_bearer_even_when_dev_unauthenticated_is_enabled() {
+        let state = empty_state();
+        let req = with_workspace_query(
+            make_http_request("GET", "/v1/capabilities", Vec::new()),
+            "ws-prod",
+        );
+
+        let mut out = Vec::new();
+        handle_list_capabilities(&mut out, &req, &state, false)
+            .expect("list must write a response");
+
+        assert_eq!(response_status(&out), 401);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        assert_eq!(parse_response_body(&out)["traverse_code"], "unauthorized");
+    }
+
+    #[test]
+    fn non_loopback_rejects_valid_bearer_without_required_scope() {
+        let state = empty_state();
+        let token = make_scoped_jwt("alice", future_exp(), &["runtime:execute"]);
+        let req = with_bearer(
+            with_workspace_query(
+                make_http_request("GET", "/v1/capabilities", Vec::new()),
+                "ws-prod",
+            ),
+            &token,
+        );
+
+        let mut out = Vec::new();
+        handle_list_capabilities(&mut out, &req, &state, false)
+            .expect("list must write a response");
+
+        assert_eq!(response_status(&out), 403);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        assert_eq!(parse_response_body(&out)["traverse_code"], "unauthorized");
+    }
+
+    #[test]
+    fn non_loopback_allows_valid_bearer_with_required_scope() {
+        let state = empty_state();
+        let token = make_scoped_jwt("alice", future_exp(), &["registry:read"]);
+        let req = with_bearer(
+            with_workspace_query(
+                make_http_request("GET", "/v1/capabilities", Vec::new()),
+                "ws-prod",
+            ),
+            &token,
+        );
+
+        let mut out = Vec::new();
+        handle_list_capabilities(&mut out, &req, &state, false)
+            .expect("list must write a response");
+
+        assert_eq!(response_status(&out), 200);
+        assert!(
+            parse_response_body(&out)
+                .as_array()
+                .expect("array")
+                .is_empty()
+        );
     }
 
     #[test]
