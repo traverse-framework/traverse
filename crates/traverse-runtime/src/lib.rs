@@ -2,6 +2,7 @@
 
 mod workflows;
 pub use workflows::*;
+pub mod data_store;
 pub mod events;
 pub mod executor;
 pub mod placement;
@@ -2071,7 +2072,7 @@ fn validate_payload_against_contract(
     }
 }
 
-fn validate_value_against_schema(
+pub(crate) fn validate_value_against_schema(
     value: &Value,
     schema: &Value,
     path: &str,
@@ -3649,6 +3650,7 @@ mod tests {
             ],
             event_trigger: None,
             connector_requirements: Vec::new(),
+            state_schema: None,
         }
     }
 

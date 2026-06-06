@@ -1075,6 +1075,7 @@ fn capability_contract(
         ],
         event_trigger: None,
         connector_requirements: Vec::new(),
+        state_schema: None,
     }
 }
 
@@ -1395,6 +1396,7 @@ fn simple_registration(scope: RegistryScope, id: &str, version: &str) -> Capabil
         permitted_targets: vec![ExecutionTarget::Local],
         event_trigger: None,
         connector_requirements: Vec::new(),
+        state_schema: None,
     };
     CapabilityRegistration {
         scope,

@@ -51,6 +51,9 @@ pub struct CapabilityContract {
     /// External resource connectors required before this capability can be registered or executed.
     #[serde(default)]
     pub connector_requirements: Vec<ConnectorRequirement>,
+    /// Typed JSON schema for capability state values written through the runtime `DataStore`.
+    #[serde(default)]
+    pub state_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

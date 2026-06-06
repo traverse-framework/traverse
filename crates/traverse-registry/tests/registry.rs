@@ -899,6 +899,7 @@ fn base_contract(id: &str, version: &str) -> CapabilityContract {
         ],
         event_trigger: None,
         connector_requirements: Vec::new(),
+        state_schema: None,
     }
 }
 

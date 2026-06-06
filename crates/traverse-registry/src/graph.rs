@@ -884,6 +884,7 @@ mod tests {
             ],
             event_trigger: None,
             connector_requirements: Vec::new(),
+            state_schema: None,
             provenance: Provenance {
                 source: ProvenanceSource::Greenfield,
                 author: "graph".to_string(),

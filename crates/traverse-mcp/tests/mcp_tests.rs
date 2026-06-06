@@ -127,6 +127,7 @@ fn capability_contract() -> traverse_contracts::CapabilityContract {
         ],
         event_trigger: None,
         connector_requirements: Vec::new(),
+        state_schema: None,
     }
 }
 
