@@ -86,6 +86,7 @@ fn base_contract() -> CapabilityContract {
             ExecutionTarget::Edge,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 

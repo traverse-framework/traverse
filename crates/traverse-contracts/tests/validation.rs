@@ -1,16 +1,17 @@
 use std::{fs, path::Path};
 
 use traverse_contracts::{
-    BinaryFormat, CapabilityContract, CapabilityReference, Condition, DependencyArtifactType,
-    DependencyReference, Entrypoint, EntrypointKind, EventClassification, EventContract,
-    EventPayload, EventProvenance, EventProvenanceSource, EventReference, EventType,
+    BinaryFormat, CapabilityContract, CapabilityReference, Condition, ConnectorRequirement,
+    DependencyArtifactType, DependencyReference, Entrypoint, EntrypointKind, EventClassification,
+    EventContract, EventPayload, EventProvenance, EventProvenanceSource, EventReference, EventType,
     EventValidationContext, EventValidationEvidence, EvidenceStatus, EvidenceType, Execution,
     ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess, IdReference, Lifecycle,
     NetworkAccess, Owner, PayloadCompatibility, ProducedValidationEvidence, Provenance,
     ProvenanceSource, PublishedContractRecord, PublishedEventRecord, SchemaContainer, ServiceType,
     SideEffect, SideEffectKind, ValidationContext, ValidationErrorCode, ValidationEvidence,
     ValidationFailure, ValidationResult, governed_content_digest, governed_event_content_digest,
-    parse_contract, parse_event_contract, validate_contract, validate_event_contract,
+    parse_connector_contract, parse_contract, parse_event_contract, reference_connector_contracts,
+    validate_connector_contract, validate_contract, validate_event_contract,
 };
 
 const GOVERNING_SPEC: &str = "002-capability-contracts@0.1.0";
@@ -75,6 +76,147 @@ fn rejects_invalid_identity_and_semver() {
             .iter()
             .any(|item| item.code == ValidationErrorCode::InvalidSemver)
     );
+}
+
+#[test]
+fn parses_and_validates_connector_contract() -> Result<(), String> {
+    let contract = reference_connector_contracts()
+        .into_iter()
+        .find(|connector| connector.connector_id == "traverse.http")
+        .ok_or_else(|| "missing traverse.http reference connector".to_string())?;
+    let json = serde_json::to_string(&contract).map_err(|error| error.to_string())?;
+    let parsed = parse_connector_contract(&json).map_err(|error| format!("{error:?}"))?;
+    let validated =
+        validate_connector_contract(parsed.clone()).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(validated, parsed);
+    assert_eq!(validated.version, "1.0.0");
+    assert_eq!(
+        validated.capabilities_provided,
+        vec!["traverse.http.outbound".to_string()]
+    );
+    assert!(validated.required_config_schema.is_object());
+    Ok(())
+}
+
+#[test]
+fn rejects_invalid_connector_json() {
+    let errors: Vec<_> = parse_connector_contract("{").err().into_iter().collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors[0].code, ValidationErrorCode::InvalidFormat);
+}
+
+#[test]
+fn rejects_invalid_connector_contract_shape() -> Result<(), String> {
+    let mut contract = reference_connector_contracts()
+        .into_iter()
+        .next()
+        .ok_or_else(|| "reference connector should exist".to_string())?;
+    contract.kind = "wrong".to_string();
+    contract.schema_version = "2.0.0".to_string();
+    contract.version = "nope".to_string();
+    contract.capabilities_provided.clear();
+    contract.required_config_schema = serde_json::json!("not-object");
+    contract.supported_placement_targets = vec![ExecutionTarget::Local, ExecutionTarget::Local];
+
+    let errors: Vec<_> = expect_validation_failure(validate_connector_contract(contract))
+        .into_iter()
+        .collect();
+    let failure = &errors[0];
+
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::InvalidLiteral && error.path == "$.kind"
+    }));
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::InvalidLiteral && error.path == "$.schema_version"
+    }));
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::InvalidSemver && error.path == "$.version"
+    }));
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::MissingRequiredField
+            && error.path == "$.capabilities_provided"
+    }));
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::DuplicateItem
+            && error.path == "$.supported_placement_targets"
+    }));
+    Ok(())
+}
+
+#[test]
+fn rejects_connector_contract_without_targets() -> Result<(), String> {
+    let mut contract = reference_connector_contracts()
+        .into_iter()
+        .next()
+        .ok_or_else(|| "reference connector should exist".to_string())?;
+    contract.supported_placement_targets.clear();
+
+    let errors: Vec<_> = expect_validation_failure(validate_connector_contract(contract))
+        .into_iter()
+        .collect();
+
+    assert!(errors[0].errors.iter().any(|error| {
+        error.code == ValidationErrorCode::MissingRequiredField
+            && error.path == "$.supported_placement_targets"
+    }));
+    Ok(())
+}
+
+#[test]
+fn validates_connector_requirements_on_capability_contracts() {
+    let mut contract = valid_contract();
+    contract.connector_requirements.push(ConnectorRequirement {
+        connector_id: "traverse.http".to_string(),
+        version: "^1.0.0".to_string(),
+    });
+
+    let result = validate_contract(
+        contract,
+        &ValidationContext {
+            governing_spec: GOVERNING_SPEC,
+            validator_version: VALIDATOR_VERSION,
+            existing_published: None,
+        },
+    );
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn rejects_invalid_connector_requirements_on_capability_contracts() {
+    let mut contract = valid_contract();
+    contract.connector_requirements = vec![
+        ConnectorRequirement {
+            connector_id: "traverse.http".to_string(),
+            version: "not a range".to_string(),
+        },
+        ConnectorRequirement {
+            connector_id: "traverse.http".to_string(),
+            version: "not a range".to_string(),
+        },
+    ];
+
+    let errors: Vec<_> = expect_validation_failure(validate_contract(
+        contract,
+        &ValidationContext {
+            governing_spec: GOVERNING_SPEC,
+            validator_version: VALIDATOR_VERSION,
+            existing_published: None,
+        },
+    ))
+    .into_iter()
+    .collect();
+    let failure = &errors[0];
+
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::InvalidConnectorRequirement
+            && error.path == "$.connector_requirements[0].version"
+    }));
+    assert!(failure.errors.iter().any(|error| {
+        error.code == ValidationErrorCode::DuplicateItem
+            && error.path == "$.connector_requirements[1].connector_id"
+    }));
 }
 
 #[test]
@@ -571,6 +713,7 @@ fn valid_contract() -> CapabilityContract {
             ExecutionTarget::Edge,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 
@@ -869,6 +1012,24 @@ fn rejects_duplicate_event_references_and_evidence() {
             .iter()
             .any(|item| item.path == "$.evidence[1].kind")
     );
+}
+
+#[test]
+fn validates_checked_in_reference_connector_contracts() -> Result<(), String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for relative_path in [
+        "contracts/connectors/traverse.http/connector_contract.json",
+        "contracts/connectors/traverse.fs.read/connector_contract.json",
+        "contracts/connectors/traverse.env/connector_contract.json",
+    ] {
+        let path = repo_root.join(relative_path);
+        let contents = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        let parsed = parse_connector_contract(&contents).map_err(|error| format!("{error:?}"))?;
+        validate_connector_contract(parsed).map_err(|error| format!("{error:?}"))?;
+    }
+
+    Ok(())
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Capability contract parsing and validation for Traverse.
 
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
@@ -10,6 +10,7 @@ pub use violations::ViolationRecord;
 
 const CAPABILITY_CONTRACT_KIND: &str = "capability_contract";
 const EVENT_CONTRACT_KIND: &str = "event_contract";
+const CONNECTOR_CONTRACT_KIND: &str = "connector_contract";
 const SUPPORTED_SCHEMA_VERSION: &str = "1.0.0";
 const GOVERNED_CONTENT_VERSION: &str = "0.1.0";
 
@@ -47,6 +48,119 @@ pub struct CapabilityContract {
     /// Required for `Subscribable` capabilities: the event type that triggers this capability.
     #[serde(default)]
     pub event_trigger: Option<String>,
+    /// External resource connectors required before this capability can be registered or executed.
+    #[serde(default)]
+    pub connector_requirements: Vec<ConnectorRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorContract {
+    pub kind: String,
+    pub schema_version: String,
+    pub connector_id: String,
+    pub version: String,
+    pub capabilities_provided: Vec<String>,
+    pub required_config_schema: Value,
+    #[serde(default = "default_connector_targets")]
+    pub supported_placement_targets: Vec<ExecutionTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorRequirement {
+    pub connector_id: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorInvocation {
+    pub capability_id: String,
+    pub connector_id: String,
+    pub config: Value,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorOutput {
+    pub output: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorError {
+    pub code: String,
+    pub message: String,
+}
+
+pub trait ConnectorPlugin: Send + Sync {
+    fn connector_id(&self) -> &str;
+    fn version(&self) -> &str;
+    fn capabilities_provided(&self) -> &[String];
+    /// Invoke the connector with runtime-injected config and input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError`] when the connector cannot satisfy the invocation.
+    fn invoke(&self, invocation: ConnectorInvocation) -> Result<ConnectorOutput, ConnectorError>;
+}
+
+#[must_use]
+pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
+    vec![
+        reference_connector_contract(
+            "traverse.http",
+            vec!["traverse.http.outbound".to_string()],
+            serde_json::json!({
+                "type": "object",
+                "required": ["base_url"],
+                "properties": {
+                    "base_url": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+        ),
+        reference_connector_contract(
+            "traverse.fs.read",
+            vec!["traverse.fs.read".to_string()],
+            serde_json::json!({
+                "type": "object",
+                "required": ["root"],
+                "properties": {
+                    "root": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+        ),
+        reference_connector_contract(
+            "traverse.env",
+            vec!["traverse.env.read".to_string()],
+            serde_json::json!({
+                "type": "object",
+                "required": ["allowed_keys"],
+                "properties": {
+                    "allowed_keys": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "additionalProperties": false
+            }),
+        ),
+    ]
+}
+
+fn reference_connector_contract(
+    connector_id: &str,
+    capabilities_provided: Vec<String>,
+    required_config_schema: Value,
+) -> ConnectorContract {
+    ConnectorContract {
+        kind: CONNECTOR_CONTRACT_KIND.to_string(),
+        schema_version: SUPPORTED_SCHEMA_VERSION.to_string(),
+        connector_id: connector_id.to_string(),
+        version: "1.0.0".to_string(),
+        capabilities_provided,
+        required_config_schema,
+        supported_placement_targets: default_connector_targets(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +340,10 @@ fn default_permitted_targets() -> Vec<ExecutionTarget> {
         ExecutionTarget::Worker,
         ExecutionTarget::Device,
     ]
+}
+
+fn default_connector_targets() -> Vec<ExecutionTarget> {
+    vec![ExecutionTarget::Local, ExecutionTarget::Cloud]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,6 +541,8 @@ pub enum ValidationErrorCode {
     InvalidPlacementConstraint,
     /// `service_type: subscribable` without a non-empty `event_trigger`.
     MissingEventTrigger,
+    InvalidConnectorContract,
+    InvalidConnectorRequirement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,6 +584,23 @@ pub fn parse_event_contract(json: &str) -> Result<EventContract, ValidationFailu
     })
 }
 
+/// Parses a connector contract from raw JSON text.
+///
+/// # Errors
+///
+/// Returns [`ValidationFailure`] when the JSON payload cannot be deserialized
+/// into the connector contract model.
+pub fn parse_connector_contract(json: &str) -> Result<ConnectorContract, ValidationFailure> {
+    serde_json::from_str::<ConnectorContract>(json).map_err(|error| ValidationFailure {
+        errors: vec![ValidationError {
+            code: ValidationErrorCode::InvalidFormat,
+            message: error.to_string(),
+            path: "$".to_string(),
+            severity: ErrorSeverity::Error,
+        }],
+    })
+}
+
 /// Validates a parsed capability contract against the governed `v0.1` rules.
 ///
 /// # Errors
@@ -493,6 +630,7 @@ pub fn validate_contract(
     validate_execution(&contract.execution, &contract.provenance, &mut errors);
     validate_id_references(&contract.policies, "$.policies", &mut errors);
     validate_dependencies(&contract.dependencies, &mut errors);
+    validate_connector_requirements(&contract.connector_requirements, &mut errors);
     validate_provenance(&contract.provenance, &mut errors);
     validate_evidence(&contract.evidence, &mut errors);
     validate_boundary(&contract, &mut errors);
@@ -515,6 +653,77 @@ pub fn validate_contract(
         },
         normalized: contract,
     })
+}
+
+/// Validates a parsed connector contract.
+///
+/// # Errors
+///
+/// Returns [`ValidationFailure`] when structural or semantic validation fails.
+pub fn validate_connector_contract(
+    contract: ConnectorContract,
+) -> Result<ConnectorContract, ValidationFailure> {
+    let mut errors = Vec::new();
+
+    if contract.kind != CONNECTOR_CONTRACT_KIND {
+        errors.push(error(
+            ValidationErrorCode::InvalidLiteral,
+            "$.kind",
+            "kind must equal connector_contract",
+        ));
+    }
+    if contract.schema_version != SUPPORTED_SCHEMA_VERSION {
+        errors.push(error(
+            ValidationErrorCode::InvalidLiteral,
+            "$.schema_version",
+            "schema_version must equal 1.0.0",
+        ));
+    }
+    validate_non_empty(&contract.connector_id, "$.connector_id", &mut errors);
+    validate_semver(&contract.version, "$.version", &mut errors);
+    validate_unique_strings(
+        &contract.capabilities_provided,
+        "$.capabilities_provided",
+        "capabilities_provided must be unique",
+        &mut errors,
+    );
+    if contract.capabilities_provided.is_empty() {
+        errors.push(error(
+            ValidationErrorCode::MissingRequiredField,
+            "$.capabilities_provided",
+            "capabilities_provided must contain at least one capability id",
+        ));
+    }
+    validate_schema_value(
+        &contract.required_config_schema,
+        "$.required_config_schema",
+        &mut errors,
+    );
+    if contract.supported_placement_targets.is_empty() {
+        errors.push(error(
+            ValidationErrorCode::MissingRequiredField,
+            "$.supported_placement_targets",
+            "supported_placement_targets must contain at least one target",
+        ));
+    }
+    let unique_targets: BTreeSet<_> = contract
+        .supported_placement_targets
+        .iter()
+        .cloned()
+        .collect();
+    if unique_targets.len() != contract.supported_placement_targets.len() {
+        errors.push(error(
+            ValidationErrorCode::DuplicateItem,
+            "$.supported_placement_targets",
+            "supported_placement_targets must be unique",
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(ValidationFailure { errors });
+    }
+
+    Ok(contract)
 }
 
 /// Validates a parsed event contract against the governed `v0.1` rules.
@@ -724,7 +933,11 @@ fn validate_schema_container(
     path: &str,
     errors: &mut Vec<ValidationError>,
 ) {
-    if !container.schema.is_object() {
+    validate_schema_value(&container.schema, path, errors);
+}
+
+fn validate_schema_value(schema: &Value, path: &str, errors: &mut Vec<ValidationError>) {
+    if !schema.is_object() {
         errors.push(error(
             ValidationErrorCode::InvalidFormat,
             path,
@@ -974,6 +1187,35 @@ fn validate_dependencies(dependencies: &[DependencyReference], errors: &mut Vec<
                 ValidationErrorCode::DuplicateItem,
                 &id_path,
                 "dependencies must be unique by artifact_type, id, and version",
+            ));
+        }
+    }
+}
+
+fn validate_connector_requirements(
+    requirements: &[ConnectorRequirement],
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut seen = HashSet::new();
+    for (index, requirement) in requirements.iter().enumerate() {
+        let id_path = format!("$.connector_requirements[{index}].connector_id");
+        let version_path = format!("$.connector_requirements[{index}].version");
+        validate_non_empty(&requirement.connector_id, &id_path, errors);
+        if VersionReq::parse(&requirement.version).is_err() {
+            errors.push(error(
+                ValidationErrorCode::InvalidConnectorRequirement,
+                &version_path,
+                "connector requirement version must be a valid semver range",
+            ));
+        }
+        if !seen.insert((
+            requirement.connector_id.clone(),
+            requirement.version.clone(),
+        )) {
+            errors.push(error(
+                ValidationErrorCode::DuplicateItem,
+                &id_path,
+                "connector_requirements must be unique by connector_id and version",
             ));
         }
     }

@@ -1,0 +1,25 @@
+{
+  "kind": "connector_contract",
+  "schema_version": "1.0.0",
+  "connector_id": "traverse.http",
+  "version": "1.0.0",
+  "capabilities_provided": [
+    "traverse.http.outbound"
+  ],
+  "required_config_schema": {
+    "type": "object",
+    "required": [
+      "base_url"
+    ],
+    "properties": {
+      "base_url": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "supported_placement_targets": [
+    "local",
+    "cloud"
+  ]
+}

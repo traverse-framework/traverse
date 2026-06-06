@@ -1,0 +1,28 @@
+{
+  "kind": "connector_contract",
+  "schema_version": "1.0.0",
+  "connector_id": "traverse.env",
+  "version": "1.0.0",
+  "capabilities_provided": [
+    "traverse.env.read"
+  ],
+  "required_config_schema": {
+    "type": "object",
+    "required": [
+      "allowed_keys"
+    ],
+    "properties": {
+      "allowed_keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "supported_placement_targets": [
+    "local",
+    "cloud"
+  ]
+}

@@ -147,6 +147,7 @@ fn expedition_contract() -> CapabilityContract {
             ExecutionTarget::Device,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 

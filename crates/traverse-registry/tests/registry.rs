@@ -5,20 +5,21 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use traverse_contracts::{
-    BinaryFormat as ContractBinaryFormat, CapabilityContract, Condition, DependencyArtifactType,
-    DependencyReference, Entrypoint, EntrypointKind, EventClassification, EventContract,
-    EventPayload, EventProvenance, EventProvenanceSource, EventReference, EventType,
+    BinaryFormat as ContractBinaryFormat, CapabilityContract, Condition, ConnectorRequirement,
+    DependencyArtifactType, DependencyReference, Entrypoint, EntrypointKind, EventClassification,
+    EventContract, EventPayload, EventProvenance, EventProvenanceSource, EventReference, EventType,
     EvidenceStatus, EvidenceType, Execution, ExecutionConstraints, ExecutionTarget,
     FilesystemAccess, HostApiAccess, IdReference, Lifecycle, NetworkAccess, Owner,
     PayloadCompatibility, Provenance, ProvenanceSource, SchemaContainer, ServiceType, SideEffect,
-    SideEffectKind, ValidationEvidence,
+    SideEffectKind, ValidationEvidence, reference_connector_contracts,
 };
 use traverse_registry::{
     ArtifactDigests, BinaryFormat, BinaryReference, BundleLoadErrorCode, CapabilityArtifactRecord,
     CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, EventRegistryErrorCode,
-    ImplementationKind, LookupScope, RegistryErrorCode, RegistryProvenance, RegistryScope,
-    SourceKind, SourceReference, WorkflowReference, load_registry_bundle, resolve_version_range,
+    CompositionPattern, ConnectorRegistration, DiscoveryQuery, EventRegistration, EventRegistry,
+    EventRegistryErrorCode, ImplementationKind, LookupScope, RegistryErrorCode, RegistryProvenance,
+    RegistryScope, SourceKind, SourceReference, WorkflowReference, load_registry_bundle,
+    resolve_version_range,
 };
 
 #[test]
@@ -63,6 +64,174 @@ fn duplicate_identical_registration_is_idempotent() {
 
     assert_eq!(first.record, second.record);
     assert_eq!(first.index_entry, second.index_entry);
+}
+
+#[test]
+fn registers_and_discovers_reference_connector() {
+    let mut registry = CapabilityRegistry::new();
+    let connector = reference_connector_contracts()
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.http")
+        .expect("traverse.http reference connector should exist");
+
+    let record = registry
+        .register_connector(connector_registration(RegistryScope::Public, connector))
+        .expect("connector registration should pass");
+    let discovered =
+        registry.discover_connectors(LookupScope::PublicOnly, "traverse.http", "^1.0.0");
+
+    assert_eq!(discovered, vec![record]);
+}
+
+#[test]
+fn connector_registration_rejects_invalid_contract() {
+    let mut registry = CapabilityRegistry::new();
+    let mut connector = reference_connector_contracts()
+        .into_iter()
+        .next()
+        .expect("reference connector should exist");
+    connector.connector_id.clear();
+
+    let failure = registry
+        .register_connector(connector_registration(RegistryScope::Public, connector))
+        .expect_err("invalid connector contract should fail");
+
+    assert!(failure.errors.iter().any(|error| {
+        error.code == RegistryErrorCode::InvalidConnectorContract
+            && error.target == "$.connector_id"
+    }));
+}
+
+#[test]
+fn connector_registration_is_idempotent_and_rejects_conflicts() {
+    let mut registry = CapabilityRegistry::new();
+    let connector = reference_connector_contracts()
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.env")
+        .expect("traverse.env reference connector should exist");
+    let request = connector_registration(RegistryScope::Public, connector.clone());
+
+    let first = registry
+        .register_connector(request.clone())
+        .expect("connector registration should pass");
+    let second = registry
+        .register_connector(request)
+        .expect("identical connector registration should be idempotent");
+    assert_eq!(first, second);
+
+    let mut conflicting_request = connector_registration(RegistryScope::Public, connector);
+    conflicting_request.registered_at = "2026-04-20T00:00:00Z".to_string();
+    let failure = registry
+        .register_connector(conflicting_request)
+        .expect_err("different connector metadata should conflict");
+    assert_eq!(
+        failure.errors[0].code,
+        RegistryErrorCode::ImmutableVersionConflict
+    );
+}
+
+#[test]
+fn connector_discovery_handles_invalid_ranges_and_private_shadowing() {
+    let mut registry = CapabilityRegistry::new();
+    let connector = reference_connector_contracts()
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.env")
+        .expect("traverse.env reference connector should exist");
+    registry
+        .register_connector(connector_registration(
+            RegistryScope::Public,
+            connector.clone(),
+        ))
+        .expect("public connector registration should pass");
+    registry
+        .register_connector(connector_registration(RegistryScope::Private, connector))
+        .expect("private connector registration should pass");
+
+    assert!(
+        registry
+            .discover_connectors(LookupScope::PreferPrivate, "traverse.env", "not a range")
+            .is_empty()
+    );
+    assert!(
+        registry
+            .discover_connectors(LookupScope::PreferPrivate, "traverse.http", "^1.0.0")
+            .is_empty()
+    );
+
+    let discovered =
+        registry.discover_connectors(LookupScope::PreferPrivate, "traverse.env", "^1.0.0");
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].scope, RegistryScope::Private);
+}
+
+#[test]
+fn capability_registration_rejects_missing_required_connector() {
+    let mut registry = CapabilityRegistry::new();
+    let mut contract = base_contract("content.comments.create-comment-draft", "1.0.0");
+    contract.connector_requirements.push(ConnectorRequirement {
+        connector_id: "traverse.http".to_string(),
+        version: "^1.0.0".to_string(),
+    });
+
+    let failure = registry
+        .register(executable_registration(RegistryScope::Public, contract))
+        .expect_err("missing connector should reject registration");
+
+    assert!(failure.errors.iter().any(|error| {
+        error.code == RegistryErrorCode::MissingRequiredConnector
+            && error.message.contains("missing_required_connector")
+    }));
+}
+
+#[test]
+fn capability_registration_rejects_incompatible_connector_version() {
+    let mut registry = CapabilityRegistry::new();
+    let connector = reference_connector_contracts()
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.http")
+        .expect("traverse.http reference connector should exist");
+    registry
+        .register_connector(connector_registration(RegistryScope::Public, connector))
+        .expect("connector registration should pass");
+
+    let mut contract = base_contract("content.comments.create-comment-draft", "1.0.0");
+    contract.connector_requirements.push(ConnectorRequirement {
+        connector_id: "traverse.http".to_string(),
+        version: "^2.0.0".to_string(),
+    });
+
+    let failure = registry
+        .register(executable_registration(RegistryScope::Public, contract))
+        .expect_err("incompatible connector should reject registration");
+
+    assert!(failure.errors.iter().any(|error| {
+        error.code == RegistryErrorCode::ConnectorVersionIncompatible
+            && error.message.contains("connector_version_incompatible")
+    }));
+}
+
+#[test]
+fn capability_registration_accepts_satisfied_connector_requirement() {
+    let mut registry = CapabilityRegistry::new();
+    let connector = reference_connector_contracts()
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.http")
+        .expect("traverse.http reference connector should exist");
+    registry
+        .register_connector(connector_registration(RegistryScope::Public, connector))
+        .expect("connector registration should pass");
+
+    let mut contract = base_contract("content.comments.create-comment-draft", "1.0.0");
+    contract.connector_requirements.push(ConnectorRequirement {
+        connector_id: "traverse.http".to_string(),
+        version: "^1.0.0".to_string(),
+    });
+
+    let outcome = registry
+        .register(executable_registration(RegistryScope::Public, contract))
+        .expect("satisfied connector requirement should allow registration");
+
+    assert_eq!(outcome.record.id, "content.comments.create-comment-draft");
 }
 
 #[test]
@@ -585,6 +754,25 @@ fn event_registration(scope: RegistryScope, contract: EventContract) -> EventReg
     }
 }
 
+fn connector_registration(
+    scope: RegistryScope,
+    contract: traverse_contracts::ConnectorContract,
+) -> ConnectorRegistration {
+    ConnectorRegistration {
+        scope,
+        contract_path: format!(
+            "registry/{}/connectors/{}/{}.json",
+            scope_name(scope),
+            contract.connector_id,
+            contract.version
+        ),
+        registered_at: "2026-04-19T00:00:00Z".to_string(),
+        governing_spec: "039-connector-plugin-architecture".to_string(),
+        validator_version: "registry-test".to_string(),
+        contract,
+    }
+}
+
 fn workflow_registration(
     scope: RegistryScope,
     contract: CapabilityContract,
@@ -710,6 +898,7 @@ fn base_contract(id: &str, version: &str) -> CapabilityContract {
             ExecutionTarget::Device,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 

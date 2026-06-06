@@ -2122,6 +2122,7 @@ mod tests {
                 ExecutionTarget::Device,
             ],
             event_trigger: None,
+            connector_requirements: Vec::new(),
         }
     }
 

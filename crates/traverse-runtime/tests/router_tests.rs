@@ -99,6 +99,7 @@ fn base_contract(service_type: ServiceType) -> CapabilityContract {
         service_type,
         permitted_targets: vec![ExecutionTarget::Local, ExecutionTarget::Cloud],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 

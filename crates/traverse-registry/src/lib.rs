@@ -20,13 +20,13 @@ pub use semver_resolver::{
 };
 pub use workflows::*;
 
-use semver::Version;
+use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use traverse_contracts::{
-    CapabilityContract, ErrorSeverity, EventReference, IdReference, Lifecycle, Owner,
-    PublishedContractRecord, ValidationContext, ValidationFailure, governed_content_digest,
-    validate_contract,
+    CapabilityContract, ConnectorContract, ConnectorRequirement, ErrorSeverity, EventReference,
+    ExecutionTarget, IdReference, Lifecycle, Owner, PublishedContractRecord, ValidationContext,
+    ValidationFailure, governed_content_digest, validate_connector_contract, validate_contract,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,6 +133,29 @@ pub struct CapabilityRegistration {
     pub registered_at: String,
     pub tags: Vec<String>,
     pub composability: ComposabilityMetadata,
+    pub governing_spec: String,
+    pub validator_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorRegistration {
+    pub scope: RegistryScope,
+    pub contract: ConnectorContract,
+    pub contract_path: String,
+    pub registered_at: String,
+    pub governing_spec: String,
+    pub validator_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorRegistryRecord {
+    pub scope: RegistryScope,
+    pub connector_id: String,
+    pub version: String,
+    pub capabilities_provided: Vec<String>,
+    pub supported_placement_targets: Vec<ExecutionTarget>,
+    pub contract_path: String,
+    pub registered_at: String,
     pub governing_spec: String,
     pub validator_version: String,
 }
@@ -263,6 +286,9 @@ pub enum RegistryErrorCode {
     InvalidSemverProgression,
     SemverTooSmall,
     UnknownCompatibility,
+    InvalidConnectorContract,
+    MissingRequiredConnector,
+    ConnectorVersionIncompatible,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +307,7 @@ pub struct RegistryFailure {
 #[derive(Debug, Clone, Default)]
 pub struct CapabilityRegistry {
     contracts: BTreeMap<RegistryKey, CapabilityContract>,
+    connectors: BTreeMap<RegistryKey, ConnectorRegistryRecord>,
     records: BTreeMap<RegistryKey, CapabilityRegistryRecord>,
     artifacts: BTreeMap<String, CapabilityArtifactRecord>,
     index: BTreeMap<RegistryKey, DiscoveryIndexEntry>,
@@ -293,6 +320,61 @@ impl CapabilityRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Registers a connector contract as a first-class registry entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryFailure`] when the connector contract is invalid or
+    /// the same connector version has already been registered with different metadata.
+    pub fn register_connector(
+        &mut self,
+        request: ConnectorRegistration,
+    ) -> Result<ConnectorRegistryRecord, RegistryFailure> {
+        let connector =
+            validate_connector_contract(request.contract).map_err(|failure| RegistryFailure {
+                errors: failure
+                    .errors
+                    .into_iter()
+                    .map(|error| RegistryError {
+                        code: RegistryErrorCode::InvalidConnectorContract,
+                        target: error.path,
+                        message: error.message,
+                        severity: error.severity,
+                    })
+                    .collect(),
+            })?;
+        let key = (
+            request.scope,
+            connector.connector_id.clone(),
+            connector.version.clone(),
+        );
+        let record = ConnectorRegistryRecord {
+            scope: request.scope,
+            connector_id: connector.connector_id,
+            version: connector.version,
+            capabilities_provided: connector.capabilities_provided,
+            supported_placement_targets: connector.supported_placement_targets,
+            contract_path: request.contract_path,
+            registered_at: request.registered_at,
+            governing_spec: request.governing_spec,
+            validator_version: request.validator_version,
+        };
+
+        if let Some(existing) = self.connectors.get(&key) {
+            if existing == &record {
+                return Ok(existing.clone());
+            }
+            return Err(single_error(
+                RegistryErrorCode::ImmutableVersionConflict,
+                "$.connector",
+                "connector version is immutable once registered",
+            ));
+        }
+
+        self.connectors.insert(key, record.clone());
+        Ok(record)
     }
 
     /// Registers a capability publication into the registry.
@@ -360,6 +442,11 @@ impl CapabilityRegistry {
         .map_err(map_contract_failure)?;
 
         let contract = validated.normalized;
+        validate_connector_requirements_for_registration(
+            &contract.connector_requirements,
+            &self.connectors,
+            scope,
+        )?;
         let contract_digest = governed_content_digest(&contract);
         let artifact_ref = artifact.artifact_ref.clone();
         let record = build_registry_record(&RegistryRecordInput {
@@ -474,6 +561,38 @@ impl CapabilityRegistry {
         }
 
         results.sort_by(compare_index_entries);
+        results
+    }
+
+    #[must_use]
+    pub fn discover_connectors(
+        &self,
+        lookup_scope: LookupScope,
+        connector_id: &str,
+        version_range: &str,
+    ) -> Vec<ConnectorRegistryRecord> {
+        let Ok(requirement) = VersionReq::parse(version_range) else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        let mut shadowed = BTreeSet::new();
+        for &scope in lookup_order(lookup_scope) {
+            for ((entry_scope, id, version), record) in &self.connectors {
+                if *entry_scope != scope || id != connector_id {
+                    continue;
+                }
+                if !shadowed.insert((id.clone(), version.clone())) {
+                    continue;
+                }
+                let Ok(parsed) = Version::parse(version) else {
+                    continue;
+                };
+                if requirement.matches(&parsed) {
+                    results.push(record.clone());
+                }
+            }
+        }
+        results.sort_by(|a, b| a.version.cmp(&b.version));
         results
     }
 
@@ -767,6 +886,58 @@ fn validate_registration_fields(
     validate_unique_strings(&composability.requires, "$.composability.requires", errors);
     validate_patterns(&composability.patterns, errors);
     validate_artifact(artifact, composability, errors);
+}
+
+fn validate_connector_requirements_for_registration(
+    requirements: &[ConnectorRequirement],
+    connectors: &BTreeMap<RegistryKey, ConnectorRegistryRecord>,
+    scope: RegistryScope,
+) -> Result<(), RegistryFailure> {
+    for requirement in requirements {
+        let matching_id = connectors
+            .iter()
+            .filter(|((entry_scope, connector_id, _), _)| {
+                (*entry_scope == scope || *entry_scope == RegistryScope::Public)
+                    && connector_id == &requirement.connector_id
+            })
+            .collect::<Vec<_>>();
+        if matching_id.is_empty() {
+            return Err(single_error(
+                RegistryErrorCode::MissingRequiredConnector,
+                "$.connector_requirements",
+                &format!(
+                    "missing_required_connector: {} {}",
+                    requirement.connector_id, requirement.version
+                ),
+            ));
+        }
+        let parsed_range = VersionReq::parse(&requirement.version).map_err(|_| {
+            single_error(
+                RegistryErrorCode::ConnectorVersionIncompatible,
+                "$.connector_requirements",
+                &format!(
+                    "connector_version_incompatible: {} {}",
+                    requirement.connector_id, requirement.version
+                ),
+            )
+        })?;
+        let has_satisfying_version = matching_id.iter().any(|((_, _, version), _)| {
+            Version::parse(version)
+                .map(|parsed| parsed_range.matches(&parsed))
+                .unwrap_or(false)
+        });
+        if !has_satisfying_version {
+            return Err(single_error(
+                RegistryErrorCode::ConnectorVersionIncompatible,
+                "$.connector_requirements",
+                &format!(
+                    "connector_version_incompatible: {} {}",
+                    requirement.connector_id, requirement.version
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_artifact(
@@ -1189,6 +1360,53 @@ mod tests {
         let discovered = registry.discover(LookupScope::PreferPrivate, &DiscoveryQuery::default());
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].scope, RegistryScope::Private);
+    }
+
+    #[test]
+    fn connector_helpers_cover_invalid_range_and_invalid_stored_version_paths() {
+        let mut registry = CapabilityRegistry::new();
+        let key = (
+            RegistryScope::Public,
+            "traverse.env".to_string(),
+            "not-semver".to_string(),
+        );
+        registry.connectors.insert(
+            key,
+            ConnectorRegistryRecord {
+                scope: RegistryScope::Public,
+                connector_id: "traverse.env".to_string(),
+                version: "not-semver".to_string(),
+                capabilities_provided: vec!["traverse.env.read".to_string()],
+                supported_placement_targets: vec![ExecutionTarget::Local],
+                contract_path: "contracts/connectors/traverse.env/connector_contract.json"
+                    .to_string(),
+                registered_at: "2026-04-19T00:00:00Z".to_string(),
+                governing_spec: "039-connector-plugin-architecture".to_string(),
+                validator_version: "registry-test".to_string(),
+            },
+        );
+
+        assert!(
+            registry
+                .discover_connectors(LookupScope::PublicOnly, "traverse.env", "^1.0.0")
+                .is_empty()
+        );
+
+        let requirements = vec![traverse_contracts::ConnectorRequirement {
+            connector_id: "traverse.env".to_string(),
+            version: "not a range".to_string(),
+        }];
+        let failure = validate_connector_requirements_for_registration(
+            &requirements,
+            &registry.connectors,
+            RegistryScope::Public,
+        )
+        .expect_err("invalid range should fail");
+
+        assert_eq!(
+            failure.errors[0].code,
+            RegistryErrorCode::ConnectorVersionIncompatible
+        );
     }
 
     #[test]
@@ -1783,6 +2001,7 @@ mod tests {
                 ExecutionTarget::Device,
             ],
             event_trigger: None,
+            connector_requirements: Vec::new(),
         }
     }
 

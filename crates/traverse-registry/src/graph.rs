@@ -883,6 +883,7 @@ mod tests {
                 ExecutionTarget::Device,
             ],
             event_trigger: None,
+            connector_requirements: Vec::new(),
             provenance: Provenance {
                 source: ProvenanceSource::Greenfield,
                 author: "graph".to_string(),

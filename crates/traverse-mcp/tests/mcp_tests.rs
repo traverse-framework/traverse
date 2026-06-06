@@ -126,6 +126,7 @@ fn capability_contract() -> traverse_contracts::CapabilityContract {
             ExecutionTarget::Edge,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 

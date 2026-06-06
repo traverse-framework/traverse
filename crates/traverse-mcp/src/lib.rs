@@ -956,6 +956,7 @@ mod tests {
                 traverse_contracts::ExecutionTarget::Device,
             ],
             event_trigger: None,
+            connector_requirements: Vec::new(),
         }
     }
 

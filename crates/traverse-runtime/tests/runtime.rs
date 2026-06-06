@@ -1074,6 +1074,7 @@ fn capability_contract(
             traverse_contracts::ExecutionTarget::Device,
         ],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     }
 }
 
@@ -1393,6 +1394,7 @@ fn simple_registration(scope: RegistryScope, id: &str, version: &str) -> Capabil
         service_type: traverse_contracts::ServiceType::Stateless,
         permitted_targets: vec![ExecutionTarget::Local],
         event_trigger: None,
+        connector_requirements: Vec::new(),
     };
     CapabilityRegistration {
         scope,
