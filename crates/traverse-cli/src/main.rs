@@ -2001,6 +2001,7 @@ fn build_capability_artifact(
                     "bundled://{}/{}/module.wasm",
                     capability.contract.id, capability.contract.version
                 ),
+                signature: None,
             }),
             ImplementationKind::Workflow => None,
         },

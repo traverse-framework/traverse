@@ -1235,6 +1235,7 @@ mod tests {
                 traceparent: None,
                 tracestate: None,
                 metadata: None,
+                identity: None,
             },
             governing_spec: "006-runtime-request-execution".to_string(),
         });
@@ -1682,6 +1683,7 @@ mod tests {
                     traceparent: None,
                     tracestate: None,
                     metadata: None,
+                    identity: None,
                 },
                 governing_spec: "006-runtime-request-execution".to_string(),
             },
@@ -1707,6 +1709,7 @@ mod tests {
             &selected,
             crate::resolve_placement(crate::PlacementTarget::Local)
                 .unwrap_or_else(|_| unreachable!("local placement should resolve")),
+            None,
         );
         let outcome = runtime.execute_workflow_capability(
             crate::ExecutionContext {
@@ -1765,6 +1768,7 @@ mod tests {
             &selected,
             crate::resolve_placement(crate::PlacementTarget::Local)
                 .unwrap_or_else(|_| unreachable!("local placement should resolve")),
+            None,
         );
         let failing_runtime = Runtime::new(capability_registry_fixture(), FailingWorkflowExecutor)
             .with_workflow_registry(workflow_registry_fixture());
@@ -1893,6 +1897,7 @@ mod tests {
                         binary: Some(BinaryReference {
                             format: BinaryFormat::Wasm,
                             location: format!("{id}.wasm"),
+                            signature: None,
                         }),
                         workflow_ref: None,
                         digests: ArtifactDigests {
@@ -2163,6 +2168,7 @@ mod tests {
                 traceparent: None,
                 tracestate: None,
                 metadata: None,
+                identity: None,
             },
             governing_spec: "006-runtime-request-execution".to_string(),
         }

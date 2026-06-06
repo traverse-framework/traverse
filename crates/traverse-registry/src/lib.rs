@@ -68,6 +68,21 @@ pub enum BinaryFormat {
 pub struct BinaryReference {
     pub format: BinaryFormat,
     pub location: String,
+    pub signature: Option<ArtifactSignature>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactSignatureScheme {
+    Ed25519,
+    Sigstore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactSignature {
+    pub scheme: ArtifactSignatureScheme,
+    pub public_key_hex: Option<String>,
+    pub signature_hex: Option<String>,
+    pub sigstore_bundle_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1894,6 +1909,7 @@ mod tests {
             binary: Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: format!("artifacts/{}/{}.wasm", contract.name, contract.version),
+                signature: None,
             }),
             workflow_ref: None,
             digests: ArtifactDigests {

@@ -782,6 +782,7 @@ mod tests {
                     BinaryReference {
                         format: BinaryFormat::Wasm,
                         location: "artifacts/example.wasm".to_string(),
+                        signature: None,
                     }
                 }),
                 workflow_ref: workflow_ref.map(|(workflow_id, workflow_version)| {

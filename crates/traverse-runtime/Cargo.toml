@@ -13,6 +13,7 @@ semver = "1.0.27"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10"
+ed25519-dalek = "2.2.0"
 wasmtime = { version = "44", features = ["cranelift", "component-model"] }
 wasmtime-wasi = "44"
 uuid = { version = "1", features = ["v4"] }

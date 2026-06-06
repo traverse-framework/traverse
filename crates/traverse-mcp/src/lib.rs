@@ -972,6 +972,7 @@ mod tests {
             binary: Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: "artifacts/create-comment-draft.wasm".to_string(),
+                signature: None,
             }),
             workflow_ref: None,
             digests: ArtifactDigests {
@@ -1121,6 +1122,7 @@ mod tests {
                 traceparent: None,
                 tracestate: None,
                 metadata: None,
+                identity: None,
             },
             governing_spec: "006-runtime-request-execution".to_string(),
         }

@@ -1452,6 +1452,7 @@ fn derive_registration(
             binary: Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: entrypoint,
+                signature: None,
             }),
             workflow_ref: None,
             digests: ArtifactDigests {
@@ -5427,6 +5428,7 @@ mod tests {
                 binary: Some(BinaryReference {
                     format: BinaryFormat::Wasm,
                     location: format!("test/{id}/module.wasm"),
+                    signature: None,
                 }),
                 workflow_ref: None,
                 digests: ArtifactDigests {

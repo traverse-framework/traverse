@@ -153,6 +153,7 @@ impl LoadedAgentPackage {
                 binary: Some(BinaryReference {
                     format: BinaryFormat::Wasm,
                     location: self.binary_path.display().to_string(),
+                    signature: None,
                 }),
                 workflow_ref: None,
                 digests: ArtifactDigests {

@@ -819,6 +819,7 @@ fn base_request_exact() -> RuntimeRequest {
             traceparent: None,
             tracestate: None,
             metadata: None,
+            identity: None,
         },
         governing_spec: "006-runtime-request-execution".to_string(),
     }
@@ -1090,6 +1091,7 @@ fn artifact_record(id: &str, version: &str) -> CapabilityArtifactRecord {
         binary: Some(BinaryReference {
             format: BinaryFormat::Wasm,
             location: format!("artifacts/{id}/{version}/capability.wasm"),
+            signature: None,
         }),
         workflow_ref: None,
         digests: ArtifactDigests {

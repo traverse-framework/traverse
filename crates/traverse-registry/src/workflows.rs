@@ -2250,6 +2250,7 @@ mod tests {
                 binary: Some(BinaryReference {
                     format: BinaryFormat::Wasm,
                     location: format!("{capability_id}.wasm"),
+                    signature: None,
                 }),
                 workflow_ref: None,
                 digests: ArtifactDigests {

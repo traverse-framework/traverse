@@ -7,12 +7,18 @@ pub mod events;
 pub mod executor;
 pub mod placement;
 pub mod router;
+pub mod security;
 pub mod trace;
 
+use security::{
+    ArtifactVerificationFailure, ArtifactVerificationRecord, RuntimeIdentity,
+    RuntimeSecurityConfig, RuntimeWarning, derive_identity_from_jwt, verify_artifact,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::fmt;
+use std::fs;
 use traverse_contracts::{
     ExecutionTarget, HostApiAccess, Lifecycle, NetworkAccess, ViolationRecord,
 };
@@ -47,6 +53,7 @@ pub struct Runtime<E> {
     workflow_registry: WorkflowRegistry,
     executor: E,
     observability: RuntimeObservabilityConfig,
+    security: RuntimeSecurityConfig,
 }
 
 impl<E> Runtime<E> {
@@ -57,6 +64,7 @@ impl<E> Runtime<E> {
             workflow_registry: WorkflowRegistry::new(),
             executor,
             observability: RuntimeObservabilityConfig::default(),
+            security: RuntimeSecurityConfig::default(),
         }
     }
 
@@ -75,6 +83,17 @@ impl<E> Runtime<E> {
     #[must_use]
     pub fn observability_config(&self) -> &RuntimeObservabilityConfig {
         &self.observability
+    }
+
+    #[must_use]
+    pub fn with_security_config(mut self, security: RuntimeSecurityConfig) -> Self {
+        self.security = security;
+        self
+    }
+
+    #[must_use]
+    pub fn security_config(&self) -> &RuntimeSecurityConfig {
+        &self.security
     }
 
     /// Returns a reference to the capability registry.
@@ -217,6 +236,8 @@ pub struct RuntimeContext {
     pub tracestate: Option<String>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    #[serde(default)]
+    pub identity: Option<RuntimeIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,6 +648,10 @@ pub struct ExecutionRecord {
     pub output_digest: Option<String>,
     #[serde(default)]
     pub failure_reason: Option<ExecutionFailureReason>,
+    #[serde(default)]
+    pub artifact_verification: Option<ArtifactVerificationRecord>,
+    #[serde(default)]
+    pub identity: Option<RuntimeIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -669,6 +694,8 @@ pub struct RuntimeResult {
     pub output: Option<Value>,
     #[serde(default)]
     pub error: Option<RuntimeError>,
+    #[serde(default)]
+    pub warnings: Vec<RuntimeWarning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -986,7 +1013,10 @@ where
         emitter.push(
             RuntimeState::Discovering,
             RuntimeTransitionReasonCode::RequestStarted,
-            json!({"lookup_scope": attempt.request.lookup.scope}),
+            json!({
+                "lookup_scope": attempt.request.lookup.scope,
+                "identity": attempt.request.context.identity,
+            }),
         );
 
         if let Some(error) = validate_request(&attempt.request) {
@@ -1160,7 +1190,7 @@ where
         selection: SelectionRecord,
         selected: &ResolvedCapability,
     ) -> RuntimeExecutionOutcome {
-        let context = ExecutionContext {
+        let mut context = ExecutionContext {
             attempt,
             emitter,
             candidate_collection,
@@ -1189,6 +1219,7 @@ where
                         PlacementDecisionReason::SelectionNotReached,
                     ),
                     error,
+                    artifact_verification: None,
                 },
             );
         }
@@ -1206,10 +1237,54 @@ where
                             PlacementDecisionReason::RequestedTargetUnsupported,
                         ),
                         error,
+                        artifact_verification: None,
                     },
                 );
             }
         };
+
+        let artifact_bytes = match load_artifact_bytes_for_verification(selected) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return pre_execution_failure_outcome(
+                    context,
+                    PreExecutionFailure {
+                        artifact_ref: Some(selected.record.artifact_ref.clone()),
+                        failure_reason: ExecutionFailureReason::ArtifactMissing,
+                        placement,
+                        error,
+                        artifact_verification: None,
+                    },
+                );
+            }
+        };
+
+        match verify_artifact(selected, &artifact_bytes, &self.security) {
+            Ok(record) => {
+                if record.warning_code.is_some() {
+                    context.attempt.warnings.push(RuntimeWarning {
+                        code: record.warning_code.clone().unwrap_or_default(),
+                        message: "unsigned local/dev artifact allowed by development security mode"
+                            .to_string(),
+                    });
+                }
+                context.attempt.artifact_verification = Some(record);
+            }
+            Err(error) => {
+                let record = error.record().clone();
+                let runtime_error = artifact_verification_runtime_error(&error);
+                return pre_execution_failure_outcome(
+                    context,
+                    PreExecutionFailure {
+                        artifact_ref: Some(selected.record.artifact_ref.clone()),
+                        failure_reason: ExecutionFailureReason::ArtifactNotRunnable,
+                        placement,
+                        error: runtime_error,
+                        artifact_verification: Some(record),
+                    },
+                );
+            }
+        }
 
         // Dependency resolution gate (spec 043): resolve and verify all
         // Capability-typed dependencies before executing.
@@ -1240,6 +1315,7 @@ where
                     "required_version": detail_version,
                 }),
             );
+            let artifact_verification = context.attempt.artifact_verification.clone();
             return pre_execution_failure_outcome(
                 context,
                 PreExecutionFailure {
@@ -1247,6 +1323,7 @@ where
                     failure_reason: ExecutionFailureReason::ArtifactMissing,
                     placement,
                     error,
+                    artifact_verification,
                 },
             );
         }
@@ -1257,6 +1334,7 @@ where
             RuntimeErrorCode::RequestInvalid,
             "runtime request input does not satisfy the selected capability input contract",
         ) {
+            let artifact_verification = context.attempt.artifact_verification.clone();
             return pre_execution_failure_outcome(
                 context,
                 PreExecutionFailure {
@@ -1264,6 +1342,7 @@ where
                     failure_reason: ExecutionFailureReason::ContractInputInvalid,
                     placement,
                     error,
+                    artifact_verification,
                 },
             );
         }
@@ -1277,7 +1356,9 @@ where
         selected: &ResolvedCapability,
         placement: PlacementDecisionRecord,
     ) -> RuntimeExecutionOutcome {
-        let started_execution = start_selected_execution(&mut context.emitter, selected, placement);
+        let identity = context.attempt.request.context.identity.clone();
+        let started_execution =
+            start_selected_execution(&mut context.emitter, selected, placement, identity.as_ref());
         if selected.record.implementation_kind == ImplementationKind::Workflow {
             return self.execute_workflow_capability(context, selected, started_execution);
         }
@@ -1395,6 +1476,7 @@ fn terminal_failure(context: FailureContext) -> RuntimeExecutionOutcome {
         trace_ref: context.attempt.trace_id,
         output: None,
         error: Some(context.error),
+        warnings: context.attempt.warnings,
     };
 
     RuntimeExecutionOutcome {
@@ -1444,10 +1526,61 @@ fn resolve_placement(
     ))
 }
 
+fn sanitized_request(mut request: RuntimeRequest) -> RuntimeRequest {
+    if let Some(token) = request.context.caller.take() {
+        if let Some(identity) = derive_identity_from_jwt(&token) {
+            request.context.identity = Some(identity);
+        } else {
+            request.context.caller = Some(token);
+        }
+    }
+    request
+}
+
+fn load_artifact_bytes_for_verification(
+    selected: &ResolvedCapability,
+) -> Result<Vec<u8>, RuntimeError> {
+    let Some(binary) = selected.artifact.binary.as_ref() else {
+        return Ok(Vec::new());
+    };
+    match fs::read(&binary.location) {
+        Ok(bytes) => Ok(bytes),
+        Err(_) if binary.signature.is_none() => Ok(selected
+            .artifact
+            .digests
+            .binary_digest
+            .clone()
+            .unwrap_or_else(|| selected.record.artifact_ref.clone())
+            .into_bytes()),
+        Err(error) => Err(runtime_error(
+            RuntimeErrorCode::ArtifactMissing,
+            "artifact bytes could not be loaded for signature verification",
+            json!({
+                "artifact_ref": selected.record.artifact_ref,
+                "location": binary.location,
+                "code": "artifact_load_failed",
+                "message": error.to_string(),
+            }),
+        )),
+    }
+}
+
+fn artifact_verification_runtime_error(error: &ArtifactVerificationFailure) -> RuntimeError {
+    runtime_error(
+        RuntimeErrorCode::ContractViolation,
+        "artifact signature verification failed before execution",
+        json!({
+            "code": error.code(),
+            "artifact_verification": error.record(),
+        }),
+    )
+}
+
 fn begin_attempt(
     request: RuntimeRequest,
     observability: RuntimeObservabilityConfig,
 ) -> (AttemptContext, StateEmitter) {
+    let request = sanitized_request(request);
     let request_id = request.request_id.clone();
     let execution_id = format!("{EXECUTION_PREFIX}{request_id}");
     let trace_id = format!("{TRACE_PREFIX}{execution_id}");
@@ -1455,7 +1588,10 @@ fn begin_attempt(
     emitter.push(
         RuntimeState::LoadingRegistry,
         RuntimeTransitionReasonCode::RuntimeInitializationStarted,
-        json!({"registry_status": "available"}),
+        json!({
+            "registry_status": "available",
+            "identity": request.context.identity,
+        }),
     );
     emitter.push(
         RuntimeState::Ready,
@@ -1469,6 +1605,8 @@ fn begin_attempt(
             execution_id,
             trace_id,
             observability,
+            artifact_verification: None,
+            warnings: Vec::new(),
         },
         emitter,
     )
@@ -1499,6 +1637,7 @@ fn invalid_request_outcome(
         json!({"terminal_state": RuntimeState::Error}),
     );
     let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
     terminal_failure(FailureContext {
         attempt,
         state_events: finished.events,
@@ -1525,6 +1664,8 @@ fn invalid_request_outcome(
             completed_at: None,
             output_digest: None,
             failure_reason: Some(ExecutionFailureReason::ContractInputInvalid),
+            artifact_verification: None,
+            identity,
         },
         error,
         emitted_events: Vec::new(),
@@ -1571,6 +1712,7 @@ fn no_eligible_outcome(
         SelectionFailureReason::NotRunnable
     };
     let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
 
     terminal_failure(FailureContext {
         attempt,
@@ -1594,6 +1736,8 @@ fn no_eligible_outcome(
             completed_at: None,
             output_digest: None,
             failure_reason: Some(ExecutionFailureReason::ArtifactNotRunnable),
+            artifact_verification: None,
+            identity,
         },
         error,
         emitted_events: Vec::new(),
@@ -1631,6 +1775,7 @@ fn ambiguous_outcome(
         json!({"terminal_state": RuntimeState::Error}),
     );
     let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
 
     terminal_failure(FailureContext {
         attempt,
@@ -1654,6 +1799,8 @@ fn ambiguous_outcome(
             completed_at: None,
             output_digest: None,
             failure_reason: Some(ExecutionFailureReason::ArtifactNotRunnable),
+            artifact_verification: None,
+            identity,
         },
         error,
         emitted_events: Vec::new(),
@@ -1687,6 +1834,7 @@ fn pre_execution_failure_outcome(
         json!({"terminal_state": RuntimeState::Error}),
     );
     let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
     terminal_failure(FailureContext {
         attempt,
         state_events: finished.events,
@@ -1706,6 +1854,8 @@ fn pre_execution_failure_outcome(
             completed_at: None,
             output_digest: None,
             failure_reason: Some(failure.failure_reason),
+            artifact_verification: failure.artifact_verification,
+            identity,
         },
         error: failure.error,
         emitted_events: Vec::new(),
@@ -1739,6 +1889,8 @@ fn execution_failure_outcome(
         json!({"terminal_state": RuntimeState::Error}),
     );
     let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
+    let artifact_verification = attempt.artifact_verification.clone();
 
     terminal_failure(FailureContext {
         attempt,
@@ -1759,6 +1911,8 @@ fn execution_failure_outcome(
             completed_at: Some(completed_at),
             output_digest: None,
             failure_reason: Some(failure.failure_reason),
+            artifact_verification,
+            identity,
         },
         error,
         emitted_events,
@@ -1831,6 +1985,8 @@ fn successful_execution_outcome(
         completed_at: Some(completed_at),
         output_digest: Some(content_digest(&execution_output)),
         failure_reason: None,
+        artifact_verification: attempt.artifact_verification.clone(),
+        identity: attempt.request.context.identity.clone(),
     };
     let result_record = TraceResultRecord {
         status: RuntimeResultStatus::Completed,
@@ -1888,6 +2044,7 @@ fn successful_execution_outcome(
         trace_ref: attempt.trace_id,
         output: Some(execution_output),
         error: None,
+        warnings: attempt.warnings,
     };
 
     RuntimeExecutionOutcome {
@@ -2454,6 +2611,8 @@ struct AttemptContext {
     execution_id: String,
     trace_id: String,
     observability: RuntimeObservabilityConfig,
+    artifact_verification: Option<ArtifactVerificationRecord>,
+    warnings: Vec<RuntimeWarning>,
 }
 
 struct CandidateResolution {
@@ -2499,6 +2658,7 @@ struct PreExecutionFailure {
     failure_reason: ExecutionFailureReason,
     placement: PlacementDecisionRecord,
     error: RuntimeError,
+    artifact_verification: Option<ArtifactVerificationRecord>,
 }
 
 enum CandidateEvaluation {
@@ -2527,6 +2687,7 @@ fn start_selected_execution(
     emitter: &mut StateEmitter,
     selected: &ResolvedCapability,
     placement: PlacementDecisionRecord,
+    identity: Option<&RuntimeIdentity>,
 ) -> StartedExecution {
     let started_at = emitter.next_timestamp();
     emitter.push(
@@ -2540,6 +2701,7 @@ fn start_selected_execution(
             "selected_target": placement.selected_target,
             "placement_status": placement.status,
             "placement_reason": placement.reason,
+            "identity": identity,
         }),
     );
     StartedExecution {
@@ -2773,6 +2935,10 @@ fn runtime_state_name(state: RuntimeState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::security::{
+        ArtifactVerificationFailure, ArtifactVerificationScheme, ArtifactVerificationStatus,
+        RuntimeSecurityConfig, derive_identity_from_jwt, verify_artifact,
+    };
     use super::{
         BrowserRuntimeSubscriptionErrorCode, BrowserRuntimeSubscriptionMessage,
         BrowserRuntimeSubscriptionRequest, CandidateEvaluation, CandidateReason, LocalExecutor,
@@ -2783,19 +2949,23 @@ mod tests {
         map_registry_scope, parse_runtime_request, runtime_candidate, subscription_targets_outcome,
         validate_browser_subscription_request, validate_payload_against_contract, validate_request,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
+    use std::fs;
     use traverse_contracts::{
         BinaryFormat as ContractBinaryFormat, Entrypoint, EntrypointKind, Execution,
         ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess, Lifecycle,
         NetworkAccess, Owner, Provenance, ProvenanceSource, SchemaContainer, ServiceType,
     };
     use traverse_registry::{
-        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-        CapabilityRegistration, CapabilityRegistry, CapabilityRegistryRecord,
-        ComposabilityMetadata, CompositionKind, CompositionPattern, DiscoveryIndexEntry,
-        ImplementationKind, RegistryProvenance, RegistryScope, ResolvedCapability, SourceKind,
-        SourceReference,
+        ArtifactDigests, ArtifactSignature, ArtifactSignatureScheme, BinaryFormat, BinaryReference,
+        CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
+        CapabilityRegistryRecord, ComposabilityMetadata, CompositionKind, CompositionPattern,
+        DiscoveryIndexEntry, ImplementationKind, RegistryProvenance, RegistryScope,
+        ResolvedCapability, SourceKind, SourceReference,
     };
+
+    const HEX_TABLE: &[u8; 16] = b"0123456789abcdef";
 
     #[test]
     fn missing_binary_metadata_is_rejected_as_artifact_missing() {
@@ -2887,6 +3057,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -2908,6 +3079,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: String::new(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -2920,6 +3092,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -2933,6 +3106,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -2947,6 +3121,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -2960,6 +3135,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -3097,6 +3273,7 @@ mod tests {
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Deprecated,
         );
@@ -3149,11 +3326,14 @@ mod tests {
             execution_id: "exec_1".to_string(),
             trace_id: "trace_exec_1".to_string(),
             observability: super::RuntimeObservabilityConfig::default(),
+            artifact_verification: None,
+            warnings: Vec::new(),
         };
         let capability = resolved_capability(
             Some(traverse_registry::BinaryReference {
                 format: traverse_registry::BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -3214,7 +3394,8 @@ mod tests {
     fn runtime_execution_produces_otel_phase_spans() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let outcome = runtime.execute(valid_request());
         let spans = &outcome.trace.otel_trace.spans;
         let names: Vec<&str> = spans.iter().map(|span| span.name.as_str()).collect();
@@ -3274,6 +3455,345 @@ mod tests {
         assert_eq!(
             runtime.observability_config().exporter.endpoint.as_deref(),
             Some("http://collector:4318")
+        );
+    }
+
+    #[test]
+    fn governed_artifact_with_valid_ed25519_signature_executes() {
+        let artifact_bytes = b"governed wasm bytes";
+        let path = temp_artifact_path("ed25519-valid");
+        assert!(fs::write(&path, artifact_bytes).is_ok());
+        let signature = ed25519_signature_for(artifact_bytes);
+        let mut registry = CapabilityRegistry::new();
+        assert!(
+            registry
+                .register(governed_registration(&path, Some(signature)))
+                .is_ok()
+        );
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .artifact_verification
+                .as_ref()
+                .map(|record| record.status),
+            Some(ArtifactVerificationStatus::Verified)
+        );
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .artifact_verification
+                .as_ref()
+                .and_then(|record| record.scheme),
+            Some(ArtifactVerificationScheme::Ed25519)
+        );
+    }
+
+    #[test]
+    fn governed_artifact_without_signature_is_rejected_in_production() {
+        let path = temp_artifact_path("missing-signature");
+        assert!(fs::write(&path, b"unsigned governed bytes").is_ok());
+        let mut registry = CapabilityRegistry::new();
+        assert!(
+            registry
+                .register(governed_registration(&path, None))
+                .is_ok()
+        );
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("missing_signature")
+        );
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .artifact_verification
+                .as_ref()
+                .and_then(|record| record.error_code.as_deref()),
+            Some("missing_signature")
+        );
+    }
+
+    #[test]
+    fn local_dev_unsigned_artifact_warns_and_executes_in_development_mode() {
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(public_registration()).is_ok());
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+        assert_eq!(
+            outcome
+                .result
+                .warnings
+                .first()
+                .map(|warning| warning.code.as_str()),
+            Some("unsigned_local_dev_artifact")
+        );
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .artifact_verification
+                .as_ref()
+                .map(|record| record.status),
+            Some(ArtifactVerificationStatus::Warning)
+        );
+    }
+
+    #[test]
+    fn governed_artifact_accepts_verified_sigstore_bundle() {
+        let path = temp_artifact_path("sigstore-valid");
+        assert!(fs::write(&path, b"sigstore governed bytes").is_ok());
+        let signature = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Sigstore,
+            public_key_hex: None,
+            signature_hex: None,
+            sigstore_bundle_ref: Some("verified://bundle/comment-draft".to_string()),
+        };
+        let mut registry = CapabilityRegistry::new();
+        assert!(
+            registry
+                .register(governed_registration(&path, Some(signature)))
+                .is_ok()
+        );
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::production());
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .artifact_verification
+                .as_ref()
+                .and_then(|record| record.scheme),
+            Some(ArtifactVerificationScheme::Sigstore)
+        );
+    }
+
+    #[test]
+    fn jwt_identity_is_derived_and_raw_token_is_not_traced() {
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(public_registration()).is_ok());
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
+        let mut request = valid_request();
+        let token = make_jwt_with_actor("alice", "workflow-agent");
+        request.context.caller = Some(token.clone());
+
+        let outcome = runtime.execute(request);
+        let trace_json = serde_json::to_string(&outcome.trace).unwrap_or_default();
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+        assert!(!trace_json.contains(&token));
+        assert_eq!(
+            outcome
+                .trace
+                .request
+                .context
+                .identity
+                .as_ref()
+                .map(|identity| identity.subject_id.as_str()),
+            Some("alice")
+        );
+        assert_eq!(
+            outcome
+                .trace
+                .execution
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.actor_id.as_deref()),
+            Some("workflow-agent")
+        );
+        assert!(
+            outcome
+                .state_events
+                .iter()
+                .any(|event| event.details.to_string().contains("alice"))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn security_branch_guards_cover_malformed_signatures_sigstore_and_jwts() {
+        let capability = governed_resolved_capability(None);
+        let missing_public_key = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: None,
+            signature_hex: Some("00".to_string()),
+            sigstore_bundle_ref: None,
+        };
+        let missing_signature = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("00".to_string()),
+            signature_hex: None,
+            sigstore_bundle_ref: None,
+        };
+        let bad_public_hex = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("abc".to_string()),
+            signature_hex: Some("00".to_string()),
+            sigstore_bundle_ref: None,
+        };
+        let bad_signature_hex = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("00".to_string()),
+            signature_hex: Some("zz".to_string()),
+            sigstore_bundle_ref: None,
+        };
+        let short_public_key = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("00".to_string()),
+            signature_hex: Some("00".repeat(64)),
+            sigstore_bundle_ref: None,
+        };
+        let short_signature = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("00".repeat(32)),
+            signature_hex: Some("00".to_string()),
+            sigstore_bundle_ref: None,
+        };
+        let invalid_public_key = ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some("ff".repeat(32)),
+            signature_hex: Some("00".repeat(64)),
+            sigstore_bundle_ref: None,
+        };
+        let mismatch = ed25519_signature_for(b"other bytes");
+        for signature in [
+            missing_public_key,
+            missing_signature,
+            bad_public_hex,
+            bad_signature_hex,
+            short_public_key,
+            short_signature,
+            invalid_public_key,
+            mismatch,
+        ] {
+            let mut capability = capability.clone();
+            capability.artifact.binary = Some(BinaryReference {
+                format: BinaryFormat::Wasm,
+                location: "unused.wasm".to_string(),
+                signature: Some(signature),
+            });
+            let error = verify_artifact(
+                &capability,
+                b"artifact bytes",
+                &RuntimeSecurityConfig::production(),
+            );
+            assert!(matches!(
+                error,
+                Err(ArtifactVerificationFailure::SignatureVerificationFailed(_))
+            ));
+            let failure = error.err();
+            assert_eq!(
+                failure.as_ref().map(ArtifactVerificationFailure::code),
+                Some("signature_verification_failed")
+            );
+            assert_eq!(
+                failure
+                    .as_ref()
+                    .and_then(|item| item.record().error_code.as_deref()),
+                Some("signature_verification_failed")
+            );
+        }
+
+        let mut capability = capability.clone();
+        capability.artifact.binary = Some(BinaryReference {
+            format: BinaryFormat::Wasm,
+            location: "unused.wasm".to_string(),
+            signature: Some(ArtifactSignature {
+                scheme: ArtifactSignatureScheme::Sigstore,
+                public_key_hex: None,
+                signature_hex: None,
+                sigstore_bundle_ref: Some("https://rekor.example/bundle".to_string()),
+            }),
+        });
+        let error = verify_artifact(
+            &capability,
+            b"artifact bytes",
+            &RuntimeSecurityConfig::production(),
+        );
+        assert!(matches!(
+            error,
+            Err(ArtifactVerificationFailure::SigstoreUnreachable(_))
+        ));
+        assert_eq!(
+            error.err().as_ref().map(ArtifactVerificationFailure::code),
+            Some("sigstore_unreachable")
+        );
+
+        let bad_payload = base64url_encode(b"{");
+        let no_subject = base64url_encode(b"{}");
+        assert!(derive_identity_from_jwt("not-a-jwt").is_none());
+        assert!(derive_identity_from_jwt("a.b.c.d").is_none());
+        assert!(derive_identity_from_jwt("a.abc=.c").is_none());
+        assert!(derive_identity_from_jwt("a.*.c").is_none());
+        assert!(derive_identity_from_jwt("a.a.c").is_none());
+        assert!(derive_identity_from_jwt("a.-___.c").is_none());
+        assert!(derive_identity_from_jwt(&format!("a.{bad_payload}.c")).is_none());
+        assert!(derive_identity_from_jwt(&format!("a.{no_subject}.c")).is_none());
+        assert_eq!(base64url_encode(b""), "");
+    }
+
+    #[test]
+    fn runtime_security_config_accessor_returns_current_config() {
+        let runtime = Runtime::new(CapabilityRegistry::new(), NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::production());
+
+        assert_eq!(
+            runtime.security_config(),
+            &RuntimeSecurityConfig::production()
+        );
+    }
+
+    #[test]
+    fn signed_artifact_missing_from_disk_fails_before_execution() {
+        let path = temp_artifact_path("missing-from-disk");
+        let signature = ed25519_signature_for(b"governed wasm bytes");
+        let mut registry = CapabilityRegistry::new();
+        assert!(
+            registry
+                .register(governed_registration(&path, Some(signature)))
+                .is_ok()
+        );
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::production());
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("artifact_load_failed")
         );
     }
 
@@ -3356,6 +3876,8 @@ mod tests {
                     execution_id: "exec_1".to_string(),
                     trace_id: "trace_exec_1".to_string(),
                     observability: super::RuntimeObservabilityConfig::default(),
+                    artifact_verification: None,
+                    warnings: Vec::new(),
                 },
                 emitter: events,
                 candidate_collection: super::CandidateCollectionRecord {
@@ -3383,6 +3905,7 @@ mod tests {
                     "not runnable",
                     json!({}),
                 ),
+                artifact_verification: None,
             },
         );
 
@@ -3437,6 +3960,7 @@ mod tests {
             Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             }),
             Lifecycle::Active,
         );
@@ -3530,6 +4054,7 @@ mod tests {
                 traceparent: None,
                 tracestate: None,
                 metadata: None,
+                identity: None,
             },
             governing_spec: "006-runtime-request-execution".to_string(),
         }
@@ -3552,6 +4077,113 @@ mod tests {
         runtime.execute(valid_request())
     }
 
+    fn governed_registration(
+        path: &std::path::Path,
+        signature: Option<ArtifactSignature>,
+    ) -> CapabilityRegistration {
+        let mut registration = public_registration();
+        registration.contract_path = "contracts/approved/comment-draft.json".to_string();
+        registration.artifact.source = SourceReference {
+            kind: SourceKind::Git,
+            location: "https://github.com/enricopiovesan/Traverse".to_string(),
+        };
+        registration.artifact.binary = Some(BinaryReference {
+            format: BinaryFormat::Wasm,
+            location: path.display().to_string(),
+            signature,
+        });
+        registration
+    }
+
+    fn governed_resolved_capability(signature: Option<ArtifactSignature>) -> ResolvedCapability {
+        let mut capability = resolved_capability(
+            Some(BinaryReference {
+                format: BinaryFormat::Wasm,
+                location: "unused.wasm".to_string(),
+                signature,
+            }),
+            Lifecycle::Active,
+        );
+        capability.record.contract_path = "contracts/approved/comment-draft.json".to_string();
+        capability.artifact.source = SourceReference {
+            kind: SourceKind::Git,
+            location: "https://github.com/enricopiovesan/Traverse".to_string(),
+        };
+        capability
+    }
+
+    fn ed25519_signature_for(bytes: &[u8]) -> ArtifactSignature {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let signature = signing_key.sign(bytes);
+        ArtifactSignature {
+            scheme: ArtifactSignatureScheme::Ed25519,
+            public_key_hex: Some(hex_encode(signing_key.verifying_key().as_bytes())),
+            signature_hex: Some(hex_encode(&signature.to_bytes())),
+            sigstore_bundle_ref: None,
+        }
+    }
+
+    fn temp_artifact_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "traverse-runtime-{name}-{}-{}.wasm",
+            std::process::id(),
+            "req_123"
+        ))
+    }
+
+    fn make_jwt_with_actor(subject_id: &str, actor_id: &str) -> String {
+        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload = serde_json::json!({
+            "sub": subject_id,
+            "act": {"sub": actor_id}
+        });
+        format!(
+            "{}.{}.signature",
+            header,
+            base64url_encode(payload.to_string().as_bytes())
+        )
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        let mut output = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            output.push(char::from(HEX_TABLE[(byte >> 4) as usize]));
+            output.push(char::from(HEX_TABLE[(byte & 0x0f) as usize]));
+        }
+        output
+    }
+
+    fn base64url_encode(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        let mut index = 0;
+        while index + 3 <= bytes.len() {
+            let chunk = &bytes[index..index + 3];
+            let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+            out.push(char::from(TABLE[((n >> 18) & 0x3f) as usize]));
+            out.push(char::from(TABLE[((n >> 12) & 0x3f) as usize]));
+            out.push(char::from(TABLE[((n >> 6) & 0x3f) as usize]));
+            out.push(char::from(TABLE[(n & 0x3f) as usize]));
+            index += 3;
+        }
+        match bytes.len() - index {
+            1 => {
+                let n = u32::from(bytes[index]) << 16;
+                out.push(char::from(TABLE[((n >> 18) & 0x3f) as usize]));
+                out.push(char::from(TABLE[((n >> 12) & 0x3f) as usize]));
+            }
+            2 => {
+                let n = (u32::from(bytes[index]) << 16) | (u32::from(bytes[index + 1]) << 8);
+                out.push(char::from(TABLE[((n >> 18) & 0x3f) as usize]));
+                out.push(char::from(TABLE[((n >> 12) & 0x3f) as usize]));
+                out.push(char::from(TABLE[((n >> 6) & 0x3f) as usize]));
+            }
+            _ => {}
+        }
+        out
+    }
+
     fn public_registration() -> CapabilityRegistration {
         CapabilityRegistration {
             scope: RegistryScope::Public,
@@ -3560,6 +4192,7 @@ mod tests {
             artifact: test_artifact(Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: "artifact.wasm".to_string(),
+                signature: None,
             })),
             registered_at: "2026-03-27T00:00:00Z".to_string(),
             tags: vec!["comments".to_string()],
@@ -3769,7 +4402,8 @@ mod tests {
     fn successful_trace() -> super::RuntimeTrace {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         runtime.execute(valid_request()).trace
     }
 

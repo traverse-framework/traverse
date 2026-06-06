@@ -292,6 +292,7 @@ mod tests {
             binary: Some(BinaryReference {
                 format: BinaryFormat::Wasm,
                 location: format!("artifacts/{}/{}.wasm", contract.name, contract.version),
+                signature: None,
             }),
             workflow_ref: None,
             digests: ArtifactDigests {
