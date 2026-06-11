@@ -24,6 +24,8 @@ For the first release-facing HTTP/JSON app path, use [docs/youaskm3-canonical-ap
 
 For the single Traverse `v0.3.0` downstream validation path that `youaskm3` can cite for release evidence, use [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
+For the first-release readiness index that ties the canonical paths, compatibility statement, packaging expectations, and validation evidence together, use [docs/youaskm3-v0.3.0-integration-readiness.md](youaskm3-v0.3.0-integration-readiness.md).
+
 ## Governing Spec
 
 - `specs/019-downstream-consumer-contract/spec.md`

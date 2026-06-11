@@ -17,6 +17,7 @@ required_files=(
   "docs/v0.3.0-public-surface-compatibility.md"
   "docs/v0.3.0-source-build-consumer-packaging.md"
   "docs/v0.3.0-downstream-validation-path.md"
+  "docs/youaskm3-v0.3.0-integration-readiness.md"
   "docs/troubleshooting.md"
   "docs/adapter-boundaries.md"
   "docs/contract-publication-policy.md"
@@ -335,6 +336,7 @@ grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/v0.3.0-public-surface-
 grep -q "Supply-chain evidence" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/v0.3.0-source-build-consumer-packaging.md" README.md
 grep -q "docs/v0.3.0-downstream-validation-path.md" README.md
+grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" README.md
 grep -q "cargo build" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-cli -- serve" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/v0.3.0-source-build-consumer-packaging.md
@@ -353,6 +355,19 @@ grep -q "docs/v0.3.0-downstream-validation-path.md" docs/v0.3.0-source-build-con
 grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-canonical-app-http-path.md
 grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-canonical-mcp-client-path.md
 grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-integration-validation.md
+grep -q "youaskm3 Traverse v0.3.0 Integration Readiness" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "Traverse \`v0.3.0\`" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/youaskm3-canonical-app-http-path.md" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/v0.3.0-source-build-consumer-packaging.md" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "Traverse Owns" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "youaskm3 Owns" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "First-Release Readiness Checklist" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "bash scripts/ci/youaskm3_compatibility_conformance.sh" docs/youaskm3-v0.3.0-integration-readiness.md
+grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" docs/youaskm3-integration-validation.md
+grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/v0.3.0-public-surface-compatibility.md" README.md
 grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/compatibility-policy.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" README.md
