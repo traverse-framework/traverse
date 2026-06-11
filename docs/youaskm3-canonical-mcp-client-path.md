@@ -34,6 +34,7 @@ Requirements:
 - an MCP client that supports stdio server commands
 
 For packaging and source-build expectations, see [docs/v0.3.0-source-build-consumer-packaging.md](v0.3.0-source-build-consumer-packaging.md).
+For the combined release evidence path that includes this MCP surface, see [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
 ## Example Client Configuration
 
@@ -108,4 +109,5 @@ These checks prove that the released public MCP path can start, expose the expec
 - [docs/mcp-stdio-server.md](mcp-stdio-server.md)
 - [docs/mcp-consumption-validation.md](mcp-consumption-validation.md)
 - [docs/mcp-real-agent-exercise.md](mcp-real-agent-exercise.md)
+- [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md)
 - [docs/youaskm3-integration-validation.md](youaskm3-integration-validation.md)

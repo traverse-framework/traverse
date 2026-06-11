@@ -222,6 +222,7 @@ Traverse is spec-driven. Code must align with an approved, immutable spec or it 
 - [docs/app-consumable-package-release-pointer.md](docs/app-consumable-package-release-pointer.md) — package release pointer
 - [docs/v0.3.0-public-surface-compatibility.md](docs/v0.3.0-public-surface-compatibility.md) — public surface compatibility for the v0.3.0 youaskm3 baseline
 - [docs/v0.3.0-source-build-consumer-packaging.md](docs/v0.3.0-source-build-consumer-packaging.md) — source-build packaging expectations for v0.3.0 consumers
+- [docs/v0.3.0-downstream-validation-path.md](docs/v0.3.0-downstream-validation-path.md) — deterministic downstream validation path for the v0.3.0 youaskm3 baseline
 - [docs/youaskm3-canonical-app-http-path.md](docs/youaskm3-canonical-app-http-path.md) — release-facing HTTP app path for youaskm3
 - [docs/event-publishing-tutorial.md](docs/event-publishing-tutorial.md) — how to emit and receive governed events from a capability
 - [docs/youaskm3-canonical-mcp-client-path.md](docs/youaskm3-canonical-mcp-client-path.md) — release-facing MCP client path for youaskm3

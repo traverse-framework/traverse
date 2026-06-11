@@ -16,6 +16,7 @@ required_files=(
   "docs/compatibility-policy.md"
   "docs/v0.3.0-public-surface-compatibility.md"
   "docs/v0.3.0-source-build-consumer-packaging.md"
+  "docs/v0.3.0-downstream-validation-path.md"
   "docs/troubleshooting.md"
   "docs/adapter-boundaries.md"
   "docs/contract-publication-policy.md"
@@ -333,11 +334,25 @@ grep -q "docs/youaskm3-canonical-app-http-path.md" docs/v0.3.0-public-surface-co
 grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/v0.3.0-public-surface-compatibility.md
 grep -q "Supply-chain evidence" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/v0.3.0-source-build-consumer-packaging.md" README.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" README.md
 grep -q "cargo build" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-cli -- serve" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "traverse-sbom.cdx.json" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "No package-manager distribution" docs/v0.3.0-source-build-consumer-packaging.md
+grep -q "Traverse v0.3.0 Downstream Validation Path" docs/v0.3.0-downstream-validation-path.md
+grep -q "git checkout v0.3.0" docs/v0.3.0-downstream-validation-path.md
+grep -q "bash scripts/ci/mcp_consumption_validation.sh" docs/v0.3.0-downstream-validation-path.md
+grep -q "bash scripts/ci/app_consumable_acceptance.sh" docs/v0.3.0-downstream-validation-path.md
+grep -q "bash scripts/ci/youaskm3_compatibility_conformance.sh" docs/v0.3.0-downstream-validation-path.md
+grep -q "bash scripts/ci/repository_checks.sh" docs/v0.3.0-downstream-validation-path.md
+grep -q "consumer_name: youaskm3" docs/v0.3.0-downstream-validation-path.md
+grep -q "validated_flow_id: youaskm3_mcp_validation" docs/v0.3.0-downstream-validation-path.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/v0.3.0-public-surface-compatibility.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/v0.3.0-source-build-consumer-packaging.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-canonical-app-http-path.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-canonical-mcp-client-path.md
+grep -q "docs/v0.3.0-downstream-validation-path.md" docs/youaskm3-integration-validation.md
 grep -q "docs/v0.3.0-public-surface-compatibility.md" README.md
 grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/compatibility-policy.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" README.md

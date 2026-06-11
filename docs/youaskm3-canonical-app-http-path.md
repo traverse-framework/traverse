@@ -61,6 +61,7 @@ Requirements:
 - `jq` for the copy/pasteable shell examples below
 
 For packaging and source-build expectations, see [docs/v0.3.0-source-build-consumer-packaging.md](v0.3.0-source-build-consumer-packaging.md).
+For the combined release evidence path that includes this app surface, see [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
 ## Discover The Server
 
@@ -185,4 +186,5 @@ These checks prove that the released app-consumable path remains documented, the
 - [docs/app-consumable-entry-path.md](app-consumable-entry-path.md)
 - [docs/app-consumable-acceptance.md](app-consumable-acceptance.md)
 - [docs/browser-adapter.md](browser-adapter.md)
+- [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md)
 - [docs/youaskm3-integration-validation.md](youaskm3-integration-validation.md)

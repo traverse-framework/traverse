@@ -22,6 +22,8 @@ For the shortest Traverse-side start path, begin with [quickstart.md](../quickst
 
 For the first release-facing HTTP/JSON app path, use [docs/youaskm3-canonical-app-http-path.md](youaskm3-canonical-app-http-path.md).
 
+For the single Traverse `v0.3.0` downstream validation path that `youaskm3` can cite for release evidence, use [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
+
 ## Governing Spec
 
 - `specs/019-downstream-consumer-contract/spec.md`
@@ -59,6 +61,8 @@ For the broader release-aligned compatibility check, also run:
 ```bash
 bash scripts/ci/youaskm3_compatibility_conformance.sh
 ```
+
+For the pinned Traverse `v0.3.0` release evidence sequence, follow [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
 For the published-artifact validation against the released Traverse runtime and MCP artifacts, also run:
 
