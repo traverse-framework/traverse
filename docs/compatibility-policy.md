@@ -64,6 +64,10 @@ The boundary between governed core runtime responsibilities and optional adapter
 
 - `docs/adapter-boundaries.md`
 
+The release-facing downstream compatibility statement for the current `youaskm3` baseline is:
+
+- `docs/v0.3.0-public-surface-compatibility.md`
+
 ## Specs
 
 Approved specs are immutable once they govern implementation.

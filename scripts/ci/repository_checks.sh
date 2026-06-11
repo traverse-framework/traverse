@@ -14,6 +14,7 @@ required_files=(
   ".specify/memory/constitution.md"
   "docs/quality-standards.md"
   "docs/compatibility-policy.md"
+  "docs/v0.3.0-public-surface-compatibility.md"
   "docs/troubleshooting.md"
   "docs/adapter-boundaries.md"
   "docs/contract-publication-policy.md"
@@ -326,6 +327,12 @@ grep -q "## Prerequisites" quickstart.md
 grep -q "browser-adapter serve --bind 127.0.0.1:4174" quickstart.md
 grep -q "node apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173" quickstart.md
 grep -q "apps/browser-consumer/README.md" docs/app-consumable-entry-path.md
+grep -q "git checkout v0.3.0" docs/v0.3.0-public-surface-compatibility.md
+grep -q "docs/youaskm3-canonical-app-http-path.md" docs/v0.3.0-public-surface-compatibility.md
+grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/v0.3.0-public-surface-compatibility.md
+grep -q "Supply-chain evidence" docs/v0.3.0-public-surface-compatibility.md
+grep -q "docs/v0.3.0-public-surface-compatibility.md" README.md
+grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/compatibility-policy.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" README.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" docs/app-consumable-entry-path.md
 grep -q "Supported Traverse baseline: \`v0.3.0\`" docs/youaskm3-canonical-app-http-path.md
