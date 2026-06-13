@@ -34,6 +34,8 @@ Traverse uses split, focused governing specs instead of one giant spec file. Thi
 | Programmatic workflow building and composition | `041-workflow-composition-api` |
 | MCP library surface and embeddable agent APIs | `042-mcp-library-surface` |
 | Module dependency registry and resolution strategy | `043-module-dependency-management` |
+| Downstream app manifests, component manifests, app config, and app/component CLI scaffolding | `044-application-bundle-manifest` |
+| Real model dependency candidates, local inference readiness, selection heuristics, and model selection trace evidence | `045-governed-model-dependency-resolution` |
 
 ## Context Hygiene
 

@@ -467,6 +467,37 @@
         "specs/043-module-dependency-management/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "044-application-bundle-manifest",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/044-application-bundle-manifest/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-contracts/",
+        "crates/traverse-registry/",
+        "crates/traverse-runtime/",
+        "specs/044-application-bundle-manifest/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "045-governed-model-dependency-resolution",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/045-governed-model-dependency-resolution/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-contracts/",
+        "crates/traverse-registry/",
+        "crates/traverse-runtime/",
+        "crates/traverse-mcp/",
+        "specs/045-governed-model-dependency-resolution/",
+        "specs/governance/"
+      ]
     }
   ]
 }
