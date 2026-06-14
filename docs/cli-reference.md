@@ -33,6 +33,8 @@ Subcommand-level help (full per-command detail with flags and examples):
 ```
 traverse-cli bundle inspect --help
 traverse-cli bundle register --help
+traverse-cli app new --help
+traverse-cli component new --help
 traverse-cli agent inspect --help
 traverse-cli agent execute --help
 traverse-cli workflow inspect --help
@@ -51,6 +53,8 @@ consistent with error output behaviour across the CLI.
 |---|---|---|---|
 | `bundle inspect <manifest-path>` | Validate and summarize a registry bundle manifest. | `cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, artifact counts, and the discovered capability/event/workflow ids. |
 | `bundle register <manifest-path>` | Load a registry bundle and register its contents into in-memory registries. | `cargo run -p traverse-cli -- bundle register examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, registered counts, and registration record summaries. |
+| `app new <app-id> [--register --workspace <workspace-id>]` | Create a governed Traverse app bundle scaffold under `apps/<app-id>`. | `cargo run -p traverse-cli -- app new youaskm3` | Creates `manifest.json`, `workspace.config.json`, component/workflow directories, and a bundle README. `--register` rejects the initial incomplete scaffold until real components and workflows are present. |
+| `component new <component-id>` | Create a governed WASM component package scaffold under `components/<component-id>`. | `cargo run -p traverse-cli -- component new knowledge.retrieve` | Creates a component `manifest.json`, draft capability `contract.json`, Rust package shell, source directory, and artifact directory without creating executable WASM behavior. |
 | `browser-adapter serve [--bind <address>]` | Start the local browser adapter for the governed browser consumer path. | `cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:4174` | Prints `local browser adapter listening on http://...` and stays running until stopped. |
 | `agent inspect <manifest-path>` | Load and summarize a governed WASM agent package manifest. | `cargo run -p traverse-cli -- agent inspect examples/agents/expedition-intent-agent/manifest.json` | Prints `path`, `package_id`, `package_version`, `capability_id`, binary location, digest, and model/workflow references. |
 | `agent execute <manifest-path> <request-path>` | Load a governed WASM agent package and execute it against a runtime request. | `cargo run -p traverse-cli -- agent execute examples/agents/expedition-intent-agent/manifest.json examples/agents/runtime-requests/interpret-expedition-intent.json` | Prints `request_id`, `execution_id`, `package_id`, `capability_id`, `trace_ref`, `status`, and capability-specific result fields. |
@@ -65,6 +69,8 @@ The following command families are intended to be the public documented surface 
 
 - `bundle inspect`
 - `bundle register`
+- `app new`
+- `component new`
 - `browser-adapter serve`
 - `agent inspect`
 - `agent execute`
@@ -102,6 +108,8 @@ This reference was checked against the live CLI behavior with:
 - `cargo run -p traverse-cli -- help`
 - `cargo run -p traverse-cli -- bundle inspect --help`
 - `cargo run -p traverse-cli -- bundle register --help`
+- `cargo run -p traverse-cli -- app new --help`
+- `cargo run -p traverse-cli -- component new --help`
 - `cargo run -p traverse-cli -- agent inspect --help`
 - `cargo run -p traverse-cli -- agent execute --help`
 - `cargo run -p traverse-cli -- workflow inspect --help`

@@ -20,12 +20,12 @@ use traverse_contracts::{
     EventContract, EventValidationContext, parse_event_contract, validate_event_contract,
 };
 use traverse_registry::{
-    ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-    CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
-    LookupScope, RegistryBundle, RegistryProvenance, SourceKind, SourceReference,
-    WorkflowDefinition, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    load_registry_bundle,
+    ApplicationRegistrationRequest, ApplicationRegistry, ArtifactDigests, BinaryFormat,
+    BinaryReference, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
+    ComposabilityMetadata, CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration,
+    EventRegistry, ImplementationKind, LookupScope, RegistryBundle, RegistryProvenance,
+    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowReference,
+    WorkflowRegistration, WorkflowRegistry, load_registry_bundle,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -43,6 +43,14 @@ enum Command {
     BundleRegister {
         manifest_path: PathBuf,
         json_output: bool,
+    },
+    AppNew {
+        app_id: String,
+        register: bool,
+        workspace_id: Option<String>,
+    },
+    ComponentNew {
+        component_id: String,
     },
     BrowserAdapterServe {
         bind_address: String,
@@ -197,6 +205,12 @@ fn run_command(command: Command) -> Result<String, CliError> {
             manifest_path,
             json_output,
         } => register_bundle(&manifest_path, json_output),
+        Command::AppNew {
+            app_id,
+            register,
+            workspace_id,
+        } => app_new(&app_id, register, workspace_id.as_deref()),
+        Command::ComponentNew { component_id } => component_new(&component_id),
         Command::BrowserAdapterServe { .. } | Command::Serve { .. } => {
             Err(CliError::UsageError(usage()))
         }
@@ -266,6 +280,8 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
     match (family, subcommand) {
         (Some("browser-adapter"), Some("serve")) => parse_browser_adapter_command(args),
         (Some("serve"), _) => parse_serve_command(args),
+        (Some("app"), Some("new")) => parse_app_new_command(args),
+        (Some("component"), Some("new")) => parse_component_new_command(args),
         (Some("federation"), Some(_)) => parse_federation_command(args),
         (Some("agent"), Some("execute")) => parse_agent_execute_command(args),
         (Some("artifact"), Some("verify")) => parse_artifact_verify_command(args),
@@ -282,6 +298,10 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("bundle"), Some("inspect")) => help_bundle_inspect(),
         (Some("bundle"), Some("register")) => help_bundle_register(),
         (Some("bundle"), _) => help_bundle(),
+        (Some("app"), Some("new")) => help_app_new(),
+        (Some("app"), _) => help_app(),
+        (Some("component"), Some("new")) => help_component_new(),
+        (Some("component"), _) => help_component(),
         (Some("agent"), Some("inspect")) => help_agent_inspect(),
         (Some("agent"), Some("execute")) => help_agent_execute(),
         (Some("agent"), _) => help_agent(),
@@ -307,6 +327,68 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("serve"), _) => help_serve(),
         _ => usage(),
     }
+}
+
+fn help_app_new() -> String {
+    "traverse-cli app new <app-id> [--register --workspace <workspace-id>]
+
+  Purpose:
+    Create a governed Traverse app bundle directory under apps/<app-id>.
+    The scaffold contains a schema-valid application manifest, workspace-local
+    config template, component reference directory, workflow directory, and
+    bundle README. It contains no executable product behavior.
+
+  Required arguments:
+    <app-id>             Application id to scaffold.
+
+  Optional flags:
+    --register           Validate and attempt registration after generation.
+    --workspace <id>     Workspace id for --register.
+    --help               Print this help text.
+
+  Example:
+    traverse-cli app new youaskm3"
+        .to_string()
+}
+
+fn help_app() -> String {
+    "traverse-cli app <subcommand> [options]
+
+  Subcommands:
+    new <app-id>   Create a governed Traverse app bundle scaffold.
+
+  Run `traverse-cli app new --help` for subcommand-specific help."
+        .to_string()
+}
+
+fn help_component_new() -> String {
+    "traverse-cli component new <component-id>
+
+  Purpose:
+    Create a governed WASM component package directory under
+    components/<component-id>. The scaffold contains a schema-valid component
+    manifest, draft capability contract, Rust package shell, source directory,
+    and artifact directory. It does not create an executable WASM artifact.
+
+  Required arguments:
+    <component-id>   Component and capability id to scaffold.
+
+  Optional flags:
+    --help           Print this help text.
+
+  Example:
+    traverse-cli component new knowledge.retrieve"
+        .to_string()
+}
+
+fn help_component() -> String {
+    "traverse-cli component <subcommand> [options]
+
+  Subcommands:
+    new <component-id>   Create a governed WASM component package scaffold.
+
+  Run `traverse-cli component new --help` for subcommand-specific help."
+        .to_string()
 }
 
 fn help_bundle_inspect() -> String {
@@ -707,6 +789,47 @@ fn help_browser_adapter() -> String {
         .to_string()
 }
 
+fn parse_app_new_command(args: &[String]) -> Result<Command, String> {
+    let register = args.iter().any(|a| a == "--register");
+    let workspace_id = parse_string_flag(args, "--workspace");
+    let mut positional = Vec::new();
+    let mut skip_next = false;
+
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--register" => {}
+            "--workspace" => skip_next = true,
+            _ => positional.push(arg),
+        }
+    }
+
+    if args.iter().any(|a| a == "--workspace") && workspace_id.is_none() {
+        return Err("--workspace requires a value".to_string());
+    }
+
+    match positional.as_slice() {
+        [_, _, _, app_id] => Ok(Command::AppNew {
+            app_id: (*app_id).clone(),
+            register,
+            workspace_id,
+        }),
+        _ => Err(usage()),
+    }
+}
+
+fn parse_component_new_command(args: &[String]) -> Result<Command, String> {
+    match args {
+        [_, _, _, component_id] => Ok(Command::ComponentNew {
+            component_id: component_id.clone(),
+        }),
+        _ => Err(usage()),
+    }
+}
+
 fn parse_browser_adapter_command(args: &[String]) -> Result<Command, String> {
     match args.len() {
         3 => Ok(Command::BrowserAdapterServe {
@@ -1025,6 +1148,394 @@ fn register_bundle(manifest_path: &Path, json_output: bool) -> Result<String, Cl
             &registered.workflow_records,
         ))
     }
+}
+
+fn app_new(app_id: &str, register: bool, workspace_id: Option<&str>) -> Result<String, CliError> {
+    let base_dir = env::current_dir()
+        .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
+    app_new_at(&base_dir, app_id, register, workspace_id)
+}
+
+fn app_new_at(
+    base_dir: &Path,
+    app_id: &str,
+    register: bool,
+    workspace_id: Option<&str>,
+) -> Result<String, CliError> {
+    validate_scaffold_id(app_id, "app id")?;
+    let app_dir = base_dir.join("apps").join(app_id);
+    if app_dir.exists() {
+        return Err(CliError::IoError(format!(
+            "app scaffold target already exists: {}",
+            app_dir.display()
+        )));
+    }
+
+    let components_dir = app_dir.join("components");
+    let workflows_dir = app_dir.join("workflows");
+    fs::create_dir_all(&components_dir).map_err(|e| {
+        CliError::IoError(format!(
+            "failed to create component reference directory {}: {e}",
+            components_dir.display()
+        ))
+    })?;
+    fs::create_dir_all(&workflows_dir).map_err(|e| {
+        CliError::IoError(format!(
+            "failed to create workflow directory {}: {e}",
+            workflows_dir.display()
+        ))
+    })?;
+
+    let manifest_path = app_dir.join("manifest.json");
+    write_pretty_json(
+        &manifest_path,
+        &serde_json::json!({
+            "app_id": app_id,
+            "version": "1.0.0",
+            "schema_version": "1.0.0",
+            "workspace_defaults": {
+                "workspace_id": format!("{app_id}-local"),
+                "config_path": "workspace.config.json"
+            },
+            "components": [],
+            "workflows": [],
+            "model_dependencies": [],
+            "config_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            },
+            "default_config": {},
+            "placement_policy": {
+                "preferred_targets": ["local"]
+            },
+            "public_surfaces": ["cli"]
+        }),
+    )?;
+    write_pretty_json(
+        &app_dir.join("workspace.config.json"),
+        &serde_json::json!({
+            "workspace_id": format!("{app_id}-local"),
+            "overrides": {},
+            "secrets": {}
+        }),
+    )?;
+    write_new_file(
+        &components_dir.join("README.md"),
+        "Add component manifest references here after real component packages are authored.\n",
+    )?;
+    write_new_file(
+        &workflows_dir.join("README.md"),
+        "Add workflow definitions here after real component-backed workflows are authored.\n",
+    )?;
+    write_new_file(
+        &app_dir.join("README.md"),
+        &format!(
+            "# {app_id}\n\nGoverned Traverse app bundle scaffold for `{app_id}`.\n\nThe initial bundle contains no executable components or workflows. Add real WASM component manifests, real capability contracts, workflow definitions, and verified WASM digests before registration.\n"
+        ),
+    )?;
+
+    let mut lines = vec![
+        format!("created_app: {app_id}"),
+        format!("app_dir: {}", app_dir.display()),
+        format!("manifest: {}", manifest_path.display()),
+        format!(
+            "workspace_config: {}",
+            app_dir.join("workspace.config.json").display()
+        ),
+        format!("components_dir: {}", components_dir.display()),
+        format!("workflows_dir: {}", workflows_dir.display()),
+    ];
+
+    if register {
+        let workspace = workspace_id.unwrap_or(app_id);
+        let registration = register_generated_app_bundle(app_id, workspace, &manifest_path)?;
+        lines.push(registration);
+    }
+
+    Ok(lines.join("\n"))
+}
+
+fn component_new(component_id: &str) -> Result<String, CliError> {
+    let base_dir = env::current_dir()
+        .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
+    component_new_at(&base_dir, component_id)
+}
+
+fn component_new_at(base_dir: &Path, component_id: &str) -> Result<String, CliError> {
+    validate_scaffold_id(component_id, "component id")?;
+    let component_dir = base_dir.join("components").join(component_id);
+    if component_dir.exists() {
+        return Err(CliError::IoError(format!(
+            "component scaffold target already exists: {}",
+            component_dir.display()
+        )));
+    }
+
+    let src_dir = component_dir.join("src");
+    let artifacts_dir = component_dir.join("artifacts");
+    fs::create_dir_all(&src_dir).map_err(|e| {
+        CliError::IoError(format!(
+            "failed to create source directory {}: {e}",
+            src_dir.display()
+        ))
+    })?;
+    fs::create_dir_all(&artifacts_dir).map_err(|e| {
+        CliError::IoError(format!(
+            "failed to create artifact directory {}: {e}",
+            artifacts_dir.display()
+        ))
+    })?;
+
+    let component_name = scaffold_leaf_name(component_id);
+    let wasm_name = format!("{component_name}.wasm");
+    let package_name = component_id.replace('.', "-");
+    write_new_file(
+        &component_dir.join("Cargo.toml"),
+        &format!(
+            "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\npath = \"src/lib.rs\"\n"
+        ),
+    )?;
+    write_new_file(&src_dir.join("lib.rs"), "")?;
+    write_new_file(
+        &artifacts_dir.join("README.md"),
+        "Place the compiled WASM artifact here after the component implementation is built.\n",
+    )?;
+    write_pretty_json(
+        &component_dir.join("contract.json"),
+        &component_contract_json(component_id, &component_name),
+    )?;
+    write_pretty_json(
+        &component_dir.join("manifest.json"),
+        &serde_json::json!({
+            "component_id": component_id,
+            "version": "1.0.0",
+            "schema_version": "1.0.0",
+            "capability_id": component_id,
+            "capability_version": "1.0.0",
+            "contract_path": "contract.json",
+            "wasm_binary_path": format!("artifacts/{wasm_name}"),
+            "wasm_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "runtime_constraints": {
+                "host_api_access": "none",
+                "network_access": "forbidden",
+                "filesystem_access": "none"
+            },
+            "permitted_targets": ["local"],
+            "dependencies": [],
+            "connector_requirements": [],
+            "validation_evidence": []
+        }),
+    )?;
+
+    Ok([
+        format!("created_component: {component_id}"),
+        format!("component_dir: {}", component_dir.display()),
+        format!(
+            "manifest: {}",
+            component_dir.join("manifest.json").display()
+        ),
+        format!(
+            "contract: {}",
+            component_dir.join("contract.json").display()
+        ),
+        format!("source: {}", src_dir.join("lib.rs").display()),
+    ]
+    .join("\n"))
+}
+
+fn register_generated_app_bundle(
+    app_id: &str,
+    workspace_id: &str,
+    manifest_path: &Path,
+) -> Result<String, CliError> {
+    let manifest_value = read_json_file(manifest_path)?;
+    let components_empty = manifest_value
+        .get("components")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    let workflows_empty = manifest_value
+        .get("workflows")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    if components_empty || workflows_empty {
+        return Err(CliError::ValidationFailed(format!(
+            "app bundle {app_id} is incomplete: add at least one real component reference and one workflow before registration"
+        )));
+    }
+
+    let mut apps = ApplicationRegistry::new();
+    let mut capabilities = CapabilityRegistry::new();
+    let events = EventRegistry::new();
+    let mut workflows = WorkflowRegistry::new();
+    let outcome = apps
+        .register_bundle(
+            &mut capabilities,
+            &events,
+            &mut workflows,
+            &ApplicationRegistrationRequest {
+                scope: RegistryScope::Private,
+                workspace_id: workspace_id.to_string(),
+                manifest_path: manifest_path.to_path_buf(),
+                registered_at: format!("app:{app_id}@1.0.0"),
+                validator_version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        )
+        .map_err(|failure| {
+            CliError::ValidationFailed(render_application_registration_failure(failure.errors))
+        })?;
+
+    Ok(format!(
+        "registration_status: {:?}\nhttp_status: {}\nworkspace_id: {}",
+        outcome.status,
+        outcome.status.http_status(),
+        outcome.record.workspace_id
+    ))
+}
+
+fn component_contract_json(component_id: &str, name: &str) -> Value {
+    let namespace = component_namespace(component_id);
+    serde_json::json!({
+        "kind": "capability_contract",
+        "schema_version": "1.0.0",
+        "id": component_id,
+        "namespace": namespace,
+        "name": name,
+        "version": "1.0.0",
+        "lifecycle": "draft",
+        "owner": {
+            "team": "local-author",
+            "contact": "local-author"
+        },
+        "summary": format!("Governed capability contract for {component_id}."),
+        "description": format!("Draft Traverse capability contract for the real WASM component {component_id}."),
+        "inputs": {
+            "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }
+        },
+        "outputs": {
+            "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }
+        },
+        "preconditions": [],
+        "postconditions": [],
+        "side_effects": [
+            {
+                "kind": "memory_only",
+                "description": "No external side effects are declared for this draft component contract."
+            }
+        ],
+        "emits": [],
+        "consumes": [],
+        "permissions": [
+            {
+                "id": component_id
+            }
+        ],
+        "execution": {
+            "binary_format": "wasm",
+            "entrypoint": {
+                "kind": "wasi-command",
+                "command": "run"
+            },
+            "preferred_targets": ["local"],
+            "constraints": {
+                "host_api_access": "none",
+                "network_access": "forbidden",
+                "filesystem_access": "none"
+            }
+        },
+        "policies": [
+            {
+                "id": "manual-approval-required"
+            }
+        ],
+        "dependencies": [],
+        "provenance": {
+            "source": "greenfield",
+            "author": "traverse-cli",
+            "created_at": "app-scaffold",
+            "spec_ref": "044-application-bundle-manifest@1.0.0",
+            "adr_refs": [],
+            "exception_refs": []
+        },
+        "evidence": [],
+        "service_type": "stateless",
+        "permitted_targets": ["local"],
+        "artifact_type": "native"
+    })
+}
+
+fn component_namespace(component_id: &str) -> String {
+    component_id
+        .rsplit_once('.')
+        .map_or(component_id.to_string(), |(namespace, _)| {
+            namespace.to_string()
+        })
+}
+
+fn scaffold_leaf_name(id: &str) -> String {
+    id.rsplit_once('.')
+        .map_or(id.to_string(), |(_, name)| name.to_string())
+}
+
+fn validate_scaffold_id(value: &str, label: &str) -> Result<(), CliError> {
+    let valid = !value.is_empty()
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.contains("..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(CliError::UsageError(format!(
+            "{label} must contain only ASCII letters, digits, dot, dash, or underscore"
+        )))
+    }
+}
+
+fn write_pretty_json(path: &Path, value: &Value) -> Result<(), CliError> {
+    let contents = serde_json::to_string_pretty(value)
+        .map_err(|e| CliError::IoError(format!("failed to serialize JSON: {e}")))?;
+    write_new_file(path, &format!("{contents}\n"))
+}
+
+fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
+    if path.exists() {
+        return Err(CliError::IoError(format!(
+            "refusing to overwrite existing file: {}",
+            path.display()
+        )));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            CliError::IoError(format!(
+                "failed to create parent directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::write(path, contents)
+        .map_err(|e| CliError::IoError(format!("failed to write {}: {e}", path.display())))
+}
+
+fn render_application_registration_failure(
+    errors: Vec<traverse_registry::ApplicationRegistrationError>,
+) -> String {
+    let details = errors
+        .into_iter()
+        .map(|error| format!("{:?}: {} ({})", error.code, error.message, error.path))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("application registration failed: {details}")
 }
 
 fn discover_capabilities(manifest_path: &Path, json_output: bool) -> Result<String, CliError> {
@@ -1367,6 +1878,16 @@ fn read_text_file(path: &Path, artifact_kind: &str) -> Result<String, CliError> 
     })
 }
 
+fn read_json_file(path: &Path) -> Result<Value, CliError> {
+    let contents = read_text_file(path, "JSON file")?;
+    serde_json::from_str(&contents).map_err(|error| {
+        CliError::ValidationFailed(format!(
+            "failed to parse JSON file {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 fn render_validation_failure(
     artifact_kind: &str,
     path: &Path,
@@ -1687,7 +2208,7 @@ fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
 }
 
 fn usage() -> String {
-    "usage: traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
+    "usage: traverse-cli app new <app-id> [--register --workspace <workspace-id>] | traverse-cli component new <component-id> | traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
 }
 
 fn write_trace_artifact(path: &Path, trace: &RuntimeTrace) -> Result<(), CliError> {
@@ -2444,13 +2965,16 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        Command, execute_agent, execute_expedition, inspect_agent, inspect_bundle, inspect_event,
-        inspect_trace, inspect_workflow, parse_command, register_bundle,
+        Command, app_new_at, component_new_at, execute_agent, execute_expedition, inspect_agent,
+        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, parse_command,
+        register_bundle,
     };
     use crate::agent_packages::fnv1a64;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use traverse_contracts::parse_contract;
+    use traverse_registry::load_application_bundle_manifest;
 
     #[test]
     fn parse_command_accepts_supported_inspect_commands() {
@@ -2525,6 +3049,18 @@ mod tests {
             "--trace-out".to_string(),
             "/tmp/plan-expedition-trace.json".to_string(),
         ];
+        let app_new = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "new".to_string(),
+            "youaskm3".to_string(),
+        ];
+        let component_new = vec![
+            "traverse-cli".to_string(),
+            "component".to_string(),
+            "new".to_string(),
+            "knowledge.retrieve".to_string(),
+        ];
 
         assert!(parse_command(&bundle).is_ok());
         assert!(parse_command(&bundle_register).is_ok());
@@ -2537,6 +3073,106 @@ mod tests {
         assert!(parse_command(&event).is_ok());
         assert!(parse_command(&trace).is_ok());
         assert!(parse_command(&workflow).is_ok());
+        assert!(parse_command(&app_new).is_ok());
+        assert!(parse_command(&component_new).is_ok());
+    }
+
+    #[test]
+    fn parse_app_new_accepts_register_workspace_flags() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "new".to_string(),
+            "youaskm3".to_string(),
+            "--register".to_string(),
+            "--workspace".to_string(),
+            "local-dev".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("app new should parse");
+
+        match command {
+            Command::AppNew {
+                app_id,
+                register,
+                workspace_id,
+            } => {
+                assert_eq!(app_id, "youaskm3");
+                assert!(register);
+                assert_eq!(workspace_id.as_deref(), Some("local-dev"));
+            }
+            other => assert!(matches!(other, Command::AppNew { .. })),
+        }
+    }
+
+    #[test]
+    fn app_new_generates_schema_valid_empty_bundle_structure() {
+        let temp_dir = unique_temp_dir();
+
+        let output =
+            app_new_at(&temp_dir, "youaskm3", false, None).expect("app scaffold should be created");
+
+        let app_dir = temp_dir.join("apps/youaskm3");
+        assert!(output.contains("created_app: youaskm3"));
+        assert!(app_dir.join("manifest.json").is_file());
+        assert!(app_dir.join("workspace.config.json").is_file());
+        assert!(app_dir.join("components/README.md").is_file());
+        assert!(app_dir.join("workflows/README.md").is_file());
+        assert!(app_dir.join("README.md").is_file());
+
+        let manifest = load_application_bundle_manifest(&app_dir.join("manifest.json"))
+            .expect("empty app manifest should be schema-valid");
+        assert_eq!(manifest.app_id, "youaskm3");
+        assert!(manifest.components.is_empty());
+        assert!(manifest.workflows.is_empty());
+        assert!(!read_tree(&app_dir).contains("TODO"));
+    }
+
+    #[test]
+    fn app_new_register_rejects_incomplete_generated_bundle() {
+        let temp_dir = unique_temp_dir();
+
+        let error = app_new_at(&temp_dir, "youaskm3", true, Some("local-dev"))
+            .expect_err("empty generated bundle must not register");
+
+        assert!(
+            error
+                .message()
+                .contains("app bundle youaskm3 is incomplete")
+        );
+        assert!(temp_dir.join("apps/youaskm3/manifest.json").is_file());
+    }
+
+    #[test]
+    fn component_new_generates_manifest_contract_and_non_executable_package() {
+        let temp_dir = unique_temp_dir();
+
+        let output = component_new_at(&temp_dir, "knowledge.retrieve")
+            .expect("component scaffold should be created");
+
+        let component_dir = temp_dir.join("components/knowledge.retrieve");
+        assert!(output.contains("created_component: knowledge.retrieve"));
+        assert!(component_dir.join("manifest.json").is_file());
+        assert!(component_dir.join("contract.json").is_file());
+        assert!(component_dir.join("Cargo.toml").is_file());
+        assert!(component_dir.join("src/lib.rs").is_file());
+        assert!(!component_dir.join("artifacts/retrieve.wasm").exists());
+
+        let manifest = serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(component_dir.join("manifest.json"))
+                .expect("component manifest should read"),
+        )
+        .expect("component manifest should parse as JSON");
+        assert_eq!(manifest["component_id"], "knowledge.retrieve");
+        assert_eq!(manifest["capability_id"], "knowledge.retrieve");
+        assert_eq!(manifest["wasm_binary_path"], "artifacts/retrieve.wasm");
+
+        let contract_contents =
+            fs::read_to_string(component_dir.join("contract.json")).expect("contract should read");
+        let contract = parse_contract(&contract_contents).expect("contract should parse");
+        assert_eq!(contract.id, "knowledge.retrieve");
+        assert_eq!(contract.lifecycle, traverse_contracts::Lifecycle::Draft);
+        assert!(!read_tree(&component_dir).contains("TODO"));
     }
 
     #[test]
@@ -3235,6 +3871,20 @@ mod tests {
         let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}"));
         fs::create_dir_all(&path).expect("temporary directory should create");
         path
+    }
+
+    fn read_tree(root: &PathBuf) -> String {
+        let mut contents = String::new();
+        for entry in fs::read_dir(root).expect("directory should read") {
+            let path = entry.expect("directory entry should read").path();
+            if path.is_dir() {
+                contents.push_str(&read_tree(&path));
+            } else {
+                contents
+                    .push_str(&fs::read_to_string(&path).expect("generated text file should read"));
+            }
+        }
+        contents
     }
 
     struct AgentFixture {
