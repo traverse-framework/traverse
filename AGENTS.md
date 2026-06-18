@@ -75,14 +75,9 @@ If a `claude/issue-<NUMBER>-*` branch exists → **STOP**. Report:
 # Add label
 gh issue edit <NUMBER> --repo enricopiovesan/Traverse --add-label "agent:codex"
 
-# Get project item ID
-gh project item-list 1 --owner enricopiovesan --format json \
-  | python3 -c "
-import json,sys
-items = json.load(sys.stdin)['items']
-match = [i for i in items if str(i.get('content',{}).get('number','')) == '<NUMBER>']
-if match: print(match[0]['id'])
-"
+# Get project item ID with bounded output
+gh project item-list 1 --owner enricopiovesan --format json --limit 300 \
+  --jq '.items[] | select(.content.number == <NUMBER>) | .id'
 
 # Set Agent → Codex
 gh project item-edit --project-id PVT_kwHOAEZXvs4BS6Ns \

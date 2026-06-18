@@ -108,6 +108,9 @@ When Enrico says `TRAVERSE OPS`, Codex should treat it as:
 - Start or resume the PM/PO backlog gardener: audit Project 1 statuses, labels, blockers, and notes; ensure Todo items become `Ready` or `Blocked`; ensure Blocked items have a note; create missing tickets with full Definition of Done.
 - Do all feasible work autonomously and ask only when a product decision is truly required.
 - Do not use labels as status; Project 1 status is the actionability source of truth.
+- Run lean by default: use filtered Project 1 queries, bounded command output,
+  focused diffs, and summarized CI/test results. Quote only actionable failure
+  lines, not full logs or full board JSON.
 
 Use this PM thread prompt:
 

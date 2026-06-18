@@ -31,6 +31,31 @@ TRAVERSE OPS
 9. Keep work scoped to the claimed issue and governing spec.
 10. Open a dedicated PR with validation evidence.
 
+## Token Discipline
+
+Use a lean-by-default operating style so long-running Traverse ops sessions do
+not waste context on raw logs.
+
+- Prefer targeted GitHub queries over full board dumps. For Ready work, use
+  `gh project item-list 1 --owner enricopiovesan --format json --limit 300 --jq '...'`
+  and return only issue number, title, labels, and item id.
+- Do not paste full `gh project item-list`, `gh pr checks --watch`, test, clippy,
+  coverage, or CI logs into the conversation. Summarize pass/fail counts and
+  only quote the failing lines needed to fix the issue.
+- Use `git diff --stat`, `git diff --name-only`, and focused file hunks before
+  large diffs. Open exact line ranges only when a decision depends on them.
+- Use `rg` with narrow patterns before broad recursive reads. Avoid reading
+  generated files, target directories, lockfile-scale artifacts, and full specs
+  unless the active issue requires them.
+- Keep progress updates short: current action, discovered blocker if any, and
+  next action. Avoid repeating unchanged state.
+- After CI starts, poll with bounded output. If checks are pending, report only
+  changed status; if a job fails, fetch that job log and extract the actionable
+  failure.
+- Prefer local reproduction of a failing gate before fetching large remote logs.
+- In final updates, include merged PRs, validations, and next recommended issue;
+  do not restate every command output.
+
 ## Operating Lanes
 
 - **Ready-ticket worker**: claim one Ready Project 1 issue and implement it end to end.
