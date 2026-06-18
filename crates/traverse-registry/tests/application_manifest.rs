@@ -126,6 +126,330 @@ fn rejects_duplicate_component_references() {
 }
 
 #[test]
+fn loads_valid_governed_model_dependency_schema() {
+    let fixture = AppFixture::new("valid-model-dependency");
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([model_candidate(
+            "ollama-llama-3-2",
+            json!({})
+        )]))]),
+    );
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("model dependency schema should validate");
+
+    assert_eq!(bundle.model_dependencies.len(), 1);
+    let dependency = &bundle.model_dependencies[0];
+    assert_eq!(dependency.interface_id, "traverse.inference.generate");
+    assert_eq!(dependency.version_range, "^1.0");
+    assert_eq!(dependency.selection_policy.strategy, "priority");
+    assert!(dependency.selection_policy.allow_fallback);
+    assert_eq!(dependency.minimum_context_window, 8192);
+    assert_eq!(dependency.candidates[0].candidate_id, "ollama-llama-3-2");
+    assert_eq!(dependency.candidates[0].priority, 10);
+}
+
+#[test]
+fn rejects_unsupported_model_dependency_interface() {
+    let fixture = AppFixture::new("unsupported-model-interface");
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([
+            model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}))]))
+                .as_object()
+                .map(|object| {
+                    let mut object = object.clone();
+                    object.insert(
+                        "interface_id".to_string(),
+                        json!("downstream.private.generate"),
+                    );
+                    serde_json::Value::Object(object)
+                })
+                .expect("model dependency object")
+        ]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("unsupported model interface must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::UnsupportedModelInterface
+    );
+}
+
+#[test]
+fn rejects_model_dependency_without_candidates() {
+    let fixture = AppFixture::new("missing-model-candidates");
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("missing model candidates must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ModelDependencyMissingCandidates
+    );
+}
+
+#[test]
+fn rejects_duplicate_model_candidate_ids() {
+    let fixture = AppFixture::new("duplicate-model-candidates");
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([
+            model_candidate("ollama-llama-3-2", json!({})),
+            model_candidate("ollama-llama-3-2", json!({"model_context_window": 16384}))
+        ]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("duplicate model candidate must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::DuplicateModelCandidate
+    );
+}
+
+#[test]
+fn rejects_invalid_model_candidate_config() {
+    let fixture = AppFixture::new("invalid-model-candidate-config");
+    let mut invalid_candidate = model_candidate("ollama-llama-3-2", json!({}));
+    invalid_candidate
+        .as_object_mut()
+        .expect("candidate object")
+        .insert("priority".to_string(), json!(0));
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([invalid_candidate]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("invalid model candidate config must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ModelCandidateConfigInvalid
+    );
+}
+
+#[test]
+fn rejects_missing_model_dependency_fields_with_stable_errors() {
+    let cases = vec![
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency
+                    .as_object_mut()
+                    .expect("dependency object")
+                    .remove("interface_id");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency
+                    .as_object_mut()
+                    .expect("dependency object")
+                    .remove("version_range");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency
+                    .as_object_mut()
+                    .expect("dependency object")
+                    .remove("required_capabilities");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency
+                    .as_object_mut()
+                    .expect("dependency object")
+                    .remove("selection_policy");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency["selection_policy"]
+                    .as_object_mut()
+                    .expect("selection policy object")
+                    .remove("strategy");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency
+                    .as_object_mut()
+                    .expect("dependency object")
+                    .remove("candidates");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelDependencyMissingCandidates,
+        ),
+    ];
+
+    assert_model_dependency_rejections("missing-model-dependency", cases);
+}
+
+#[test]
+fn rejects_invalid_model_dependency_values_with_stable_errors() {
+    let cases = vec![
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency["selection_policy"]["strategy"] = json!("random");
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency["minimum_context_window"] = json!(0);
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+        (
+            {
+                let mut dependency =
+                    model_dependency(json!([model_candidate("ollama-llama-3-2", json!({}),)]));
+                dependency["required_capabilities"] = json!([""]);
+                dependency
+            },
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+        ),
+    ];
+
+    assert_model_dependency_rejections("invalid-model-dependency", cases);
+}
+
+#[test]
+fn rejects_incomplete_model_candidate_fields_with_stable_errors() {
+    let candidate_fields = vec![
+        "candidate_id",
+        "provider_capability_id",
+        "provider_implementation_id",
+        "model_identifier",
+        "placement_target",
+    ];
+
+    for field in candidate_fields {
+        let fixture = AppFixture::new(&format!("incomplete-model-candidate-{field}"));
+        let mut candidate = model_candidate("ollama-llama-3-2", json!({}));
+        candidate
+            .as_object_mut()
+            .expect("candidate object")
+            .remove(field);
+        fixture.write_app_manifest_with_model_dependencies(
+            &json!([]),
+            &json!([model_dependency(json!([candidate]))]),
+        );
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("incomplete model candidate must fail");
+
+        assert_eq!(
+            failure.errors[0].code,
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid
+        );
+    }
+}
+
+#[test]
+fn rejects_model_candidate_without_metadata_object() {
+    let fixture = AppFixture::new("invalid-model-candidate-metadata");
+    let mut candidate = model_candidate("ollama-llama-3-2", json!({}));
+    candidate
+        .as_object_mut()
+        .expect("candidate object")
+        .insert("metadata".to_string(), json!(null));
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([candidate]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("model candidate without metadata object must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ModelCandidateConfigInvalid
+    );
+}
+
+#[test]
+fn rejects_placeholder_model_candidate_metadata() {
+    let fixture = AppFixture::new("placeholder-model-metadata");
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([model_candidate(
+            "ollama-llama-3-2",
+            json!({"implementation_kind": "documentation-only"})
+        )]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("placeholder model candidate metadata must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ModelCandidateImplementationInvalid
+    );
+}
+
+#[test]
+fn rejects_placeholder_model_candidate_implementation() {
+    let fixture = AppFixture::new("placeholder-model-implementation");
+    let mut candidate = model_candidate("ollama-llama-3-2", json!({}));
+    candidate.as_object_mut().expect("candidate object").insert(
+        "provider_implementation_id".to_string(),
+        json!("placeholder.ollama-provider"),
+    );
+    fixture.write_app_manifest_with_model_dependencies(
+        &json!([]),
+        &json!([model_dependency(json!([candidate]))]),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("placeholder model candidate must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ModelCandidateImplementationInvalid
+    );
+}
+
+#[test]
 fn rejects_unreadable_component_manifest() {
     let fixture = AppFixture::new("unreadable-component-manifest");
     fixture.write_app_manifest(&json!([component_ref(
@@ -1018,10 +1342,27 @@ impl AppFixture {
         self.write_app_manifest_with_workflows(components, &json!([]));
     }
 
+    fn write_app_manifest_with_model_dependencies(
+        &self,
+        components: &serde_json::Value,
+        model_dependencies: &serde_json::Value,
+    ) {
+        self.write_app_manifest_full(components, &json!([]), model_dependencies);
+    }
+
     fn write_app_manifest_with_workflows(
         &self,
         components: &serde_json::Value,
         workflows: &serde_json::Value,
+    ) {
+        self.write_app_manifest_full(components, workflows, &json!([]));
+    }
+
+    fn write_app_manifest_full(
+        &self,
+        components: &serde_json::Value,
+        workflows: &serde_json::Value,
+        model_dependencies: &serde_json::Value,
     ) {
         let app = json!({
             "app_id": "hello.world.app",
@@ -1032,7 +1373,7 @@ impl AppFixture {
             },
             "components": components,
             "workflows": workflows,
-            "model_dependencies": [],
+            "model_dependencies": model_dependencies,
             "config_schema": {
                 "type": "object"
             },
@@ -1250,6 +1591,66 @@ fn component_ref(id: &str, version: &str, digest: &str, manifest_path: &str) -> 
         "version": version,
         "digest": digest,
         "manifest_path": manifest_path
+    })
+}
+
+fn assert_model_dependency_rejections(
+    prefix: &str,
+    cases: Vec<(serde_json::Value, ApplicationManifestErrorCode)>,
+) {
+    for (index, (dependency, expected_code)) in cases.into_iter().enumerate() {
+        let fixture = AppFixture::new(&format!("{prefix}-{index}"));
+        fixture.write_app_manifest_with_model_dependencies(&json!([]), &json!([dependency]));
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("model dependency rejection case must fail");
+
+        assert_eq!(failure.errors[0].code, expected_code);
+    }
+}
+
+fn model_dependency(candidates: impl Into<serde_json::Value>) -> serde_json::Value {
+    let candidates = candidates.into();
+    json!({
+        "interface_id": "traverse.inference.generate",
+        "version_range": "^1.0",
+        "selection_policy": {
+            "strategy": "priority",
+            "allow_fallback": true
+        },
+        "required_capabilities": ["text_generation"],
+        "minimum_context_window": 8192,
+        "candidates": candidates
+    })
+}
+
+fn model_candidate(
+    candidate_id: &str,
+    metadata_overrides: impl Into<serde_json::Value>,
+) -> serde_json::Value {
+    let metadata_overrides = metadata_overrides.into();
+    let mut metadata = json!({
+        "implementation_kind": "real_local_provider",
+        "provider": "ollama",
+        "model_context_window": 8192,
+        "supports_streaming": true
+    });
+    if let (Some(base), Some(overrides)) =
+        (metadata.as_object_mut(), metadata_overrides.as_object())
+    {
+        for (key, value) in overrides {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    json!({
+        "candidate_id": candidate_id,
+        "provider_capability_id": "traverse.inference.generate",
+        "provider_implementation_id": "ollama.local.generate",
+        "model_identifier": "llama3.2:3b",
+        "placement_target": "local",
+        "priority": 10,
+        "required_provider_config_keys": ["ollama_base_url"],
+        "metadata": metadata
     })
 }
 

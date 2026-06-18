@@ -66,3 +66,4 @@ These docs are not part of the linear onboarding sequence but are essential refe
 - [docs/workflow-contract-authoring-guide.md](workflow-contract-authoring-guide.md) — node/edge model, direct vs event edges, authoring steps
 - [docs/registry-bundle-authoring-guide.md](registry-bundle-authoring-guide.md) — how to author a bundle manifest for a new domain
 - [docs/wasm-agent-authoring-guide.md](wasm-agent-authoring-guide.md) — stub vs. real implementation, build-fixture.sh, model_dependencies
+- [docs/model-dependency-authoring-guide.md](model-dependency-authoring-guide.md) — governed app manifest schema for real model candidates

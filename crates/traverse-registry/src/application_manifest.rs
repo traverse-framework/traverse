@@ -293,10 +293,32 @@ pub struct ApplicationWorkflowRef {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApplicationModelDependency {
-    pub dependency_id: String,
-    pub requirement_ref: String,
+    pub interface_id: String,
+    pub version_range: String,
+    pub selection_policy: ModelSelectionPolicy,
+    pub required_capabilities: Vec<String>,
+    pub minimum_context_window: u64,
+    pub candidates: Vec<ModelCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelSelectionPolicy {
+    pub strategy: String,
+    pub allow_fallback: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelCandidate {
+    pub candidate_id: String,
+    pub provider_capability_id: String,
+    pub provider_implementation_id: String,
+    pub model_identifier: String,
+    pub placement_target: ExecutionTarget,
+    pub priority: u32,
+    pub required_provider_config_keys: Vec<String>,
+    pub metadata: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,6 +366,11 @@ pub enum ApplicationManifestErrorCode {
     InvalidDigestMetadata,
     ComponentDigestMismatch,
     ComponentDependencyMustBeConcrete,
+    UnsupportedModelInterface,
+    ModelDependencyMissingCandidates,
+    DuplicateModelCandidate,
+    ModelCandidateConfigInvalid,
+    ModelCandidateImplementationInvalid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,7 +393,7 @@ struct ApplicationManifestSerde {
     workspace_defaults: Value,
     components: Vec<ApplicationComponentRef>,
     workflows: Vec<ApplicationWorkflowRef>,
-    model_dependencies: Vec<ApplicationModelDependency>,
+    model_dependencies: Vec<ApplicationModelDependencySerde>,
     config_schema: Value,
     default_config: Value,
     placement_policy: Value,
@@ -388,6 +415,50 @@ struct WasmComponentManifestSerde {
     dependencies: Vec<WasmComponentDependency>,
     connector_requirements: Vec<ConnectorRequirement>,
     validation_evidence: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationModelDependencySerde {
+    #[serde(default)]
+    interface_id: Option<String>,
+    #[serde(default)]
+    version_range: Option<String>,
+    #[serde(default)]
+    selection_policy: Option<ModelSelectionPolicySerde>,
+    #[serde(default)]
+    required_capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    minimum_context_window: Option<u64>,
+    #[serde(default)]
+    candidates: Option<Vec<ModelCandidateSerde>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelSelectionPolicySerde {
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default)]
+    allow_fallback: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelCandidateSerde {
+    #[serde(default)]
+    candidate_id: Option<String>,
+    #[serde(default)]
+    provider_capability_id: Option<String>,
+    #[serde(default)]
+    provider_implementation_id: Option<String>,
+    #[serde(default)]
+    model_identifier: Option<String>,
+    #[serde(default)]
+    placement_target: Option<ExecutionTarget>,
+    #[serde(default)]
+    priority: Option<u32>,
+    #[serde(default)]
+    required_provider_config_keys: Option<Vec<String>>,
+    #[serde(default)]
+    metadata: Option<Value>,
 }
 
 /// Loads and validates a Traverse application manifest plus its referenced
@@ -436,6 +507,7 @@ pub fn load_application_bundle_manifest(
         })?;
 
     ensure_unique_component_refs(&manifest.components)?;
+    let model_dependencies = parse_model_dependencies(&manifest.model_dependencies)?;
 
     let components = manifest
         .components
@@ -450,7 +522,7 @@ pub fn load_application_bundle_manifest(
         workspace_defaults: manifest.workspace_defaults,
         components,
         workflows: manifest.workflows,
-        model_dependencies: manifest.model_dependencies,
+        model_dependencies,
         config_schema: manifest.config_schema,
         default_config: manifest.default_config,
         placement_policy: manifest.placement_policy,
@@ -745,6 +817,228 @@ fn ensure_unique_component_refs(
         }
     }
     Ok(())
+}
+
+fn parse_model_dependencies(
+    dependencies: &[ApplicationModelDependencySerde],
+) -> Result<Vec<ApplicationModelDependency>, ApplicationManifestFailure> {
+    let mut parsed = Vec::new();
+    for dependency in dependencies {
+        let interface_id = required_text(
+            dependency.interface_id.as_deref(),
+            "$.model_dependencies[].interface_id",
+            "model dependency interface_id is required",
+        )?;
+        let version_range = required_text(
+            dependency.version_range.as_deref(),
+            "$.model_dependencies[].version_range",
+            "model dependency version_range is required",
+        )?;
+        let selection_policy = parse_selection_policy(dependency.selection_policy.as_ref())?;
+        let required_capabilities = dependency.required_capabilities.clone().ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+                "$.model_dependencies[].required_capabilities".to_string(),
+                "model dependency required_capabilities is required".to_string(),
+            )
+        })?;
+        let minimum_context_window = dependency.minimum_context_window.unwrap_or_default();
+        let candidates = parse_model_candidates(dependency.candidates.as_deref())?;
+
+        let model_dependency = ApplicationModelDependency {
+            interface_id,
+            version_range,
+            selection_policy,
+            required_capabilities,
+            minimum_context_window,
+            candidates,
+        };
+
+        if model_dependency.interface_id != "traverse.inference.generate" {
+            return Err(single_error(
+                ApplicationManifestErrorCode::UnsupportedModelInterface,
+                "$.model_dependencies[].interface_id".to_string(),
+                format!(
+                    "unsupported model dependency interface: {}",
+                    model_dependency.interface_id
+                ),
+            ));
+        }
+        if model_dependency.selection_policy.strategy != "priority"
+            || model_dependency.minimum_context_window == 0
+            || model_dependency
+                .required_capabilities
+                .iter()
+                .any(|value| !has_text(value))
+        {
+            return Err(single_error(
+                ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+                "$.model_dependencies[]".to_string(),
+                "model dependency must declare version_range, priority selection policy, minimum_context_window, and non-empty required_capabilities".to_string(),
+            ));
+        }
+        parsed.push(model_dependency);
+    }
+    Ok(parsed)
+}
+
+fn parse_selection_policy(
+    policy: Option<&ModelSelectionPolicySerde>,
+) -> Result<ModelSelectionPolicy, ApplicationManifestFailure> {
+    let policy = policy.ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+            "$.model_dependencies[].selection_policy".to_string(),
+            "model dependency selection_policy is required".to_string(),
+        )
+    })?;
+    Ok(ModelSelectionPolicy {
+        strategy: required_text(
+            policy.strategy.as_deref(),
+            "$.model_dependencies[].selection_policy.strategy",
+            "model dependency selection_policy.strategy is required",
+        )?,
+        allow_fallback: policy.allow_fallback.unwrap_or(false),
+    })
+}
+
+fn parse_model_candidates(
+    candidates: Option<&[ModelCandidateSerde]>,
+) -> Result<Vec<ModelCandidate>, ApplicationManifestFailure> {
+    let candidates = candidates.ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::ModelDependencyMissingCandidates,
+            "$.model_dependencies[].candidates".to_string(),
+            "model dependency candidates are required".to_string(),
+        )
+    })?;
+    if candidates.is_empty() {
+        return Err(single_error(
+            ApplicationManifestErrorCode::ModelDependencyMissingCandidates,
+            "$.model_dependencies[].candidates".to_string(),
+            "model dependency must declare at least one real candidate".to_string(),
+        ));
+    }
+
+    let mut parsed = Vec::new();
+    let mut seen = BTreeSet::new();
+    for candidate in candidates {
+        let model_candidate = parse_model_candidate(candidate)?;
+        if !seen.insert(model_candidate.candidate_id.clone()) {
+            return Err(single_error(
+                ApplicationManifestErrorCode::DuplicateModelCandidate,
+                "$.model_dependencies[].candidates[].candidate_id".to_string(),
+                format!(
+                    "duplicate model candidate id: {}",
+                    model_candidate.candidate_id
+                ),
+            ));
+        }
+        if !valid_model_candidate(&model_candidate) {
+            return Err(single_error(
+                ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+                "$.model_dependencies[].candidates[]".to_string(),
+                format!(
+                    "model candidate {} must declare provider ids, model_identifier, priority, config keys, and metadata object",
+                    model_candidate.candidate_id
+                ),
+            ));
+        }
+        if looks_like_placeholder(&model_candidate.provider_implementation_id)
+            || model_candidate
+                .metadata
+                .get("implementation_kind")
+                .and_then(Value::as_str)
+                .is_some_and(looks_like_placeholder)
+        {
+            return Err(single_error(
+                ApplicationManifestErrorCode::ModelCandidateImplementationInvalid,
+                "$.model_dependencies[].candidates[].provider_implementation_id".to_string(),
+                format!(
+                    "model candidate {} must reference a real provider implementation, not a fake, stub, placeholder, or documentation-only implementation",
+                    model_candidate.candidate_id
+                ),
+            ));
+        }
+        parsed.push(model_candidate);
+    }
+    Ok(parsed)
+}
+
+fn parse_model_candidate(
+    candidate: &ModelCandidateSerde,
+) -> Result<ModelCandidate, ApplicationManifestFailure> {
+    Ok(ModelCandidate {
+        candidate_id: required_text(
+            candidate.candidate_id.as_deref(),
+            "$.model_dependencies[].candidates[].candidate_id",
+            "model candidate candidate_id is required",
+        )?,
+        provider_capability_id: required_text(
+            candidate.provider_capability_id.as_deref(),
+            "$.model_dependencies[].candidates[].provider_capability_id",
+            "model candidate provider_capability_id is required",
+        )?,
+        provider_implementation_id: required_text(
+            candidate.provider_implementation_id.as_deref(),
+            "$.model_dependencies[].candidates[].provider_implementation_id",
+            "model candidate provider_implementation_id is required",
+        )?,
+        model_identifier: required_text(
+            candidate.model_identifier.as_deref(),
+            "$.model_dependencies[].candidates[].model_identifier",
+            "model candidate model_identifier is required",
+        )?,
+        placement_target: candidate.placement_target.clone().ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+                "$.model_dependencies[].candidates[].placement_target".to_string(),
+                "model candidate placement_target is required".to_string(),
+            )
+        })?,
+        priority: candidate.priority.unwrap_or_default(),
+        required_provider_config_keys: candidate
+            .required_provider_config_keys
+            .clone()
+            .unwrap_or_default(),
+        metadata: candidate.metadata.clone().unwrap_or(Value::Null),
+    })
+}
+
+fn required_text(
+    value: Option<&str>,
+    path: &str,
+    message: &str,
+) -> Result<String, ApplicationManifestFailure> {
+    if let Some(value) = value.filter(|value| has_text(value)) {
+        Ok(value.to_string())
+    } else {
+        Err(single_error(
+            ApplicationManifestErrorCode::ModelCandidateConfigInvalid,
+            path.to_string(),
+            message.to_string(),
+        ))
+    }
+}
+
+fn valid_model_candidate(candidate: &ModelCandidate) -> bool {
+    has_text(&candidate.candidate_id)
+        && has_text(&candidate.provider_capability_id)
+        && has_text(&candidate.provider_implementation_id)
+        && has_text(&candidate.model_identifier)
+        && candidate.priority > 0
+        && candidate
+            .required_provider_config_keys
+            .iter()
+            .all(|key| has_text(key))
+        && candidate.metadata.is_object()
+}
+
+fn looks_like_placeholder(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    ["fake", "stub", "placeholder", "documentation-only"]
+        .iter()
+        .any(|marker| lowered.contains(marker))
 }
 
 fn load_component(
