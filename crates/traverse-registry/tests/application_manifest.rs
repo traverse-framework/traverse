@@ -7,11 +7,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use traverse_contracts::parse_event_contract;
+use traverse_contracts::{ExecutionTarget, parse_event_contract};
 use traverse_registry::{
     ApplicationManifestErrorCode, ApplicationRegistrationErrorCode, ApplicationRegistrationRequest,
     ApplicationRegistrationStatus, ApplicationRegistry, CapabilityRegistry, EventRegistration,
-    EventRegistry, LookupScope, RegistryScope, WorkflowRegistry, load_application_bundle_manifest,
+    EventRegistry, LookupScope, ModelCandidateRejectionCode, ModelResolutionEvidence,
+    ModelResolutionPhase, RegistryScope, SelectedModelCandidate, WorkflowRegistry,
+    load_application_bundle_manifest,
 };
 
 #[test]
@@ -877,6 +879,7 @@ fn registers_application_bundle_atomically_with_created_status() {
     assert_eq!(outcome.status, ApplicationRegistrationStatus::Created);
     assert_eq!(outcome.status.http_status(), 201);
     assert_eq!(outcome.record.app_id, "hello.world.app");
+    assert!(outcome.record.model_readiness.is_empty());
     assert_eq!(outcome.record.components.len(), 1);
     assert_eq!(outcome.record.workflows.len(), 1);
     assert!(
@@ -894,6 +897,39 @@ fn registers_application_bundle_atomically_with_created_status() {
             .find_exact(LookupScope::PreferPrivate, "hello.world.say-hello", "1.0.0")
             .is_some()
     );
+}
+
+#[test]
+fn application_registration_records_model_readiness_evidence() {
+    let fixture = AppFixture::new("register-model-readiness");
+    fixture.write_hello_world_bundle();
+    let mut app_registry = ApplicationRegistry::new();
+    let mut capability_registry = CapabilityRegistry::new();
+    let event_registry = EventRegistry::new();
+    let mut workflow_registry = WorkflowRegistry::new();
+
+    let outcome = app_registry
+        .register_bundle_with_model_readiness(
+            &mut capability_registry,
+            &event_registry,
+            &mut workflow_registry,
+            &fixture.registration_request(),
+            vec![model_readiness_evidence("ollama-llama-3-2")],
+        )
+        .expect("valid application bundle should register with readiness evidence");
+
+    assert_eq!(outcome.record.model_readiness.len(), 1);
+    let readiness = &outcome.record.model_readiness[0];
+    assert_eq!(readiness.phase, ModelResolutionPhase::Setup);
+    assert_eq!(
+        readiness
+            .selected
+            .as_ref()
+            .expect("selected candidate should be recorded")
+            .candidate_id,
+        "ollama-llama-3-2"
+    );
+    assert!(readiness.failure_code.is_none());
 }
 
 #[test]
@@ -1652,6 +1688,26 @@ fn model_candidate(
         "required_provider_config_keys": ["ollama_base_url"],
         "metadata": metadata
     })
+}
+
+fn model_readiness_evidence(candidate_id: &str) -> ModelResolutionEvidence {
+    ModelResolutionEvidence {
+        phase: ModelResolutionPhase::Setup,
+        interface_id: "traverse.inference.generate".to_string(),
+        requested_interface_id: "traverse.inference.generate".to_string(),
+        requested_placement: ExecutionTarget::Local,
+        selected: Some(SelectedModelCandidate {
+            candidate_id: candidate_id.to_string(),
+            provider_capability_id: "traverse.inference.generate".to_string(),
+            provider_implementation_id: "ollama.local.generate".to_string(),
+            model_identifier: "llama3.2:3b".to_string(),
+            placement_target: ExecutionTarget::Local,
+            priority: 10,
+            selection_reason: "selected highest-priority passing candidate".to_string(),
+        }),
+        candidates: Vec::new(),
+        failure_code: Option::<ModelCandidateRejectionCode>::None,
+    }
 }
 
 fn register_event_fixture(registry: &mut EventRegistry, event_dir: &str, expected_id: &str) {

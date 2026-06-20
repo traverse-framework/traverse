@@ -6,15 +6,19 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::thread;
-use traverse_contracts::{governed_content_digest, parse_contract, reference_connector_contracts};
+use traverse_contracts::{
+    ExecutionTarget, governed_content_digest, parse_contract, reference_connector_contracts,
+};
 use traverse_registry::{
-    ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-    CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, ConnectorRegistration, ImplementationKind, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference,
+    ApplicationModelDependency, ArtifactDigests, BinaryFormat, BinaryReference,
+    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
+    CompositionKind, CompositionPattern, ConnectorRegistration, ImplementationKind, ModelCandidate,
+    ModelCandidateRejectionCode, ModelResolutionPhase, ModelResolutionRequest,
+    ModelSelectionPolicy, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
 };
 use traverse_runtime::inference::{
-    OllamaInferenceErrorCode, OllamaInferenceProvider, OllamaInferenceRequest, OllamaProviderConfig,
+    OllamaInferenceErrorCode, OllamaInferenceProvider, OllamaInferenceRequest,
+    OllamaModelAvailabilityProbe, OllamaProviderConfig, resolve_ollama_model_dependency,
 };
 
 #[test]
@@ -381,16 +385,245 @@ fn inference_contract_validates_and_registers_with_http_connector() {
     assert_eq!(outcome.record.id, "traverse.inference.generate");
 }
 
+#[test]
+fn ollama_model_resolution_selects_available_candidate_at_setup() {
+    let tags = json!({
+        "models": [{"name": "mistral:7b"}]
+    })
+    .to_string();
+    let base_url = start_ollama_server(vec![tags.clone(), tags]);
+    let dependency = model_dependency(vec![
+        model_candidate("preferred", "llama3.2:3b", 20, 8192),
+        model_candidate("fallback", "mistral:7b", 10, 8192),
+    ]);
+
+    let evidence = resolve_ollama_model_dependency(
+        &dependency,
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::new(provider_config(&base_url, 1_000)),
+    );
+
+    assert_eq!(
+        evidence
+            .selected
+            .expect("available fallback should be selected")
+            .candidate_id,
+        "fallback"
+    );
+    assert_eq!(
+        evidence.candidates[0].rejection_code,
+        Some(ModelCandidateRejectionCode::ModelCandidateUnavailable)
+    );
+    assert!(evidence.failure_code.is_none());
+}
+
+#[test]
+fn ollama_model_resolution_revalidates_at_execution_time() {
+    let setup_tags = json!({
+        "models": [{"name": "llama3.2:3b"}, {"name": "mistral:7b"}]
+    })
+    .to_string();
+    let execution_tags = json!({
+        "models": [{"name": "mistral:7b"}]
+    })
+    .to_string();
+    let setup_base_url = start_ollama_server(vec![setup_tags.clone(), setup_tags]);
+    let execution_base_url = start_ollama_server(vec![execution_tags.clone(), execution_tags]);
+    let dependency = model_dependency(vec![
+        model_candidate("setup-choice", "llama3.2:3b", 20, 8192),
+        model_candidate("execution-choice", "mistral:7b", 10, 8192),
+    ]);
+
+    let setup = resolve_ollama_model_dependency(
+        &dependency,
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::new(provider_config(&setup_base_url, 1_000)),
+    );
+    let execution = resolve_ollama_model_dependency(
+        &dependency,
+        &model_request(ModelResolutionPhase::Execution),
+        &OllamaModelAvailabilityProbe::new(provider_config(&execution_base_url, 1_000)),
+    );
+
+    assert_eq!(
+        setup.selected.expect("setup should select").candidate_id,
+        "setup-choice"
+    );
+    assert_eq!(
+        execution
+            .selected
+            .expect("execution should select fallback")
+            .candidate_id,
+        "execution-choice"
+    );
+    assert_eq!(execution.phase, ModelResolutionPhase::Execution);
+}
+
+#[test]
+fn ollama_model_resolution_reports_unsatisfied_dependency() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral port should bind");
+    let port = listener
+        .local_addr()
+        .expect("listener address should be readable")
+        .port();
+    drop(listener);
+    let dependency = model_dependency(vec![model_candidate(
+        "unreachable",
+        "llama3.2:3b",
+        20,
+        8192,
+    )]);
+
+    let evidence = resolve_ollama_model_dependency(
+        &dependency,
+        &model_request(ModelResolutionPhase::Execution),
+        &OllamaModelAvailabilityProbe::new(provider_config(
+            &format!("http://127.0.0.1:{port}"),
+            100,
+        )),
+    );
+
+    assert!(evidence.selected.is_none());
+    assert_eq!(
+        evidence.machine_failure_code(),
+        Some("model_dependency_unsatisfied")
+    );
+    assert_eq!(
+        evidence.candidates[0].rejection_code,
+        Some(ModelCandidateRejectionCode::ModelProviderUnavailable)
+    );
+}
+
+#[test]
+fn ollama_model_resolution_maps_provider_config_and_http_failures() {
+    let tags = json!({
+        "models": [{"name": "llama3.2:3b"}]
+    })
+    .to_string();
+    let custom_base_url = start_ollama_server(vec![tags]);
+    let mut custom_candidate = model_candidate("custom", "llama3.2:3b", 20, 8192);
+    custom_candidate.provider_implementation_id = "ollama.custom.generate".to_string();
+    let custom = resolve_ollama_model_dependency(
+        &model_dependency(vec![custom_candidate]),
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::default().with_provider_config(
+            "ollama.custom.generate",
+            provider_config(&custom_base_url, 1_000),
+        ),
+    );
+    assert_eq!(
+        custom
+            .selected
+            .expect("custom config should select")
+            .candidate_id,
+        "custom"
+    );
+
+    let mut missing_config_candidate = model_candidate("missing-config", "llama3.2:3b", 20, 8192);
+    missing_config_candidate.provider_implementation_id = "ollama.missing.generate".to_string();
+    let missing_config = resolve_ollama_model_dependency(
+        &model_dependency(vec![missing_config_candidate]),
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::new(provider_config("http://127.0.0.1:11434", 100)),
+    );
+    assert_eq!(
+        missing_config.candidates[0].rejection_code,
+        Some(ModelCandidateRejectionCode::ModelCandidateConfigInvalid)
+    );
+
+    let invalid_config = resolve_ollama_model_dependency(
+        &model_dependency(vec![model_candidate(
+            "invalid-config",
+            "llama3.2:3b",
+            20,
+            8192,
+        )]),
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::new(provider_config("https://127.0.0.1:11434", 100)),
+    );
+    assert_eq!(
+        invalid_config.candidates[0].rejection_code,
+        Some(ModelCandidateRejectionCode::ModelCandidateConfigInvalid)
+    );
+
+    let provider_failure = resolve_ollama_model_dependency(
+        &model_dependency(vec![model_candidate(
+            "provider-failure",
+            "llama3.2:3b",
+            20,
+            8192,
+        )]),
+        &model_request(ModelResolutionPhase::Setup),
+        &OllamaModelAvailabilityProbe::new(provider_config(
+            &start_raw_server(vec![http_response(500, "{}")]),
+            1_000,
+        )),
+    );
+    assert_eq!(
+        provider_failure.candidates[0].rejection_code,
+        Some(ModelCandidateRejectionCode::ModelProviderUnavailable)
+    );
+}
+
 fn provider(base_url: &str) -> OllamaInferenceProvider {
     provider_with_timeout(base_url, 1_000)
 }
 
 fn provider_with_timeout(base_url: &str, timeout_ms: u64) -> OllamaInferenceProvider {
-    OllamaInferenceProvider::new(OllamaProviderConfig {
+    OllamaInferenceProvider::new(provider_config(base_url, timeout_ms))
+        .expect("provider config should be valid")
+}
+
+fn provider_config(base_url: &str, timeout_ms: u64) -> OllamaProviderConfig {
+    OllamaProviderConfig {
         base_url: base_url.to_string(),
         request_timeout_ms: Some(timeout_ms),
-    })
-    .expect("provider config should be valid")
+    }
+}
+
+fn model_request(phase: ModelResolutionPhase) -> ModelResolutionRequest {
+    ModelResolutionRequest {
+        phase,
+        requested_interface_id: "traverse.inference.generate".to_string(),
+        requested_placement: ExecutionTarget::Local,
+    }
+}
+
+fn model_dependency(candidates: Vec<ModelCandidate>) -> ApplicationModelDependency {
+    ApplicationModelDependency {
+        interface_id: "traverse.inference.generate".to_string(),
+        version_range: "^1.0".to_string(),
+        selection_policy: ModelSelectionPolicy {
+            strategy: "priority".to_string(),
+            allow_fallback: true,
+        },
+        required_capabilities: vec!["text_generation".to_string()],
+        minimum_context_window: 8192,
+        candidates,
+    }
+}
+
+fn model_candidate(
+    candidate_id: &str,
+    model_identifier: &str,
+    priority: u32,
+    context_window: u64,
+) -> ModelCandidate {
+    ModelCandidate {
+        candidate_id: candidate_id.to_string(),
+        provider_capability_id: "traverse.inference.generate".to_string(),
+        provider_implementation_id: "ollama.local.generate".to_string(),
+        model_identifier: model_identifier.to_string(),
+        placement_target: ExecutionTarget::Local,
+        priority,
+        required_provider_config_keys: vec!["ollama_base_url".to_string()],
+        metadata: json!({
+            "implementation_kind": "real_local_provider",
+            "provider": "ollama",
+            "capabilities": ["text_generation"],
+            "model_context_window": context_window
+        }),
+    }
 }
 
 fn start_ollama_server(bodies: Vec<String>) -> String {

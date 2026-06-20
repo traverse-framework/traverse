@@ -13,9 +13,9 @@ use traverse_contracts::{
 use crate::{
     ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
     CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, EventRegistry, ImplementationKind, LookupScope, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowRegistration,
-    WorkflowRegistry,
+    CompositionPattern, EventRegistry, ImplementationKind, LookupScope, ModelResolutionEvidence,
+    RegistryProvenance, RegistryScope, SourceKind, SourceReference, WorkflowDefinition,
+    WorkflowRegistration, WorkflowRegistry,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub struct ApplicationRegistryRecord {
     pub bundle_digest: String,
     pub registered_at: String,
     pub readiness_status: ApplicationReadinessStatus,
+    pub model_readiness: Vec<ModelResolutionEvidence>,
     pub components: Vec<ApplicationRegisteredComponent>,
     pub workflows: Vec<ApplicationRegisteredWorkflow>,
     pub inspection_link: String,
@@ -159,6 +160,29 @@ impl ApplicationRegistry {
         workflows: &mut WorkflowRegistry,
         request: &ApplicationRegistrationRequest,
     ) -> Result<ApplicationRegistrationOutcome, ApplicationRegistrationFailure> {
+        self.register_bundle_with_model_readiness(
+            capabilities,
+            events,
+            workflows,
+            request,
+            Vec::new(),
+        )
+    }
+
+    /// Registers a complete application bundle with setup-time model readiness evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationRegistrationFailure`] when bundle validation or
+    /// atomic registry staging fails.
+    pub fn register_bundle_with_model_readiness(
+        &mut self,
+        capabilities: &mut CapabilityRegistry,
+        events: &EventRegistry,
+        workflows: &mut WorkflowRegistry,
+        request: &ApplicationRegistrationRequest,
+        model_readiness: Vec<ModelResolutionEvidence>,
+    ) -> Result<ApplicationRegistrationOutcome, ApplicationRegistrationFailure> {
         let manifest = load_application_bundle_manifest(&request.manifest_path)
             .map_err(map_manifest_failure)?;
         let workflow_artifacts = load_application_workflows(&request.manifest_path, &manifest)?;
@@ -209,6 +233,7 @@ impl ApplicationRegistry {
         let record = build_application_record(
             request,
             &manifest,
+            model_readiness,
             registered_components,
             registered_workflows,
         );
@@ -685,6 +710,7 @@ fn build_application_capability_registration(
 fn build_application_record(
     request: &ApplicationRegistrationRequest,
     manifest: &ApplicationBundleManifest,
+    model_readiness: Vec<ModelResolutionEvidence>,
     components: Vec<ApplicationRegisteredComponent>,
     workflows: Vec<ApplicationRegisteredWorkflow>,
 ) -> ApplicationRegistryRecord {
@@ -700,6 +726,7 @@ fn build_application_record(
         bundle_digest,
         registered_at: request.registered_at.clone(),
         readiness_status: ApplicationReadinessStatus::Ready,
+        model_readiness,
         components,
         workflows,
         inspection_link: format!("/v1/apps/{}/{}", manifest.app_id, manifest.version),

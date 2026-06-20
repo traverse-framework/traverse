@@ -2,10 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
+use traverse_registry::{
+    ApplicationModelDependency, ModelAvailabilityProbe, ModelCandidate, ModelCandidateAvailability,
+    ModelCandidateRejectionCode, ModelResolutionEvidence, ModelResolutionRequest,
+    resolve_model_dependency,
+};
 
 const OLLAMA_PROVIDER: &str = "ollama";
 const GENERATE_INTERFACE: &str = "traverse.inference.generate";
@@ -156,6 +162,68 @@ impl OllamaInferenceProvider {
         )?;
         parse_http_json_response(&response_text)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OllamaModelAvailabilityProbe {
+    configs_by_implementation: BTreeMap<String, OllamaProviderConfig>,
+}
+
+impl OllamaModelAvailabilityProbe {
+    #[must_use]
+    pub fn new(config: OllamaProviderConfig) -> Self {
+        let mut configs_by_implementation = BTreeMap::new();
+        configs_by_implementation.insert("ollama.local.generate".to_string(), config);
+        Self {
+            configs_by_implementation,
+        }
+    }
+
+    #[must_use]
+    pub fn with_provider_config(
+        mut self,
+        provider_implementation_id: impl Into<String>,
+        config: OllamaProviderConfig,
+    ) -> Self {
+        self.configs_by_implementation
+            .insert(provider_implementation_id.into(), config);
+        self
+    }
+}
+
+impl ModelAvailabilityProbe for OllamaModelAvailabilityProbe {
+    fn check_candidate(
+        &self,
+        _dependency: &ApplicationModelDependency,
+        candidate: &ModelCandidate,
+    ) -> ModelCandidateAvailability {
+        let Some(config) = self
+            .configs_by_implementation
+            .get(&candidate.provider_implementation_id)
+        else {
+            return ModelCandidateAvailability::rejected(
+                ModelCandidateRejectionCode::ModelCandidateConfigInvalid,
+                "missing provider config for model candidate",
+            );
+        };
+        let provider = match OllamaInferenceProvider::new(config.clone()) {
+            Ok(provider) => provider,
+            Err(error) => return model_candidate_availability_error(&error),
+        };
+        match provider.check_model_available(&candidate.model_identifier) {
+            Ok(()) => ModelCandidateAvailability::ready(),
+            Err(error) => model_candidate_availability_error(&error),
+        }
+    }
+}
+
+#[must_use]
+pub fn resolve_ollama_model_dependency(
+    dependency: &ApplicationModelDependency,
+    request: &ModelResolutionRequest,
+    probe: &OllamaModelAvailabilityProbe,
+) -> ModelResolutionEvidence {
+    resolve_model_dependency(dependency, request, probe)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -426,4 +494,27 @@ fn parse_status_code(status_line: &str) -> Result<u16, OllamaInferenceError> {
 
 fn provider_unavailable(message: impl Into<String>) -> OllamaInferenceError {
     OllamaInferenceError::new(OllamaInferenceErrorCode::ModelProviderUnavailable, message)
+}
+
+fn model_candidate_availability_error(error: &OllamaInferenceError) -> ModelCandidateAvailability {
+    match error.code {
+        OllamaInferenceErrorCode::InvalidConfig => ModelCandidateAvailability::rejected(
+            ModelCandidateRejectionCode::ModelCandidateConfigInvalid,
+            error.message.clone(),
+        ),
+        OllamaInferenceErrorCode::ModelProviderUnavailable => ModelCandidateAvailability::rejected(
+            ModelCandidateRejectionCode::ModelProviderUnavailable,
+            error.message.clone(),
+        ),
+        OllamaInferenceErrorCode::ModelUnavailable => ModelCandidateAvailability::rejected(
+            ModelCandidateRejectionCode::ModelCandidateUnavailable,
+            error.message.clone(),
+        ),
+        OllamaInferenceErrorCode::ProviderFailure | OllamaInferenceErrorCode::InvalidResponse => {
+            ModelCandidateAvailability::rejected(
+                ModelCandidateRejectionCode::ModelProviderUnavailable,
+                error.message.clone(),
+            )
+        }
+    }
 }
