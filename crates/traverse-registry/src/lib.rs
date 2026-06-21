@@ -6,6 +6,7 @@ pub mod dependency_resolver;
 mod events;
 mod federation;
 mod graph;
+mod model_resolution;
 pub mod semver_resolver;
 mod workflows;
 pub use application_manifest::*;
@@ -17,6 +18,7 @@ pub use dependency_resolver::{
 pub use events::*;
 pub use federation::*;
 pub use graph::*;
+pub use model_resolution::*;
 pub use semver_resolver::{
     AmbiguousCandidate, RangeResolutionError, ResolvedRangeCapability, resolve_version_range,
 };
