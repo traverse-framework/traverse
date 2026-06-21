@@ -241,6 +241,293 @@ fn rejects_invalid_model_candidate_config() {
 }
 
 #[test]
+fn workspace_config_overrides_declared_fields_and_redacts_secret_values() {
+    let fixture = AppFixture::new("workspace-config-merge");
+    fixture.write_app_manifest_with_config(
+        &json!([]),
+        &config_schema(),
+        &json!({
+            "ollama_base_url": "http://127.0.0.1:11434",
+            "browser_origin": "http://127.0.0.1:5173"
+        }),
+    );
+    fixture.write_workspace_config(&json!({
+        "overrides": {
+            "ollama_base_url": "http://localhost:11434"
+        },
+        "secrets": {
+            "ollama_api_key": "sk-local-secret"
+        }
+    }));
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("workspace config should merge with manifest defaults");
+
+    assert_eq!(
+        bundle.effective_config.values["ollama_base_url"],
+        "http://localhost:11434"
+    );
+    assert_eq!(
+        bundle.effective_config.values["browser_origin"],
+        "http://127.0.0.1:5173"
+    );
+    assert_eq!(
+        bundle.effective_config.redacted_secret_keys,
+        vec!["ollama_api_key"]
+    );
+    let serialized =
+        serde_json::to_string(&bundle.effective_config).expect("effective config serializes");
+    assert!(!serialized.contains("sk-local-secret"));
+}
+
+#[test]
+fn rejects_workspace_config_immutable_override() {
+    let fixture = AppFixture::new("workspace-config-immutable");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+    fixture.write_workspace_config(&json!({
+        "overrides": {
+            "app_id": "other.app"
+        },
+        "secrets": {}
+    }));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("immutable config override must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigImmutableOverride
+    );
+}
+
+#[test]
+fn rejects_workspace_config_value_that_violates_schema() {
+    let fixture = AppFixture::new("workspace-config-invalid");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+    fixture.write_workspace_config(&json!({
+        "overrides": {
+            "ollama_base_url": false
+        },
+        "secrets": {}
+    }));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("invalid workspace config type must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigInvalid
+    );
+}
+
+#[test]
+fn rejects_workspace_config_malformed_json() {
+    let fixture = AppFixture::new("workspace-config-malformed");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+    fs::write(fixture.root.join("workspace.config.json"), "{ not json")
+        .expect("malformed workspace config should write");
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("malformed workspace config must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigInvalid
+    );
+}
+
+#[test]
+fn rejects_workspace_config_sections_that_are_not_objects() {
+    let cases = vec![
+        json!({
+            "overrides": "not-object",
+            "secrets": {}
+        }),
+        json!({
+            "overrides": {},
+            "secrets": "not-object"
+        }),
+    ];
+    for config in cases {
+        let fixture = AppFixture::new("workspace-config-section-shape");
+        fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+        fixture.write_workspace_config(&config);
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("workspace config sections must be objects");
+
+        assert_eq!(
+            failure.errors[0].code,
+            ApplicationManifestErrorCode::AppConfigInvalid
+        );
+    }
+}
+
+#[test]
+fn rejects_workspace_config_undeclared_and_non_overrideable_fields() {
+    let cases = vec![
+        (
+            json!({
+                "overrides": {
+                    "private_endpoint": "http://localhost"
+                },
+                "secrets": {}
+            }),
+            ApplicationManifestErrorCode::AppConfigInvalid,
+        ),
+        (
+            json!({
+                "overrides": {
+                    "app_theme": "dark"
+                },
+                "secrets": {}
+            }),
+            ApplicationManifestErrorCode::AppConfigImmutableOverride,
+        ),
+    ];
+    for (config, expected_code) in cases {
+        let fixture = AppFixture::new("workspace-config-field-guard");
+        fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+        fixture.write_workspace_config(&config);
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("workspace config field guard must fail");
+
+        assert_eq!(failure.errors[0].code, expected_code);
+    }
+}
+
+#[test]
+fn rejects_workspace_config_missing_required_effective_value() {
+    let fixture = AppFixture::new("workspace-config-required");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+    fixture.write_workspace_config(&json!({
+        "overrides": {},
+        "secrets": {}
+    }));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("missing required effective config must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigInvalid
+    );
+}
+
+#[test]
+fn rejects_manifest_default_config_that_is_not_an_object() {
+    let fixture = AppFixture::new("workspace-config-default-shape");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!("not-object"));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("manifest default_config must be an object");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigInvalid
+    );
+}
+
+#[test]
+fn absent_workspace_config_uses_manifest_defaults() {
+    let fixture = AppFixture::new("workspace-config-absent");
+    fixture.write_app_manifest_without_workspace_config(
+        &config_schema(),
+        &json!({
+            "ollama_base_url": "http://127.0.0.1:11434"
+        }),
+    );
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("absent workspace config should use manifest defaults");
+
+    assert_eq!(
+        bundle.effective_config.values["ollama_base_url"],
+        "http://127.0.0.1:11434"
+    );
+    assert!(bundle.effective_config.redacted_secret_keys.is_empty());
+}
+
+#[test]
+fn missing_workspace_config_file_uses_manifest_defaults() {
+    let fixture = AppFixture::new("workspace-config-missing-file");
+    fixture.write_app_manifest_with_config(
+        &json!([]),
+        &config_schema(),
+        &json!({
+            "ollama_base_url": "http://127.0.0.1:11434"
+        }),
+    );
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("missing workspace config file should use manifest defaults");
+
+    assert_eq!(
+        bundle.effective_config.values["ollama_base_url"],
+        "http://127.0.0.1:11434"
+    );
+}
+
+#[test]
+fn rejects_unreadable_workspace_config() {
+    let fixture = AppFixture::new("workspace-config-unreadable");
+    fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+    fixture.write_workspace_config(&json!({
+        "overrides": {},
+        "secrets": {}
+    }));
+    make_unreadable(&fixture.root.join("workspace.config.json"));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("unreadable workspace config must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppConfigInvalid
+    );
+}
+
+#[test]
+fn accepts_workspace_config_supported_schema_value_types() {
+    let fixture = AppFixture::new("workspace-config-types");
+    fixture.write_app_manifest_with_config(
+        &json!([]),
+        &json!({
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "x-traverse-overrideable": true},
+                "limit": {"type": "integer", "x-traverse-overrideable": true},
+                "temperature": {"type": "number", "x-traverse-overrideable": true},
+                "metadata": {"type": "object", "x-traverse-overrideable": true},
+                "origins": {"type": "array", "x-traverse-overrideable": true},
+                "schema_free": {"x-traverse-overrideable": true},
+                "future_type": {"type": "duration", "x-traverse-overrideable": true}
+            }
+        }),
+        &json!({}),
+    );
+    fixture.write_workspace_config(&json!({
+        "overrides": {
+            "enabled": true,
+            "limit": 3,
+            "temperature": 0.2,
+            "metadata": {"tier": "local"},
+            "origins": ["http://localhost:5173"],
+            "schema_free": false,
+            "future_type": "PT1S"
+        },
+        "secrets": {}
+    }));
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("supported config schema types should validate");
+
+    assert_eq!(bundle.effective_config.values["limit"], 3);
+    assert_eq!(bundle.effective_config.values["future_type"], "PT1S");
+}
+
+#[test]
 fn rejects_missing_model_dependency_fields_with_stable_errors() {
     let cases = vec![
         (
@@ -933,6 +1220,109 @@ fn application_registration_records_model_readiness_evidence() {
 }
 
 #[test]
+fn application_registration_exposes_only_non_sensitive_effective_config() {
+    let fixture = AppFixture::new("register-effective-config");
+    let wasm_digest = fixture.write_hello_component("hello world executable bytes");
+    let workflow_path = fixture.write_workflow("hello.world.say-hello", "hello.world.say-hello");
+    fixture.write_app_manifest_full_with_config(
+        &json!([component_ref(
+            "hello.world.say-hello-component",
+            "1.0.0",
+            &format!("sha256:{wasm_digest}"),
+            "components/validate-team-readiness/component.manifest.json",
+        )]),
+        &json!([{
+            "workflow_id": "hello.world.say-hello",
+            "workflow_version": "1.0.0",
+            "path": workflow_path
+        }]),
+        &json!([]),
+        &config_schema(),
+        &json!({
+            "ollama_base_url": "http://127.0.0.1:11434"
+        }),
+    );
+    fixture.write_workspace_config(&json!({
+        "overrides": {
+            "ollama_base_url": "http://localhost:11434"
+        },
+        "secrets": {
+            "ollama_api_key": "sk-local-secret"
+        }
+    }));
+    let mut app_registry = ApplicationRegistry::new();
+    let mut capability_registry = CapabilityRegistry::new();
+    let event_registry = EventRegistry::new();
+    let mut workflow_registry = WorkflowRegistry::new();
+
+    let outcome = app_registry
+        .register_bundle(
+            &mut capability_registry,
+            &event_registry,
+            &mut workflow_registry,
+            &fixture.registration_request(),
+        )
+        .expect("registration record should expose redacted effective config");
+
+    assert_eq!(
+        outcome.record.effective_config.values["ollama_base_url"],
+        "http://localhost:11434"
+    );
+    assert_eq!(
+        outcome.record.effective_config.redacted_secret_keys,
+        vec!["ollama_api_key"]
+    );
+    assert_ne!(
+        outcome.record.effective_config.values["ollama_base_url"],
+        "sk-local-secret"
+    );
+}
+
+#[test]
+fn application_registration_returns_stable_config_error_codes() {
+    let cases = vec![
+        (
+            json!({
+                "overrides": {
+                    "app_id": "other.app"
+                },
+                "secrets": {}
+            }),
+            ApplicationRegistrationErrorCode::AppConfigImmutableOverride,
+        ),
+        (
+            json!({
+                "overrides": {
+                    "ollama_base_url": false
+                },
+                "secrets": {}
+            }),
+            ApplicationRegistrationErrorCode::AppConfigInvalid,
+        ),
+    ];
+    for (config, expected_code) in cases {
+        let fixture = AppFixture::new("register-invalid-config");
+        fixture.write_app_manifest_with_config(&json!([]), &config_schema(), &json!({}));
+        fixture.write_workspace_config(&config);
+        let mut app_registry = ApplicationRegistry::new();
+        let mut capability_registry = CapabilityRegistry::new();
+        let event_registry = EventRegistry::new();
+        let mut workflow_registry = WorkflowRegistry::new();
+
+        let failure = app_registry
+            .register_bundle(
+                &mut capability_registry,
+                &event_registry,
+                &mut workflow_registry,
+                &fixture.registration_request(),
+            )
+            .expect_err("registration must expose stable config error code");
+
+        assert_eq!(failure.errors[0].code, expected_code);
+    }
+}
+
+#[test]
 fn reregistering_unchanged_application_bundle_returns_stable_200() {
     let fixture = AppFixture::new("register-idempotent");
     fixture.write_hello_world_bundle();
@@ -1394,11 +1784,71 @@ impl AppFixture {
         self.write_app_manifest_full(components, workflows, &json!([]));
     }
 
+    fn write_app_manifest_with_config(
+        &self,
+        components: &serde_json::Value,
+        config_schema: &serde_json::Value,
+        default_config: &serde_json::Value,
+    ) {
+        self.write_app_manifest_full_with_config(
+            components,
+            &json!([]),
+            &json!([]),
+            config_schema,
+            default_config,
+        );
+    }
+
     fn write_app_manifest_full(
         &self,
         components: &serde_json::Value,
         workflows: &serde_json::Value,
         model_dependencies: &serde_json::Value,
+    ) {
+        self.write_app_manifest_full_with_config(
+            components,
+            workflows,
+            model_dependencies,
+            &json!({
+                "type": "object"
+            }),
+            &json!({}),
+        );
+    }
+
+    fn write_app_manifest_full_with_config(
+        &self,
+        components: &serde_json::Value,
+        workflows: &serde_json::Value,
+        model_dependencies: &serde_json::Value,
+        config_schema: &serde_json::Value,
+        default_config: &serde_json::Value,
+    ) {
+        let app = json!({
+            "app_id": "hello.world.app",
+            "version": "1.0.0",
+            "schema_version": "1.0.0",
+            "workspace_defaults": {
+                "workspace_id": "test",
+                "config_path": "workspace.config.json"
+            },
+            "components": components,
+            "workflows": workflows,
+            "model_dependencies": model_dependencies,
+            "config_schema": config_schema,
+            "default_config": default_config,
+            "placement_policy": {
+                "preferred_targets": ["local"]
+            },
+            "public_surfaces": ["cli"]
+        });
+        fs::write(self.app_manifest_path(), app.to_string()).expect("app manifest should write");
+    }
+
+    fn write_app_manifest_without_workspace_config(
+        &self,
+        config_schema: &serde_json::Value,
+        default_config: &serde_json::Value,
     ) {
         let app = json!({
             "app_id": "hello.world.app",
@@ -1407,19 +1857,22 @@ impl AppFixture {
             "workspace_defaults": {
                 "workspace_id": "test"
             },
-            "components": components,
-            "workflows": workflows,
-            "model_dependencies": model_dependencies,
-            "config_schema": {
-                "type": "object"
-            },
-            "default_config": {},
+            "components": [],
+            "workflows": [],
+            "model_dependencies": [],
+            "config_schema": config_schema,
+            "default_config": default_config,
             "placement_policy": {
                 "preferred_targets": ["local"]
             },
             "public_surfaces": ["cli"]
         });
         fs::write(self.app_manifest_path(), app.to_string()).expect("app manifest should write");
+    }
+
+    fn write_workspace_config(&self, config: &serde_json::Value) {
+        fs::write(self.root.join("workspace.config.json"), config.to_string())
+            .expect("workspace config should write");
     }
 
     fn write_component_manifest(&self, overrides: &serde_json::Value) {
@@ -1627,6 +2080,28 @@ fn component_ref(id: &str, version: &str, digest: &str, manifest_path: &str) -> 
         "version": version,
         "digest": digest,
         "manifest_path": manifest_path
+    })
+}
+
+fn config_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "required": ["ollama_base_url"],
+        "properties": {
+            "ollama_base_url": {
+                "type": "string",
+                "x-traverse-overrideable": true
+            },
+            "browser_origin": {
+                "type": "string",
+                "x-traverse-overrideable": true
+            },
+            "app_theme": {
+                "type": "string",
+                "x-traverse-overrideable": false
+            }
+        },
+        "additionalProperties": false
     })
 }
 

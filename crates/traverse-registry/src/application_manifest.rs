@@ -29,6 +29,7 @@ pub struct ApplicationBundleManifest {
     pub model_dependencies: Vec<ApplicationModelDependency>,
     pub config_schema: Value,
     pub default_config: Value,
+    pub effective_config: ApplicationEffectiveConfig,
     pub placement_policy: Value,
     pub public_surfaces: Vec<String>,
 }
@@ -45,6 +46,7 @@ pub struct ApplicationRegistryRecord {
     pub registered_at: String,
     pub readiness_status: ApplicationReadinessStatus,
     pub model_readiness: Vec<ModelResolutionEvidence>,
+    pub effective_config: ApplicationEffectiveConfig,
     pub components: Vec<ApplicationRegisteredComponent>,
     pub workflows: Vec<ApplicationRegisteredWorkflow>,
     pub inspection_link: String,
@@ -111,6 +113,8 @@ pub enum ApplicationRegistrationErrorCode {
     WorkflowReadFailed,
     WorkflowParseFailed,
     WorkflowReferenceMismatch,
+    AppConfigImmutableOverride,
+    AppConfigInvalid,
     CapabilityRegistrationFailed,
     WorkflowRegistrationFailed,
     ImmutableApplicationVersionConflict,
@@ -319,6 +323,12 @@ pub struct ApplicationWorkflowRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationEffectiveConfig {
+    pub values: Value,
+    pub redacted_secret_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApplicationModelDependency {
     pub interface_id: String,
     pub version_range: String,
@@ -396,6 +406,8 @@ pub enum ApplicationManifestErrorCode {
     DuplicateModelCandidate,
     ModelCandidateConfigInvalid,
     ModelCandidateImplementationInvalid,
+    AppConfigImmutableOverride,
+    AppConfigInvalid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,6 +435,14 @@ struct ApplicationManifestSerde {
     default_config: Value,
     placement_policy: Value,
     public_surfaces: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceLocalConfigSerde {
+    #[serde(default)]
+    overrides: Value,
+    #[serde(default)]
+    secrets: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,6 +553,7 @@ pub fn load_application_bundle_manifest(
 
     ensure_unique_component_refs(&manifest.components)?;
     let model_dependencies = parse_model_dependencies(&manifest.model_dependencies)?;
+    let effective_config = load_effective_config(manifest_dir, &manifest)?;
 
     let components = manifest
         .components
@@ -550,6 +571,7 @@ pub fn load_application_bundle_manifest(
         model_dependencies,
         config_schema: manifest.config_schema,
         default_config: manifest.default_config,
+        effective_config,
         placement_policy: manifest.placement_policy,
         public_surfaces: manifest.public_surfaces,
     })
@@ -727,6 +749,7 @@ fn build_application_record(
         registered_at: request.registered_at.clone(),
         readiness_status: ApplicationReadinessStatus::Ready,
         model_readiness,
+        effective_config: manifest.effective_config.clone(),
         components,
         workflows,
         inspection_link: format!("/v1/apps/{}/{}", manifest.app_id, manifest.version),
@@ -785,12 +808,24 @@ fn map_manifest_failure(failure: ApplicationManifestFailure) -> ApplicationRegis
             .errors
             .into_iter()
             .map(|error| ApplicationRegistrationError {
-                code: ApplicationRegistrationErrorCode::ManifestValidationFailed,
+                code: map_manifest_error_code(error.code),
                 path: error.path,
                 message: error.message,
                 severity: ErrorSeverity::Error,
             })
             .collect(),
+    }
+}
+
+fn map_manifest_error_code(code: ApplicationManifestErrorCode) -> ApplicationRegistrationErrorCode {
+    match code {
+        ApplicationManifestErrorCode::AppConfigImmutableOverride => {
+            ApplicationRegistrationErrorCode::AppConfigImmutableOverride
+        }
+        ApplicationManifestErrorCode::AppConfigInvalid => {
+            ApplicationRegistrationErrorCode::AppConfigInvalid
+        }
+        _ => ApplicationRegistrationErrorCode::ManifestValidationFailed,
     }
 }
 
@@ -844,6 +879,210 @@ fn ensure_unique_component_refs(
         }
     }
     Ok(())
+}
+
+fn load_effective_config(
+    manifest_dir: &Path,
+    manifest: &ApplicationManifestSerde,
+) -> Result<ApplicationEffectiveConfig, ApplicationManifestFailure> {
+    let workspace_config = read_workspace_config(manifest_dir, manifest)?;
+    ensure_no_immutable_config_overrides(&workspace_config)?;
+
+    let overrides = workspace_config.overrides.as_object().ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            "$.overrides".to_string(),
+            "workspace-local config overrides must be an object".to_string(),
+        )
+    })?;
+    let secrets = workspace_config.secrets.as_object().ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            "$.secrets".to_string(),
+            "workspace-local config secrets must be an object".to_string(),
+        )
+    })?;
+
+    let mut values = manifest.default_config.clone();
+    let Value::Object(values_object) = &mut values else {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            "$.default_config".to_string(),
+            "application default_config must be an object".to_string(),
+        ));
+    };
+    for (key, value) in overrides {
+        validate_config_override(key, value, &manifest.config_schema)?;
+        values_object.insert(key.clone(), value.clone());
+    }
+    validate_required_config(values_object, &manifest.config_schema)?;
+
+    let mut redacted_secret_keys = secrets.keys().cloned().collect::<Vec<_>>();
+    redacted_secret_keys.sort();
+
+    Ok(ApplicationEffectiveConfig {
+        values,
+        redacted_secret_keys,
+    })
+}
+
+fn read_workspace_config(
+    manifest_dir: &Path,
+    manifest: &ApplicationManifestSerde,
+) -> Result<WorkspaceLocalConfigSerde, ApplicationManifestFailure> {
+    let Some(config_path) = manifest
+        .workspace_defaults
+        .get("config_path")
+        .and_then(Value::as_str)
+        .filter(|value| has_text(value))
+    else {
+        return Ok(WorkspaceLocalConfigSerde {
+            overrides: Value::Object(serde_json::Map::new()),
+            secrets: Value::Object(serde_json::Map::new()),
+        });
+    };
+
+    let path = manifest_dir.join(config_path);
+    if !path.is_file() {
+        return Ok(WorkspaceLocalConfigSerde {
+            overrides: Value::Object(serde_json::Map::new()),
+            secrets: Value::Object(serde_json::Map::new()),
+        });
+    }
+    let contents = fs::read_to_string(&path).map_err(|error| {
+        single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            path.display().to_string(),
+            format!(
+                "failed to read workspace-local config {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    serde_json::from_str(&contents).map_err(|error| {
+        single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            path.display().to_string(),
+            format!(
+                "failed to parse workspace-local config {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn ensure_no_immutable_config_overrides(
+    config: &WorkspaceLocalConfigSerde,
+) -> Result<(), ApplicationManifestFailure> {
+    let immutable_fields = [
+        "app_id",
+        "version",
+        "schema_version",
+        "components",
+        "workflows",
+        "model_dependencies",
+        "component_id",
+        "capability_id",
+        "capability_version",
+    ];
+    for value in [&config.overrides, &config.secrets] {
+        let Some(object) = value.as_object() else {
+            continue;
+        };
+        if let Some(field) = immutable_fields
+            .iter()
+            .find(|field| object.contains_key(**field))
+        {
+            return Err(single_error(
+                ApplicationManifestErrorCode::AppConfigImmutableOverride,
+                format!("$.overrides.{field}"),
+                format!("workspace-local config cannot override immutable manifest field {field}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_config_override(
+    key: &str,
+    value: &Value,
+    schema: &Value,
+) -> Result<(), ApplicationManifestFailure> {
+    let property = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get(key))
+        .ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::AppConfigInvalid,
+                format!("$.overrides.{key}"),
+                format!("workspace-local config override {key} is not declared by config_schema"),
+            )
+        })?;
+
+    let overrideable = property
+        .get("x-traverse-overrideable")
+        .or_else(|| property.get("overrideable"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !overrideable {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppConfigImmutableOverride,
+            format!("$.overrides.{key}"),
+            format!("workspace-local config override {key} is not declared overrideable"),
+        ));
+    }
+
+    validate_config_value_type(key, value, property)
+}
+
+fn validate_required_config(
+    values: &serde_json::Map<String, Value>,
+    schema: &Value,
+) -> Result<(), ApplicationManifestFailure> {
+    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for required_key in required.iter().filter_map(Value::as_str) {
+        if !values.contains_key(required_key) {
+            return Err(single_error(
+                ApplicationManifestErrorCode::AppConfigInvalid,
+                format!("$.effective_config.{required_key}"),
+                format!("required application config value {required_key} is missing"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_config_value_type(
+    key: &str,
+    value: &Value,
+    property: &Value,
+) -> Result<(), ApplicationManifestFailure> {
+    let Some(expected_type) = property.get("type").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let valid = match expected_type {
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(single_error(
+            ApplicationManifestErrorCode::AppConfigInvalid,
+            format!("$.overrides.{key}"),
+            format!(
+                "workspace-local config override {key} does not match declared schema type {expected_type}"
+            ),
+        ))
+    }
 }
 
 fn parse_model_dependencies(
