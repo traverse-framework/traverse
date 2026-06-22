@@ -68,6 +68,10 @@ The release-facing downstream compatibility statement for the current `youaskm3`
 
 - `docs/v0.3.0-public-surface-compatibility.md`
 
+The current Traverse release notes are:
+
+- `docs/releases/v0.4.0.md`
+
 ## Specs
 
 Approved specs are immutable once they govern implementation.

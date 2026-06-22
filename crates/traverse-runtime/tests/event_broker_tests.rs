@@ -240,7 +240,7 @@ fn cursor_expired_is_returned_when_cursor_is_outside_retention_window() -> Resul
     }
 
     // Advance beyond retention window so all buffered events are pruned.
-    clock.advance(Duration::from_secs(60));
+    clock.advance(Duration::from_mins(1));
 
     let Err(err) = broker.subscribe("dev.traverse.retained", "1") else {
         return Err("expected subscribe to fail with cursor_expired".to_string());
@@ -269,7 +269,7 @@ fn bounded_queue_drops_oldest_when_over_capacity() -> Result<(), String> {
     let broker = InProcessBroker::with_clock(
         Arc::clone(&catalog),
         BrokerConfig {
-            retention_window: Duration::from_secs(60),
+            retention_window: Duration::from_mins(1),
             max_queue_len: 2,
         },
         Arc::new(traverse_runtime::events::SystemClock),

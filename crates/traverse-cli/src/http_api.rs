@@ -332,8 +332,7 @@ fn mint_local_dev_token(local_addr: &str) -> String {
 fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn configured_idempotency_retention(value: Option<u64>) -> u64 {
@@ -1275,10 +1274,8 @@ fn map_workflow_failure_http(
             WorkflowErrorCode::DeterministicCycleNotAllowed => has_cycle = true,
             WorkflowErrorCode::EdgeSchemaMismatch => has_edge_schema_mismatch = true,
             WorkflowErrorCode::MissingReference => has_missing_reference = true,
-            WorkflowErrorCode::MissingRequiredField => {
-                if err.path == "$.nodes" {
-                    has_empty_nodes = true;
-                }
+            WorkflowErrorCode::MissingRequiredField if err.path == "$.nodes" => {
+                has_empty_nodes = true;
             }
             _ => {}
         }
@@ -2897,8 +2894,7 @@ fn handle_connection<E: LocalExecutor + Clone>(
 
     let peer_ip = stream
         .peer_addr()
-        .map(|a| a.ip())
-        .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+        .map_or(IpAddr::from([127, 0, 0, 1]), |a| a.ip());
     let loopback = peer_ip.is_loopback();
 
     if request.method == "OPTIONS" {

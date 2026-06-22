@@ -645,7 +645,7 @@ mod tests {
         let broker = InProcessBroker::with_clock(
             make_catalog("dev.traverse.clock", LifecycleStatus::Active),
             BrokerConfig {
-                retention_window: Duration::from_secs(60),
+                retention_window: Duration::from_mins(1),
                 max_queue_len: 16,
             },
             clock.clone(),

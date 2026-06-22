@@ -8,7 +8,7 @@
 [![Spec Governed](https://img.shields.io/badge/spec-governed-blueviolet)](specs/governance/approved-specs.json)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.3.0-blue)](https://github.com/enricopiovesan/Traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/enricopiovesan/Traverse/releases)
 
 
 
@@ -218,6 +218,7 @@ Traverse is spec-driven. Code must align with an approved, immutable spec or it 
 
 #### Consumer and release surfaces
 
+- [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md) — current release notes for the v0.4.0 manifest/model baseline
 - [docs/app-consumable-consumer-bundle.md](docs/app-consumable-consumer-bundle.md) — versioned consumer bundle
 - [docs/app-consumable-package-release-pointer.md](docs/app-consumable-package-release-pointer.md) — package release pointer
 - [docs/v0.3.0-public-surface-compatibility.md](docs/v0.3.0-public-surface-compatibility.md) — public surface compatibility for the v0.3.0 youaskm3 baseline
