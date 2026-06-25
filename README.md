@@ -15,8 +15,6 @@ Traverse keeps it in one contract and runs it anywhere — with a full execution
 
 Traverse is the working implementation of [Universal Microservices Architecture](https://www.universalmicroservices.com/).
 
-This is personal research and development by [Enrico Piovesan](https://enricopiovesan.com), built to prove in code the ideas behind [Universal Microservices Architecture](https://www.universalmicroservices.com/).
-
 ---
 
 ## Quick Start
