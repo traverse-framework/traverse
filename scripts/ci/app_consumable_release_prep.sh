@@ -29,4 +29,12 @@ grep -q "## Release Blockers" "${repo_root}/docs/app-consumable-release-checklis
 grep -q "docs/app-consumable-consumer-bundle.md" "${repo_root}/docs/app-consumable-release-checklist.md"
 grep -q "release artifact and publication bundle" "${repo_root}/docs/app-consumable-requirements-traceability.md"
 
+# README and docs must have been updated for this release.
+# The update-docs skill in Claude Code applies the product-writing principles
+# from .specify/memory/readme-principles.md. Run it before tagging.
+test -s "${repo_root}/.specify/memory/readme-principles.md"
+test -s "${repo_root}/README.md"
+test -s "${repo_root}/quickstart.md"
+test -s "${repo_root}/docs/what-can-i-build.md"
+
 echo "Traverse v0.1 app-consumable release preparation bundle is ready."

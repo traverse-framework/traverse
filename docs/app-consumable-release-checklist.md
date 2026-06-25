@@ -14,6 +14,11 @@ It does not redefine the downstream contract or the validation specs. It only st
 
 Traverse MUST NOT claim `app-consumable v0.1` unless all of the following are satisfied:
 
+- [ ] README.md, quickstart.md, and docs/what-can-i-build.md have been updated
+  for this release following the product-writing principles in
+  [.specify/memory/readme-principles.md](../.specify/memory/readme-principles.md).
+  Run the `update-docs` skill in Claude Code to apply them.
+
 - [ ] The governed browser consumer path exists and is documented in [quickstart.md](../quickstart.md).
 - [ ] The live local browser adapter path passes [scripts/ci/react_demo_live_adapter_smoke.sh](../scripts/ci/react_demo_live_adapter_smoke.sh).
 - [ ] The browser demo path is documented as a real live adapter consumer in [apps/react-demo/README.md](../apps/react-demo/README.md).
