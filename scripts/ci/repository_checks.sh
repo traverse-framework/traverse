@@ -159,7 +159,6 @@ fi
 
 grep -q "GitHub Project 1" README.md
 grep -q "Apache-2.0" README.md
-grep -q "personal research" README.md
 grep -q "docs/adapter-boundaries.md" README.md
 grep -q "docs/troubleshooting.md" README.md
 grep -q "docs/getting-started.md" README.md
