@@ -355,6 +355,7 @@ grep -q "Supply-chain evidence" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/v0.3.0-source-build-consumer-packaging.md" README.md
 grep -q "docs/v0.3.0-downstream-validation-path.md" README.md
 grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" README.md
+grep -q 'version = "0.5.0"' Cargo.toml
 grep -q "docs/releases/v0.5.0.md" README.md
 grep -q "Traverse v0.4.0" docs/releases/v0.4.0.md
 grep -q "044-application-bundle-manifest" docs/releases/v0.4.0.md
