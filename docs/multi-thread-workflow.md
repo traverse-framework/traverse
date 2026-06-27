@@ -82,10 +82,10 @@ For parallel work to be valid:
 
 For the current expedition artifact work, the cleanest split is:
 
-- Workstream 1: [#42](https://github.com/enricopiovesan/Traverse/issues/42) event contracts
-- Workstream 2: [#44](https://github.com/enricopiovesan/Traverse/issues/44) atomic capability contracts
-- Workstream 3: [#43](https://github.com/enricopiovesan/Traverse/issues/43) composed capability contract
-- Workstream 4: [#45](https://github.com/enricopiovesan/Traverse/issues/45) workflow artifact
+- Workstream 1: [#42](https://github.com/traverse-framework/Traverse/issues/42) event contracts
+- Workstream 2: [#44](https://github.com/traverse-framework/Traverse/issues/44) atomic capability contracts
+- Workstream 3: [#43](https://github.com/traverse-framework/Traverse/issues/43) composed capability contract
+- Workstream 4: [#45](https://github.com/traverse-framework/Traverse/issues/45) workflow artifact
 
 If we only have one active dev thread, these should remain `Ready`.
 
@@ -129,13 +129,13 @@ Use this dev thread prompt:
 Act as a Traverse dev thread for issue #NN.
 
 Pre-flight (run before any work):
-1. gh issue view NN --repo enricopiovesan/Traverse --json labels
+1. gh issue view NN --repo traverse-framework/Traverse --json labels
    If labels include "agent:claude" → STOP. Report: "Issue #NN is claimed by Claude Code."
 2. git ls-remote --heads origin | grep "issue-NN-"
    If a claude/issue-NN-* branch exists → STOP. Report: "A Claude Code branch exists for #NN."
 
 Claim (only if pre-flight passes):
-1. gh issue edit NN --repo enricopiovesan/Traverse --add-label "agent:codex"
+1. gh issue edit NN --repo traverse-framework/Traverse --add-label "agent:codex"
 2. Set Agent → Codex and Status → In Progress on Project 1 for this issue.
    Project ID: PVT_kwHOAEZXvs4BS6Ns
    Agent field: PVTSSF_lAHOAEZXvs4BS6NszhBK-Qk, Codex option: 34d6db7d

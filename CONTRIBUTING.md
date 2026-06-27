@@ -26,7 +26,7 @@ Please read:
 1. Start from the governing approved spec.
 2. Confirm whether an issue already exists.
 3. Open or link the work item in the project board:
-   [GitHub Project 1](https://github.com/users/enricopiovesan/projects/1/)
+   [GitHub Project](https://github.com/orgs/traverse-framework/projects)
 4. If needed, add or update an ADR before implementation.
 5. Implement with tests and validation evidence.
 6. Make sure the change passes the required validation flow.

@@ -10,6 +10,7 @@ Pick the path that matches your goal before reading further:
 |---|---|
 | Register and invoke a capability end to end | [docs/getting-started.md](getting-started.md) |
 | Consume Traverse from a browser app | [quickstart.md](../quickstart.md) |
+| Plan Traverse reference apps across web, cloud, mobile, and desktop | [docs/reference-app-roadmap.md](reference-app-roadmap.md) |
 | Follow the full ordered onboarding sequence | Continue below |
 
 All three paths are documented in this repo. The descriptions above tell you which one to open first; the ordered sequence below links them all together when you are ready for more.
@@ -41,7 +42,8 @@ Use it in sequence unless you already know the slice you need:
 21. [docs/multi-thread-workflow.md](multi-thread-workflow.md)
 22. [docs/project-management.md](project-management.md)
 23. [docs/troubleshooting.md](troubleshooting.md)
-24. [docs/adr/README.md](adr/README.md)
+24. [docs/reference-app-roadmap.md](reference-app-roadmap.md)
+25. [docs/adr/README.md](adr/README.md)
 
 ## How To Read It
 

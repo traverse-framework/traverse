@@ -1,8 +1,6 @@
 [![Traverse](https://github.com/user-attachments/assets/479aa1e5-5799-4c7d-bb8a-4b30d711c7db)](https://traverse-framework.com/)
 
 
-
-
 # Traverse
 
 [![CI](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml/badge.svg)](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml)

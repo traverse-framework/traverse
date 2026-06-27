@@ -37,7 +37,7 @@ Use a lean-by-default operating style so long-running Traverse ops sessions do
 not waste context on raw logs.
 
 - Prefer targeted GitHub queries over full board dumps. For Ready work, use
-  `gh project item-list 1 --owner enricopiovesan --format json --limit 300 --jq '...'`
+  `gh project item-list 1 --owner traverse-framework --format json --limit 300 --jq '...'`
   and return only issue number, title, labels, and item id.
 - Do not paste full `gh project item-list`, `gh pr checks --watch`, test, clippy,
   coverage, or CI logs into the conversation. Summarize pass/fail counts and

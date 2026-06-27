@@ -68,7 +68,7 @@ security, traceability, accessibility, or required tests.
 ### 1. Check for Claude Code claim
 
 ```bash
-gh issue view <NUMBER> --repo enricopiovesan/Traverse --json labels
+gh issue view <NUMBER> --repo traverse-framework/Traverse --json labels
 ```
 
 If the labels include `agent:claude` → **STOP**. Report:
@@ -87,10 +87,10 @@ If a `claude/issue-<NUMBER>-*` branch exists → **STOP**. Report:
 
 ```bash
 # Add label
-gh issue edit <NUMBER> --repo enricopiovesan/Traverse --add-label "agent:codex"
+gh issue edit <NUMBER> --repo traverse-framework/Traverse --add-label "agent:codex"
 
 # Get project item ID with bounded output
-gh project item-list 1 --owner enricopiovesan --format json --limit 300 \
+gh project item-list 1 --owner traverse-framework --format json --limit 300 \
   --jq '.items[] | select(.content.number == <NUMBER>) | .id'
 
 # Set Agent → Codex

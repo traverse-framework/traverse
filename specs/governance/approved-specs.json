@@ -8,7 +8,6 @@
       "immutable": true,
       "path": "specs/001-foundation-v0-1/spec.md",
       "governs": [
-        "README.md",
         ".specify/memory/constitution.md",
         "docs/quality-standards.md",
         "docs/compatibility-policy.md",

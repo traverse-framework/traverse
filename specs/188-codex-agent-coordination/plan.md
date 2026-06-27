@@ -53,7 +53,7 @@ Two steps prepended to the existing prompt:
 **Pre-flight (runs before any work):**
 ```
 Before starting any work on issue #<NUMBER>:
-1. gh issue view <NUMBER> --repo enricopiovesan/Traverse --json labels
+1. gh issue view <NUMBER> --repo traverse-framework/Traverse --json labels
    If labels include "agent:claude" → STOP. Report: "Issue #<NUMBER> is claimed by Claude Code."
 2. git ls-remote --heads origin | grep "issue-<NUMBER>-"
    If a claude/issue-<NUMBER>-* branch exists → STOP. Report: "A Claude Code branch exists for #<NUMBER>."
@@ -61,7 +61,7 @@ Before starting any work on issue #<NUMBER>:
 
 **Claim step (runs only if pre-flight passes):**
 ```
-1. gh issue edit <NUMBER> --repo enricopiovesan/Traverse --add-label "agent:codex"
+1. gh issue edit <NUMBER> --repo traverse-framework/Traverse --add-label "agent:codex"
 2. Retrieve project item ID for issue #<NUMBER> from Project 1, then:
    gh project item-edit --project-id PVT_kwHOAEZXvs4BS6Ns --id <ITEM_ID> \
      --field-id PVTSSF_lAHOAEZXvs4BS6NszhBK-Qk --single-select-option-id 34d6db7d

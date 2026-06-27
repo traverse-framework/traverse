@@ -13,7 +13,7 @@ Questions, bug reports, and contribution discussions should generally go through
 - Use GitHub issues for bugs, features, and task discussion
 - Use pull requests for implementation review
 - Use the project board for task tracking:
-  [GitHub Project 1](https://github.com/users/enricopiovesan/projects/1/)
+  [GitHub Project](https://github.com/orgs/traverse-framework/projects)
 
 ## Security Issues
 
