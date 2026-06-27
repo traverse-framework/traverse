@@ -10,7 +10,9 @@ use federation_operator::{
     render_federation_peers, render_federation_status, render_federation_sync,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::env;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -26,7 +28,7 @@ use traverse_registry::{
     DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind, LookupScope,
     RegistryBundle, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
     WorkflowDefinition, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    load_registry_bundle,
+    load_application_bundle_manifest, load_registry_bundle,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -49,6 +51,15 @@ enum Command {
         app_id: String,
         register: bool,
         workspace_id: Option<String>,
+    },
+    AppValidate {
+        manifest_path: PathBuf,
+        json_output: bool,
+    },
+    AppRegister {
+        manifest_path: PathBuf,
+        workspace_id: String,
+        json_output: bool,
     },
     ComponentNew {
         component_id: String,
@@ -211,6 +222,15 @@ fn run_command(command: Command) -> Result<String, CliError> {
             register,
             workspace_id,
         } => app_new(&app_id, register, workspace_id.as_deref()),
+        Command::AppValidate {
+            manifest_path,
+            json_output,
+        } => app_validate(&manifest_path, json_output),
+        Command::AppRegister {
+            manifest_path,
+            workspace_id,
+            json_output,
+        } => app_register(&manifest_path, &workspace_id, json_output),
         Command::ComponentNew { component_id } => component_new(&component_id),
         Command::BrowserAdapterServe { .. } | Command::Serve { .. } => {
             Err(CliError::UsageError(usage()))
@@ -282,6 +302,8 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         (Some("browser-adapter"), Some("serve")) => parse_browser_adapter_command(args),
         (Some("serve"), _) => parse_serve_command(args),
         (Some("app"), Some("new")) => parse_app_new_command(args),
+        (Some("app"), Some("validate")) => parse_app_validate_command(args),
+        (Some("app"), Some("register")) => parse_app_register_command(args),
         (Some("component"), Some("new")) => parse_component_new_command(args),
         (Some("federation"), Some(_)) => parse_federation_command(args),
         (Some("agent"), Some("execute")) => parse_agent_execute_command(args),
@@ -300,6 +322,8 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("bundle"), Some("register")) => help_bundle_register(),
         (Some("bundle"), _) => help_bundle(),
         (Some("app"), Some("new")) => help_app_new(),
+        (Some("app"), Some("validate")) => help_app_validate(),
+        (Some("app"), Some("register")) => help_app_register(),
         (Some("app"), _) => help_app(),
         (Some("component"), Some("new")) => help_component_new(),
         (Some("component"), _) => help_component(),
@@ -352,13 +376,64 @@ fn help_app_new() -> String {
         .to_string()
 }
 
+fn help_app_validate() -> String {
+    "traverse-cli app validate --manifest <path> --json
+
+  Purpose:
+    Validate a downstream application manifest, component manifests,
+    capability contracts, workflow references, WASM digests, workspace config,
+    runtime constraints, public surfaces, and delegated model dependency
+    declarations. Emits deterministic JSON setup evidence and does not
+    register workspace state.
+
+  Required flags:
+    --manifest <path>   Path to the application manifest JSON file.
+    --json              Emit machine-readable validation evidence.
+
+  Optional flags:
+    --help              Print this help text.
+
+  Example:
+    traverse-cli app validate \\
+      --manifest examples/applications/expedition-readiness/app.manifest.json \\
+      --json"
+        .to_string()
+}
+
+fn help_app_register() -> String {
+    "traverse-cli app register --manifest <path> --workspace <workspace-id> --json
+
+  Purpose:
+    Validate a downstream application manifest and atomically record durable
+    local workspace registration state for later Traverse runtime loading.
+    Emits deterministic JSON setup evidence and never exposes secret config
+    values.
+
+  Required flags:
+    --manifest <path>   Path to the application manifest JSON file.
+    --workspace <id>    Local workspace id to register into.
+    --json              Emit machine-readable registration evidence.
+
+  Optional flags:
+    --help              Print this help text.
+
+  Example:
+    traverse-cli app register \\
+      --manifest examples/applications/expedition-readiness/app.manifest.json \\
+      --workspace local \\
+      --json"
+        .to_string()
+}
+
 fn help_app() -> String {
     "traverse-cli app <subcommand> [options]
 
   Subcommands:
-    new <app-id>   Create a governed Traverse app bundle scaffold.
+    new <app-id>                 Create a governed Traverse app bundle scaffold.
+    validate --manifest <path>   Validate an app bundle and emit JSON evidence.
+    register --manifest <path>   Validate and persist local app registration.
 
-  Run `traverse-cli app new --help` for subcommand-specific help."
+  Run `traverse-cli app <subcommand> --help` for subcommand-specific help."
         .to_string()
 }
 
@@ -820,6 +895,33 @@ fn parse_app_new_command(args: &[String]) -> Result<Command, String> {
         }),
         _ => Err(usage()),
     }
+}
+
+fn parse_app_validate_command(args: &[String]) -> Result<Command, String> {
+    let manifest_path = parse_string_flag(args, "--manifest")
+        .ok_or_else(|| "app validate requires --manifest <path>".to_string())?;
+    if !args.iter().any(|a| a == "--json") {
+        return Err("app validate requires --json for stable setup evidence".to_string());
+    }
+    Ok(Command::AppValidate {
+        manifest_path: PathBuf::from(manifest_path),
+        json_output: true,
+    })
+}
+
+fn parse_app_register_command(args: &[String]) -> Result<Command, String> {
+    let manifest_path = parse_string_flag(args, "--manifest")
+        .ok_or_else(|| "app register requires --manifest <path>".to_string())?;
+    let workspace_id = parse_string_flag(args, "--workspace")
+        .ok_or_else(|| "app register requires --workspace <workspace-id>".to_string())?;
+    if !args.iter().any(|a| a == "--json") {
+        return Err("app register requires --json for stable setup evidence".to_string());
+    }
+    Ok(Command::AppRegister {
+        manifest_path: PathBuf::from(manifest_path),
+        workspace_id,
+        json_output: true,
+    })
 }
 
 fn parse_component_new_command(args: &[String]) -> Result<Command, String> {
@@ -1392,6 +1494,665 @@ fn register_generated_app_bundle(
         outcome.status.http_status(),
         outcome.record.workspace_id
     ))
+}
+
+fn app_validate(manifest_path: &Path, json_output: bool) -> Result<String, CliError> {
+    if !json_output {
+        return Err(CliError::UsageError(
+            "app validate requires --json for stable setup evidence".to_string(),
+        ));
+    }
+
+    if let Some(error) = validate_app_manifest_metadata_for_cli(manifest_path)? {
+        return render_app_validation_failure(manifest_path, vec![error]);
+    }
+
+    match load_application_bundle_manifest(manifest_path) {
+        Ok(manifest) => render_app_validation_success(manifest_path, &manifest),
+        Err(failure) => Ok(render_app_validation_failure(
+            manifest_path,
+            failure
+                .errors
+                .into_iter()
+                .map(AppValidationError::from_manifest_error)
+                .collect(),
+        )?),
+    }
+}
+
+fn app_register(
+    manifest_path: &Path,
+    workspace_id: &str,
+    json_output: bool,
+) -> Result<String, CliError> {
+    let base_dir = std::env::current_dir()
+        .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
+    app_register_at(&base_dir, manifest_path, workspace_id, json_output)
+}
+
+fn app_register_at(
+    base_dir: &Path,
+    manifest_path: &Path,
+    workspace_id: &str,
+    json_output: bool,
+) -> Result<String, CliError> {
+    if !json_output {
+        return Err(CliError::UsageError(
+            "app register requires --json for stable setup evidence".to_string(),
+        ));
+    }
+
+    if let Some(error) = validate_workspace_id_for_cli(workspace_id) {
+        return render_app_registration_failure(manifest_path, workspace_id, vec![error], None);
+    }
+
+    if let Some(error) = validate_app_manifest_metadata_for_cli(manifest_path)? {
+        return render_app_registration_failure(manifest_path, workspace_id, vec![error], None);
+    }
+
+    let manifest = match load_application_bundle_manifest(manifest_path) {
+        Ok(manifest) => manifest,
+        Err(failure) => {
+            return render_app_registration_failure(
+                manifest_path,
+                workspace_id,
+                failure
+                    .errors
+                    .into_iter()
+                    .map(AppValidationError::from_manifest_error)
+                    .collect(),
+                None,
+            );
+        }
+    };
+
+    let state_path =
+        app_registration_state_path(base_dir, workspace_id, &manifest.app_id, &manifest.version);
+    let mut state = match render_app_registration_state(manifest_path, workspace_id, &manifest) {
+        Ok(state) => state,
+        Err(error) => {
+            return render_app_registration_failure(manifest_path, workspace_id, vec![error], None);
+        }
+    };
+    let fingerprint = state["registration_fingerprint"].clone();
+    let status = match read_existing_registration_fingerprint(&state_path)? {
+        Some(existing) if existing == fingerprint => "already_registered",
+        Some(_) => {
+            return render_app_registration_failure(
+                manifest_path,
+                workspace_id,
+                vec![AppValidationError {
+                    code: "registration_conflict".to_string(),
+                    path: state_path.display().to_string(),
+                    message: "workspace already contains different registration state for this app version".to_string(),
+                }],
+                Some(&state_path),
+            );
+        }
+        None => "registered",
+    };
+
+    state["status"] = Value::String(status.to_string());
+    if status == "registered"
+        && let Err(error) = write_registration_state_atomically(&state_path, &state)
+    {
+        return render_app_registration_failure(
+            manifest_path,
+            workspace_id,
+            vec![error],
+            Some(&state_path),
+        );
+    }
+
+    serde_json::to_string_pretty(&state)
+        .map_err(|e| CliError::IoError(format!("failed to serialize app registration: {e}")))
+}
+
+fn render_app_registration_state(
+    manifest_path: &Path,
+    workspace_id: &str,
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Result<Value, AppValidationError> {
+    let manifest_digest = file_sha256_digest(manifest_path)?;
+    let component_ids = app_registration_component_ids(manifest);
+    let workflow_ids = app_registration_workflow_ids(manifest);
+    let components = app_registration_components(manifest);
+    let workflows = app_registration_workflows(manifest_path, manifest)?;
+    let digest_verification = app_registration_digest_verification(manifest);
+    let model_readiness = app_registration_model_readiness(manifest);
+    let bundle_fingerprint = serde_json::json!({
+        "app_id": manifest.app_id.clone(),
+        "app_version": manifest.version.clone(),
+        "manifest_digest": manifest_digest.clone(),
+        "components": components.clone(),
+        "workflows": workflows.clone(),
+        "model_readiness": model_readiness.clone(),
+        "effective_config": {
+            "values": manifest.effective_config.values.clone(),
+            "redacted_secret_keys": manifest.effective_config.redacted_secret_keys.clone()
+        }
+    });
+    let bundle_digest = value_sha256_digest(&bundle_fingerprint);
+
+    Ok(serde_json::json!({
+        "status": "registered",
+        "workspace_id": workspace_id,
+        "app_id": manifest.app_id.clone(),
+        "app_version": manifest.version.clone(),
+        "schema_version": manifest.schema_version.clone(),
+        "manifest_path": manifest_path.display().to_string(),
+        "manifest_digest": manifest_digest,
+        "bundle_digest": bundle_digest,
+        "component_ids": component_ids,
+        "workflow_ids": workflow_ids,
+        "components": components,
+        "workflows": workflows,
+        "digest_verification": digest_verification,
+        "model_readiness": model_readiness,
+        "effective_config": {
+            "values": manifest.effective_config.values.clone(),
+            "redacted_secret_keys": manifest.effective_config.redacted_secret_keys.clone()
+        },
+        "runtime_references": {
+            "inspection": format!("/v1/apps/{}/{}", manifest.app_id, manifest.version),
+            "workflows": manifest.workflows.iter().map(|workflow| {
+                format!("/v1/workflows/{}/{}", workflow.workflow_id, workflow.workflow_version)
+            }).collect::<Vec<_>>()
+        },
+        "public_surfaces": manifest.public_surfaces.clone(),
+        "state_scope": "workspace_persisted",
+        "state_path": app_registration_relative_state_path(
+            workspace_id,
+            &manifest.app_id,
+            &manifest.version
+        ).display().to_string(),
+        "registration_fingerprint": bundle_fingerprint,
+        "governing_specs": [
+            "044-application-bundle-manifest",
+            "045-governed-model-dependency-resolution",
+            "046-public-cli-app-registration"
+        ]
+    }))
+}
+
+fn app_registration_component_ids(
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Vec<String> {
+    manifest
+        .components
+        .iter()
+        .map(|component| component.manifest.component_id.clone())
+        .collect()
+}
+
+fn app_registration_workflow_ids(
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Vec<String> {
+    manifest
+        .workflows
+        .iter()
+        .map(|workflow| workflow.workflow_id.clone())
+        .collect()
+}
+
+fn app_registration_components(
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Vec<Value> {
+    manifest
+        .components
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "component_id": component.manifest.component_id.clone(),
+                "component_version": component.manifest.version.clone(),
+                "capability_id": component.manifest.capability_id.clone(),
+                "capability_version": component.manifest.capability_version.clone(),
+                "wasm_digest": component.verified_wasm_digest.clone(),
+                "manifest_path": component.manifest_path.display().to_string(),
+                "contract_path": component.contract_path.display().to_string(),
+                "artifact_ref": component.wasm_binary_path.display().to_string()
+            })
+        })
+        .collect()
+}
+
+fn app_registration_workflows(
+    manifest_path: &Path,
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Result<Vec<Value>, AppValidationError> {
+    manifest
+        .workflows
+        .iter()
+        .map(|workflow| {
+            let workflow_path = manifest_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(&workflow.path);
+            let workflow_digest = file_sha256_digest(&workflow_path)?;
+            Ok(serde_json::json!({
+                "workflow_id": workflow.workflow_id.clone(),
+                "workflow_version": workflow.workflow_version.clone(),
+                "workflow_digest": workflow_digest,
+                "path": workflow_path.display().to_string()
+            }))
+        })
+        .collect()
+}
+
+fn app_registration_digest_verification(
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Vec<Value> {
+    manifest
+        .components
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "component_id": component.manifest.component_id.clone(),
+                "component_version": component.manifest.version.clone(),
+                "path": component.wasm_binary_path.display().to_string(),
+                "wasm_digest": component.verified_wasm_digest.clone(),
+                "status": "verified"
+            })
+        })
+        .collect()
+}
+
+fn app_registration_model_readiness(
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Vec<Value> {
+    manifest
+        .model_dependencies
+        .iter()
+        .map(|dependency| {
+            serde_json::json!({
+                "interface_id": dependency.interface_id.clone(),
+                "version_range": dependency.version_range.clone(),
+                "selection_strategy": dependency.selection_policy.strategy.clone(),
+                "candidate_count": dependency.candidates.len(),
+                "candidate_ids": dependency.candidates.iter().map(|candidate| candidate.candidate_id.clone()).collect::<Vec<_>>(),
+                "status": "declared"
+            })
+        })
+        .collect()
+}
+
+fn read_existing_registration_fingerprint(path: &Path) -> Result<Option<Value>, CliError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let state = read_json_file(path)?;
+    Ok(Some(
+        state
+            .get("registration_fingerprint")
+            .cloned()
+            .unwrap_or(Value::Null),
+    ))
+}
+
+fn file_sha256_digest(path: &Path) -> Result<String, AppValidationError> {
+    let bytes = fs::read(path).map_err(|error| AppValidationError {
+        code: "workspace_state_digest_failed".to_string(),
+        path: path.display().to_string(),
+        message: format!("failed to read artifact for registration digest: {error}"),
+    })?;
+    Ok(format!("sha256:{}", sha256_hex(&bytes)))
+}
+
+fn value_sha256_digest(value: &Value) -> String {
+    format!("sha256:{}", sha256_hex(value.to_string().as_bytes()))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
+fn app_registration_state_path(
+    base_dir: &Path,
+    workspace_id: &str,
+    app_id: &str,
+    version: &str,
+) -> PathBuf {
+    base_dir.join(app_registration_relative_state_path(
+        workspace_id,
+        app_id,
+        version,
+    ))
+}
+
+fn app_registration_relative_state_path(
+    workspace_id: &str,
+    app_id: &str,
+    version: &str,
+) -> PathBuf {
+    PathBuf::from(".traverse")
+        .join("workspaces")
+        .join(workspace_id)
+        .join("apps")
+        .join(sanitize_state_segment(app_id))
+        .join(sanitize_state_segment(version))
+        .join("registration.json")
+}
+
+fn sanitize_state_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn validate_workspace_id_for_cli(workspace_id: &str) -> Option<AppValidationError> {
+    let valid = !workspace_id.is_empty()
+        && !workspace_id.contains("..")
+        && workspace_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    if valid {
+        None
+    } else {
+        Some(AppValidationError {
+            code: "invalid_workspace_id".to_string(),
+            path: "$.workspace_id".to_string(),
+            message:
+                "workspace id must contain only ASCII letters, digits, dot, dash, or underscore"
+                    .to_string(),
+        })
+    }
+}
+
+fn write_registration_state_atomically(
+    state_path: &Path,
+    state: &Value,
+) -> Result<(), AppValidationError> {
+    let Some(parent) = state_path.parent() else {
+        return Err(AppValidationError {
+            code: "workspace_state_write_failed".to_string(),
+            path: state_path.display().to_string(),
+            message: "registration state path has no parent directory".to_string(),
+        });
+    };
+    if let Err(error) = fs::create_dir_all(parent) {
+        return Err(AppValidationError {
+            code: "workspace_state_write_failed".to_string(),
+            path: parent.display().to_string(),
+            message: format!("failed to create workspace state directory: {error}"),
+        });
+    }
+
+    let serialized = serde_json::to_string_pretty(state).map_err(|error| AppValidationError {
+        code: "workspace_state_write_failed".to_string(),
+        path: state_path.display().to_string(),
+        message: format!("failed to serialize workspace registration state: {error}"),
+    })?;
+    let tmp_path = state_path.with_file_name("registration.json.tmp");
+    if let Err(error) = fs::write(&tmp_path, format!("{serialized}\n")) {
+        return Err(AppValidationError {
+            code: "workspace_state_write_failed".to_string(),
+            path: tmp_path.display().to_string(),
+            message: format!("failed to write temporary registration state: {error}"),
+        });
+    }
+    if let Err(error) = fs::rename(&tmp_path, state_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AppValidationError {
+            code: "workspace_state_write_failed".to_string(),
+            path: state_path.display().to_string(),
+            message: format!("failed to commit registration state atomically: {error}"),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppValidationError {
+    code: String,
+    path: String,
+    message: String,
+}
+
+impl AppValidationError {
+    fn from_manifest_error(error: traverse_registry::ApplicationManifestError) -> Self {
+        Self {
+            code: debug_enum_to_snake_case(&format!("{:?}", error.code)),
+            path: error.path,
+            message: error.message,
+        }
+    }
+}
+
+fn render_app_validation_success(
+    manifest_path: &Path,
+    manifest: &traverse_registry::ApplicationBundleManifest,
+) -> Result<String, CliError> {
+    let component_ids = manifest
+        .components
+        .iter()
+        .map(|component| component.manifest.component_id.clone())
+        .collect::<Vec<_>>();
+    let workflow_ids = manifest
+        .workflows
+        .iter()
+        .map(|workflow| workflow.workflow_id.clone())
+        .collect::<Vec<_>>();
+    let digest_results = manifest
+        .components
+        .iter()
+        .map(|component| {
+            serde_json::json!({
+                "component_id": component.manifest.component_id.clone(),
+                "component_version": component.manifest.version.clone(),
+                "path": component.wasm_binary_path.display().to_string(),
+                "wasm_digest": component.verified_wasm_digest.clone(),
+                "status": "verified"
+            })
+        })
+        .collect::<Vec<_>>();
+    let model_dependencies = manifest
+        .model_dependencies
+        .iter()
+        .map(|dependency| {
+            serde_json::json!({
+                "interface_id": dependency.interface_id.clone(),
+                "version_range": dependency.version_range.clone(),
+                "selection_strategy": dependency.selection_policy.strategy.clone(),
+                "candidate_count": dependency.candidates.len(),
+                "candidate_ids": dependency.candidates.iter().map(|candidate| candidate.candidate_id.clone()).collect::<Vec<_>>(),
+                "status": "declared"
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let output = serde_json::json!({
+        "status": "validated",
+        "app_id": manifest.app_id,
+        "app_version": manifest.version,
+        "schema_version": manifest.schema_version,
+        "manifest_path": manifest_path.display().to_string(),
+        "component_ids": component_ids,
+        "workflow_ids": workflow_ids,
+        "components": manifest.components.iter().map(|component| {
+            serde_json::json!({
+                "component_id": component.manifest.component_id.clone(),
+                "component_version": component.manifest.version.clone(),
+                "capability_id": component.manifest.capability_id.clone(),
+                "capability_version": component.manifest.capability_version.clone(),
+                "manifest_path": component.manifest_path.display().to_string(),
+                "contract_path": component.contract_path.display().to_string(),
+                "wasm_digest": component.verified_wasm_digest.clone()
+            })
+        }).collect::<Vec<_>>(),
+        "workflows": manifest.workflows.iter().map(|workflow| {
+            serde_json::json!({
+                "workflow_id": workflow.workflow_id.clone(),
+                "workflow_version": workflow.workflow_version.clone(),
+                "path": workflow.path.clone()
+            })
+        }).collect::<Vec<_>>(),
+        "digest_verification": digest_results,
+        "model_readiness": model_dependencies,
+        "effective_config": {
+            "values": manifest.effective_config.values.clone(),
+            "redacted_secret_keys": manifest.effective_config.redacted_secret_keys.clone()
+        },
+        "public_surfaces": manifest.public_surfaces.clone(),
+        "runtime_references": {
+            "inspection": format!("/v1/apps/{}/{}", manifest.app_id, manifest.version),
+            "workflows": manifest.workflows.iter().map(|workflow| {
+                format!("/v1/workflows/{}/{}", workflow.workflow_id, workflow.workflow_version)
+            }).collect::<Vec<_>>()
+        },
+        "governing_specs": [
+            "044-application-bundle-manifest",
+            "045-governed-model-dependency-resolution",
+            "046-public-cli-app-registration"
+        ]
+    });
+    serde_json::to_string_pretty(&output)
+        .map_err(|e| CliError::IoError(format!("failed to serialize app validation: {e}")))
+}
+
+fn render_app_validation_failure(
+    manifest_path: &Path,
+    errors: Vec<AppValidationError>,
+) -> Result<String, CliError> {
+    let output = serde_json::json!({
+        "status": "failed",
+        "manifest_path": manifest_path.display().to_string(),
+        "errors": errors.into_iter().map(|error| {
+            serde_json::json!({
+                "code": error.code,
+                "path": error.path,
+                "severity": "error",
+                "message": error.message
+            })
+        }).collect::<Vec<_>>()
+    });
+    serde_json::to_string_pretty(&output)
+        .map_err(|e| CliError::IoError(format!("failed to serialize app validation failure: {e}")))
+}
+
+fn render_app_registration_failure(
+    manifest_path: &Path,
+    workspace_id: &str,
+    errors: Vec<AppValidationError>,
+    state_path: Option<&Path>,
+) -> Result<String, CliError> {
+    let output = serde_json::json!({
+        "status": "failed",
+        "manifest_path": manifest_path.display().to_string(),
+        "workspace_id": workspace_id,
+        "state_path": state_path.map(|path| path.display().to_string()),
+        "errors": errors.into_iter().map(|error| {
+            serde_json::json!({
+                "code": error.code,
+                "path": error.path,
+                "severity": "error",
+                "message": error.message
+            })
+        }).collect::<Vec<_>>()
+    });
+    serde_json::to_string_pretty(&output).map_err(|e| {
+        CliError::IoError(format!("failed to serialize app registration failure: {e}"))
+    })
+}
+
+fn validate_app_manifest_metadata_for_cli(
+    manifest_path: &Path,
+) -> Result<Option<AppValidationError>, CliError> {
+    let manifest = read_json_file(manifest_path)?;
+    if let Some(error) = find_private_manifest_field(&manifest, "$") {
+        return Ok(Some(error));
+    }
+
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new(""));
+    let Some(components) = manifest.get("components").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+
+    for component in components {
+        if let Some(digest) = component.get("digest").and_then(Value::as_str)
+            && let Some(error) = validate_non_placeholder_sha256(
+                "$.components[].digest",
+                digest,
+                "application component reference",
+            )
+        {
+            return Ok(Some(error));
+        }
+
+        let Some(component_manifest_path) = component.get("manifest_path").and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let component_path = manifest_dir.join(component_manifest_path);
+        if !component_path.is_file() {
+            continue;
+        }
+        let component_manifest = read_json_file(&component_path)?;
+        if let Some(error) = find_private_manifest_field(&component_manifest, "$.components[]") {
+            return Ok(Some(error));
+        }
+        if let Some(digest) = component_manifest
+            .get("wasm_digest")
+            .and_then(Value::as_str)
+            && let Some(error) = validate_non_placeholder_sha256(
+                &format!("{}:$.wasm_digest", component_path.display()),
+                digest,
+                "component manifest",
+            )
+        {
+            return Ok(Some(error));
+        }
+    }
+
+    Ok(None)
+}
+
+fn find_private_manifest_field(value: &Value, path: &str) -> Option<AppValidationError> {
+    let object = value.as_object()?;
+    for key in object.keys() {
+        let private = key.starts_with('_')
+            || key.starts_with("internal")
+            || key.starts_with("x-internal")
+            || key.starts_with("private")
+            || key.starts_with("x-private");
+        if private {
+            return Some(AppValidationError {
+                code: "unsupported_private_field".to_string(),
+                path: format!("{path}.{key}"),
+                message: format!("unsupported private/internal manifest field {key}"),
+            });
+        }
+    }
+    None
+}
+
+fn validate_non_placeholder_sha256(
+    path: &str,
+    value: &str,
+    artifact_kind: &str,
+) -> Option<AppValidationError> {
+    let digest = value.strip_prefix("sha256:").unwrap_or(value);
+    let all_zero = digest.len() == 64 && digest.bytes().all(|byte| byte == b'0');
+    let empty_sha256 = digest == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    if all_zero || empty_sha256 {
+        return Some(AppValidationError {
+            code: "placeholder_wasm_digest".to_string(),
+            path: path.to_string(),
+            message: format!("{artifact_kind} declares a placeholder or all-zero WASM digest"),
+        });
+    }
+    None
 }
 
 fn component_contract_json(component_id: &str, name: &str) -> Value {
@@ -2209,7 +2970,7 @@ fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
 }
 
 fn usage() -> String {
-    "usage: traverse-cli app new <app-id> [--register --workspace <workspace-id>] | traverse-cli component new <component-id> | traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
+    "usage: traverse-cli app <new|validate|register> [options] | traverse-cli component new <component-id> | traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
 }
 
 fn write_trace_artifact(path: &Path, trace: &RuntimeTrace) -> Result<(), CliError> {
@@ -2990,13 +3751,14 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        Command, app_new_at, component_new_at, execute_agent, execute_expedition, inspect_agent,
-        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, parse_command,
-        register_bundle,
+        Command, app_new_at, app_register_at, app_registration_state_path, app_validate,
+        component_new_at, execute_agent, execute_expedition, inspect_agent, inspect_bundle,
+        inspect_event, inspect_trace, inspect_workflow, parse_command, register_bundle,
     };
     use crate::agent_packages::fnv1a64;
+    use serde_json::Value;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use traverse_contracts::parse_contract;
     use traverse_registry::load_application_bundle_manifest;
@@ -3128,6 +3890,289 @@ mod tests {
             }
             other => assert!(matches!(other, Command::AppNew { .. })),
         }
+    }
+
+    #[test]
+    fn parse_app_validate_requires_manifest_and_json_flags() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "validate".to_string(),
+            "--manifest".to_string(),
+            "examples/applications/expedition-readiness/app.manifest.json".to_string(),
+            "--json".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("app validate should parse");
+
+        match command {
+            Command::AppValidate {
+                manifest_path,
+                json_output,
+            } => {
+                assert_eq!(
+                    manifest_path,
+                    PathBuf::from("examples/applications/expedition-readiness/app.manifest.json")
+                );
+                assert!(json_output);
+            }
+            other => assert!(matches!(other, Command::AppValidate { .. })),
+        }
+
+        let missing_json = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "validate".to_string(),
+            "--manifest".to_string(),
+            "examples/applications/expedition-readiness/app.manifest.json".to_string(),
+        ];
+        assert!(parse_command(&missing_json).is_err());
+    }
+
+    #[test]
+    fn parse_app_register_requires_manifest_workspace_and_json_flags() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "register".to_string(),
+            "--manifest".to_string(),
+            "examples/applications/expedition-readiness/app.manifest.json".to_string(),
+            "--workspace".to_string(),
+            "local-dev".to_string(),
+            "--json".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("app register should parse");
+
+        match command {
+            Command::AppRegister {
+                manifest_path,
+                workspace_id,
+                json_output,
+            } => {
+                assert_eq!(
+                    manifest_path,
+                    PathBuf::from("examples/applications/expedition-readiness/app.manifest.json")
+                );
+                assert_eq!(workspace_id, "local-dev");
+                assert!(json_output);
+            }
+            other => assert!(matches!(other, Command::AppRegister { .. })),
+        }
+
+        let missing_workspace = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "register".to_string(),
+            "--manifest".to_string(),
+            "examples/applications/expedition-readiness/app.manifest.json".to_string(),
+            "--json".to_string(),
+        ];
+        assert!(parse_command(&missing_workspace).is_err());
+
+        let missing_json = vec![
+            "traverse-cli".to_string(),
+            "app".to_string(),
+            "register".to_string(),
+            "--manifest".to_string(),
+            "examples/applications/expedition-readiness/app.manifest.json".to_string(),
+            "--workspace".to_string(),
+            "local-dev".to_string(),
+        ];
+        assert!(parse_command(&missing_json).is_err());
+    }
+
+    #[test]
+    fn app_validate_returns_validated_json_for_checked_in_app_manifest() {
+        let manifest_path =
+            repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
+
+        let output = app_validate(&manifest_path, true).expect("app validation should succeed");
+        let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
+
+        assert_eq!(json["status"], "validated");
+        assert_eq!(json["app_id"], "expedition.readiness");
+        assert_eq!(
+            json["component_ids"][0],
+            "expedition.readiness.validate-team-readiness-component"
+        );
+        assert_eq!(json["digest_verification"][0]["status"], "verified");
+        assert_eq!(json["model_readiness"][0]["status"], "declared");
+        assert_eq!(
+            json["effective_config"]["redacted_secret_keys"]
+                .as_array()
+                .expect("redacted secret keys must be an array")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn app_validate_rejects_placeholder_digest_with_failed_json() {
+        let temp_dir = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &temp_dir,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        );
+
+        let output =
+            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["errors"][0]["code"], "placeholder_wasm_digest");
+        assert_eq!(json["errors"][0]["severity"], "error");
+    }
+
+    #[test]
+    fn app_validate_redacts_workspace_secret_keys() {
+        let temp_dir = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &temp_dir,
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            Some(serde_json::json!({
+                "overrides": {
+                    "readiness_mode": "deterministic"
+                },
+                "secrets": {
+                    "ollama_api_key": "do-not-render"
+                }
+            })),
+        );
+
+        let output = app_validate(&manifest_path, true).expect("app validation should succeed");
+        let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
+
+        assert_eq!(json["status"], "validated");
+        assert_eq!(
+            json["effective_config"]["redacted_secret_keys"][0],
+            "ollama_api_key"
+        );
+        assert!(!output.contains("do-not-render"));
+    }
+
+    #[test]
+    fn app_register_persists_durable_workspace_state() {
+        let state_root = unique_temp_dir();
+        let manifest_path =
+            repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
+
+        let output = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("app registration should succeed");
+        let json: Value = serde_json::from_str(&output).expect("registration output must be JSON");
+        let state_path =
+            app_registration_state_path(&state_root, "local", "expedition.readiness", "1.0.0");
+        let persisted: Value = serde_json::from_str(
+            &fs::read_to_string(&state_path).expect("registration state must persist"),
+        )
+        .expect("persisted state must be JSON");
+
+        assert_eq!(json["status"], "registered");
+        assert_eq!(json["workspace_id"], "local");
+        assert_eq!(json["app_id"], "expedition.readiness");
+        assert_eq!(json["state_scope"], "workspace_persisted");
+        assert_eq!(
+            json["component_ids"][0],
+            "expedition.readiness.validate-team-readiness-component"
+        );
+        assert_eq!(json, persisted);
+    }
+
+    #[test]
+    fn app_register_is_idempotent_for_unchanged_bundle() {
+        let state_root = unique_temp_dir();
+        let manifest_path =
+            repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
+
+        let first = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("first registration should succeed");
+        let second = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("second registration should succeed");
+        let first_json: Value =
+            serde_json::from_str(&first).expect("first registration output must be JSON");
+        let second_json: Value =
+            serde_json::from_str(&second).expect("second registration output must be JSON");
+
+        assert_eq!(first_json["status"], "registered");
+        assert_eq!(second_json["status"], "already_registered");
+        assert_eq!(
+            first_json["registration_fingerprint"],
+            second_json["registration_fingerprint"]
+        );
+    }
+
+    #[test]
+    fn app_register_validation_failure_leaves_no_workspace_state() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &fixture_root,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        );
+
+        let output = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("validation failure should return JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("registration failure must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["errors"][0]["code"], "placeholder_wasm_digest");
+        assert!(!state_root.join(".traverse").exists());
+    }
+
+    #[test]
+    fn app_register_write_failure_leaves_no_partial_registration_file() {
+        let state_root = unique_temp_dir();
+        let manifest_path =
+            repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
+        let apps_path = state_root.join(".traverse/workspaces/local/apps");
+        fs::create_dir_all(apps_path.parent().expect("apps path must have parent"))
+            .expect("workspace parent should create");
+        fs::write(&apps_path, "not a directory").expect("conflicting apps path should write");
+
+        let output = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("write failure should return JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("registration failure must be JSON");
+        let state_path =
+            app_registration_state_path(&state_root, "local", "expedition.readiness", "1.0.0");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["errors"][0]["code"], "workspace_state_write_failed");
+        assert!(!state_path.exists());
+    }
+
+    #[test]
+    fn app_register_redacts_workspace_secret_keys() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &fixture_root,
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            Some(serde_json::json!({
+                "overrides": {
+                    "readiness_mode": "deterministic"
+                },
+                "secrets": {
+                    "ollama_api_key": "do-not-render"
+                }
+            })),
+        );
+
+        let output = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("app registration should succeed");
+        let json: Value = serde_json::from_str(&output).expect("registration output must be JSON");
+
+        assert_eq!(json["status"], "registered");
+        assert_eq!(
+            json["effective_config"]["redacted_secret_keys"][0],
+            "ollama_api_key"
+        );
+        assert!(!output.contains("do-not-render"));
     }
 
     #[test]
@@ -3896,6 +4941,130 @@ mod tests {
         let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}"));
         fs::create_dir_all(&path).expect("temporary directory should create");
         path
+    }
+
+    fn write_app_validate_fixture(
+        temp_dir: &Path,
+        app_digest: &str,
+        component_digest: &str,
+        workspace_config: Option<Value>,
+    ) -> PathBuf {
+        let repo = repo_root();
+        let component_manifest_path =
+            write_app_validate_component_fixture(temp_dir, &repo, component_digest);
+        let mut workspace_defaults = serde_json::json!({ "workspace_id": "expedition-local" });
+        if let Some(config) = workspace_config {
+            let config_path = temp_dir.join("workspace.config.json");
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&config).expect("workspace config must serialize"),
+            )
+            .expect("workspace config must write");
+            workspace_defaults["config_path"] = Value::String("workspace.config.json".to_string());
+        }
+
+        let manifest_path = temp_dir.join("app.manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "app_id": "expedition.readiness",
+                "version": "1.0.0",
+                "schema_version": "1.0.0",
+                "workspace_defaults": workspace_defaults,
+                "components": [{
+                    "component_id": "expedition.readiness.validate-team-readiness-component",
+                    "version": "1.0.0",
+                    "digest": app_digest,
+                    "manifest_path": component_manifest_path.display().to_string()
+                }],
+                "workflows": [{
+                    "workflow_id": "expedition.planning.plan-expedition",
+                    "workflow_version": "1.0.0",
+                    "path": repo.join("workflows/examples/expedition/plan-expedition/workflow.json").display().to_string()
+                }],
+                "model_dependencies": [{
+                    "interface_id": "traverse.inference.generate",
+                    "version_range": "^1.0",
+                    "selection_policy": {
+                        "strategy": "priority",
+                        "allow_fallback": true
+                    },
+                    "required_capabilities": ["text_generation"],
+                    "minimum_context_window": 8192,
+                    "candidates": [{
+                        "candidate_id": "ollama-llama-3-2-readiness",
+                        "provider_capability_id": "traverse.inference.generate",
+                        "provider_implementation_id": "ollama.local.generate",
+                        "model_identifier": "llama3.2:3b",
+                        "placement_target": "local",
+                        "priority": 10,
+                        "required_provider_config_keys": ["ollama_base_url"],
+                        "metadata": {
+                            "provider": "ollama"
+                        }
+                    }]
+                }],
+                "config_schema": {
+                    "type": "object",
+                    "required": ["workspace_id"],
+                    "properties": {
+                        "workspace_id": {
+                            "type": "string"
+                        },
+                        "readiness_mode": {
+                            "type": "string",
+                            "x-traverse-overrideable": true
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "default_config": {
+                    "workspace_id": "expedition-local",
+                    "readiness_mode": "deterministic"
+                },
+                "placement_policy": {
+                    "preferred_targets": ["local"],
+                    "allow_fallback": false
+                },
+                "public_surfaces": ["cli"]
+            }))
+            .expect("app manifest must serialize"),
+        )
+        .expect("app manifest must write");
+        manifest_path
+    }
+
+    fn write_app_validate_component_fixture(
+        temp_dir: &Path,
+        repo: &Path,
+        component_digest: &str,
+    ) -> PathBuf {
+        let component_manifest_path = temp_dir.join("component.manifest.json");
+        fs::write(
+            &component_manifest_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "component_id": "expedition.readiness.validate-team-readiness-component",
+                "version": "1.0.0",
+                "schema_version": "1.0.0",
+                "capability_id": "expedition.planning.validate-team-readiness",
+                "capability_version": "1.0.0",
+                "contract_path": repo.join("contracts/examples/expedition/capabilities/validate-team-readiness/contract.json").display().to_string(),
+                "wasm_binary_path": repo.join("examples/agents/team-readiness-agent/artifacts/validate-team-readiness-agent.wasm").display().to_string(),
+                "wasm_digest": component_digest,
+                "runtime_constraints": {
+                    "host_api_access": "none",
+                    "network_access": "forbidden",
+                    "filesystem_access": "none"
+                },
+                "permitted_targets": ["local"],
+                "dependencies": [],
+                "connector_requirements": [],
+                "validation_evidence": []
+            }))
+            .expect("component manifest must serialize"),
+        )
+        .expect("component manifest must write");
+        component_manifest_path
     }
 
     fn read_tree(root: &PathBuf) -> String {

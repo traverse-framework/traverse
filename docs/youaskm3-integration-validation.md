@@ -12,6 +12,8 @@ It stays on governed public Traverse surfaces only:
 - the real-agent MCP exercise guide
 - the published-artifact validation path for the released Traverse runtime and MCP artifacts
 - the canonical HTTP/JSON app path at [docs/youaskm3-canonical-app-http-path.md](youaskm3-canonical-app-http-path.md)
+- the public CLI app validation and local workspace registration path at [docs/cli-reference.md](cli-reference.md)
+- the downstream app MVP conformance path at [docs/downstream-app-mvp-conformance.md](downstream-app-mvp-conformance.md)
 - [docs/youaskm3-published-artifact-validation.md](youaskm3-published-artifact-validation.md)
 - [docs/youaskm3-compatibility-conformance-suite.md](youaskm3-compatibility-conformance-suite.md)
 - the `youaskm3` compatibility conformance suite
@@ -21,6 +23,15 @@ It stays on governed public Traverse surfaces only:
 For the shortest Traverse-side start path, begin with [quickstart.md](../quickstart.md).
 
 For the first release-facing HTTP/JSON app path, use [docs/youaskm3-canonical-app-http-path.md](youaskm3-canonical-app-http-path.md).
+
+For public local-dev app setup, validate and register the downstream app through:
+
+```bash
+cargo run -p traverse-cli -- app validate --manifest <path> --json
+cargo run -p traverse-cli -- app register --manifest <path> --workspace <workspace-id> --json
+```
+
+That flow produces durable workspace state for Traverse runtime loading. It does not create an HTTP app registration endpoint, a service registry, a runtime-owned admin registration API, or a downstream UI deployment path. `youaskm3` owns the UI; Traverse owns validation, local workspace registration evidence, runtime loading, execution, traces, and eventing-oriented runtime contracts.
 
 For the single Traverse `v0.3.0` downstream validation path that `youaskm3` can cite for release evidence, use [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
@@ -64,6 +75,12 @@ For the broader release-aligned compatibility check, also run:
 bash scripts/ci/youaskm3_compatibility_conformance.sh
 ```
 
+For the downstream app MVP conformance path, including public CLI validation, public CLI registration, and runtime loading of CLI-produced durable workspace state, run:
+
+```bash
+bash scripts/ci/downstream_app_mvp_conformance.sh
+```
+
 For the pinned Traverse `v0.3.0` release evidence sequence, follow [docs/v0.3.0-downstream-validation-path.md](v0.3.0-downstream-validation-path.md).
 
 For the published-artifact validation against the released Traverse runtime and MCP artifacts, also run:
@@ -91,6 +108,8 @@ The validation path should prove:
 - request submission from the approved public consumer path
 - ordered runtime updates and terminal outcome consumption
 - trace visibility through the public Traverse surfaces
+- public CLI app validation and local workspace registration evidence
+- runtime discovery from CLI-produced durable workspace app state
 - `consumer_name: youaskm3`
 - `validated_flow_id: youaskm3_mcp_validation`
 - no dependency on private Traverse internals or undocumented setup
@@ -107,11 +126,16 @@ The path is expected to fail deterministically when:
 - the MCP consumption surface is unavailable
 - the documented quickstart or validation docs are missing
 - the downstream consumer path cannot be followed through the public surfaces
+- the app manifest cannot be validated through `traverse-cli app validate --manifest <path> --json`
+- the app cannot be registered through `traverse-cli app register --manifest <path> --workspace <workspace-id> --json`
+- registered workspace app state cannot be loaded by the runtime
 
 ## Validation
 
 - `bash scripts/ci/react_demo_live_adapter_smoke.sh`
 - `bash scripts/ci/mcp_consumption_validation.sh`
 - `bash scripts/ci/mcp_real_agent_exercise_smoke.sh`
+- `bash scripts/ci/downstream_public_app_registration_smoke.sh`
+- `bash scripts/ci/downstream_app_mvp_conformance.sh`
 - `bash scripts/ci/youaskm3_integration_validation.sh`
 - `bash scripts/ci/repository_checks.sh`

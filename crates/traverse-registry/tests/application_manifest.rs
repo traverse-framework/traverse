@@ -26,7 +26,7 @@ fn loads_checked_in_application_manifest_with_real_wasm_component() {
 
     assert_eq!(bundle.app_id, "expedition.readiness");
     assert_eq!(bundle.version, "1.0.0");
-    assert_eq!(bundle.components.len(), 1);
+    assert_eq!(bundle.components.len(), 5);
     assert_eq!(
         bundle.components[0].manifest.component_id,
         "expedition.readiness.validate-team-readiness-component"

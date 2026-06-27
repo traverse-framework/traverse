@@ -36,6 +36,7 @@ Traverse uses split, focused governing specs instead of one giant spec file. Thi
 | Module dependency registry and resolution strategy | `043-module-dependency-management` |
 | Downstream app manifests, component manifests, app config, and app/component CLI scaffolding | `044-application-bundle-manifest` |
 | Real model dependency candidates, local inference readiness, selection heuristics, and model selection trace evidence | `045-governed-model-dependency-resolution` |
+| Public CLI app validation/registration, durable local workspace state, and runtime loading of registered app bundles | `046-public-cli-app-registration` |
 
 ## Context Hygiene
 

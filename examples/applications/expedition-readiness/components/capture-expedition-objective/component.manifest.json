@@ -1,0 +1,28 @@
+{
+  "component_id": "expedition.readiness.capture-expedition-objective-component",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "capability_id": "expedition.planning.capture-expedition-objective",
+  "capability_version": "1.0.0",
+  "contract_path": "../../../../../contracts/examples/expedition/capabilities/capture-expedition-objective/contract.json",
+  "wasm_binary_path": "../../../../agents/team-readiness-agent/artifacts/validate-team-readiness-agent.wasm",
+  "wasm_digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+  "runtime_constraints": {
+    "host_api_access": "none",
+    "network_access": "forbidden",
+    "filesystem_access": "none"
+  },
+  "permitted_targets": [
+    "local",
+    "device"
+  ],
+  "dependencies": [],
+  "connector_requirements": [],
+  "validation_evidence": [
+    {
+      "evidence_type": "checked_in_fixture",
+      "status": "passed",
+      "produced_by": "repository_checks"
+    }
+  ]
+}

@@ -3,18 +3,17 @@
 
 # Traverse
 
-[![CI](https://github.com/traverse-framework/Traverse/actions/workflows/ci.yml/badge.svg)](https://github.com/traverse-framework/Traverse/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/traverse-framework/Traverse/actions/workflows/ci.yml)
+[![CI](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml/badge.svg)](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/enricopiovesan/Traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/traverse-framework/Traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.5.0-blue)](https://github.com/enricopiovesan/Traverse/releases)
 
 Your business logic runs in the browser, on your server, and in a cloud function.
 They drift. You maintain three versions of the same behavior.
 Traverse keeps it in one contract and runs it anywhere — with a full execution trace every time.
 
 Traverse is the working implementation of [Universal Microservices Architecture](https://www.universalmicroservices.com/).
-
 
 ---
 
@@ -23,7 +22,7 @@ Traverse is the working implementation of [Universal Microservices Architecture]
 **Requirements**: Rust 1.94+
 
 ```bash
-git clone https://github.com/traverse-framework/Traverse.git
+git clone https://github.com/enricopiovesan/Traverse.git
 cd Traverse
 cargo build
 cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
@@ -103,7 +102,7 @@ Scaffolds a governed app bundle. Add your capability contracts, workflows, and W
 
 ### Consumer and release surfaces
 
-- [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md) — current release notes
+- [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md) — current release notes
 - [docs/app-consumable-consumer-bundle.md](docs/app-consumable-consumer-bundle.md) — versioned consumer bundle
 - [docs/app-consumable-package-release-pointer.md](docs/app-consumable-package-release-pointer.md) — package release pointer
 - [docs/packaged-traverse-runtime-artifact.md](docs/packaged-traverse-runtime-artifact.md) — packaged runtime artifact
@@ -159,7 +158,7 @@ Please read before opening a PR:
 
 All work follows the governance workflow below. Every PR must be backed by an approved spec.
 
-[GitHub Project](https://github.com/orgs/traverse-framework/projects) is the canonical board. All active work has an issue, a project item, and a PR.
+[GitHub Project 1](https://github.com/users/enricopiovesan/projects/1/) is the canonical board. All active work has an issue, a project item, and a PR.
 
 ---
 

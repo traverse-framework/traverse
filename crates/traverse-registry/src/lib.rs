@@ -9,6 +9,7 @@ mod graph;
 mod model_resolution;
 pub mod semver_resolver;
 mod workflows;
+mod workspace_app_state;
 pub use application_manifest::*;
 pub use bundle::*;
 pub use dependency_resolver::{
@@ -23,6 +24,7 @@ pub use semver_resolver::{
     AmbiguousCandidate, RangeResolutionError, ResolvedRangeCapability, resolve_version_range,
 };
 pub use workflows::*;
+pub use workspace_app_state::*;
 
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;

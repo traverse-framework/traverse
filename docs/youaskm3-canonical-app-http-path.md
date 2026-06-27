@@ -33,6 +33,8 @@ The app-facing surfaces `youaskm3` can depend on at `v0.3.0` are:
 
 - `traverse-cli serve`
 - `.traverse/server.json`
+- `traverse-cli app validate --manifest <path> --json`
+- `traverse-cli app register --manifest <path> --workspace <workspace-id> --json`
 - `GET /healthz`
 - `POST /v1/workspaces/{workspace_id}/capabilities`
 - `POST /v1/workspaces/{workspace_id}/execute`
@@ -41,6 +43,25 @@ The app-facing surfaces `youaskm3` can depend on at `v0.3.0` are:
 - RFC 9457 Problem Details error envelopes
 
 Implementation details inside `crates/traverse-cli/src/http_api.rs`, in-memory stores, test helpers, and private registry internals are not downstream app API.
+
+## Local App Registration Boundary
+
+Downstream app setup uses the CLI/local-dev registration path, not an HTTP app registration endpoint:
+
+```bash
+cargo run -p traverse-cli -- app validate \
+  --manifest examples/applications/expedition-readiness/app.manifest.json \
+  --json
+
+cargo run -p traverse-cli -- app register \
+  --manifest examples/applications/expedition-readiness/app.manifest.json \
+  --workspace "$WORKSPACE_ID" \
+  --json
+```
+
+`app validate` emits read-only JSON setup evidence. `app register` writes durable local state at `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json` so Traverse runtime code can load the registered app capability and workflow from workspace state.
+
+This slice deliberately does not provide HTTP app registration, runtime-owned downstream UI deployment, deployment orchestration, or a service registry. `youaskm3` owns its browser-hosted UI and deployment. Traverse owns validation, registration evidence, runtime loading, execution, traces, and eventing-oriented contracts used for runtime communication.
 
 ## Start From The Released Tag
 
@@ -174,11 +195,13 @@ Run the deterministic app-consumable validation commands from the Traverse repos
 
 ```bash
 bash scripts/ci/app_consumable_acceptance.sh
+bash scripts/ci/downstream_public_app_registration_smoke.sh
+bash scripts/ci/downstream_app_mvp_conformance.sh
 bash scripts/ci/browser_consumer_package_smoke.sh
 bash scripts/ci/repository_checks.sh
 ```
 
-These checks prove that the released app-consumable path remains documented, the browser-consumer package remains discoverable, and the repository-level documentation assertions still include the canonical HTTP path.
+These checks prove that the released app-consumable path remains documented, public CLI app registration writes durable workspace state that the runtime can load, the browser-consumer package remains discoverable, and the repository-level documentation assertions still include the canonical HTTP path.
 
 ## Related Docs
 

@@ -498,6 +498,24 @@
         "specs/045-governed-model-dependency-resolution/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "046-public-cli-app-registration",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/046-public-cli-app-registration/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-registry/",
+        "crates/traverse-runtime/",
+        "docs/cli-reference.md",
+        "docs/app-consumable-entry-path.md",
+        "docs/youaskm3-integration-validation.md",
+        "scripts/ci/downstream_app_mvp_conformance.sh",
+        "specs/046-public-cli-app-registration/",
+        "specs/governance/"
+      ]
     }
   ]
 }

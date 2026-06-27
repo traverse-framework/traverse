@@ -12,6 +12,30 @@
       "version": "1.0.0",
       "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
       "manifest_path": "components/validate-team-readiness/component.manifest.json"
+    },
+    {
+      "component_id": "expedition.readiness.capture-expedition-objective-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/capture-expedition-objective/component.manifest.json"
+    },
+    {
+      "component_id": "expedition.readiness.interpret-expedition-intent-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/interpret-expedition-intent/component.manifest.json"
+    },
+    {
+      "component_id": "expedition.readiness.assess-conditions-summary-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/assess-conditions-summary/component.manifest.json"
+    },
+    {
+      "component_id": "expedition.readiness.assemble-expedition-plan-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/assemble-expedition-plan/component.manifest.json"
     }
   ],
   "workflows": [

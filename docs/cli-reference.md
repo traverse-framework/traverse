@@ -34,6 +34,8 @@ Subcommand-level help (full per-command detail with flags and examples):
 traverse-cli bundle inspect --help
 traverse-cli bundle register --help
 traverse-cli app new --help
+traverse-cli app validate --help
+traverse-cli app register --help
 traverse-cli component new --help
 traverse-cli agent inspect --help
 traverse-cli agent execute --help
@@ -54,6 +56,8 @@ consistent with error output behaviour across the CLI.
 | `bundle inspect <manifest-path>` | Validate and summarize a registry bundle manifest. | `cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, artifact counts, and the discovered capability/event/workflow ids. |
 | `bundle register <manifest-path>` | Load a registry bundle and register its contents into in-memory registries. | `cargo run -p traverse-cli -- bundle register examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, registered counts, and registration record summaries. |
 | `app new <app-id> [--register --workspace <workspace-id>]` | Create a governed Traverse app bundle scaffold under `apps/<app-id>`. | `cargo run -p traverse-cli -- app new youaskm3` | Creates `manifest.json`, `workspace.config.json`, component/workflow directories, and a bundle README. `--register` rejects the initial incomplete scaffold until real components and workflows are present. |
+| `app validate --manifest <path> --json` | Validate a downstream app manifest and emit stable setup evidence without writing workspace state. | `cargo run -p traverse-cli -- app validate --manifest examples/applications/expedition-readiness/app.manifest.json --json` | Prints JSON with `status: validated`, app identity, component/workflow ids, verified WASM digests, public surfaces, model readiness, and runtime references. |
+| `app register --manifest <path> --workspace <workspace-id> --json` | Validate a downstream app manifest and atomically persist local workspace registration state. | `cargo run -p traverse-cli -- app register --manifest examples/applications/expedition-readiness/app.manifest.json --workspace local --json` | Prints JSON with `status: registered` or `status: already_registered`, app identity, workspace id, `state_scope: workspace_persisted`, `state_path`, digest evidence, and runtime references. |
 | `component new <component-id>` | Create a governed WASM component package scaffold under `components/<component-id>`. | `cargo run -p traverse-cli -- component new knowledge.retrieve` | Creates a component `manifest.json`, draft capability `contract.json`, Rust package shell, source directory, and artifact directory without creating executable WASM behavior. |
 | `browser-adapter serve [--bind <address>]` | Start the local browser adapter for the governed browser consumer path. | `cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:4174` | Prints `local browser adapter listening on http://...` and stays running until stopped. |
 | `agent inspect <manifest-path>` | Load and summarize a governed WASM agent package manifest. | `cargo run -p traverse-cli -- agent inspect examples/agents/expedition-intent-agent/manifest.json` | Prints `path`, `package_id`, `package_version`, `capability_id`, binary location, digest, and model/workflow references. |
@@ -70,6 +74,8 @@ The following command families are intended to be the public documented surface 
 - `bundle inspect`
 - `bundle register`
 - `app new`
+- `app validate`
+- `app register`
 - `component new`
 - `browser-adapter serve`
 - `agent inspect`
@@ -80,6 +86,81 @@ The following command families are intended to be the public documented surface 
 - `expedition execute`
 
 These commands are the ones a downstream developer should rely on when working with Traverse from the terminal.
+
+## Downstream App Validation And Registration
+
+The public local-dev app setup flow is governed by `046-public-cli-app-registration` and uses two stable JSON-producing commands:
+
+- `traverse-cli app validate --manifest <path> --json`
+- `traverse-cli app register --manifest <path> --workspace <workspace-id> --json`
+
+```bash
+cargo run -p traverse-cli -- app validate \
+  --manifest examples/applications/expedition-readiness/app.manifest.json \
+  --json
+
+cargo run -p traverse-cli -- app register \
+  --manifest examples/applications/expedition-readiness/app.manifest.json \
+  --workspace local \
+  --json
+```
+
+`app validate` is read-only. It validates the app manifest, component manifests, capability contracts, workflow references, WASM digests, workspace config, public surfaces, and governed model dependency declarations. A concise success response includes:
+
+```json
+{
+  "status": "validated",
+  "app_id": "expedition.readiness",
+  "app_version": "1.0.0",
+  "component_ids": [
+    "expedition.readiness.validate-team-readiness-component",
+    "expedition.readiness.capture-expedition-objective-component"
+  ],
+  "workflow_ids": [
+    "expedition.planning.plan-expedition"
+  ],
+  "digest_verification": [
+    {
+      "status": "verified",
+      "wasm_digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99"
+    }
+  ],
+  "public_surfaces": [
+    "cli",
+    "http_json",
+    "mcp"
+  ]
+}
+```
+
+`app register` performs the same validation and writes durable local workspace state under `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json`. A concise success response includes:
+
+```json
+{
+  "status": "registered",
+  "workspace_id": "local",
+  "app_id": "expedition.readiness",
+  "app_version": "1.0.0",
+  "state_scope": "workspace_persisted",
+  "state_path": ".traverse/workspaces/local/apps/expedition.readiness/1.0.0/registration.json",
+  "manifest_digest": "sha256:498ed9a924cbc46caa48c244fc699b800548b0671faf0cc2aef105ffb7cf1c71",
+  "bundle_digest": "sha256:88ee514f6a18a6c30d6ea17a4110ff49d148f5ba655e2d866a2c1ab3553f5b7e"
+}
+```
+
+Re-registering unchanged state is idempotent and returns `status: already_registered` with the same stable app, workspace, and digest evidence.
+
+Common failure cases return non-zero exit status and JSON with `status: failed` plus actionable error entries:
+
+- missing `--manifest`, `--workspace`, or `--json`
+- invalid workspace id
+- missing or malformed app manifest
+- missing component manifest, contract, workflow, or WASM artifact
+- digest mismatch between the component manifest and the WASM binary
+- placeholder or incomplete governed model dependency declarations
+- workspace state write failure
+
+The CLI registration path is a local-dev setup surface. It is not an HTTP app registration endpoint, service registry, downstream UI deployment mechanism, or runtime-owned admin API. Downstream apps own their UI deployment. Traverse runtime code loads registered workspace state and communicates runtime progress, traceability, and app-facing updates through the governed runtime, workflow, HTTP/JSON, MCP, and eventing-oriented contract surfaces documented for each slice.
 
 ## Internal Or Test-Only Paths
 
@@ -109,6 +190,8 @@ This reference was checked against the live CLI behavior with:
 - `cargo run -p traverse-cli -- bundle inspect --help`
 - `cargo run -p traverse-cli -- bundle register --help`
 - `cargo run -p traverse-cli -- app new --help`
+- `cargo run -p traverse-cli -- app validate --help`
+- `cargo run -p traverse-cli -- app register --help`
 - `cargo run -p traverse-cli -- component new --help`
 - `cargo run -p traverse-cli -- agent inspect --help`
 - `cargo run -p traverse-cli -- agent execute --help`

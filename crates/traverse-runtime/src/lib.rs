@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::fmt;
 use std::fs;
+use std::path::Path;
 use traverse_contracts::{
     ExecutionTarget, HostApiAccess, Lifecycle, NetworkAccess, ViolationRecord,
 };
@@ -27,7 +28,8 @@ use traverse_registry::{
     CapabilityRegistration, CapabilityRegistry, DiscoveryQuery, ImplementationKind, LookupScope,
     ModelResolutionEvidence, RegistrationOutcome, RegistryFailure, RegistryScope, ResolutionError,
     ResolvedCapability, WorkflowFailure, WorkflowRegistration, WorkflowRegistrationOutcome,
-    WorkflowRegistry, resolve_dependencies, resolve_version_range,
+    WorkflowRegistry, WorkspaceAppStateFailure, load_workspace_application_registries,
+    resolve_dependencies, resolve_version_range,
 };
 
 const RUNTIME_REQUEST_KIND: &str = "runtime_request";
@@ -73,6 +75,25 @@ impl<E> Runtime<E> {
     pub fn with_workflow_registry(mut self, workflow_registry: WorkflowRegistry) -> Self {
         self.workflow_registry = workflow_registry;
         self
+    }
+
+    /// Loads a runtime from durable local workspace app registration state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceAppStateFailure`] when the workspace has no app
+    /// registration state, state is malformed or incompatible, or registry
+    /// reconstruction fails validation.
+    pub fn from_workspace_app_state(
+        workspace_root: &Path,
+        workspace_id: &str,
+        executor: E,
+        validator_version: &str,
+    ) -> Result<Self, WorkspaceAppStateFailure> {
+        let loaded =
+            load_workspace_application_registries(workspace_root, workspace_id, validator_version)?;
+        Ok(Self::new(loaded.capability_registry, executor)
+            .with_workflow_registry(loaded.workflow_registry))
     }
 
     #[must_use]
@@ -2954,6 +2975,8 @@ fn runtime_state_name(state: RuntimeState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::security::{
         ArtifactVerificationFailure, ArtifactVerificationScheme, ArtifactVerificationStatus,
         RuntimeSecurityConfig, derive_identity_from_jwt, verify_artifact,
@@ -2971,6 +2994,8 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use traverse_contracts::{
         BinaryFormat as ContractBinaryFormat, Entrypoint, EntrypointKind, Execution,
         ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess, Lifecycle,
@@ -2983,10 +3008,11 @@ mod tests {
         DiscoveryIndexEntry, ImplementationKind, ModelCandidateReadiness,
         ModelCandidateRejectionCode, ModelResolutionEvidence, ModelResolutionPhase,
         RegistryProvenance, RegistryScope, ResolvedCapability, SelectedModelCandidate, SourceKind,
-        SourceReference,
+        SourceReference, WorkspaceAppStateErrorCode,
     };
 
     const HEX_TABLE: &[u8; 16] = b"0123456789abcdef";
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn missing_binary_metadata_is_rejected_as_artifact_missing() {
@@ -3007,6 +3033,59 @@ mod tests {
         assert!(error.is_some());
         let message = error.map(|item| item.to_string()).unwrap_or_default();
         assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn runtime_loads_durable_workspace_app_state() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+
+        assert!(
+            runtime
+                .capability_registry()
+                .find_exact(
+                    traverse_registry::LookupScope::PreferPrivate,
+                    "expedition.planning.validate-team-readiness",
+                    "1.0.0"
+                )
+                .is_some()
+        );
+        assert!(
+            runtime
+                .workflow_registry()
+                .find_exact(
+                    traverse_registry::LookupScope::PreferPrivate,
+                    "expedition.planning.plan-expedition",
+                    "1.0.0"
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn runtime_reports_missing_workspace_app_state() {
+        let workspace_root = unique_workspace_state_dir();
+
+        let failure = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect_err("missing workspace app state should fail");
+
+        assert_eq!(
+            failure.errors[0].code,
+            WorkspaceAppStateErrorCode::MissingWorkspaceState
+        );
     }
 
     #[test]
@@ -4393,6 +4472,117 @@ mod tests {
         }
     }
 
+    fn write_runtime_workspace_app_state_fixture(workspace_root: &Path, workspace_id: &str) {
+        let repo = repo_root();
+        let state_path = workspace_root
+            .join(".traverse/workspaces")
+            .join(workspace_id)
+            .join("apps/expedition.readiness/1.0.0/registration.json");
+        fs::create_dir_all(state_path.parent().expect("state path must have parent"))
+            .expect("workspace state parent should create");
+        fs::write(
+            state_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "registered",
+                "workspace_id": workspace_id,
+                "app_id": "expedition.readiness",
+                "app_version": "1.0.0",
+                "schema_version": "1.0.0",
+                "manifest_path": repo.join("examples/applications/expedition-readiness/app.manifest.json").display().to_string(),
+                "manifest_digest": "sha256:test-manifest",
+                "bundle_digest": "sha256:test-bundle",
+                "component_ids": [
+                    "expedition.readiness.capture-expedition-objective-component",
+                    "expedition.readiness.interpret-expedition-intent-component",
+                    "expedition.readiness.assess-conditions-summary-component",
+                    "expedition.readiness.validate-team-readiness-component",
+                    "expedition.readiness.assemble-expedition-plan-component"
+                ],
+                "workflow_ids": ["expedition.planning.plan-expedition"],
+                "components": runtime_workspace_components_json(&repo),
+                "workflows": [{
+                    "workflow_id": "expedition.planning.plan-expedition",
+                    "workflow_version": "1.0.0",
+                    "workflow_digest": "sha256:test-workflow",
+                    "path": repo.join("workflows/examples/expedition/plan-expedition/workflow.json").display().to_string()
+                }],
+                "effective_config": {
+                    "values": {
+                        "workspace_id": "expedition-local",
+                        "readiness_mode": "deterministic"
+                    },
+                    "redacted_secret_keys": []
+                },
+                "state_scope": "workspace_persisted",
+                "registration_fingerprint": {
+                    "app_id": "expedition.readiness",
+                    "app_version": "1.0.0",
+                    "manifest_digest": "sha256:test-manifest"
+                }
+            }))
+            .expect("workspace app state should serialize"),
+        )
+        .expect("workspace app state should write");
+    }
+
+    fn runtime_workspace_components_json(repo: &Path) -> Vec<serde_json::Value> {
+        [
+            (
+                "capture-expedition-objective",
+                "expedition.planning.capture-expedition-objective",
+            ),
+            (
+                "interpret-expedition-intent",
+                "expedition.planning.interpret-expedition-intent",
+            ),
+            (
+                "assess-conditions-summary",
+                "expedition.planning.assess-conditions-summary",
+            ),
+            (
+                "validate-team-readiness",
+                "expedition.planning.validate-team-readiness",
+            ),
+            (
+                "assemble-expedition-plan",
+                "expedition.planning.assemble-expedition-plan",
+            ),
+        ]
+        .into_iter()
+        .map(|(leaf, capability_id)| {
+            serde_json::json!({
+                "component_id": format!("expedition.readiness.{leaf}-component"),
+                "component_version": "1.0.0",
+                "capability_id": capability_id,
+                "capability_version": "1.0.0",
+                "wasm_digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+                "manifest_path": repo.join("examples/applications/expedition-readiness/components/validate-team-readiness/component.manifest.json").display().to_string(),
+                "contract_path": repo.join(format!("contracts/examples/expedition/capabilities/{leaf}/contract.json")).display().to_string(),
+                "artifact_ref": repo.join("examples/agents/team-readiness-agent/artifacts/validate-team-readiness-agent.wasm").display().to_string()
+            })
+        })
+        .collect()
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn unique_workspace_state_dir() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "traverse-runtime-workspace-state-test-{}-{nanos}-{counter}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temporary workspace should create");
+        path
+    }
+
+    #[derive(Debug)]
     struct NoopExecutor;
 
     impl super::LocalExecutor for NoopExecutor {
