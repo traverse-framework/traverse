@@ -1620,12 +1620,14 @@ fn render_app_registration_state(
     let workflows = app_registration_workflows(manifest_path, manifest)?;
     let digest_verification = app_registration_digest_verification(manifest);
     let model_readiness = app_registration_model_readiness(manifest);
+    let model_dependencies = manifest.model_dependencies.clone();
     let bundle_fingerprint = serde_json::json!({
         "app_id": manifest.app_id.clone(),
         "app_version": manifest.version.clone(),
         "manifest_digest": manifest_digest.clone(),
         "components": components.clone(),
         "workflows": workflows.clone(),
+        "model_dependencies": model_dependencies.clone(),
         "model_readiness": model_readiness.clone(),
         "effective_config": {
             "values": manifest.effective_config.values.clone(),
@@ -1648,6 +1650,7 @@ fn render_app_registration_state(
         "components": components,
         "workflows": workflows,
         "digest_verification": digest_verification,
+        "model_dependencies": model_dependencies,
         "model_readiness": model_readiness,
         "effective_config": {
             "values": manifest.effective_config.values.clone(),

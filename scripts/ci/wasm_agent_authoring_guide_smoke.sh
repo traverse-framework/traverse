@@ -22,6 +22,12 @@ grep -q "workflow_refs" "${repo_root}/docs/wasm-agent-authoring-guide.md"
 grep -q "binary" "${repo_root}/docs/wasm-agent-authoring-guide.md"
 grep -q "constraints" "${repo_root}/docs/wasm-agent-authoring-guide.md"
 grep -q "model_dependencies" "${repo_root}/docs/wasm-agent-authoring-guide.md"
+grep -q "governed runtime dependencies" "${repo_root}/docs/wasm-agent-authoring-guide.md"
+grep -q "must not hardcode Ollama" "${repo_root}/docs/wasm-agent-authoring-guide.md"
+if grep -q "documentation-only" "${repo_root}/docs/wasm-agent-authoring-guide.md"; then
+  echo "WASM agent guide must not describe model_dependencies as documentation-only." >&2
+  exit 1
+fi
 grep -q "examples/templates/executable-capability-package/manifest.template.json" "${repo_root}/docs/wasm-agent-authoring-guide.md"
 grep -q "examples/agents/expedition-intent-agent/manifest.json" "${repo_root}/docs/wasm-agent-authoring-guide.md"
 grep -q "examples/agents/team-readiness-agent/manifest.json" "${repo_root}/docs/wasm-agent-authoring-guide.md"

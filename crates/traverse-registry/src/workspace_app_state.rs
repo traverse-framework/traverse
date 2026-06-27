@@ -1,8 +1,8 @@
 use crate::{
-    ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-    CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, ImplementationKind, RegistryProvenance, RegistryScope, SourceKind,
-    SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
+    ApplicationModelDependency, ArtifactDigests, BinaryFormat, BinaryReference,
+    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
+    CompositionKind, CompositionPattern, ImplementationKind, RegistryProvenance, RegistryScope,
+    SourceKind, SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,6 +30,7 @@ pub struct WorkspaceApplicationRegistration {
     pub manifest_path: String,
     pub manifest_digest: String,
     pub bundle_digest: String,
+    pub model_dependencies: Vec<ApplicationModelDependency>,
     pub state_path: PathBuf,
 }
 
@@ -69,6 +70,8 @@ struct PersistedWorkspaceApplicationState {
     state_scope: String,
     components: Vec<PersistedWorkspaceComponent>,
     workflows: Vec<PersistedWorkspaceWorkflow>,
+    #[serde(default)]
+    model_dependencies: Vec<ApplicationModelDependency>,
     registration_fingerprint: Value,
 }
 
@@ -168,6 +171,7 @@ pub fn load_workspace_application_registries(
             manifest_path: state.manifest_path,
             manifest_digest: state.manifest_digest,
             bundle_digest: state.bundle_digest,
+            model_dependencies: state.model_dependencies,
             state_path,
         });
     }
@@ -602,6 +606,10 @@ mod tests {
         assert_eq!(loaded.workspace_id, "local");
         assert_eq!(loaded.applications.len(), 1);
         assert_eq!(loaded.applications[0].app_id, "expedition.readiness");
+        assert_eq!(
+            loaded.applications[0].model_dependencies[0].interface_id,
+            "traverse.inference.generate"
+        );
         assert!(
             loaded
                 .capability_registry
@@ -1158,6 +1166,30 @@ mod tests {
                 "workflow_version": "1.0.0",
                 "workflow_digest": "sha256:test-workflow",
                 "path": repo.join("workflows/examples/expedition/plan-expedition/workflow.json").display().to_string()
+            }],
+            "model_dependencies": [{
+                "interface_id": "traverse.inference.generate",
+                "version_range": "^1.0",
+                "selection_policy": {
+                    "strategy": "priority",
+                    "allow_fallback": true
+                },
+                "required_capabilities": ["text_generation"],
+                "minimum_context_window": 8192,
+                "candidates": [{
+                    "candidate_id": "ollama-llama-3-2-readiness",
+                    "provider_capability_id": "traverse.inference.generate",
+                    "provider_implementation_id": "ollama.local.generate",
+                    "model_identifier": "llama3.2:3b",
+                    "placement_target": "local",
+                    "priority": 10,
+                    "required_provider_config_keys": ["ollama_base_url"],
+                    "metadata": {
+                        "implementation_kind": "real_local_provider",
+                        "provider": "ollama",
+                        "model_context_window": 8192
+                    }
+                }]
             }],
             "effective_config": {
                 "values": {

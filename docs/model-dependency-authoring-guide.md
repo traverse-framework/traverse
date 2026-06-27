@@ -13,7 +13,7 @@ traverse.inference.generate
 ```
 
 Downstream apps declare this abstract interface plus concrete model candidates.
-Traverse owns provider selection and later execution. Product code must not
+Traverse owns provider selection and execution. Product code must not
 hardcode Ollama, llama.cpp, WebLLM, cloud APIs, or provider-specific paths.
 
 ## App Manifest Shape
@@ -85,6 +85,7 @@ with `stream: false`. It reports stable machine-readable failures:
 - `model_provider_invalid_response` when Ollama returns malformed or incomplete
   JSON.
 
-Full candidate resolution across multiple manifest entries is implemented in a
-later Spec 045 slice. This provider slice gives that resolver a real local
-implementation to call.
+Runtime hosts execute app-declared model dependencies through Traverse's
+governed model dependency surface. The runtime revalidates the selected
+candidate at execution time, invokes the real provider implementation, and
+returns public `ModelResolutionEvidence` alongside the inference output.

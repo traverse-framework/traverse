@@ -28,8 +28,8 @@ use traverse_registry::{
     CapabilityRegistration, CapabilityRegistry, DiscoveryQuery, ImplementationKind, LookupScope,
     ModelResolutionEvidence, RegistrationOutcome, RegistryFailure, RegistryScope, ResolutionError,
     ResolvedCapability, WorkflowFailure, WorkflowRegistration, WorkflowRegistrationOutcome,
-    WorkflowRegistry, WorkspaceAppStateFailure, load_workspace_application_registries,
-    resolve_dependencies, resolve_version_range,
+    WorkflowRegistry, WorkspaceAppStateFailure, WorkspaceApplicationRegistration,
+    load_workspace_application_registries, resolve_dependencies, resolve_version_range,
 };
 
 const RUNTIME_REQUEST_KIND: &str = "runtime_request";
@@ -54,6 +54,7 @@ const TRACE_PREFIX: &str = "trace_";
 pub struct Runtime<E> {
     registry: CapabilityRegistry,
     workflow_registry: WorkflowRegistry,
+    applications: Vec<WorkspaceApplicationRegistration>,
     executor: E,
     observability: RuntimeObservabilityConfig,
     security: RuntimeSecurityConfig,
@@ -65,6 +66,7 @@ impl<E> Runtime<E> {
         Self {
             registry,
             workflow_registry: WorkflowRegistry::new(),
+            applications: Vec::new(),
             executor,
             observability: RuntimeObservabilityConfig::default(),
             security: RuntimeSecurityConfig::default(),
@@ -74,6 +76,15 @@ impl<E> Runtime<E> {
     #[must_use]
     pub fn with_workflow_registry(mut self, workflow_registry: WorkflowRegistry) -> Self {
         self.workflow_registry = workflow_registry;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_applications(
+        mut self,
+        applications: Vec<WorkspaceApplicationRegistration>,
+    ) -> Self {
+        self.applications = applications;
         self
     }
 
@@ -93,7 +104,8 @@ impl<E> Runtime<E> {
         let loaded =
             load_workspace_application_registries(workspace_root, workspace_id, validator_version)?;
         Ok(Self::new(loaded.capability_registry, executor)
-            .with_workflow_registry(loaded.workflow_registry))
+            .with_workflow_registry(loaded.workflow_registry)
+            .with_workspace_applications(loaded.applications))
     }
 
     #[must_use]
@@ -146,6 +158,12 @@ impl<E> Runtime<E> {
         &self.workflow_registry
     }
 
+    /// Returns workspace application registrations loaded into this runtime.
+    #[must_use]
+    pub fn workspace_applications(&self) -> &[WorkspaceApplicationRegistration] {
+        self.applications.as_slice()
+    }
+
     /// Returns a mutable reference to the workflow registry.
     #[must_use]
     pub fn workflow_registry_mut(&mut self) -> &mut WorkflowRegistry {
@@ -164,6 +182,42 @@ impl<E> Runtime<E> {
     ) -> Result<WorkflowRegistrationOutcome, WorkflowFailure> {
         self.workflow_registry
             .register(&self.registry, registration)
+    }
+
+    /// Executes an app-declared model dependency through the governed inference surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`inference::GovernedModelExecutionError`] when the app or
+    /// interface is not registered, model resolution fails, or provider
+    /// execution fails.
+    pub fn execute_governed_model_dependency(
+        &self,
+        app_id: &str,
+        app_version: &str,
+        request: &inference::GovernedModelExecutionRequest,
+    ) -> Result<inference::GovernedModelExecutionOutcome, inference::GovernedModelExecutionError>
+    {
+        let Some(application) = self.applications.iter().find(|application| {
+            application.app_id == app_id && application.app_version == app_version
+        }) else {
+            return Err(inference::GovernedModelExecutionError::new(
+                inference::GovernedModelExecutionErrorCode::InterfaceNotDeclared,
+                "application registration was not loaded into this runtime",
+            ));
+        };
+        let Some(dependency) = application
+            .model_dependencies
+            .iter()
+            .find(|dependency| dependency.interface_id == request.interface_id)
+        else {
+            return Err(inference::GovernedModelExecutionError::new(
+                inference::GovernedModelExecutionErrorCode::InterfaceNotDeclared,
+                "requested inference interface is not declared by this application",
+            ));
+        };
+
+        inference::execute_governed_ollama_model_dependency(dependency, request)
     }
 }
 
@@ -2993,6 +3047,7 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3067,6 +3122,99 @@ mod tests {
                     "1.0.0"
                 )
                 .is_some()
+        );
+        assert_eq!(
+            runtime.workspace_applications()[0].model_dependencies[0].interface_id,
+            "traverse.inference.generate"
+        );
+    }
+
+    #[test]
+    fn governed_model_execution_resolves_from_loaded_app_declaration() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let mut provider_configs = BTreeMap::new();
+        provider_configs.insert(
+            "ollama.local.generate".to_string(),
+            crate::inference::OllamaProviderConfig {
+                base_url: "http://127.0.0.1:9".to_string(),
+                request_timeout_ms: Some(50),
+            },
+        );
+
+        let error = runtime
+            .execute_governed_model_dependency(
+                "expedition.readiness",
+                "1.0.0",
+                &crate::inference::GovernedModelExecutionRequest {
+                    interface_id: "traverse.inference.generate".to_string(),
+                    prompt: "Summarize readiness.".to_string(),
+                    system_prompt: None,
+                    options: json!({}),
+                    requested_placement: ExecutionTarget::Local,
+                    provider_configs,
+                },
+            )
+            .expect_err("unavailable local provider should fail before output");
+
+        assert_eq!(
+            error.code,
+            crate::inference::GovernedModelExecutionErrorCode::ModelDependencyUnsatisfied
+        );
+        let evidence = error
+            .model_resolution
+            .expect("failed model execution should include resolution evidence");
+        assert_eq!(
+            evidence.requested_interface_id,
+            "traverse.inference.generate"
+        );
+        assert_eq!(
+            evidence.machine_failure_code(),
+            Some("model_dependency_unsatisfied")
+        );
+    }
+
+    #[test]
+    fn governed_model_execution_rejects_missing_app_or_interface() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let request = crate::inference::GovernedModelExecutionRequest {
+            interface_id: "traverse.inference.embed".to_string(),
+            prompt: "Summarize readiness.".to_string(),
+            system_prompt: None,
+            options: json!({}),
+            requested_placement: ExecutionTarget::Local,
+            provider_configs: BTreeMap::new(),
+        };
+
+        let missing_app = runtime
+            .execute_governed_model_dependency("missing.app", "1.0.0", &request)
+            .expect_err("unknown app should fail");
+        assert_eq!(
+            missing_app.code,
+            crate::inference::GovernedModelExecutionErrorCode::InterfaceNotDeclared
+        );
+
+        let missing_interface = runtime
+            .execute_governed_model_dependency("expedition.readiness", "1.0.0", &request)
+            .expect_err("undeclared interface should fail");
+        assert_eq!(
+            missing_interface.code,
+            crate::inference::GovernedModelExecutionErrorCode::InterfaceNotDeclared
         );
     }
 
@@ -4505,6 +4653,30 @@ mod tests {
                     "workflow_version": "1.0.0",
                     "workflow_digest": "sha256:test-workflow",
                     "path": repo.join("workflows/examples/expedition/plan-expedition/workflow.json").display().to_string()
+                }],
+                "model_dependencies": [{
+                    "interface_id": "traverse.inference.generate",
+                    "version_range": "^1.0",
+                    "selection_policy": {
+                        "strategy": "priority",
+                        "allow_fallback": true
+                    },
+                    "required_capabilities": ["text_generation"],
+                    "minimum_context_window": 8192,
+                    "candidates": [{
+                        "candidate_id": "ollama-llama-3-2-readiness",
+                        "provider_capability_id": "traverse.inference.generate",
+                        "provider_implementation_id": "ollama.local.generate",
+                        "model_identifier": "llama3.2:3b",
+                        "placement_target": "local",
+                        "priority": 10,
+                        "required_provider_config_keys": ["ollama_base_url"],
+                        "metadata": {
+                            "implementation_kind": "real_local_provider",
+                            "provider": "ollama",
+                            "model_context_window": 8192
+                        }
+                    }]
                 }],
                 "effective_config": {
                     "values": {

@@ -7,10 +7,11 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
+use traverse_contracts::ExecutionTarget;
 use traverse_registry::{
     ApplicationModelDependency, ModelAvailabilityProbe, ModelCandidate, ModelCandidateAvailability,
-    ModelCandidateRejectionCode, ModelResolutionEvidence, ModelResolutionRequest,
-    resolve_model_dependency,
+    ModelCandidateRejectionCode, ModelResolutionEvidence, ModelResolutionPhase,
+    ModelResolutionRequest, resolve_model_dependency,
 };
 
 const OLLAMA_PROVIDER: &str = "ollama";
@@ -59,6 +60,76 @@ pub struct OllamaInferenceEvidence {
     pub selected_model: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernedModelExecutionRequest {
+    pub interface_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub options: Value,
+    pub requested_placement: ExecutionTarget,
+    #[serde(default)]
+    pub provider_configs: BTreeMap<String, OllamaProviderConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernedModelExecutionOutcome {
+    pub output: OllamaInferenceOutput,
+    pub model_resolution: ModelResolutionEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernedModelExecutionErrorCode {
+    InterfaceNotDeclared,
+    ModelDependencyUnsatisfied,
+    ProviderExecutionFailed,
+}
+
+impl GovernedModelExecutionErrorCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InterfaceNotDeclared => "model_interface_not_declared",
+            Self::ModelDependencyUnsatisfied => "model_dependency_unsatisfied",
+            Self::ProviderExecutionFailed => "model_provider_failure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernedModelExecutionError {
+    pub code: GovernedModelExecutionErrorCode,
+    pub message: String,
+    pub model_resolution: Option<Box<ModelResolutionEvidence>>,
+}
+
+impl GovernedModelExecutionError {
+    #[must_use]
+    pub fn new(code: GovernedModelExecutionErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            model_resolution: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_model_resolution(mut self, evidence: ModelResolutionEvidence) -> Self {
+        self.model_resolution = Some(Box::new(evidence));
+        self
+    }
+}
+
+impl fmt::Display for GovernedModelExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code.as_str(), self.message)
+    }
+}
+
+impl std::error::Error for GovernedModelExecutionError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaInferenceProvider {
     config: OllamaProviderConfig,
@@ -73,6 +144,10 @@ impl OllamaInferenceProvider {
     pub fn new(config: OllamaProviderConfig) -> Result<Self, OllamaInferenceError> {
         parse_base_url(&config.base_url)?;
         Ok(Self { config })
+    }
+
+    fn from_validated_config(config: OllamaProviderConfig) -> Self {
+        Self { config }
     }
 
     #[must_use]
@@ -224,6 +299,70 @@ pub fn resolve_ollama_model_dependency(
     probe: &OllamaModelAvailabilityProbe,
 ) -> ModelResolutionEvidence {
     resolve_model_dependency(dependency, request, probe)
+}
+
+/// Resolves and executes one app-declared model dependency through Traverse.
+///
+/// The caller supplies runtime-local provider configuration, while the selected
+/// provider/model must come from the registered app dependency declaration.
+///
+/// # Errors
+///
+/// Returns [`GovernedModelExecutionError`] when the dependency does not match
+/// the requested interface, no model candidate can be selected, selected
+/// provider config is unavailable, or real provider execution fails.
+pub fn execute_governed_ollama_model_dependency(
+    dependency: &ApplicationModelDependency,
+    request: &GovernedModelExecutionRequest,
+) -> Result<GovernedModelExecutionOutcome, GovernedModelExecutionError> {
+    if dependency.interface_id != request.interface_id {
+        return Err(GovernedModelExecutionError::new(
+            GovernedModelExecutionErrorCode::InterfaceNotDeclared,
+            "requested inference interface is not declared by this app dependency",
+        ));
+    }
+
+    let probe = request.provider_configs.iter().fold(
+        OllamaModelAvailabilityProbe::default(),
+        |probe, (implementation_id, config)| {
+            probe.with_provider_config(implementation_id.clone(), config.clone())
+        },
+    );
+    let resolution_request = ModelResolutionRequest {
+        phase: ModelResolutionPhase::Execution,
+        requested_interface_id: request.interface_id.clone(),
+        requested_placement: request.requested_placement.clone(),
+    };
+    let evidence = resolve_ollama_model_dependency(dependency, &resolution_request, &probe);
+    let Some(selected) = evidence.selected.as_ref() else {
+        return Err(GovernedModelExecutionError::new(
+            GovernedModelExecutionErrorCode::ModelDependencyUnsatisfied,
+            "no app-declared model candidate satisfied execution-time resolution",
+        )
+        .with_model_resolution(evidence));
+    };
+    let provider = OllamaInferenceProvider::from_validated_config(
+        request.provider_configs[&selected.provider_implementation_id].clone(),
+    );
+    let output = provider
+        .generate(&OllamaInferenceRequest {
+            model: selected.model_identifier.clone(),
+            prompt: request.prompt.clone(),
+            system_prompt: request.system_prompt.clone(),
+            options: request.options.clone(),
+        })
+        .map_err(|error| {
+            GovernedModelExecutionError::new(
+                GovernedModelExecutionErrorCode::ProviderExecutionFailed,
+                error.to_string(),
+            )
+            .with_model_resolution(evidence.clone())
+        })?;
+
+    Ok(GovernedModelExecutionOutcome {
+        output,
+        model_resolution: evidence,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

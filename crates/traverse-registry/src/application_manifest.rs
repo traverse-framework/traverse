@@ -322,13 +322,13 @@ pub struct ApplicationWorkflowRef {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ApplicationEffectiveConfig {
     pub values: Value,
     pub redacted_secret_keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ApplicationModelDependency {
     pub interface_id: String,
     pub version_range: String,
@@ -338,13 +338,13 @@ pub struct ApplicationModelDependency {
     pub candidates: Vec<ModelCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ModelSelectionPolicy {
     pub strategy: String,
     pub allow_fallback: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ModelCandidate {
     pub candidate_id: String,
     pub provider_capability_id: String,

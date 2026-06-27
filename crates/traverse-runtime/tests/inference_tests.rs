@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -17,8 +18,10 @@ use traverse_registry::{
     ModelSelectionPolicy, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
 };
 use traverse_runtime::inference::{
+    GovernedModelExecutionError, GovernedModelExecutionErrorCode, GovernedModelExecutionRequest,
     OllamaInferenceErrorCode, OllamaInferenceProvider, OllamaInferenceRequest,
-    OllamaModelAvailabilityProbe, OllamaProviderConfig, resolve_ollama_model_dependency,
+    OllamaModelAvailabilityProbe, OllamaProviderConfig, execute_governed_ollama_model_dependency,
+    resolve_ollama_model_dependency,
 };
 
 #[test]
@@ -293,6 +296,26 @@ fn ollama_error_codes_are_stable() {
         OllamaInferenceErrorCode::ProviderFailure.as_str(),
         "model_provider_failure"
     );
+    assert_eq!(
+        GovernedModelExecutionErrorCode::InterfaceNotDeclared.as_str(),
+        "model_interface_not_declared"
+    );
+    assert_eq!(
+        GovernedModelExecutionErrorCode::ModelDependencyUnsatisfied.as_str(),
+        "model_dependency_unsatisfied"
+    );
+    assert_eq!(
+        GovernedModelExecutionErrorCode::ProviderExecutionFailed.as_str(),
+        "model_provider_failure"
+    );
+
+    let display = GovernedModelExecutionError::new(
+        GovernedModelExecutionErrorCode::InterfaceNotDeclared,
+        "missing interface",
+    )
+    .to_string();
+    assert!(display.contains("model_interface_not_declared"));
+    assert!(display.contains("missing interface"));
 }
 
 #[test]
@@ -565,6 +588,120 @@ fn ollama_model_resolution_maps_provider_config_and_http_failures() {
     );
 }
 
+#[test]
+fn governed_model_execution_invokes_selected_provider_and_returns_evidence() {
+    let base_url = start_ollama_server(vec![
+        json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+        json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+        json!({"model": "llama3.2:3b", "response": "ready", "done": true}).to_string(),
+    ]);
+    let dependency = model_dependency(vec![model_candidate(
+        "ready-local",
+        "llama3.2:3b",
+        20,
+        8192,
+    )]);
+
+    let outcome = execute_governed_ollama_model_dependency(
+        &dependency,
+        &governed_model_request("traverse.inference.generate", &base_url),
+    )
+    .expect("available app-declared model should execute");
+
+    assert_eq!(outcome.output.response, "ready");
+    assert_eq!(
+        outcome
+            .model_resolution
+            .selected
+            .expect("selected candidate should be recorded")
+            .candidate_id,
+        "ready-local"
+    );
+}
+
+#[test]
+fn governed_model_execution_rejects_undeclared_interface() {
+    let dependency = model_dependency(vec![model_candidate(
+        "ready-local",
+        "llama3.2:3b",
+        20,
+        8192,
+    )]);
+
+    let error = execute_governed_ollama_model_dependency(
+        &dependency,
+        &governed_model_request("traverse.inference.embed", "http://127.0.0.1:11434"),
+    )
+    .expect_err("undeclared interface should fail before provider access");
+
+    assert_eq!(
+        error.code,
+        GovernedModelExecutionErrorCode::InterfaceNotDeclared
+    );
+    assert!(error.model_resolution.is_none());
+}
+
+#[test]
+fn governed_model_execution_reports_unsatisfied_dependency_evidence() {
+    let dependency = model_dependency(vec![model_candidate(
+        "missing-config",
+        "llama3.2:3b",
+        20,
+        8192,
+    )]);
+    let mut request =
+        governed_model_request("traverse.inference.generate", "http://127.0.0.1:11434");
+    request.provider_configs.clear();
+
+    let error = execute_governed_ollama_model_dependency(&dependency, &request)
+        .expect_err("missing provider config should leave dependency unsatisfied");
+
+    assert_eq!(
+        error.code,
+        GovernedModelExecutionErrorCode::ModelDependencyUnsatisfied
+    );
+    assert_eq!(
+        error
+            .model_resolution
+            .expect("resolution evidence should be attached")
+            .machine_failure_code(),
+        Some("model_dependency_unsatisfied")
+    );
+}
+
+#[test]
+fn governed_model_execution_reports_provider_execution_failure_with_evidence() {
+    let base_url = start_ollama_server(vec![
+        json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+        json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+        json!({"model": "llama3.2:3b", "done": true}).to_string(),
+    ]);
+    let dependency = model_dependency(vec![model_candidate(
+        "bad-generate",
+        "llama3.2:3b",
+        20,
+        8192,
+    )]);
+
+    let error = execute_governed_ollama_model_dependency(
+        &dependency,
+        &governed_model_request("traverse.inference.generate", &base_url),
+    )
+    .expect_err("invalid provider output should fail execution");
+
+    assert_eq!(
+        error.code,
+        GovernedModelExecutionErrorCode::ProviderExecutionFailed
+    );
+    assert!(
+        error
+            .model_resolution
+            .expect("provider failure should retain selected model evidence")
+            .selected
+            .is_some()
+    );
+}
+
 fn provider(base_url: &str) -> OllamaInferenceProvider {
     provider_with_timeout(base_url, 1_000)
 }
@@ -623,6 +760,22 @@ fn model_candidate(
             "capabilities": ["text_generation"],
             "model_context_window": context_window
         }),
+    }
+}
+
+fn governed_model_request(interface_id: &str, base_url: &str) -> GovernedModelExecutionRequest {
+    let mut provider_configs = BTreeMap::new();
+    provider_configs.insert(
+        "ollama.local.generate".to_string(),
+        provider_config(base_url, 1_000),
+    );
+    GovernedModelExecutionRequest {
+        interface_id: interface_id.to_string(),
+        prompt: "Summarize readiness.".to_string(),
+        system_prompt: Some("Be concise.".to_string()),
+        options: json!({"temperature": 0}),
+        requested_placement: ExecutionTarget::Local,
+        provider_configs,
     }
 }
 

@@ -198,6 +198,6 @@ Agent manifests may declare `model_dependencies` — abstract interface names th
 
 **What they are**: Named contracts for LLM interface behaviour (e.g. "given this prompt format, return this JSON shape"). They are abstract — not tied to a specific model provider.
 
-**How the runtime uses them**: In v0.1, `model_dependencies` are **documentation-only**. The runtime records them in the agent manifest but does not resolve or inject a model implementation automatically. The agent is responsible for calling the appropriate model API inside its WASM binary.
+**How the runtime uses them**: App-level `model_dependencies` are governed runtime dependencies. Traverse loads the registered app declaration, resolves an available candidate for the requested abstract inference interface, invokes the governed provider implementation, and returns model resolution evidence with the inference output. A WASM agent must not hardcode Ollama, llama.cpp, WebLLM, cloud APIs, provider URLs, credentials, or provider SDK calls inside its binary.
 
-**How to declare a new interface**: Choose a name that describes the capability + version (e.g. `"my-domain-classification-v1"`). Document the expected prompt format and output schema in a companion markdown file alongside the agent. There is no central interface registry in v0.1; naming is by convention.
+**How to declare a new interface**: Use the governed interface `traverse.inference.generate` unless an approved spec adds another interface. Declare concrete candidates in the application manifest, keep provider configuration in runtime-local workspace config, and route execution through Traverse's governed model dependency surface.
