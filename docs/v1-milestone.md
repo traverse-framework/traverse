@@ -8,16 +8,16 @@ v1.0.0 signals that Traverse public API surfaces are stable, all six crates are 
 
 | Gate | Condition | Verifiable |
 |---|---|---|
-| G-01 | All 6 crates published on crates.io at `v1.0.0` | `cargo search traverse-runtime` |
-| G-02 | ThreadPoolExecutor stress tests green on all 5 platforms | CI stress-test matrix |
+| G-01 | All 6 crates published on crates.io at `v1.0.0` | `cargo search` for each Traverse crate |
+| G-02 | ThreadPoolExecutor stress tests green on all 5 platforms | `cargo test -p traverse-runtime --test thread_pool_stress -- --ignored` and CI stress-test matrix |
 | G-03 | `docs/compatibility-policy.md` contains v1 stability statement | `grep "v1 stability"` |
-| G-04 | 5-platform CI matrix all green (Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64) | CI run status |
+| G-04 | 5-platform CI matrix all green (Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64) | latest `ci.yml` GitHub Actions run status |
 | G-05 | `cargo audit` clean, SBOM generated | `supply-chain.yml` passing |
 | G-06 | Quickstart command produces documented output on clean clone on Linux + macOS in CI | Smoke test |
 | G-07 | MCP library surface callable without subprocess (`discover_capabilities`, `execute_capability`) | Integration tests |
 | G-08 | 100% test coverage on all governed crate paths | Coverage gate |
-| G-09 | Zero open P0/P1 bugs in Project 1 | `gh issue list --label bug` |
-| G-10 | `Cargo.toml` and all doc badges point to `traverse-framework/Traverse` | `grep traverse-framework/Traverse Cargo.toml` |
+| G-09 | Zero open P0/P1 bugs in Project 1 | `gh issue list --label bug` filtered to P0/P1 priority labels |
+| G-10 | `Cargo.toml` and all doc badges point to `traverse-framework/Traverse` | metadata and documentation grep |
 
 ## How to check locally
 
