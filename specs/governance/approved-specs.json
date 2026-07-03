@@ -516,6 +516,20 @@
         "specs/046-public-cli-app-registration/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "047-thread-pool-executor",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/047-thread-pool-executor/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "Cargo.toml",
+        ".github/workflows/ci.yml",
+        "specs/047-thread-pool-executor/",
+        "specs/governance/"
+      ]
     }
   ]
 }
