@@ -124,6 +124,12 @@ impl CapabilityExecutor for ThreadPoolExecutor {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use serde_json::json;
 
@@ -161,6 +167,21 @@ mod tests {
         Ok(input.clone())
     }
 
+    fn result_debug<T, E: std::fmt::Debug>(result: Result<T, E>) -> Result<T, String> {
+        result.map_err(|err| format!("{err:?}"))
+    }
+
+    fn executor(capacity: usize) -> Result<ThreadPoolExecutor, String> {
+        result_debug(new_executor(
+            capacity,
+            Box::new(NativeExecutor::new(clone_input)),
+        ))
+    }
+
+    fn execute_json(executor: &ThreadPoolExecutor, input: &Value) -> Result<Value, ExecutorError> {
+        executor.execute(&native_capability(), input)
+    }
+
     #[test]
     fn clone_input_helper_can_return_error() {
         let result = clone_input(&json!({ "__thread_pool_test_error": true }));
@@ -169,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_capacity_below_minimum() {
+    fn config_capacity_zero_returns_error() {
         let result = new_executor(0, Box::new(NativeExecutor::new(clone_input)));
 
         assert_eq!(
@@ -183,16 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn config_accepts_capacity_bounds() {
-        let min_result = new_executor(1, Box::new(NativeExecutor::new(clone_input)));
-        let max_result = new_executor(256, Box::new(NativeExecutor::new(clone_input)));
+    fn config_capacity_max_valid() {
+        let result = new_executor(256, Box::new(NativeExecutor::new(clone_input)));
 
-        assert!(min_result.is_ok());
-        assert!(max_result.is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn config_rejects_capacity_above_maximum() {
+    fn config_capacity_over_max_returns_error() {
         let result = new_executor(257, Box::new(NativeExecutor::new(clone_input)));
 
         assert_eq!(
@@ -203,6 +222,13 @@ mod tests {
                 max: 256
             })
         );
+    }
+
+    #[test]
+    fn config_capacity_one_valid() {
+        let result = new_executor(1, Box::new(NativeExecutor::new(clone_input)));
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -226,7 +252,7 @@ mod tests {
 
         assert!(matches!(build_error, Err(ConfigError::PoolBuildFailed(_))));
 
-        let display = build_error.err().map(|err| err.to_string());
+        let display = build_error.map_err(|err| err.to_string()).err();
         assert_eq!(
             display,
             Some("thread pool build failed: spawn denied".to_string())
@@ -234,23 +260,24 @@ mod tests {
     }
 
     #[test]
-    fn thread_pool_executor_debug_is_non_exhaustive() {
-        let debug = new_executor(1, Box::new(NativeExecutor::new(clone_input)))
-            .map(|executor| format!("{executor:?}"));
+    fn thread_pool_executor_debug_is_non_exhaustive() -> Result<(), String> {
+        let debug = executor(1).map(|executor| format!("{executor:?}"))?;
 
-        assert_eq!(debug, Ok("ThreadPoolExecutor { .. }".to_string()));
+        assert_eq!(debug, "ThreadPoolExecutor { .. }");
+        Ok(())
     }
 
     #[test]
-    fn execute_native_returns_inner_output() {
-        let result = new_executor(2, Box::new(NativeExecutor::new(clone_input)))
-            .map(|executor| executor.execute(&native_capability(), &json!({ "value": 42 })));
+    fn execute_native_returns_correct_output() -> Result<(), String> {
+        let executor = executor(2)?;
+        let result = execute_json(&executor, &json!({ "value": 42 }));
 
-        assert_eq!(result, Ok(Ok(json!({ "value": 42 }))));
+        assert_eq!(result, Ok(json!({ "value": 42 })));
+        Ok(())
     }
 
     #[test]
-    fn execute_native_propagates_inner_error() {
+    fn execute_native_error_propagates() {
         let result = new_executor(
             2,
             Box::new(NativeExecutor::new(|_| Err("inner failed".to_string()))),
@@ -266,40 +293,225 @@ mod tests {
     }
 
     #[test]
-    fn execute_wasm_returns_unsupported() {
-        let result = new_executor(2, Box::new(NativeExecutor::new(clone_input)))
+    fn execute_wasm_artifact_type_returns_unsupported() {
+        let result = new_executor(2, Box::new(PanickingExecutor::new(1)))
             .map(|executor| executor.execute(&wasm_capability(), &json!({})));
 
         assert_eq!(result, Ok(Err(ExecutorError::UnsupportedArtifactType)));
     }
 
     #[test]
-    fn panicking_inner_returns_execution_failed_and_pool_remains_usable() {
-        struct PanickingExecutor;
+    fn concurrent_calls_run_in_parallel() {
+        let result = new_executor(
+            2,
+            Box::new(NativeExecutor::new(|input| {
+                thread::sleep(Duration::from_millis(100));
+                Ok(input.clone())
+            })),
+        )
+        .map(|executor| {
+            let executor = Arc::new(executor);
+            let started = Instant::now();
+            let first = {
+                let executor = Arc::clone(&executor);
+                thread::spawn(move || execute_json(&executor, &json!({ "call": 1 })))
+            };
+            let second = {
+                let executor = Arc::clone(&executor);
+                thread::spawn(move || execute_json(&executor, &json!({ "call": 2 })))
+            };
+            (
+                result_debug(first.join()),
+                result_debug(second.join()),
+                started.elapsed(),
+            )
+        });
 
-        impl CapabilityExecutor for PanickingExecutor {
-            fn execute(
-                &self,
-                _capability: &ExecutorCapability,
-                _input: &Value,
-            ) -> Result<Value, ExecutorError> {
-                std::panic::resume_unwind(Box::new("boom"));
-            }
+        let first_result = result
+            .as_ref()
+            .map(|(first, _, _)| first.as_ref().map_err(String::as_str));
+        let second_result = result
+            .as_ref()
+            .map(|(_, second, _)| second.as_ref().map_err(String::as_str));
+        let elapsed = result.as_ref().map(|(_, _, elapsed)| *elapsed);
+
+        assert_eq!(first_result, Ok(Ok(&Ok(json!({ "call": 1 })))));
+        assert_eq!(second_result, Ok(Ok(&Ok(json!({ "call": 2 })))));
+        assert!(
+            matches!(elapsed, Ok(duration) if duration < Duration::from_millis(150)),
+            "parallel calls took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn pool_size_one_serialises_calls() {
+        let result = new_executor(
+            1,
+            Box::new(NativeExecutor::new(|input| {
+                thread::sleep(Duration::from_millis(50));
+                Ok(input.clone())
+            })),
+        )
+        .map(|executor| {
+            let executor = Arc::new(executor);
+            let first = {
+                let executor = Arc::clone(&executor);
+                thread::spawn(move || execute_json(&executor, &json!({ "call": 1 })))
+            };
+            let second = {
+                let executor = Arc::clone(&executor);
+                thread::spawn(move || execute_json(&executor, &json!({ "call": 2 })))
+            };
+            (result_debug(first.join()), result_debug(second.join()))
+        });
+        let first_result = result
+            .as_ref()
+            .map(|(first, _)| first.as_ref().map_err(String::as_str));
+        let second_result = result
+            .as_ref()
+            .map(|(_, second)| second.as_ref().map_err(String::as_str));
+
+        assert_eq!(first_result, Ok(Ok(&Ok(json!({ "call": 1 })))));
+        assert_eq!(second_result, Ok(Ok(&Ok(json!({ "call": 2 })))));
+    }
+
+    #[test]
+    fn independent_calls_do_not_share_state() -> Result<(), String> {
+        let executor = Arc::new(executor(4)?);
+        let mut handles = Vec::new();
+
+        for value in 0..10 {
+            let executor = Arc::clone(&executor);
+            handles.push(thread::spawn(move || {
+                execute_json(&executor, &json!({ "value": value }))
+            }));
         }
 
-        let failed = new_executor(1, Box::new(PanickingExecutor))
-            .map(|executor| executor.execute(&native_capability(), &json!({})));
+        for (value, handle) in handles.into_iter().enumerate() {
+            let result = result_debug(handle.join())?;
+            assert_eq!(result, Ok(json!({ "value": value })));
+        }
+        Ok(())
+    }
+
+    struct PanickingExecutor {
+        remaining_panics: AtomicUsize,
+    }
+
+    impl PanickingExecutor {
+        fn new(remaining_panics: usize) -> Self {
+            Self {
+                remaining_panics: AtomicUsize::new(remaining_panics),
+            }
+        }
+    }
+
+    impl CapabilityExecutor for PanickingExecutor {
+        fn execute(
+            &self,
+            _capability: &ExecutorCapability,
+            input: &Value,
+        ) -> Result<Value, ExecutorError> {
+            let remaining = self.remaining_panics.load(Ordering::SeqCst);
+            if remaining > 0 {
+                self.remaining_panics.fetch_sub(1, Ordering::SeqCst);
+                std::panic::resume_unwind(Box::new("boom"));
+            }
+            Ok(input.clone())
+        }
+    }
+
+    #[test]
+    fn panicking_handler_returns_execution_failed() -> Result<(), String> {
+        let executor = result_debug(new_executor(1, Box::new(PanickingExecutor::new(1))))?;
+        let result = executor.execute(&native_capability(), &json!({}));
+
+        assert_eq!(
+            result,
+            Err(ExecutorError::ExecutionFailed(
+                "capability panicked".to_string()
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pool_usable_after_panic() -> Result<(), String> {
+        let executor = result_debug(new_executor(1, Box::new(PanickingExecutor::new(1))))?;
+        let failed = executor.execute(&native_capability(), &json!({ "first": true }));
+        let recovered = executor.execute(&native_capability(), &json!({ "second": true }));
 
         assert_eq!(
             failed,
-            Ok(Err(ExecutorError::ExecutionFailed(
+            Err(ExecutorError::ExecutionFailed(
                 "capability panicked".to_string()
-            )))
+            ))
         );
+        assert_eq!(recovered, Ok(json!({ "second": true })));
+        Ok(())
+    }
 
-        let result = new_executor(1, Box::new(NativeExecutor::new(|_| Ok(json!("ok")))))
-            .map(|executor| executor.execute(&native_capability(), &json!({})));
+    #[test]
+    fn multiple_sequential_panics_do_not_exhaust_pool() -> Result<(), String> {
+        let executor = result_debug(new_executor(2, Box::new(PanickingExecutor::new(5))))?;
 
-        assert_eq!(result, Ok(Ok(json!("ok"))));
+        for _ in 0..5 {
+            let result = executor.execute(&native_capability(), &json!({}));
+            assert_eq!(
+                result,
+                Err(ExecutorError::ExecutionFailed(
+                    "capability panicked".to_string()
+                ))
+            );
+        }
+
+        let recovered = executor.execute(&native_capability(), &json!({ "ok": true }));
+
+        assert_eq!(recovered, Ok(json!({ "ok": true })));
+        Ok(())
+    }
+
+    #[test]
+    fn executor_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<ThreadPoolExecutor>();
+    }
+
+    #[test]
+    fn arc_wrapped_executor_callable_from_multiple_threads() -> Result<(), String> {
+        let executor = Arc::new(executor(4)?);
+        let mut handles = Vec::new();
+
+        for value in 0..4 {
+            let executor = Arc::clone(&executor);
+            handles.push(thread::spawn(move || {
+                execute_json(&executor, &json!({ "thread": value }))
+            }));
+        }
+
+        for (value, handle) in handles.into_iter().enumerate() {
+            let result = result_debug(handle.join())?;
+            assert_eq!(result, Ok(json!({ "thread": value })));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn executor_drops_cleanly_after_use() -> Result<(), String> {
+        let executor = executor(1)?;
+        let result = execute_json(&executor, &json!({ "used": true }));
+
+        assert_eq!(result, Ok(json!({ "used": true })));
+        drop(executor);
+        Ok(())
+    }
+
+    #[test]
+    fn executor_drops_cleanly_with_no_calls() -> Result<(), String> {
+        let executor = executor(1)?;
+
+        drop(executor);
+        Ok(())
     }
 }
