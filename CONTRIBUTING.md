@@ -6,12 +6,8 @@ Thanks for contributing to Traverse.
 
 Please read:
 
-- [README.md](/Users/piovese/Documents/cogolo/README.md)
-- [.specify/memory/constitution.md](/Users/piovese/Documents/cogolo/.specify/memory/constitution.md)
-- [docs/quality-standards.md](/Users/piovese/Documents/cogolo/docs/quality-standards.md)
-- [docs/antipatterns.md](/Users/piovese/Documents/cogolo/docs/antipatterns.md)
-- [docs/compatibility-policy.md](/Users/piovese/Documents/cogolo/docs/compatibility-policy.md)
-- [docs/exception-process.md](/Users/piovese/Documents/cogolo/docs/exception-process.md)
+- [README.md](README.md)
+- [traverse-framework/.github](https://github.com/traverse-framework/.github) — constitution, quality standards, antipatterns, compatibility policy, exception process, CLA (this repo has adopted governance version 1.0.0)
 
 ## Core Rules
 
@@ -20,13 +16,14 @@ Please read:
 - Core runtime and business logic require 100% automated coverage.
 - Material architecture changes require an ADR.
 - Portability exceptions must be explicit and reviewed.
+- All contributions are governed by the CLA at `traverse-framework/.github/CLA.md`.
 
 ## Workflow
 
 1. Start from the governing approved spec.
 2. Confirm whether an issue already exists.
 3. Open or link the work item in the project board:
-   [GitHub Project](https://github.com/orgs/traverse-framework/projects)
+   [GitHub Project](https://github.com/orgs/traverse-framework/projects/1)
 4. If needed, add or update an ADR before implementation.
 5. Implement with tests and validation evidence.
 6. Make sure the change passes the required validation flow.

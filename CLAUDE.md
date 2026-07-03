@@ -1,6 +1,12 @@
 # Traverse Development Guidelines
 
-Auto-generated. Last updated: 2026-04-07
+Auto-generated. Last updated: 2026-07-03
+
+## Governance
+
+This repo's constitution, NFRs, quality standards, antipatterns, compatibility policy, exception process, and CLA are **not** duplicated here — they live in [`traverse-framework/.github`](https://github.com/traverse-framework/.github), pinned at **governance version 1.0.0**. Read that repo's `constitution.md` before any implementation work.
+
+Repo-specific product scope stays here: see `specs/001-foundation-v0-1/spec.md` for this repo's v0.1 scope, and `specs/051-registry-extraction/spec.md` for the in-progress registry extraction.
 
 ## Active Technologies
 
@@ -16,14 +22,14 @@ Auto-generated. Last updated: 2026-04-07
 crates/
   traverse-runtime/      # Core execution engine
   traverse-contracts/    # Contract definitions and validation
-  traverse-registry/     # Capability and event registries
+  traverse-registry/     # Capability and event registries (moving to traverse-framework/registry — see spec 051)
   traverse-cli/          # Command-line interface
   traverse-mcp/          # Model Context Protocol (stub)
 specs/                   # Versioned, immutable governing specs
 contracts/               # Capability and event contracts
-docs/                    # ADRs, quality standards, policies
-.specify/                # Speckit: constitution, scripts, templates
-scripts/ci/              # Deterministic spec-alignment gate
+docs/                    # Repo-specific docs (shared governance docs live in traverse-framework/.github)
+.specify/                # Speckit: scripts, templates (constitution lives in traverse-framework/.github)
+scripts/ci/              # Deterministic spec-alignment gate (vendored, pinned copy of traverse-framework/.github's version)
 ```
 
 ## Commands
@@ -41,14 +47,16 @@ bash scripts/ci/spec_alignment_check.sh   # Spec-alignment gate
 - 100% test coverage for core business and runtime logic
 - Deterministic: same inputs must produce same outputs
 
-## Governance
+## Development Workflow
 
-Read `.specify/memory/constitution.md` before any implementation work. Key rules:
+1. Clarify capability boundary
+2. Define or amend governing spec
+3. Define contracts
+4. Write tests
+5. Implement smallest change satisfying spec + contract
+6. Verify CI gate passes
 
-1. Every feature starts with a spec in `specs/` — no spec, no merge
-2. Contracts are source of truth — code conforms to contracts, not vice versa
-3. Spec-alignment CI gate blocks PRs that drift from approved specs (`specs/governance/approved-specs.json`)
-4. All work must be tracked: GitHub issue + Project 1 item + PR
+All work must be tracked: GitHub issue + Project 1 item + PR.
 
 ## Approved Specs
 
@@ -63,15 +71,6 @@ Read `.specify/memory/constitution.md` before any implementation work. Key rules
 | 007 | workflow-registry-traversal |
 | 008 | expedition-example-domain |
 | 009 | expedition-example-artifacts |
-
-## Development Workflow
-
-1. Clarify capability boundary
-2. Define or amend governing spec
-3. Define contracts
-4. Write tests
-5. Implement smallest change satisfying spec + contract
-6. Verify CI gate passes
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
