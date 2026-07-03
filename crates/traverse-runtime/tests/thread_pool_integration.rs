@@ -1,8 +1,11 @@
-//! Integration tests: ThreadPoolExecutor through the TraverseRuntime stack.
+//! Integration tests: `ThreadPoolExecutor` through the `TraverseRuntime` stack.
 //!
 //! Governed by spec `047-thread-pool-executor`.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    error::Error,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use serde_json::{Value, json};
 use traverse_contracts::{
@@ -23,14 +26,12 @@ use traverse_runtime::{
 };
 
 const TEST_SPEC: &str = "047-thread-pool-executor@1.0.0";
+type SharedTraceStore = Arc<Mutex<TraceStore>>;
+type TestResult<T> = Result<T, Box<dyn Error>>;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn echo_handler(input: &Value) -> Result<Value, String> {
-    Ok(input.clone())
-}
 
 fn error_handler(_input: &Value) -> Result<Value, String> {
     Err("deliberate error".to_string())
@@ -39,12 +40,11 @@ fn error_handler(_input: &Value) -> Result<Value, String> {
 fn pool_executor(
     capacity: usize,
     handler: impl Fn(&Value) -> Result<Value, String> + Send + Sync + 'static,
-) -> ThreadPoolExecutor {
-    ThreadPoolExecutor::new(
+) -> TestResult<ThreadPoolExecutor> {
+    Ok(ThreadPoolExecutor::new(
         ThreadPoolExecutorConfig { capacity },
         Box::new(NativeExecutor::new(handler)),
-    )
-    .unwrap_or_else(|e| panic!("ThreadPoolExecutor construction failed: {e}"))
+    )?)
 }
 
 fn test_contract() -> CapabilityContract {
@@ -62,8 +62,12 @@ fn test_contract() -> CapabilityContract {
         },
         summary: "Thread pool integration test subject.".to_string(),
         description: "Used only in thread pool integration tests.".to_string(),
-        inputs: SchemaContainer { schema: json!({ "type": "object" }) },
-        outputs: SchemaContainer { schema: json!({ "type": "object" }) },
+        inputs: SchemaContainer {
+            schema: json!({ "type": "object" }),
+        },
+        outputs: SchemaContainer {
+            schema: json!({ "type": "object" }),
+        },
         preconditions: vec![Condition {
             id: "always-met".to_string(),
             description: "No preconditions.".to_string(),
@@ -129,12 +133,9 @@ fn idle_snapshot() -> RuntimeSnapshot {
 
 fn build_router(
     executor: Box<dyn CapabilityExecutor>,
-) -> (PlacementRouter, Arc<Mutex<TraceStore>>) {
+) -> TestResult<(PlacementRouter, SharedTraceStore)> {
     let catalog = Arc::new(EventCatalog::new());
-    let broker = Arc::new(
-        InProcessBroker::new(Arc::clone(&catalog))
-            .unwrap_or_else(|e| panic!("broker init failed: {e}")),
-    );
+    let broker = Arc::new(InProcessBroker::new(Arc::clone(&catalog))?);
     let trace_store = Arc::new(Mutex::new(TraceStore::new()));
     let mut registry = CapabilityExecutorRegistry::new();
     registry.insert(ArtifactType::Native, executor);
@@ -144,7 +145,7 @@ fn build_router(
         Arc::clone(&trace_store),
         broker,
     );
-    (router, trace_store)
+    Ok((router, trace_store))
 }
 
 fn make_request(input: Value) -> RouterRequest {
@@ -165,25 +166,28 @@ fn make_request(input: Value) -> RouterRequest {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn native_executor_and_thread_pool_produce_identical_output() {
+fn native_executor_and_thread_pool_produce_identical_output() -> TestResult<()> {
     let input = json!({ "key": "value" });
     let cap = executor_cap(ArtifactType::Native);
 
-    let native = NativeExecutor::new(echo_handler);
+    let native = NativeExecutor::new(|input| Ok(input.clone()));
     let native_result = native.execute(&cap, &input);
 
-    let pool = pool_executor(2, echo_handler);
+    let pool = pool_executor(2, |input| Ok(input.clone()))?;
     let pool_result = pool.execute(&cap, &input);
 
     assert_eq!(native_result.ok(), pool_result.ok());
+    Ok(())
 }
 
 #[test]
-fn thread_pool_executor_satisfies_capability_executor_trait_object() {
-    let executor: Box<dyn CapabilityExecutor> = Box::new(pool_executor(2, echo_handler));
+fn thread_pool_executor_satisfies_capability_executor_trait_object() -> TestResult<()> {
+    let executor: Box<dyn CapabilityExecutor> =
+        Box::new(pool_executor(2, |input| Ok(input.clone()))?);
     let cap = executor_cap(ArtifactType::Native);
     let result = executor.execute(&cap, &json!({}));
     assert!(result.is_ok(), "trait object execute failed: {result:?}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -191,17 +195,18 @@ fn thread_pool_executor_satisfies_capability_executor_trait_object() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn router_routes_to_thread_pool_executor() {
-    let (router, _) = build_router(Box::new(pool_executor(2, echo_handler)));
+fn router_routes_to_thread_pool_executor() -> TestResult<()> {
+    let (router, _) = build_router(Box::new(pool_executor(2, |input| Ok(input.clone()))?))?;
     let input = json!({ "x": 1 });
     let result = router.execute(make_request(input.clone()));
     assert!(result.is_ok(), "router execute failed: {result:?}");
     assert_eq!(result.ok().map(|r| r.output), Some(input));
+    Ok(())
 }
 
 #[test]
-fn router_concurrent_requests_to_same_capability() {
-    let (router, _) = build_router(Box::new(pool_executor(8, echo_handler)));
+fn router_concurrent_requests_to_same_capability() -> TestResult<()> {
+    let (router, _) = build_router(Box::new(pool_executor(8, |input| Ok(input.clone()))?))?;
     let router = Arc::new(router);
     let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
 
@@ -209,29 +214,30 @@ fn router_concurrent_requests_to_same_capability() {
         for i in 0_u32..8 {
             let router = Arc::clone(&router);
             let errors = Arc::clone(&errors);
-            s.spawn(move || {
-                match router.execute(make_request(json!({ "i": i }))) {
+            s.spawn(
+                move || match router.execute(make_request(json!({ "i": i }))) {
                     Ok(resp) => {
                         if resp.output != json!({ "i": i }) {
                             errors
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner())
+                                .unwrap_or_else(PoisonError::into_inner)
                                 .push(format!("thread {i}: wrong output {:?}", resp.output));
                         }
                     }
                     Err(e) => {
                         errors
                             .lock()
-                            .unwrap_or_else(|e2| e2.into_inner())
+                            .unwrap_or_else(PoisonError::into_inner)
                             .push(format!("thread {i}: router error {e:?}"));
                     }
-                }
-            });
+                },
+            );
         }
     });
 
-    let errors = errors.lock().unwrap_or_else(|e| e.into_inner());
+    let errors = errors.lock().unwrap_or_else(PoisonError::into_inner);
     assert!(errors.is_empty(), "concurrent router errors: {errors:?}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -239,8 +245,9 @@ fn router_concurrent_requests_to_same_capability() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn concurrent_executions_produce_isolated_traces() {
-    let (router, trace_store) = build_router(Box::new(pool_executor(4, echo_handler)));
+fn concurrent_executions_produce_isolated_traces() -> TestResult<()> {
+    let (router, trace_store) =
+        build_router(Box::new(pool_executor(4, |input| Ok(input.clone()))?))?;
     let router = Arc::new(router);
 
     std::thread::scope(|s| {
@@ -252,40 +259,56 @@ fn concurrent_executions_produce_isolated_traces() {
         }
     });
 
-    let store = trace_store.lock().unwrap_or_else(|e| e.into_inner());
+    let store = trace_store.lock().unwrap_or_else(PoisonError::into_inner);
     let entries = store.list_public(None);
-    assert_eq!(entries.len(), 4, "expected 4 trace entries, got {}", entries.len());
+    assert_eq!(
+        entries.len(),
+        4,
+        "expected 4 trace entries, got {}",
+        entries.len()
+    );
     assert!(
-        entries.iter().all(|e| e.capability_id == "pool.integration.subject"),
+        entries
+            .iter()
+            .all(|e| e.capability_id == "pool.integration.subject"),
         "unexpected capability_id in traces"
     );
+    Ok(())
 }
 
 #[test]
-fn trace_capability_id_matches_executed_capability() {
-    let (router, trace_store) = build_router(Box::new(pool_executor(2, echo_handler)));
+fn trace_capability_id_matches_executed_capability() -> TestResult<()> {
+    let (router, trace_store) =
+        build_router(Box::new(pool_executor(2, |input| Ok(input.clone()))?))?;
     let _ = router.execute(make_request(json!({})));
-    let store = trace_store.lock().unwrap_or_else(|e| e.into_inner());
+    let store = trace_store.lock().unwrap_or_else(PoisonError::into_inner);
     let entries = store.list_public(Some("pool.integration.subject"));
     assert!(!entries.is_empty(), "no trace entries found");
     assert!(
-        entries.iter().all(|e| e.capability_id == "pool.integration.subject"),
+        entries
+            .iter()
+            .all(|e| e.capability_id == "pool.integration.subject"),
         "capability_id mismatch in trace"
     );
+    Ok(())
 }
 
 #[test]
-fn failed_execution_returns_router_error() {
+fn failed_execution_returns_router_error() -> TestResult<()> {
     // The router returns early with RouterError::ExecutionFailed before writing a trace.
     // This test verifies the error propagates correctly through the pool dispatch path.
-    let (router, _) = build_router(Box::new(pool_executor(1, error_handler)));
+    let (router, _) = build_router(Box::new(pool_executor(1, error_handler)?))?;
     let result = router.execute(make_request(json!({})));
-    assert!(result.is_err(), "expected error from failing capability, got ok");
+    assert!(
+        result.is_err(),
+        "expected error from failing capability, got ok"
+    );
     let err_msg = format!("{:?}", result.err());
     assert!(
         err_msg.contains("ExecutionFailed") || err_msg.contains("deliberate"),
         "unexpected error shape: {err_msg}"
     );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -293,8 +316,8 @@ fn failed_execution_returns_router_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn wasm_capability_type_rejected_by_thread_pool_executor() {
-    let pool = pool_executor(2, echo_handler);
+fn wasm_capability_type_rejected_by_thread_pool_executor() -> TestResult<()> {
+    let pool = pool_executor(2, |input| Ok(input.clone()))?;
     let wasm_cap = executor_cap(ArtifactType::Wasm);
     let result = pool.execute(&wasm_cap, &json!({}));
     assert_eq!(
@@ -302,4 +325,5 @@ fn wasm_capability_type_rejected_by_thread_pool_executor() {
         Err(ExecutorError::UnsupportedArtifactType),
         "expected UnsupportedArtifactType for Wasm artifact"
     );
+    Ok(())
 }
