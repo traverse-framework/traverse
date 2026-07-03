@@ -65,6 +65,16 @@ required_files=(
   "examples/hello-world/say-hello-agent/build-fixture.sh"
   "contracts/examples/hello-world/capabilities/say-hello/contract.json"
   "workflows/examples/hello-world/say-hello/workflow.json"
+  "apps/traverse-starter/app.manifest.json"
+  "apps/traverse-starter/components/process/component.manifest.json"
+  "examples/traverse-starter/process-agent/manifest.json"
+  "examples/traverse-starter/process-agent/build-fixture.sh"
+  "examples/traverse-starter/process-agent/src/agent.rs"
+  "examples/traverse-starter/process-agent/artifacts/process-agent.wasm"
+  "examples/traverse-starter/runtime-requests/process.json"
+  "contracts/examples/traverse-starter/capabilities/process/contract.json"
+  "workflows/examples/traverse-starter/process/workflow.json"
+  "scripts/ci/traverse_starter_example_smoke.sh"
   "docs/exception-process.md"
   "docs/project-management.md"
   "docs/multi-thread-workflow.md"
@@ -315,6 +325,12 @@ grep -q "Spec Alignment" docs/troubleshooting.md
 grep -q "Generated Local State And Safe Cleanup" docs/troubleshooting.md
 grep -q "cargo run -p traverse-cli -- agent execute" examples/hello-world/README.md
 grep -q "hello.world.say-hello" examples/hello-world/README.md
+grep -q "traverse-starter.process" contracts/examples/traverse-starter/capabilities/process/contract.json
+grep -q "traverse-starter.process-agent" examples/traverse-starter/process-agent/manifest.json
+grep -q "traverse-starter.process-component" apps/traverse-starter/app.manifest.json
+grep -q "app validate --manifest \"\$app_manifest\" --json" scripts/ci/traverse_starter_example_smoke.sh
+grep -q "/v1/workspaces/local-default/execute" scripts/ci/traverse_starter_example_smoke.sh
+grep -q "starter_status: complete" scripts/ci/traverse_starter_example_smoke.sh
 grep -q "bash scripts/ci/runtime_home_smoke.sh" docs/local-runtime-home.md
 grep -q "label: Definition of done" .github/ISSUE_TEMPLATE/task.yml
 grep -q "label: Validation" .github/ISSUE_TEMPLATE/task.yml
