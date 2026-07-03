@@ -7,6 +7,26 @@ on:
   pull_request:
 
 jobs:
+  version-guard:
+    name: Version guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Cargo.toml version matches tag (on tag pushes only)
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TAG_VERSION="${TAG#v}"
+            CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+            if [[ "$TAG_VERSION" != "$CARGO_VERSION" ]]; then
+              echo "error: tag $TAG does not match Cargo.toml version $CARGO_VERSION" >&2
+              exit 1
+            fi
+            echo "Version guard passed: $CARGO_VERSION matches tag $TAG"
+          else
+            echo "No version tag present — skipping version check"
+          fi
+
   repository-checks:
     runs-on: ubuntu-latest
 
