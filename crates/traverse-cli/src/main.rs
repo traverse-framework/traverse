@@ -2915,6 +2915,28 @@ fn render_agent_execution_summary(
                 lines.push(format!("greeting: {greeting}"));
             }
         }
+        "traverse-starter.process" => {
+            if let Some(title) = output.get("title").and_then(Value::as_str) {
+                lines.push(format!("title: {title}"));
+            }
+            if let Some(tags) = output.get("tags").and_then(Value::as_array) {
+                let joined = tags
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(format!("tags: {joined}"));
+            }
+            if let Some(note_type) = output.get("noteType").and_then(Value::as_str) {
+                lines.push(format!("noteType: {note_type}"));
+            }
+            if let Some(action) = output.get("suggestedNextAction").and_then(Value::as_str) {
+                lines.push(format!("suggestedNextAction: {action}"));
+            }
+            if let Some(status) = output.get("status").and_then(Value::as_str) {
+                lines.push(format!("starter_status: {status}"));
+            }
+        }
         _ => {}
     }
 
@@ -3046,6 +3068,7 @@ impl LocalExecutor for ExpeditionExampleExecutor {
                 execute_assess_conditions_summary(input)
             }
             "expedition.planning.validate-team-readiness" => execute_validate_team_readiness(input),
+            "traverse-starter.process" => execute_traverse_starter_process(input),
             "expedition.planning.assemble-expedition-plan" => {
                 execute_assemble_expedition_plan(input)
             }
@@ -3067,6 +3090,7 @@ impl LocalExecutor for AgentPackageExampleExecutor {
     ) -> Result<Value, LocalExecutionFailure> {
         match capability.contract.id.as_str() {
             "hello.world.say-hello" => execute_hello_world(input),
+            "traverse-starter.process" => execute_traverse_starter_process(input),
             "expedition.planning.interpret-expedition-intent" => {
                 execute_interpret_expedition_intent(input)
             }
@@ -3654,6 +3678,63 @@ fn execute_hello_world(input: &Value) -> Result<Value, LocalExecutionFailure> {
         "name": name,
         "greeting": format!("Hello, {name}!"),
     }))
+}
+
+fn execute_traverse_starter_process(input: &Value) -> Result<Value, LocalExecutionFailure> {
+    let map = input_object(input)?;
+    let note = required_string(map, "note")?;
+    let trimmed = note.trim();
+    let title_words = trimmed.split_whitespace().take(5).collect::<Vec<_>>();
+    let title = if title_words.is_empty() {
+        "Untitled note".to_string()
+    } else {
+        title_words.join(" ")
+    };
+    let tags = derive_starter_tags(trimmed);
+    let note_type =
+        if contains_ascii_word(trimmed, "project") || contains_ascii_word(trimmed, "app") {
+            "project"
+        } else if trimmed.len() > 80 {
+            "permanent"
+        } else {
+            "fleeting"
+        };
+    let suggested_next_action = match note_type {
+        "project" => "expand",
+        "permanent" => "review",
+        _ => "archive",
+    };
+
+    Ok(serde_json::json!({
+        "title": title,
+        "tags": tags,
+        "noteType": note_type,
+        "suggestedNextAction": suggested_next_action,
+        "status": "complete"
+    }))
+}
+
+fn derive_starter_tags(note: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    for word in note.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+        let normalized = word.to_ascii_lowercase();
+        if normalized.len() < 4 || tags.iter().any(|tag| tag == &normalized) {
+            continue;
+        }
+        tags.push(normalized);
+        if tags.len() == 3 {
+            break;
+        }
+    }
+    if tags.is_empty() {
+        tags.push("note".to_string());
+    }
+    tags
+}
+
+fn contains_ascii_word(text: &str, expected: &str) -> bool {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|word| word.eq_ignore_ascii_case(expected))
 }
 
 fn event_ref(event_id: &str) -> Value {
@@ -4779,6 +4860,25 @@ mod tests {
     }
 
     #[test]
+    fn execute_agent_runs_traverse_starter_process_request() {
+        let fixture = create_traverse_starter_agent_fixture();
+        let request_path =
+            repo_root().join("examples/traverse-starter/runtime-requests/process.json");
+
+        let output = execute_agent(&fixture.manifest_path, &request_path)
+            .expect("traverse-starter agent execution should succeed");
+
+        assert!(output.contains("package_id: traverse-starter.process-agent"));
+        assert!(output.contains("capability_id: traverse-starter.process"));
+        assert!(output.contains("status: completed"));
+        assert!(output.contains("title: Review Traverse starter app registration"));
+        assert!(output.contains("tags: review, traverse, starter"));
+        assert!(output.contains("noteType: project"));
+        assert!(output.contains("suggestedNextAction: expand"));
+        assert!(output.contains("starter_status: complete"));
+    }
+
+    #[test]
     fn execute_expedition_writes_trace_artifact_when_requested() {
         let request_path =
             repo_root().join("examples/expedition/runtime-requests/plan-expedition.json");
@@ -5124,6 +5224,19 @@ mod tests {
             model_interface: "hello-world-greeting-v1",
             model_purpose: "Produce a simple deterministic greeting string for onboarding validation.",
             workflow_id: "hello.world.say-hello",
+        })
+    }
+
+    fn create_traverse_starter_agent_fixture() -> AgentFixture {
+        create_agent_package_fixture(&AgentPackageFixtureSpec {
+            package_id: "traverse-starter.process-agent",
+            capability_id: "traverse-starter.process",
+            binary_name: "process-agent.wasm",
+            summary: "Governed WASM agent package for the traverse-starter reference app.",
+            contract_path: "contracts/examples/traverse-starter/capabilities/process/contract.json",
+            model_interface: "traverse-starter-deterministic-v1",
+            model_purpose: "Process one starter note into deterministic structured metadata without model inference.",
+            workflow_id: "traverse-starter.process",
         })
     }
 

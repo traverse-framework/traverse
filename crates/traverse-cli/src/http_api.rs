@@ -12,7 +12,7 @@ use traverse_registry::{
     CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
     CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
     LookupScope, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-    WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
+    WorkflowDefinition, WorkflowRegistration, WorkflowRegistry, WorkspaceAppStateErrorCode,
 };
 use traverse_runtime::{
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
@@ -522,6 +522,7 @@ where
 
         if !entry.loaded_from_disk {
             entry.persisted = load_persisted_registry(&self.registry_root, workspace_id)?;
+            load_workspace_app_runtime(self, workspace_id, entry)?;
             for persisted in entry.persisted.registrations.clone() {
                 let registration = derive_registration(workspace_id, &persisted).map_err(|e| {
                     format!("persisted registry contains invalid entry: {}", e.message)
@@ -2305,6 +2306,7 @@ fn ensure_workspace_loaded<E: LocalExecutor + Clone>(
     }
 
     ws.persisted = load_persisted_registry(&state.registry_root, workspace_id)?;
+    load_workspace_app_runtime(state, workspace_id, ws)?;
     for persisted in ws.persisted.registrations.clone() {
         let registration = derive_registration(workspace_id, &persisted)
             .map_err(|e| format!("persisted registry contains invalid entry: {}", e.message))?;
@@ -2323,6 +2325,52 @@ fn ensure_workspace_loaded<E: LocalExecutor + Clone>(
     }
     ws.loaded_from_disk = true;
     Ok(())
+}
+
+fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    ws: &mut WorkspaceState<E>,
+) -> Result<(), String> {
+    let workspace_root = state
+        .registry_root
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    match Runtime::from_workspace_app_state(
+        workspace_root,
+        workspace_id,
+        state.executor.clone(),
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        Ok(runtime) => {
+            ws.runtime = runtime;
+            Ok(())
+        }
+        Err(failure)
+            if failure
+                .errors
+                .iter()
+                .all(|error| error.code == WorkspaceAppStateErrorCode::MissingWorkspaceState) =>
+        {
+            Ok(())
+        }
+        Err(failure) => Err(format!(
+            "workspace app state contains invalid entries: {}",
+            render_workspace_app_state_failure(&failure)
+        )),
+    }
+}
+
+fn render_workspace_app_state_failure(
+    failure: &traverse_registry::WorkspaceAppStateFailure,
+) -> String {
+    failure
+        .errors
+        .iter()
+        .map(|error| format!("{:?}: {} ({})", error.code, error.message, error.path))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn apply_registration<E: LocalExecutor + Clone>(

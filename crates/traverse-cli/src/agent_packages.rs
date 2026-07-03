@@ -320,9 +320,6 @@ fn validate_manifest_shape(
     if manifest.binary.format != "wasm" {
         return Err("agent package binary.format must equal wasm".to_string());
     }
-    if manifest.model_dependencies.is_empty() {
-        return Err("agent package must declare at least one model dependency".to_string());
-    }
     if manifest.workflow_refs.is_empty() {
         return Err(
             "agent package must declare at least one approved workflow reference".to_string(),

@@ -1,0 +1,127 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "traverse-starter.process",
+  "namespace": "traverse-starter",
+  "name": "process",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Process one starter note into deterministic structured metadata.",
+  "description": "Reference app capability for downstream Traverse app authors that proves a real contract, WASM package, app manifest, workflow, and runtime request without depending on model inference.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "note"
+      ],
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "tags",
+        "noteType",
+        "suggestedNextAction",
+        "status"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "noteType": {
+          "type": "string"
+        },
+        "suggestedNextAction": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "note-provided",
+      "description": "The caller provides a non-empty note string."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "structured-note-produced",
+      "description": "The capability returns deterministic metadata for the provided note."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Produces deterministic note metadata from the provided input."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "traverse-starter.process"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-01T00:00:00Z",
+    "spec_ref": "044-application-bundle-manifest@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}

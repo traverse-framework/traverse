@@ -1,0 +1,92 @@
+{
+  "kind": "workflow_definition",
+  "schema_version": "1.0.0",
+  "id": "traverse-starter.process",
+  "name": "process",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Run the traverse-starter note processing flow as one governed workflow-backed example.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "note"
+      ],
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "tags",
+        "noteType",
+        "suggestedNextAction",
+        "status"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "noteType": {
+          "type": "string"
+        },
+        "suggestedNextAction": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "process_note",
+      "capability_id": "traverse-starter.process",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "note"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [
+          "title",
+          "tags",
+          "noteType",
+          "suggestedNextAction",
+          "status"
+        ]
+      }
+    }
+  ],
+  "edges": [],
+  "start_node": "process_note",
+  "terminal_nodes": [
+    "process_note"
+  ],
+  "tags": [
+    "traverse-starter",
+    "reference-app",
+    "deterministic"
+  ],
+  "governing_spec": "007-workflow-registry-traversal"
+}
