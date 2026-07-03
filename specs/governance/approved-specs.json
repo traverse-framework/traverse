@@ -530,6 +530,31 @@
         "specs/047-thread-pool-executor/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "048-semver-publishing-pipeline",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/048-semver-publishing-pipeline/spec.md",
+      "governs": [
+        "Cargo.toml",
+        "scripts/ci/bump_version.sh",
+        ".github/workflows/ci.yml",
+        "docs/release-process.md"
+      ]
+    },
+    {
+      "id": "049-v1-milestone-gate",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/049-v1-milestone-gate/spec.md",
+      "governs": [
+        "scripts/ci/v1_gate_check.sh",
+        "docs/v1-milestone.md",
+        "docs/compatibility-policy.md"
+      ]
     }
   ]
 }
