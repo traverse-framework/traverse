@@ -70,7 +70,7 @@ The release-facing downstream compatibility statement for the current `youaskm3`
 
 The current Traverse release notes are:
 
-- `docs/releases/v0.6.0.md`
+- `docs/releases/v0.7.0.md`
 
 ## Specs
 

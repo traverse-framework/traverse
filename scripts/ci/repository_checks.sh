@@ -20,6 +20,7 @@ required_files=(
   "docs/youaskm3-v0.3.0-integration-readiness.md"
   "docs/releases/v0.5.0.md"
   "docs/releases/v0.6.0.md"
+  "docs/releases/v0.7.0.md"
   "docs/troubleshooting.md"
   "docs/adapter-boundaries.md"
   "docs/contract-publication-policy.md"
@@ -372,8 +373,8 @@ grep -q "Supply-chain evidence" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/v0.3.0-source-build-consumer-packaging.md" README.md
 grep -q "docs/v0.3.0-downstream-validation-path.md" README.md
 grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" README.md
-grep -q 'version = "0.6.0"' Cargo.toml
-grep -q "docs/releases/v0.6.0.md" README.md
+grep -q 'version = "0.7.0"' Cargo.toml
+grep -q "docs/releases/v0.7.0.md" README.md
 grep -q "Traverse v0.4.0" docs/releases/v0.4.0.md
 grep -q "044-application-bundle-manifest" docs/releases/v0.4.0.md
 grep -q "045-governed-model-dependency-resolution" docs/releases/v0.4.0.md
@@ -401,6 +402,13 @@ grep -q "046-public-cli-app-registration" docs/releases/v0.6.0.md
 grep -q "governed model dependency execution surface" docs/releases/v0.6.0.md
 grep -q "cargo clippy -- -D warnings" docs/releases/v0.6.0.md
 grep -q "coverage-gate" docs/releases/v0.6.0.md
+grep -q "Traverse v0.7.0" docs/releases/v0.7.0.md
+grep -q "traverse-starter reference app" docs/releases/v0.7.0.md
+grep -q "traverse-starter.process" docs/releases/v0.7.0.md
+grep -q "App-References" docs/releases/v0.7.0.md
+grep -q "v0.5.0 minimum" docs/releases/v0.7.0.md
+grep -q "bash scripts/ci/traverse_starter_example_smoke.sh" docs/releases/v0.7.0.md
+grep -q "coverage-gate" docs/releases/v0.7.0.md
 grep -q "cargo build" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-cli -- serve" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/v0.3.0-source-build-consumer-packaging.md
