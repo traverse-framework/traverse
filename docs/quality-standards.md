@@ -1,109 +1,22 @@
 # Quality Standards
 
-This document defines the operational quality standards for Traverse.
+The shared, org-wide quality standards live in [`traverse-framework/.github`](https://github.com/traverse-framework/.github)'s `docs/quality-standards.md`. This repo has adopted **governance version 1.0.0**.
 
-These standards work together with the constitution and feature specs. If there is a conflict, the constitution and approved governing spec take precedence.
+## What's Repo-Specific Here
 
-## Core Rule
-
-Code is not considered mergeable unless it is:
-
-- aligned with the approved governing spec
-- aligned with capability, event, and workflow contracts
-- validated by the required automated checks
-- maintainable at production quality
-
-## Engineering Standards
-
-All in-scope code must meet these standards:
-
-- Clear module boundaries
-- Clear ownership of responsibilities
-- Deterministic behavior where practical
-- Actionable error handling
-- Structured runtime and validation evidence
-- Testability by design
-- No hidden contract bypasses
-- No demo-only hacks in foundation code
-
-## Required Validation Gates
-
-The default validation flow should include:
-
-- spec-alignment validation
-- contract validation
-- formatting
-- linting
-- tests
-- coverage checks for core logic
-- dependency/security checks
-- required work-traceability through issue, project item, and pull request linkage where applicable
-- ticket-level definition of done and validation instructions for meaningful work
-
-Spec-alignment gate implementation:
+Spec-alignment gate implementation is vendored locally (CI needs it in-repo to run):
 
 - approved spec registry: `specs/governance/approved-specs.json`
 - workflow job: `spec-alignment`
 - script: `scripts/ci/spec_alignment_check.sh`
 
-## Coverage Standard
-
-Required:
-
-- `100%` automated coverage for core business and runtime logic
-
-Core logic includes:
-
-- contract validation
-- semver enforcement
-- registry behavior
-- discovery logic
-- ambiguity handling
-- workflow traversal
-- runtime state machine
-- trace generation
-
-Coverage outside core logic should remain appropriate for risk and maintainability.
-
-Coverage gate implementation:
+Coverage gate implementation, specific to this repo's crates:
 
 - workflow job: `coverage-gate`
 - script: `scripts/ci/coverage_gate.sh`
 - protected crate list: `ci/coverage-targets.txt`
 
 The coverage gate is merge-safe even before core logic exists. It passes when no protected crates are configured, and becomes enforcing as soon as core crates are added to `ci/coverage-targets.txt`.
-
-## Reproducibility Standard
-
-Build and validation flows should be reproducible from pinned inputs:
-
-- pinned toolchain
-- pinned dependencies
-- documented commands
-- CI using the same default validation flow expected locally
-
-## Documentation Standard
-
-Public modules and runtime surfaces should document:
-
-- purpose
-- inputs and outputs
-- major constraints
-- failure modes
-- examples when useful
-
-## Merge Blocking Conditions
-
-A change must not merge when any of the following are true:
-
-- spec drift is detected
-- contract drift is detected
-- tests fail
-- required validation gates fail
-- required coverage for core logic fails
-- an unreviewed portability exception exists
-- a material architecture change lacks a required ADR
-- the change lacks the required traceability artifacts under the project-management policy
 
 ## Nightly CI Gate
 
@@ -123,10 +36,3 @@ In addition to PR-gated checks, a nightly scheduled CI job runs the full golden-
 **Manual trigger**: the workflow supports `workflow_dispatch` — trigger it from the GitHub Actions tab to validate a fix before the next scheduled run.
 
 **Notification**: GitHub Actions sends an email to the repository owner on failure by default. No additional configuration required.
-
-## Problem Handling Rule
-
-When active work reveals a problem:
-
-- must-fix issues must be resolved in the current PR when they are required for correctness, mergeability, governance, or stated acceptance criteria
-- nice-to-have improvements and non-blocking follow-ups must be captured as `future` tickets instead of being left implicit
