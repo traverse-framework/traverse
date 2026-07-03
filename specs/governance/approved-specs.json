@@ -555,6 +555,17 @@
         "docs/v1-milestone.md",
         "docs/compatibility-policy.md"
       ]
+    },
+    {
+      "id": "051-registry-extraction",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/051-registry-extraction/spec.md",
+      "governs": [
+        "Cargo.toml",
+        "specs/governance/"
+      ]
     }
   ]
 }

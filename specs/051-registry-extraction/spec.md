@@ -2,7 +2,7 @@
 
 **Feature Branch**: `051-registry-extraction`
 **Created**: 2026-07-03
-**Status**: Draft
+**Status**: Approved
 **Input**: Brainstorm session establishing `traverse-framework/registry` as a dedicated repo for the public capability registry, extracted from this repo's `crates/traverse-registry`. Full narrative record: `traverse-framework/registry`'s `docs/decision-log.md`. Companion foundation spec: `traverse-framework/registry`'s `specs/001-registry-foundation/spec.md`.
 
 ## Purpose
