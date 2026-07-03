@@ -154,6 +154,7 @@ mod tests {
         ThreadPoolExecutor::new(ThreadPoolExecutorConfig { capacity }, inner)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn clone_input(input: &Value) -> Result<Value, String> {
         if input.get("__thread_pool_test_error").is_some() {
             return Err("requested test error".to_string());
