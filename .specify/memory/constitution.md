@@ -1,5 +1,7 @@
 # Traverse Constitution
 
+> **Governance note**: this repo's constitution is now also mirrored as the shared, org-wide constitution in [`traverse-framework/.github`](https://github.com/traverse-framework/.github) (governance version 1.0.0), so other repos (`registry`, etc.) can adopt the same principles without duplicating them independently. This copy remains authoritative for this repo and satisfies this repo's own CI content checks — update both together if you amend a shared principle.
+
 ## Core Principles
 
 ### I. Capability-First Boundaries
