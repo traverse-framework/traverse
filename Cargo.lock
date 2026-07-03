@@ -1846,6 +1846,7 @@ version = "0.7.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
+ "rayon",
  "semver",
  "serde",
  "serde_json",
