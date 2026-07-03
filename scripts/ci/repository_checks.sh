@@ -386,6 +386,15 @@ grep -q "traverse-cli app register --manifest <path> --workspace <workspace-id> 
 grep -q "runtime loading from CLI-produced workspace app state" docs/releases/v0.5.0.md
 grep -q "bash scripts/ci/downstream_app_mvp_conformance.sh" docs/releases/v0.5.0.md
 grep -q "traverse-sbom.cdx.json" docs/releases/v0.5.0.md
+grep -q "traverse-framework/App-References" docs/releases/v0.5.0.md
+grep -q "pin Traverse to \`v0.5.0\` or" docs/releases/v0.5.0.md
+grep -q "newer for Phase 2 CLI registration" docs/releases/v0.5.0.md
+grep -q ".traverse/server.json" docs/releases/v0.5.0.md
+grep -q "schema version and discovery fields as \`v0.3.0\`" docs/releases/v0.5.0.md
+grep -q "Downstream App Registration Consumers" quickstart.md
+grep -q "apps/traverse-starter/app.manifest.json" quickstart.md
+grep -q "schema_version: \"1.0.0\"" quickstart.md
+grep -q "optional \`local_dev_token\`" quickstart.md
 grep -q "Traverse v0.6.0" docs/releases/v0.6.0.md
 grep -q "045-governed-model-dependency-resolution" docs/releases/v0.6.0.md
 grep -q "046-public-cli-app-registration" docs/releases/v0.6.0.md

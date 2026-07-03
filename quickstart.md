@@ -98,3 +98,31 @@ bash scripts/ci/repository_checks.sh
 ```
 
 If one of those commands fails and you need the shortest diagnosis path, use [docs/troubleshooting.md](docs/troubleshooting.md).
+
+## Downstream App Registration Consumers
+
+Downstream reference apps that use `traverse-cli app validate` or
+`traverse-cli app register` should pin Traverse to `v0.5.0` or newer. `v0.5.0`
+is the first release that includes the public local-dev app registration surface,
+durable workspace app state, and runtime loading from CLI-produced registration
+state.
+
+For the `traverse-starter` reference app, validate and register the app bundle
+from the Traverse repository root:
+
+```bash
+cargo run -p traverse-cli -- app validate \
+  --manifest apps/traverse-starter/app.manifest.json \
+  --json
+
+cargo run -p traverse-cli -- app register \
+  --manifest apps/traverse-starter/app.manifest.json \
+  --workspace local-default \
+  --json
+```
+
+The local HTTP server discovery file remains backward-compatible with the
+`v0.3.0` schema. `cargo run -p traverse-cli -- serve` writes
+`.traverse/server.json` with `schema_version: "1.0.0"`, `base_url`,
+`health_url`, `workspace_default`, `pid`, `started_at`, `auth_mode`, and an
+optional `local_dev_token` for loopback development.
