@@ -129,7 +129,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use serde_json::json;
 
@@ -302,16 +302,23 @@ mod tests {
 
     #[test]
     fn concurrent_calls_run_in_parallel() {
+        let active_calls = Arc::new(AtomicUsize::new(0));
+        let max_active_calls = Arc::new(AtomicUsize::new(0));
+        let active_for_handler = Arc::clone(&active_calls);
+        let max_for_handler = Arc::clone(&max_active_calls);
+
         let result = new_executor(
             2,
-            Box::new(NativeExecutor::new(|input| {
+            Box::new(NativeExecutor::new(move |input| {
+                let current = active_for_handler.fetch_add(1, Ordering::SeqCst) + 1;
+                max_for_handler.fetch_max(current, Ordering::SeqCst);
                 thread::sleep(Duration::from_millis(100));
+                active_for_handler.fetch_sub(1, Ordering::SeqCst);
                 Ok(input.clone())
             })),
         )
         .map(|executor| {
             let executor = Arc::new(executor);
-            let started = Instant::now();
             let first = {
                 let executor = Arc::clone(&executor);
                 thread::spawn(move || execute_json(&executor, &json!({ "call": 1 })))
@@ -320,26 +327,21 @@ mod tests {
                 let executor = Arc::clone(&executor);
                 thread::spawn(move || execute_json(&executor, &json!({ "call": 2 })))
             };
-            (
-                result_debug(first.join()),
-                result_debug(second.join()),
-                started.elapsed(),
-            )
+            (result_debug(first.join()), result_debug(second.join()))
         });
 
         let first_result = result
             .as_ref()
-            .map(|(first, _, _)| first.as_ref().map_err(String::as_str));
+            .map(|(first, _)| first.as_ref().map_err(String::as_str));
         let second_result = result
             .as_ref()
-            .map(|(_, second, _)| second.as_ref().map_err(String::as_str));
-        let elapsed = result.as_ref().map(|(_, _, elapsed)| *elapsed);
+            .map(|(_, second)| second.as_ref().map_err(String::as_str));
 
         assert_eq!(first_result, Ok(Ok(&Ok(json!({ "call": 1 })))));
         assert_eq!(second_result, Ok(Ok(&Ok(json!({ "call": 2 })))));
         assert!(
-            matches!(elapsed, Ok(duration) if duration < Duration::from_millis(150)),
-            "parallel calls took {elapsed:?}"
+            max_active_calls.load(Ordering::SeqCst) >= 2,
+            "expected two active calls to overlap"
         );
     }
 
