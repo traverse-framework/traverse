@@ -15,3 +15,26 @@ The release-facing downstream compatibility statement for the current `youaskm3`
 The current Traverse release notes are:
 
 - `docs/releases/v0.7.0.md`
+
+## v1 Stability Statement
+
+At `v1.0.0`, Traverse makes the following stability commitments:
+
+**Public API (stable — semver guarantees apply):**
+- `traverse-runtime`: `CapabilityExecutor`, `ExecutorCapability`, `ExecutorError`, `ArtifactType`, `PlacementRouter`, `RouterRequest`, `RouterResponse`, `TraceStore`, `TraceOutcome`
+- `traverse-contracts`: all public contract types (`CapabilityContract`, `EventContract`, etc.)
+- `traverse-registry`: `CapabilityRegistry`, `EventRegistry`, `WorkflowRegistry`
+- `traverse-cli`: all documented CLI subcommands and their `--json` output shapes
+- `traverse-mcp`: `discover_capabilities()`, `execute_capability()` library surface
+
+**Internal (may change between minor versions):**
+- Anything in `mod.rs` private submodules not re-exported at the crate root
+- `TraceStore` internal storage format (inspect via public API only)
+- `InProcessBroker` internal state
+
+**Semver at v1:**
+- PATCH: bug fixes, no API changes
+- MINOR: new public API additions, backward-compatible
+- MAJOR: breaking public API changes (requires new v2.x series)
+
+This v1 stability statement is a gate condition for the v1.0.0 release. See `docs/v1-milestone.md` for the full gate list.
