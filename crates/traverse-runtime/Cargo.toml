@@ -18,6 +18,7 @@ wasmtime = { version = "44", features = ["cranelift", "component-model"] }
 wasmtime-wasi = "44"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+rayon = "1.11"
 
 [dev-dependencies]
 wat = "1"
