@@ -59,6 +59,7 @@ impl std::fmt::Display for ServeError {
 /// Configuration for the HTTP/JSON API server.
 pub struct ApiServerConfig<E> {
     pub bind_address: String,
+    pub requested_auth_mode: Option<String>,
     pub allow_unauthenticated: bool,
     pub allowed_origins: Vec<String>,
     pub render_mobile_qr: bool,
@@ -71,6 +72,7 @@ pub struct ApiServerConfig<E> {
 }
 
 struct ApiState<E> {
+    auth_mode: String,
     allow_unauthenticated: bool,
     allowed_origins: Vec<String>,
     registry_root: PathBuf,
@@ -179,6 +181,7 @@ struct BundleRegistrationHttpOutcome {
 struct ServerDiscoveryV1 {
     schema_version: String,
     base_url: String,
+    bind_address: String,
     health_url: String,
     workspace_default: String,
     pid: u32,
@@ -246,16 +249,22 @@ where
     let local_addr = listener
         .local_addr()
         .map_err(|e| ServeError::BindFailed(format!("could not read local address: {e}")))?;
-    let auth_mode = if local_addr.ip().is_loopback() {
+    let auth_mode = if config.requested_auth_mode.as_deref() == Some("dev-any") {
+        "dev-any"
+    } else if local_addr.ip().is_loopback() {
         "dev-loopback"
     } else {
         "bearer-required"
     };
-    let local_dev_token = if local_addr.ip().is_loopback() {
+    let local_dev_token = if matches!(auth_mode, "dev-loopback" | "dev-any") {
         Some(mint_local_dev_token(&local_addr.to_string()))
     } else {
         None
     };
+
+    if auth_mode == "dev-any" {
+        eprintln!("WARNING: dev-any: accepting connections from LAN. Do not use in production.");
+    }
 
     if config.allow_unauthenticated {
         eprintln!(
@@ -309,6 +318,7 @@ where
 
     let state = ApiState {
         allow_unauthenticated: config.allow_unauthenticated,
+        auth_mode: auth_mode.to_string(),
         allowed_origins: config.allowed_origins,
         registry_root: config.registry_root,
         executor: config.executor,
@@ -368,6 +378,10 @@ fn write_server_discovery(
     let discovery = ServerDiscoveryV1 {
         schema_version: SERVER_DISCOVERY_SCHEMA_VERSION.to_string(),
         base_url: base_url.to_string(),
+        bind_address: base_url
+            .strip_prefix("http://")
+            .unwrap_or(base_url)
+            .to_string(),
         health_url: format!("{base_url}/healthz"),
         workspace_default: DEFAULT_WORKSPACE_ID.to_string(),
         pid: std::process::id(),
@@ -430,6 +444,22 @@ fn render_mobile_connect_qr(url: &str) -> Result<String, String> {
     Ok(rendered)
 }
 
+fn is_trusted_dev_caller(peer_ip: IpAddr, auth_mode: &str) -> bool {
+    match auth_mode {
+        "dev-loopback" => peer_ip.is_loopback(),
+        "dev-any" => peer_ip.is_loopback() || is_rfc1918_private_ip(peer_ip),
+        _ => false,
+    }
+}
+
+fn is_rfc1918_private_ip(peer_ip: IpAddr) -> bool {
+    let IpAddr::V4(ipv4) = peer_ip else {
+        return false;
+    };
+    let [a, b, _, _] = ipv4.octets();
+    a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168)
+}
+
 #[cfg(unix)]
 fn set_owner_read_write(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -481,6 +511,7 @@ where
 
         Self {
             state: ApiState {
+                auth_mode: "dev-loopback".to_string(),
                 allow_unauthenticated: config.allow_unauthenticated,
                 allowed_origins: config.allowed_origins,
                 registry_root: config.registry_root,
@@ -3002,13 +3033,17 @@ fn handle_connection<E: LocalExecutor + Clone>(
     let peer_ip = stream
         .peer_addr()
         .map_or(IpAddr::from([127, 0, 0, 1]), |a| a.ip());
-    let loopback = peer_ip.is_loopback();
+    let trusted_dev_caller = is_trusted_dev_caller(peer_ip, &state.auth_mode);
 
-    if request.method == "OPTIONS" {
-        return handle_cors_preflight(&mut stream, &request, state, loopback);
+    if reject_dev_any_public_caller(&mut stream, &state.auth_mode, trusted_dev_caller)? {
+        return Ok(());
     }
 
-    let cors_headers = match cors_response_headers(&request, state, loopback) {
+    if request.method == "OPTIONS" {
+        return handle_cors_preflight(&mut stream, &request, state, trusted_dev_caller);
+    }
+
+    let cors_headers = match cors_response_headers(&request, state, trusted_dev_caller) {
         Ok(headers) => headers,
         Err(message) => {
             return write_json(
@@ -3020,7 +3055,7 @@ fn handle_connection<E: LocalExecutor + Clone>(
         }
     };
 
-    if request.path != "/healthz" && !state.allow_unauthenticated && !loopback {
+    if request.path != "/healthz" && !state.allow_unauthenticated && !trusted_dev_caller {
         let has_bearer = request
             .headers
             .get("authorization")
@@ -3051,28 +3086,30 @@ fn handle_connection<E: LocalExecutor + Clone>(
 
     let mut response = BufferedResponse::new();
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/healthz") => handle_health(&mut response, loopback),
+        ("GET", "/healthz") => handle_health(&mut response, &state.auth_mode),
         ("GET", "/v1/capabilities") => {
-            handle_list_capabilities(&mut response, &request, state, loopback)
+            handle_list_capabilities(&mut response, &request, state, trusted_dev_caller)
         }
         ("POST", "/v1/capabilities/register") => {
-            handle_register_capability(&mut response, &request, state, loopback)
+            handle_register_capability(&mut response, &request, state, trusted_dev_caller)
         }
         ("POST", "/v1/capabilities/execute") => {
-            handle_execute(&mut response, &request, state, loopback)
+            handle_execute(&mut response, &request, state, trusted_dev_caller)
         }
         (method, path) if workspace_operation_path(method, path).is_some() => {
-            handle_workspace_operation(&mut response, &request, state, loopback)
+            handle_workspace_operation(&mut response, &request, state, trusted_dev_caller)
         }
         ("POST", "/v1/workflows/register") => {
-            handle_register_workflow(&mut response, &request, state, loopback)
+            handle_register_workflow(&mut response, &request, state, trusted_dev_caller)
         }
-        ("GET", "/v1/workflows") => handle_list_workflows(&mut response, &request, state, loopback),
+        ("GET", "/v1/workflows") => {
+            handle_list_workflows(&mut response, &request, state, trusted_dev_caller)
+        }
         ("GET", path) if path.starts_with("/v1/workflows/") => handle_get_workflow(
             &mut response,
             &request,
             state,
-            loopback,
+            trusted_dev_caller,
             path.trim_start_matches("/v1/workflows/"),
         ),
         _ => write_json(
@@ -3083,6 +3120,27 @@ fn handle_connection<E: LocalExecutor + Clone>(
         ),
     }?;
     response.write_to(&mut stream, &cors_headers)
+}
+
+fn reject_dev_any_public_caller<W: Write>(
+    w: &mut W,
+    auth_mode: &str,
+    trusted_dev_caller: bool,
+) -> Result<bool, String> {
+    if auth_mode != "dev-any" || trusted_dev_caller {
+        return Ok(false);
+    }
+
+    write_json(
+        w,
+        403,
+        "Forbidden",
+        &error_envelope(
+            "dev_any_public_ip_forbidden",
+            "auth_mode: dev-any does not allow public IPs",
+        ),
+    )?;
+    Ok(true)
 }
 
 fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
@@ -3310,13 +3368,7 @@ fn unsupported_media_type_error(request: &HttpRequest) -> Option<ApiError> {
 // Route handlers (pub(crate) so tests can call them directly)
 // ---------------------------------------------------------------------------
 
-fn handle_health<W: Write>(w: &mut W, loopback: bool) -> Result<(), String> {
-    let auth_mode = if loopback {
-        "dev-loopback"
-    } else {
-        "bearer-required"
-    };
-
+fn handle_health<W: Write>(w: &mut W, auth_mode: &str) -> Result<(), String> {
     write_json(
         w,
         200,
@@ -5784,6 +5836,7 @@ mod tests {
         );
 
         ApiState {
+            auth_mode: "dev-loopback".to_string(),
             allow_unauthenticated: true,
             allowed_origins: Vec::new(),
             registry_root,
@@ -5835,6 +5888,7 @@ mod tests {
         );
 
         ApiState {
+            auth_mode: "dev-loopback".to_string(),
             allow_unauthenticated: true,
             allowed_origins: Vec::new(),
             registry_root,
@@ -5873,6 +5927,7 @@ mod tests {
         );
 
         ApiState {
+            auth_mode: "dev-loopback".to_string(),
             allow_unauthenticated: true,
             allowed_origins: Vec::new(),
             registry_root,
@@ -6123,7 +6178,7 @@ mod tests {
     #[test]
     fn health_endpoint_returns_dev_loopback_envelope_for_loopback_callers() {
         let mut out = Vec::new();
-        handle_health(&mut out, true).expect("health must succeed");
+        handle_health(&mut out, "dev-loopback").expect("health must succeed");
 
         assert_eq!(response_status(&out), 200);
         let body = parse_response_body(&out);
@@ -6137,7 +6192,7 @@ mod tests {
     #[test]
     fn health_endpoint_returns_bearer_required_envelope_for_non_loopback_callers() {
         let mut out = Vec::new();
-        handle_health(&mut out, false).expect("health must succeed");
+        handle_health(&mut out, "bearer-required").expect("health must succeed");
 
         assert_eq!(response_status(&out), 200);
         let body = parse_response_body(&out);
@@ -6146,6 +6201,16 @@ mod tests {
         assert_eq!(body["api_version"], "v1");
         assert_eq!(body["workspace_default"], "local-default");
         assert_eq!(body["auth_mode"], "bearer-required");
+    }
+
+    #[test]
+    fn health_endpoint_reports_dev_any_auth_mode() {
+        let mut out = Vec::new();
+        handle_health(&mut out, "dev-any").expect("health must succeed");
+
+        assert_eq!(response_status(&out), 200);
+        let body = parse_response_body(&out);
+        assert_eq!(body["auth_mode"], "dev-any");
     }
 
     #[test]
@@ -6165,6 +6230,7 @@ mod tests {
         let json: Value = serde_json::from_str(&body).expect("discovery must be valid json");
         assert_eq!(json["schema_version"], SERVER_DISCOVERY_SCHEMA_VERSION);
         assert_eq!(json["base_url"], "http://127.0.0.1:8787");
+        assert_eq!(json["bind_address"], "127.0.0.1:8787");
         assert_eq!(json["health_url"], "http://127.0.0.1:8787/healthz");
         assert_eq!(json["workspace_default"], DEFAULT_WORKSPACE_ID);
         assert_eq!(json["auth_mode"], "dev-loopback");
@@ -6212,6 +6278,24 @@ mod tests {
             url,
             "traverse://connect?base_url=http%3A%2F%2F192.168.1.42%3A8787&workspace_default=local%20default&auth_mode=dev-loopback"
         );
+    }
+
+    #[test]
+    fn server_discovery_file_records_dev_any_bind_address() {
+        let repo_root = test_registry_root();
+        let discovery_path = write_server_discovery(
+            &repo_root,
+            "http://0.0.0.0:8787",
+            "dev-any",
+            "traverse://connect?base_url=http%3A%2F%2F0.0.0.0%3A8787&workspace_default=local-default&auth_mode=dev-any",
+            Some("local-token"),
+        )
+        .expect("discovery file must be written");
+
+        let body = std::fs::read_to_string(&discovery_path).expect("discovery file must be read");
+        let json: Value = serde_json::from_str(&body).expect("discovery must be valid json");
+        assert_eq!(json["auth_mode"], "dev-any");
+        assert_eq!(json["bind_address"], "0.0.0.0:8787");
     }
 
     #[test]
@@ -8002,6 +8086,62 @@ mod tests {
     fn non_loopback_ip_is_not_loopback() {
         let ip: IpAddr = "192.168.1.100".parse().expect("valid IP");
         assert!(!ip.is_loopback());
+    }
+
+    #[test]
+    fn dev_any_trusts_loopback_and_rfc1918_callers() {
+        assert!(is_trusted_dev_caller(
+            IpAddr::from([127, 0, 0, 1]),
+            "dev-any"
+        ));
+        assert!(is_trusted_dev_caller(
+            IpAddr::from([10, 0, 0, 42]),
+            "dev-any"
+        ));
+        assert!(is_trusted_dev_caller(
+            IpAddr::from([172, 16, 0, 42]),
+            "dev-any"
+        ));
+        assert!(is_trusted_dev_caller(
+            IpAddr::from([192, 168, 1, 42]),
+            "dev-any"
+        ));
+    }
+
+    #[test]
+    fn dev_any_rejects_public_and_ipv6_non_loopback_callers() {
+        assert!(!is_trusted_dev_caller(
+            IpAddr::from([8, 8, 8, 8]),
+            "dev-any"
+        ));
+        assert!(!is_trusted_dev_caller(
+            "2001:4860:4860::8888".parse().expect("valid IP"),
+            "dev-any"
+        ));
+    }
+
+    #[test]
+    fn dev_any_public_rejection_returns_problem_details() {
+        let mut out = Vec::new();
+        let rejected = reject_dev_any_public_caller(&mut out, "dev-any", false)
+            .expect("rejection must serialize");
+
+        assert!(rejected);
+        assert_eq!(response_status(&out), 403);
+        let body = parse_response_body(&out);
+        assert_eq!(body["traverse_code"], "dev_any_public_ip_forbidden");
+        assert_eq!(
+            body["detail"],
+            "auth_mode: dev-any does not allow public IPs"
+        );
+    }
+
+    #[test]
+    fn dev_loopback_does_not_trust_lan_callers() {
+        assert!(!is_trusted_dev_caller(
+            IpAddr::from([192, 168, 1, 42]),
+            "dev-loopback"
+        ));
     }
 
     // ------------------------------------------------------------------

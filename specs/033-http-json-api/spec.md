@@ -124,7 +124,8 @@ Returns a JSON health envelope:
 Allowed `auth_mode` values:
 
 - `dev-loopback`
-- `bearer-required`
+- `dev-any`
+- `bearer-required` (token-authenticated production/non-loopback mode)
 
 ### Execute
 
@@ -222,7 +223,9 @@ OpenTelemetry export is governed by `029-integrated-observability`.
 
 - `traverse-cli serve` MUST default to `127.0.0.1:8787`.
 - `--bind` MUST allow overriding the bind address.
-- Non-loopback bindings MUST require auth/production mode.
+- Non-loopback bindings MUST require auth/production mode unless `--auth dev-any` is explicitly supplied for local LAN development.
+- `--auth dev-any` MUST bind to `0.0.0.0` by default, MUST allow loopback and RFC 1918 private IPv4 callers without bearer auth, and MUST reject public callers with `403`.
+- `--auth dev-any` MUST print a startup warning that the mode accepts LAN connections and is not for production.
 - If the default port is unavailable, the server MAY fail clearly or select another local port, but if it selects another port it MUST write the selected address to `.traverse/server.json`.
 - Startup MUST print JSON startup information to stdout or stderr in a machine-readable form.
 - `.traverse/server.json` MUST be repo-local for v0 and MUST be ignored by git.
@@ -234,6 +237,7 @@ Discovery file required fields:
 ```json
 {
   "base_url": "http://127.0.0.1:8787",
+  "bind_address": "127.0.0.1:8787",
   "health_url": "http://127.0.0.1:8787/healthz",
   "workspace_default": "local-default",
   "pid": 12345,
@@ -344,6 +348,7 @@ Rules:
 - **FR-024**: CI MUST validate `specs/033-http-json-api/openapi.yaml`.
 - **FR-025**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
 - **FR-026**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
+- **FR-027**: `--auth dev-any` MUST support real-device LAN development by accepting RFC 1918 private IPv4 callers and rejecting public callers.
 
 ## Quality Gates
 
