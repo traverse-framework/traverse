@@ -21,3 +21,10 @@ commit `chore: bump version to v<version>`, and creates the local tag
 On a tag push, the `version-guard` CI job compares the tag without the leading
 `v` to the workspace version in `Cargo.toml`. Branch and pull-request runs pass
 without a release tag, while mismatched release tags fail before publishing.
+
+The tag-only `publish` CI job runs after `version-guard`, repository checks, and
+coverage pass. It runs `bash scripts/ci/publish_crates.sh` with
+`CARGO_REGISTRY_TOKEN` from GitHub Actions secrets. The script dry-runs each
+crate immediately before publishing it, publishes crates in dependency order,
+and treats an already-uploaded crate version as success so reruns are
+idempotent.
