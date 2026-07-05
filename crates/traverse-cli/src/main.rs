@@ -119,6 +119,7 @@ enum Command {
     },
     Serve {
         bind_address: String,
+        auth_mode: Option<String>,
         allow_unauthenticated: bool,
         allowed_origins: Vec<String>,
         render_mobile_qr: bool,
@@ -165,12 +166,14 @@ fn main() -> ExitCode {
         }
         Ok(Command::Serve {
             bind_address,
+            auth_mode,
             allow_unauthenticated,
             allowed_origins,
             render_mobile_qr,
         }) => {
             if let Err(error) = run_serve(
                 bind_address,
+                auth_mode,
                 allow_unauthenticated,
                 allowed_origins,
                 render_mobile_qr,
@@ -953,7 +956,7 @@ fn parse_browser_adapter_command(args: &[String]) -> Result<Command, String> {
 }
 
 fn help_serve() -> String {
-    "traverse-cli serve [--bind <address>] [--port <port>] [--allow-unauthenticated] [--qr]
+    "traverse-cli serve [--bind <address>] [--port <port>] [--auth <mode>] [--allow-unauthenticated] [--qr]
 
   Purpose:
     Start a long-running HTTP/JSON API server on 127.0.0.1:8787 by default.
@@ -967,8 +970,10 @@ fn help_serve() -> String {
     --allow-unauthenticated is set.
 
   Optional flags:
-    --bind <address>           Address and port to listen on (default: 127.0.0.1:8787).
+    --bind <address>           Address and port to listen on (default: 127.0.0.1:8787,
+                               or 0.0.0.0:8787 with --auth dev-any).
     --port <N>                 Compatibility shortcut for --bind 127.0.0.1:<N>.
+    --auth <mode>              Authentication mode: dev-loopback (default) or dev-any.
     --allow-origin <origin>    Allow an exact browser Origin, repeatable for
                                production web apps. Wildcard '*' is rejected.
     --allow-unauthenticated    Accept unauthenticated requests from non-loopback
@@ -990,11 +995,24 @@ fn parse_serve_command(args: &[String]) -> Result<Command, String> {
     let render_mobile_qr = args.iter().any(|a| a == "--qr");
     let bind_flag_pos = args.iter().position(|a| a == "--bind");
     let port_flag_pos = args.iter().position(|a| a == "--port");
+    let auth_flag_pos = args.iter().position(|a| a == "--auth");
     let mut allowed_origins = Vec::new();
 
     if bind_flag_pos.is_some() && port_flag_pos.is_some() {
         return Err("--bind and --port cannot be used together".to_string());
     }
+
+    let auth_mode = if let Some(pos) = auth_flag_pos {
+        let mode = args
+            .get(pos + 1)
+            .ok_or_else(|| "--auth requires a value".to_string())?;
+        if !matches!(mode.as_str(), "dev-loopback" | "dev-any") {
+            return Err("--auth value must be dev-loopback or dev-any".to_string());
+        }
+        Some(mode.clone())
+    } else {
+        None
+    };
 
     for (idx, arg) in args.iter().enumerate() {
         if arg != "--allow-origin" {
@@ -1019,13 +1037,20 @@ fn parse_serve_command(args: &[String]) -> Result<Command, String> {
             .ok_or_else(|| "--port requires a value".to_string())?
             .parse::<u16>()
             .map_err(|_| "--port value must be a valid port number (0-65535)".to_string())?;
-        format!("127.0.0.1:{port}")
+        if auth_mode.as_deref() == Some("dev-any") {
+            format!("0.0.0.0:{port}")
+        } else {
+            format!("127.0.0.1:{port}")
+        }
+    } else if auth_mode.as_deref() == Some("dev-any") {
+        "0.0.0.0:8787".to_string()
     } else {
         "127.0.0.1:8787".to_string()
     };
 
     Ok(Command::Serve {
         bind_address,
+        auth_mode,
         allow_unauthenticated,
         allowed_origins,
         render_mobile_qr,
@@ -1034,6 +1059,7 @@ fn parse_serve_command(args: &[String]) -> Result<Command, String> {
 
 fn run_serve(
     bind_address: String,
+    auth_mode: Option<String>,
     allow_unauthenticated: bool,
     allowed_origins: Vec<String>,
     render_mobile_qr: bool,
@@ -1043,6 +1069,7 @@ fn run_serve(
 
     let config = http_api::ApiServerConfig {
         bind_address,
+        requested_auth_mode: auth_mode,
         allow_unauthenticated,
         allowed_origins,
         render_mobile_qr,
@@ -2623,6 +2650,7 @@ fn build_in_process_api() -> Result<http_api::InProcessApi<ExpeditionExampleExec
     let registered = load_registered_bundle(&canonical_expedition_bundle_path())?;
     Ok(http_api::InProcessApi::new(http_api::ApiServerConfig {
         bind_address: "127.0.0.1:0".to_string(),
+        requested_auth_mode: None,
         allow_unauthenticated: true,
         allowed_origins: Vec::new(),
         render_mobile_qr: false,
@@ -4352,11 +4380,13 @@ mod tests {
         match command {
             Command::Serve {
                 bind_address,
+                auth_mode,
                 allow_unauthenticated,
                 allowed_origins,
                 render_mobile_qr,
             } => {
                 assert_eq!(bind_address, "127.0.0.1:8787");
+                assert_eq!(auth_mode, None);
                 assert!(!allow_unauthenticated);
                 assert!(allowed_origins.is_empty());
                 assert!(!render_mobile_qr);
@@ -4399,11 +4429,13 @@ mod tests {
         match command {
             Command::Serve {
                 bind_address,
+                auth_mode,
                 allow_unauthenticated,
                 render_mobile_qr,
                 ..
             } => {
                 assert_eq!(bind_address, "127.0.0.1:9090");
+                assert_eq!(auth_mode, None);
                 assert!(allow_unauthenticated);
                 assert!(!render_mobile_qr);
             }
@@ -4484,6 +4516,64 @@ mod tests {
             } => assert!(render_mobile_qr),
             other => assert!(matches!(other, Command::Serve { .. })),
         }
+    }
+
+    #[test]
+    fn parse_serve_dev_any_defaults_to_wildcard_bind() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "serve".to_string(),
+            "--auth".to_string(),
+            "dev-any".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("serve command should parse");
+
+        match command {
+            Command::Serve {
+                bind_address,
+                auth_mode,
+                ..
+            } => {
+                assert_eq!(bind_address, "0.0.0.0:8787");
+                assert_eq!(auth_mode, Some("dev-any".to_string()));
+            }
+            other => assert!(matches!(other, Command::Serve { .. })),
+        }
+    }
+
+    #[test]
+    fn parse_serve_dev_any_port_uses_wildcard_bind() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "serve".to_string(),
+            "--auth".to_string(),
+            "dev-any".to_string(),
+            "--port".to_string(),
+            "9090".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("serve command should parse");
+
+        match command {
+            Command::Serve { bind_address, .. } => {
+                assert_eq!(bind_address, "0.0.0.0:9090");
+            }
+            other => assert!(matches!(other, Command::Serve { .. })),
+        }
+    }
+
+    #[test]
+    fn parse_serve_rejects_unknown_auth_mode() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "serve".to_string(),
+            "--auth".to_string(),
+            "token".to_string(),
+        ];
+
+        let error = parse_command(&args).expect_err("unsupported auth mode should be rejected");
+        assert!(error.contains("--auth value must be dev-loopback or dev-any"));
     }
 
     #[test]
