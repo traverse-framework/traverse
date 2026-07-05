@@ -3,10 +3,55 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - "**"
+    tags:
+      - "v*"
   pull_request:
 
 jobs:
+  version-guard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches workspace version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+
+          if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
+            echo "No release tag present; version guard passes for ${GITHUB_REF:-unknown ref}."
+            exit 0
+          fi
+
+          tag_name="${GITHUB_REF_NAME:-}"
+          if [[ ! "${tag_name}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag ${tag_name} is not a Traverse release tag; version guard passes."
+            exit 0
+          fi
+
+          tag_version="${tag_name#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${tag_name}." >&2
+            exit 1
+          fi
+
+          echo "Cargo.toml workspace version ${workspace_version} matches ${tag_name}."
+
   repository-checks:
     runs-on: ubuntu-latest
 
