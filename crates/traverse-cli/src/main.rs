@@ -121,6 +121,7 @@ enum Command {
         bind_address: String,
         allow_unauthenticated: bool,
         allowed_origins: Vec<String>,
+        render_mobile_qr: bool,
     },
 }
 
@@ -166,8 +167,14 @@ fn main() -> ExitCode {
             bind_address,
             allow_unauthenticated,
             allowed_origins,
+            render_mobile_qr,
         }) => {
-            if let Err(error) = run_serve(bind_address, allow_unauthenticated, allowed_origins) {
+            if let Err(error) = run_serve(
+                bind_address,
+                allow_unauthenticated,
+                allowed_origins,
+                render_mobile_qr,
+            ) {
                 eprintln!("{error}");
                 ExitCode::FAILURE
             } else {
@@ -946,7 +953,7 @@ fn parse_browser_adapter_command(args: &[String]) -> Result<Command, String> {
 }
 
 fn help_serve() -> String {
-    "traverse-cli serve [--bind <address>] [--port <port>] [--allow-unauthenticated]
+    "traverse-cli serve [--bind <address>] [--port <port>] [--allow-unauthenticated] [--qr]
 
   Purpose:
     Start a long-running HTTP/JSON API server on 127.0.0.1:8787 by default.
@@ -967,6 +974,8 @@ fn help_serve() -> String {
     --allow-unauthenticated    Accept unauthenticated requests from non-loopback
                                addresses. Prints a warning to stderr. Unsafe in
                                production.
+    --qr                       Print an ASCII QR code for the traverse://connect
+                               mobile provisioning URL.
     --help                     Print this help text.
 
   Example:
@@ -978,6 +987,7 @@ fn help_serve() -> String {
 
 fn parse_serve_command(args: &[String]) -> Result<Command, String> {
     let allow_unauthenticated = args.iter().any(|a| a == "--allow-unauthenticated");
+    let render_mobile_qr = args.iter().any(|a| a == "--qr");
     let bind_flag_pos = args.iter().position(|a| a == "--bind");
     let port_flag_pos = args.iter().position(|a| a == "--port");
     let mut allowed_origins = Vec::new();
@@ -1018,6 +1028,7 @@ fn parse_serve_command(args: &[String]) -> Result<Command, String> {
         bind_address,
         allow_unauthenticated,
         allowed_origins,
+        render_mobile_qr,
     })
 }
 
@@ -1025,6 +1036,7 @@ fn run_serve(
     bind_address: String,
     allow_unauthenticated: bool,
     allowed_origins: Vec<String>,
+    render_mobile_qr: bool,
 ) -> Result<(), String> {
     let registered =
         load_registered_bundle(&canonical_expedition_bundle_path()).map_err(|e| e.to_string())?;
@@ -1033,6 +1045,7 @@ fn run_serve(
         bind_address,
         allow_unauthenticated,
         allowed_origins,
+        render_mobile_qr,
         capability_registry: registered.capability_registry,
         workflow_registry: registered.workflow_registry,
         registry_root: std::env::current_dir()
@@ -2612,6 +2625,7 @@ fn build_in_process_api() -> Result<http_api::InProcessApi<ExpeditionExampleExec
         bind_address: "127.0.0.1:0".to_string(),
         allow_unauthenticated: true,
         allowed_origins: Vec::new(),
+        render_mobile_qr: false,
         capability_registry: registered.capability_registry,
         workflow_registry: registered.workflow_registry,
         registry_root: std::env::current_dir()
@@ -4340,10 +4354,12 @@ mod tests {
                 bind_address,
                 allow_unauthenticated,
                 allowed_origins,
+                render_mobile_qr,
             } => {
                 assert_eq!(bind_address, "127.0.0.1:8787");
                 assert!(!allow_unauthenticated);
                 assert!(allowed_origins.is_empty());
+                assert!(!render_mobile_qr);
             }
             other => assert!(matches!(other, Command::Serve { .. })),
         }
@@ -4384,10 +4400,12 @@ mod tests {
             Command::Serve {
                 bind_address,
                 allow_unauthenticated,
+                render_mobile_qr,
                 ..
             } => {
                 assert_eq!(bind_address, "127.0.0.1:9090");
                 assert!(allow_unauthenticated);
+                assert!(!render_mobile_qr);
             }
             other => assert!(matches!(other, Command::Serve { .. })),
         }
@@ -4448,6 +4466,24 @@ mod tests {
 
         let error = parse_command(&args).expect_err("wildcard origin should be rejected");
         assert!(error.contains("--allow-origin '*' is not allowed"));
+    }
+
+    #[test]
+    fn parse_serve_accepts_qr_flag() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "serve".to_string(),
+            "--qr".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("serve command should parse");
+
+        match command {
+            Command::Serve {
+                render_mobile_qr, ..
+            } => assert!(render_mobile_qr),
+            other => assert!(matches!(other, Command::Serve { .. })),
+        }
     }
 
     #[test]
