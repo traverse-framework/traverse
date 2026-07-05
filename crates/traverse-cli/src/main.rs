@@ -1703,6 +1703,7 @@ fn render_app_registration_state(
             }).collect::<Vec<_>>()
         },
         "public_surfaces": manifest.public_surfaces.clone(),
+        "state_machine": manifest.state_machine.clone(),
         "state_scope": "workspace_persisted",
         "state_path": app_registration_relative_state_path(
             workspace_id,
@@ -2048,6 +2049,7 @@ fn render_app_validation_success(
             "redacted_secret_keys": manifest.effective_config.redacted_secret_keys.clone()
         },
         "public_surfaces": manifest.public_surfaces.clone(),
+        "state_machine": manifest.state_machine.clone(),
         "runtime_references": {
             "inspection": format!("/v1/apps/{}/{}", manifest.app_id, manifest.version),
             "workflows": manifest.workflows.iter().map(|workflow| {
@@ -4153,6 +4155,71 @@ mod tests {
     }
 
     #[test]
+    fn app_validate_rejects_invalid_state_machine_transition() {
+        let temp_dir = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &temp_dir,
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            None,
+        );
+        let mut manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).expect("manifest must read"))
+                .expect("manifest must parse");
+        manifest["state_machine"]["states"][0]["transitions"][0]["to"] =
+            Value::String("missing".to_string());
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest must serialize"),
+        )
+        .expect("manifest must write");
+
+        let output =
+            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(
+            json["errors"][0]["code"],
+            "app_state_machine_undefined_state"
+        );
+    }
+
+    #[test]
+    fn app_validate_rejects_state_machine_unknown_capability() {
+        let temp_dir = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &temp_dir,
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            None,
+        );
+        let mut manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).expect("manifest must read"))
+                .expect("manifest must parse");
+        manifest["state_machine"]["states"][1]["invoke"]["capability_id"] =
+            Value::String("unknown.capability".to_string());
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest must serialize"),
+        )
+        .expect("manifest must write");
+
+        let output =
+            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        let codes = json["errors"]
+            .as_array()
+            .expect("errors must be an array")
+            .iter()
+            .map(|error| error["code"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"app_state_machine_undefined_capability"));
+    }
+
+    #[test]
     fn app_validate_redacts_workspace_secret_keys() {
         let temp_dir = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
@@ -4173,6 +4240,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
 
         assert_eq!(json["status"], "validated");
+        assert_eq!(json["state_machine"]["initial_state"], "idle");
         assert_eq!(
             json["effective_config"]["redacted_secret_keys"][0],
             "ollama_api_key"
@@ -5255,12 +5323,47 @@ mod tests {
                     "preferred_targets": ["local"],
                     "allow_fallback": false
                 },
+                "state_machine": app_state_machine_fixture(),
                 "public_surfaces": ["cli"]
             }))
             .expect("app manifest must serialize"),
         )
         .expect("app manifest must write");
         manifest_path
+    }
+
+    fn app_state_machine_fixture() -> Value {
+        serde_json::json!({
+            "initial_state": "idle",
+            "states": [
+                {
+                    "id": "idle",
+                    "transitions": [{ "on": "submit", "to": "processing" }]
+                },
+                {
+                    "id": "processing",
+                    "invoke": {
+                        "capability_id": "expedition.planning.validate-team-readiness",
+                        "input_from": "command.payload"
+                    },
+                    "transitions": [
+                        { "on": "capability_succeeded", "to": "results" },
+                        { "on": "capability_failed", "to": "error" }
+                    ]
+                },
+                {
+                    "id": "results",
+                    "transitions": [{ "on": "reset", "to": "idle" }]
+                },
+                {
+                    "id": "error",
+                    "transitions": [
+                        { "on": "retry", "to": "processing", "with_last_payload": true },
+                        { "on": "reset", "to": "idle" }
+                    ]
+                }
+            ]
+        })
     }
 
     fn write_app_validate_component_fixture(
