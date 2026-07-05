@@ -73,7 +73,19 @@ As a browser app developer, I want Traverse to expose explicit CORS behavior so 
 2. **Given** a production or non-loopback binding, **When** CORS is configured, **Then** only exact configured origins are allowed.
 3. **Given** a production or non-loopback binding, **When** no matching origin is configured, **Then** the API rejects the CORS request.
 
-### User Story 3 - Discover Local Server Without Guesswork (Priority: P1)
+### User Story 3 - Connect Mobile Clients Without Filesystem Discovery (Priority: P1)
+
+As a mobile app developer, I want a copyable Traverse provisioning URL so that iOS, Android, and other sandboxed clients can configure the runtime endpoint without reading `.traverse/server.json`.
+
+**Independent Test**: Start `traverse-cli serve`, read stderr, and verify it prints a `traverse://connect?...` URL containing `base_url`, `workspace_default`, and `auth_mode`. Start with `--qr` and verify the terminal output includes an ASCII QR rendering for the same URL.
+
+**Acceptance Scenarios**:
+
+1. **Given** the server starts successfully, **When** it prints startup metadata, **Then** it includes a `traverse://connect` URL with percent-encoded `base_url`, `workspace_default`, and `auth_mode` query parameters.
+2. **Given** `--qr` is supplied, **When** the server starts successfully, **Then** it renders an ASCII QR code for the same `traverse://connect` URL.
+3. **Given** desktop clients still read `.traverse/server.json`, **When** mobile URL provisioning is added, **Then** existing discovery fields remain backward compatible.
+
+### User Story 4 - Discover Local Server Without Guesswork (Priority: P1)
 
 As a local app or agent, I want a repo-local discovery file so that I can find the Traverse server even if the default port is unavailable.
 
@@ -85,7 +97,7 @@ As a local app or agent, I want a repo-local discovery file so that I can find t
 2. **Given** `.traverse/server.json` exists, **When** a client wants to use it, **Then** the client MUST verify `GET /healthz` before trusting the file.
 3. **Given** dev-loopback mode mints a local token, **When** the token is written to `.traverse/server.json`, **Then** the file MUST be owner-read/write only (`0600`) on Unix-like systems.
 
-### User Story 4 - Receive Machine-Readable Errors (Priority: P1)
+### User Story 5 - Receive Machine-Readable Errors (Priority: P1)
 
 As an agent, I want all API errors to use stable JSON errors so that I can classify failures without regexing strings.
 
@@ -214,6 +226,8 @@ OpenTelemetry export is governed by `029-integrated-observability`.
 - If the default port is unavailable, the server MAY fail clearly or select another local port, but if it selects another port it MUST write the selected address to `.traverse/server.json`.
 - Startup MUST print JSON startup information to stdout or stderr in a machine-readable form.
 - `.traverse/server.json` MUST be repo-local for v0 and MUST be ignored by git.
+- `traverse-cli serve` MUST print the `traverse://connect` URL on startup.
+- `traverse-cli serve --qr` MUST render an ASCII QR code for the `traverse://connect` URL on startup.
 
 Discovery file required fields:
 
@@ -225,11 +239,14 @@ Discovery file required fields:
   "pid": 12345,
   "started_at": "2026-05-27T12:00:00Z",
   "auth_mode": "dev-loopback",
+  "mobile_connect_url": "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787&workspace_default=local-default&auth_mode=dev-loopback",
   "token": "local-dev-token"
 }
 ```
 
 When `token` is present, the file MUST be owner-read/write only (`0600`) on Unix-like systems.
+Mobile or sandboxed clients MAY use `mobile_connect_url` instead of reading `.traverse/server.json`.
+`traverse://connect` URLs MUST carry `base_url`, `workspace_default`, and `auth_mode`; they MUST NOT include local tokens.
 
 ## Errors
 
@@ -325,6 +342,8 @@ Rules:
 - **FR-022**: The API MUST include stable links for next actions.
 - **FR-023**: CORS MUST follow the dev-loopback and production rules above.
 - **FR-024**: CI MUST validate `specs/033-http-json-api/openapi.yaml`.
+- **FR-025**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
+- **FR-026**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
 
 ## Quality Gates
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -60,6 +61,7 @@ pub struct ApiServerConfig<E> {
     pub bind_address: String,
     pub allow_unauthenticated: bool,
     pub allowed_origins: Vec<String>,
+    pub render_mobile_qr: bool,
     pub capability_registry: CapabilityRegistry,
     pub workflow_registry: WorkflowRegistry,
     pub registry_root: PathBuf,
@@ -182,6 +184,7 @@ struct ServerDiscoveryV1 {
     pid: u32,
     started_at: String,
     auth_mode: String,
+    mobile_connect_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     local_dev_token: Option<String>,
 }
@@ -264,12 +267,22 @@ where
     eprintln!(
         "traverse-cli serve: HTTP/JSON API listening on http://{local_addr} (spec 033-http-json-api)"
     );
+    let base_url = format!("http://{local_addr}");
+    let mobile_connect_url = mobile_connect_url(&base_url, DEFAULT_WORKSPACE_ID, auth_mode);
+    eprintln!("traverse-cli serve: mobile connect URL {mobile_connect_url}");
+    if config.render_mobile_qr {
+        eprintln!(
+            "{}",
+            render_mobile_connect_qr(&mobile_connect_url).map_err(ServeError::BindFailed)?
+        );
+    }
     let _ = std::io::stderr().flush();
 
     write_server_discovery(
         Path::new("."),
-        &format!("http://{local_addr}"),
+        &base_url,
         auth_mode,
+        &mobile_connect_url,
         local_dev_token.as_deref(),
     )
     .map_err(ServeError::BindFailed)?;
@@ -345,6 +358,7 @@ fn write_server_discovery(
     repo_root: &Path,
     base_url: &str,
     auth_mode: &str,
+    mobile_connect_url: &str,
     local_dev_token: Option<&str>,
 ) -> Result<PathBuf, String> {
     let traverse_dir = repo_root.join(".traverse");
@@ -359,6 +373,7 @@ fn write_server_discovery(
         pid: std::process::id(),
         started_at: generated_registered_at().map_err(|e| e.message)?,
         auth_mode: auth_mode.to_string(),
+        mobile_connect_url: mobile_connect_url.to_string(),
         local_dev_token: local_dev_token.map(str::to_string),
     };
     let body = serde_json::to_vec_pretty(&discovery)
@@ -369,6 +384,50 @@ fn write_server_discovery(
         set_owner_read_write(&discovery_path)?;
     }
     Ok(discovery_path)
+}
+
+fn mobile_connect_url(base_url: &str, workspace_default: &str, auth_mode: &str) -> String {
+    format!(
+        "traverse://connect?base_url={}&workspace_default={}&auth_mode={}",
+        percent_encode_query_value(base_url),
+        percent_encode_query_value(workspace_default),
+        percent_encode_query_value(auth_mode)
+    )
+}
+
+fn percent_encode_query_value(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(&mut encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+fn render_mobile_connect_qr(url: &str) -> Result<String, String> {
+    let code = qrcode::QrCode::new(url.as_bytes())
+        .map_err(|e| format!("failed to generate mobile provisioning QR code: {e}"))?;
+    let width = code.width();
+    let quiet_zone = 2usize;
+    let total_width = width + quiet_zone * 2;
+    let mut rendered = String::new();
+
+    for y in 0..total_width {
+        for x in 0..total_width {
+            let dark = x >= quiet_zone
+                && x < width + quiet_zone
+                && y >= quiet_zone
+                && y < width + quiet_zone
+                && code[(x - quiet_zone, y - quiet_zone)] == qrcode::types::Color::Dark;
+            rendered.push_str(if dark { "██" } else { "  " });
+        }
+        rendered.push('\n');
+    }
+
+    Ok(rendered)
 }
 
 #[cfg(unix)]
@@ -6096,6 +6155,7 @@ mod tests {
             &repo_root,
             "http://127.0.0.1:8787",
             "dev-loopback",
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787&workspace_default=local-default&auth_mode=dev-loopback",
             Some("local-token"),
         )
         .expect("discovery file must be written");
@@ -6108,6 +6168,10 @@ mod tests {
         assert_eq!(json["health_url"], "http://127.0.0.1:8787/healthz");
         assert_eq!(json["workspace_default"], DEFAULT_WORKSPACE_ID);
         assert_eq!(json["auth_mode"], "dev-loopback");
+        assert_eq!(
+            json["mobile_connect_url"],
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787&workspace_default=local-default&auth_mode=dev-loopback"
+        );
         assert_eq!(json["local_dev_token"], "local-token");
         assert!(json["pid"].as_u64().is_some());
         assert!(
@@ -6127,6 +6191,7 @@ mod tests {
             &repo_root,
             "http://127.0.0.1:8787",
             "dev-loopback",
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787&workspace_default=local-default&auth_mode=dev-loopback",
             Some("local-token"),
         )
         .expect("discovery file must be written");
@@ -6137,6 +6202,27 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn mobile_connect_url_percent_encodes_runtime_fields() {
+        let url = mobile_connect_url("http://192.168.1.42:8787", "local default", "dev-loopback");
+
+        assert_eq!(
+            url,
+            "traverse://connect?base_url=http%3A%2F%2F192.168.1.42%3A8787&workspace_default=local%20default&auth_mode=dev-loopback"
+        );
+    }
+
+    #[test]
+    fn mobile_connect_qr_renders_ascii_blocks() {
+        let rendered = render_mobile_connect_qr(
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787&workspace_default=local-default&auth_mode=dev-loopback",
+        )
+        .expect("QR code must render");
+
+        assert!(rendered.contains("██"));
+        assert!(rendered.lines().count() > 10);
     }
 
     // ------------------------------------------------------------------
