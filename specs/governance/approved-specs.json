@@ -539,7 +539,14 @@
       "path": "specs/048-semver-publishing-pipeline/spec.md",
       "governs": [
         "Cargo.toml",
+        "crates/traverse-cli/Cargo.toml",
+        "crates/traverse-contracts/Cargo.toml",
+        "crates/traverse-expedition-wasm/Cargo.toml",
+        "crates/traverse-mcp/Cargo.toml",
+        "crates/traverse-registry/Cargo.toml",
+        "crates/traverse-runtime/Cargo.toml",
         "scripts/ci/bump_version.sh",
+        "scripts/ci/publish_crates.sh",
         ".github/workflows/ci.yml",
         "docs/release-process.md"
       ]
