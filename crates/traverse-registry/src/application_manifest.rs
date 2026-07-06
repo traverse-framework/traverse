@@ -38,6 +38,7 @@ pub struct ApplicationBundleManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApplicationStateMachine {
     pub initial_state: String,
+    pub list_context_fields: Vec<String>,
     pub states: Vec<ApplicationState>,
 }
 
@@ -496,6 +497,8 @@ struct ApplicationManifestSerde {
 #[derive(Debug, Deserialize)]
 struct ApplicationStateMachineSerde {
     initial_state: String,
+    #[serde(default)]
+    list_context_fields: Vec<String>,
     states: Vec<ApplicationStateSerde>,
 }
 
@@ -997,6 +1000,7 @@ fn validate_state_machine(
     let state_ids = state_machine_state_ids(state_machine)?;
     ensure_initial_state_declared(state_machine, &state_ids)?;
     ensure_state_machine_reachable(state_machine, &state_ids)?;
+    validate_list_context_fields(state_machine)?;
     let component_capabilities = components
         .iter()
         .map(|component| component.manifest.capability_id.clone())
@@ -1005,8 +1009,25 @@ fn validate_state_machine(
 
     Ok(Some(ApplicationStateMachine {
         initial_state: state_machine.initial_state.clone(),
+        list_context_fields: state_machine.list_context_fields.clone(),
         states,
     }))
+}
+
+fn validate_list_context_fields(
+    state_machine: &ApplicationStateMachineSerde,
+) -> Result<(), ApplicationManifestFailure> {
+    let mut seen = BTreeSet::new();
+    for field in &state_machine.list_context_fields {
+        if !valid_condition_field_path(field) || !seen.insert(field.clone()) {
+            return Err(single_error(
+                ApplicationManifestErrorCode::AppStateMachineInvalid,
+                "state_machine.list_context_fields".to_string(),
+                "list_context_fields entries must be unique non-empty output.* paths".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn state_machine_state_ids(
