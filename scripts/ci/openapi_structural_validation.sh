@@ -17,6 +17,7 @@ required_paths=(
   '/v1/workspaces/{workspace_id}/execute:'
   '/v1/workspaces/{workspace_id}/executions/{execution_id}:'
   '/v1/workspaces/{workspace_id}/traces/{execution_id}:'
+  '/v1/workspaces/{workspace_id}/apps/{app_id}/events:'
   '/v1/workspaces/{workspace_id}/capabilities:'
   '/v1/workspaces/{workspace_id}/event-contracts:'
   '/v1/workspaces/{workspace_id}/workflows:'
