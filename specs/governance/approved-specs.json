@@ -552,6 +552,20 @@
       ]
     },
     {
+      "id": "052-app-state-machine",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/052-app-state-machine/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-registry/",
+        "examples/applications/",
+        "specs/052-app-state-machine/",
+        "specs/governance/"
+      ]
+    },
+    {
       "id": "049-v1-milestone-gate",
       "version": "1.0.0",
       "status": "approved",

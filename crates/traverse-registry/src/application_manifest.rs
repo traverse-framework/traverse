@@ -32,6 +32,33 @@ pub struct ApplicationBundleManifest {
     pub effective_config: ApplicationEffectiveConfig,
     pub placement_policy: Value,
     pub public_surfaces: Vec<String>,
+    pub state_machine: Option<ApplicationStateMachine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationStateMachine {
+    pub initial_state: String,
+    pub states: Vec<ApplicationState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationState {
+    pub id: String,
+    pub invoke: Option<ApplicationStateInvoke>,
+    pub transitions: Vec<ApplicationStateTransition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationStateInvoke {
+    pub capability_id: String,
+    pub input_from: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationStateTransition {
+    pub on: String,
+    pub to: String,
+    pub with_last_payload: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,6 +435,10 @@ pub enum ApplicationManifestErrorCode {
     ModelCandidateImplementationInvalid,
     AppConfigImmutableOverride,
     AppConfigInvalid,
+    AppStateMachineInvalid,
+    AppStateMachineUnreachableState,
+    AppStateMachineUndefinedState,
+    AppStateMachineUndefinedCapability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,6 +466,37 @@ struct ApplicationManifestSerde {
     default_config: Value,
     placement_policy: Value,
     public_surfaces: Vec<String>,
+    #[serde(default)]
+    state_machine: Option<ApplicationStateMachineSerde>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationStateMachineSerde {
+    initial_state: String,
+    states: Vec<ApplicationStateSerde>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationStateSerde {
+    id: String,
+    #[serde(default)]
+    invoke: Option<ApplicationStateInvokeSerde>,
+    #[serde(default)]
+    transitions: Vec<ApplicationStateTransitionSerde>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationStateInvokeSerde {
+    capability_id: String,
+    input_from: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationStateTransitionSerde {
+    on: String,
+    to: String,
+    #[serde(default)]
+    with_last_payload: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -560,6 +622,7 @@ pub fn load_application_bundle_manifest(
         .iter()
         .map(|component| load_component(manifest_dir, component))
         .collect::<Result<Vec<_>, _>>()?;
+    let state_machine = validate_state_machine(&manifest, &components)?;
 
     Ok(ApplicationBundleManifest {
         app_id: manifest.app_id,
@@ -574,6 +637,7 @@ pub fn load_application_bundle_manifest(
         effective_config,
         placement_policy: manifest.placement_policy,
         public_surfaces: manifest.public_surfaces,
+        state_machine,
     })
 }
 
@@ -784,6 +848,7 @@ fn application_manifest_digest(manifest: &ApplicationBundleManifest) -> String {
         "default_config": manifest.default_config,
         "placement_policy": manifest.placement_policy,
         "public_surfaces": manifest.public_surfaces,
+        "state_machine": manifest.state_machine,
     });
     format!("sha256:{}", sha256_hex(value.to_string().as_bytes()))
 }
@@ -879,6 +944,170 @@ fn ensure_unique_component_refs(
         }
     }
     Ok(())
+}
+
+fn validate_state_machine(
+    manifest: &ApplicationManifestSerde,
+    components: &[ApplicationComponent],
+) -> Result<Option<ApplicationStateMachine>, ApplicationManifestFailure> {
+    let Some(state_machine) = &manifest.state_machine else {
+        return Ok(None);
+    };
+    if state_machine.initial_state.trim().is_empty() || state_machine.states.is_empty() {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+            "state_machine".to_string(),
+            "state_machine requires initial_state and at least one state".to_string(),
+        ));
+    }
+
+    let state_ids = state_machine_state_ids(state_machine)?;
+    ensure_initial_state_declared(state_machine, &state_ids)?;
+    ensure_state_machine_reachable(state_machine, &state_ids)?;
+    let component_capabilities = components
+        .iter()
+        .map(|component| component.manifest.capability_id.clone())
+        .collect::<BTreeSet<_>>();
+    let states = materialize_state_machine_states(state_machine, &component_capabilities)?;
+
+    Ok(Some(ApplicationStateMachine {
+        initial_state: state_machine.initial_state.clone(),
+        states,
+    }))
+}
+
+fn state_machine_state_ids(
+    state_machine: &ApplicationStateMachineSerde,
+) -> Result<BTreeSet<String>, ApplicationManifestFailure> {
+    let mut state_ids = BTreeSet::new();
+    for state in &state_machine.states {
+        if state.id.trim().is_empty() || !state_ids.insert(state.id.clone()) {
+            return Err(single_error(
+                ApplicationManifestErrorCode::AppStateMachineInvalid,
+                format!("state_machine.states.{}", state.id),
+                "state_machine states must have unique non-empty ids".to_string(),
+            ));
+        }
+    }
+    Ok(state_ids)
+}
+
+fn ensure_initial_state_declared(
+    state_machine: &ApplicationStateMachineSerde,
+    state_ids: &BTreeSet<String>,
+) -> Result<(), ApplicationManifestFailure> {
+    if state_ids.contains(&state_machine.initial_state) {
+        return Ok(());
+    }
+
+    Err(single_error(
+        ApplicationManifestErrorCode::AppStateMachineUndefinedState,
+        "state_machine.initial_state".to_string(),
+        format!(
+            "initial_state '{}' is not declared in state_machine.states",
+            state_machine.initial_state
+        ),
+    ))
+}
+
+fn ensure_state_machine_reachable(
+    state_machine: &ApplicationStateMachineSerde,
+    state_ids: &BTreeSet<String>,
+) -> Result<(), ApplicationManifestFailure> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = vec![state_machine.initial_state.clone()];
+
+    while let Some(state_id) = pending.pop() {
+        if !reachable.insert(state_id.clone()) {
+            continue;
+        }
+        let transitions = state_machine
+            .states
+            .iter()
+            .find(|state| state.id == state_id)
+            .map(|state| (state.id.as_str(), state.transitions.as_slice()))
+            .into_iter()
+            .flat_map(|(source_state_id, transitions)| {
+                transitions
+                    .iter()
+                    .map(move |transition| (source_state_id, transition))
+            });
+        for (source_state_id, transition) in transitions {
+            if !state_ids.contains(&transition.to) {
+                return Err(single_error(
+                    ApplicationManifestErrorCode::AppStateMachineUndefinedState,
+                    format!(
+                        "state_machine.states.{}.transitions.{}",
+                        source_state_id, transition.on
+                    ),
+                    format!(
+                        "transition '{}' targets undefined state '{}'",
+                        transition.on, transition.to
+                    ),
+                ));
+            }
+            pending.push(transition.to.clone());
+        }
+    }
+
+    if let Some(unreachable) = state_ids
+        .iter()
+        .find(|state_id| !reachable.contains(*state_id))
+    {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppStateMachineUnreachableState,
+            format!("state_machine.states.{unreachable}"),
+            format!("state_machine state '{unreachable}' is unreachable from initial_state"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn materialize_state_machine_states(
+    state_machine: &ApplicationStateMachineSerde,
+    component_capabilities: &BTreeSet<String>,
+) -> Result<Vec<ApplicationState>, ApplicationManifestFailure> {
+    state_machine
+        .states
+        .iter()
+        .map(|state| materialize_state_machine_state(state, component_capabilities))
+        .collect()
+}
+
+fn materialize_state_machine_state(
+    state: &ApplicationStateSerde,
+    component_capabilities: &BTreeSet<String>,
+) -> Result<ApplicationState, ApplicationManifestFailure> {
+    if let Some(invoke) = &state.invoke
+        && !component_capabilities.contains(&invoke.capability_id)
+    {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppStateMachineUndefinedCapability,
+            format!("state_machine.states.{}.invoke", state.id),
+            format!(
+                "invoke capability '{}' is not declared in app components",
+                invoke.capability_id
+            ),
+        ));
+    }
+
+    Ok(ApplicationState {
+        id: state.id.clone(),
+        invoke: state.invoke.as_ref().map(|invoke| ApplicationStateInvoke {
+            capability_id: invoke.capability_id.clone(),
+            input_from: invoke.input_from.clone(),
+        }),
+        transitions: state
+            .transitions
+            .iter()
+            .map(|transition| ApplicationStateTransition {
+                on: transition.on.clone(),
+                to: transition.to.clone(),
+                with_last_payload: transition.with_last_payload,
+            })
+            .collect(),
+    })
 }
 
 fn load_effective_config(

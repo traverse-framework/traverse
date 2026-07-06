@@ -128,6 +128,161 @@ fn rejects_duplicate_component_references() {
 }
 
 #[test]
+fn loads_valid_application_state_machine() {
+    let fixture = AppFixture::new("valid-state-machine");
+    let wasm_digest = fixture.write_wasm("component bytes");
+    fixture.write_component_manifest(&json!({
+        "wasm_digest": format!("sha256:{wasm_digest}"),
+        "dependencies": []
+    }));
+    fixture.write_app_manifest_with_state_machine(
+        &json!([component_ref(
+            "expedition.readiness.validate-team-readiness-component",
+            "1.0.0",
+            &format!("sha256:{wasm_digest}"),
+            "components/validate-team-readiness/component.manifest.json",
+        )]),
+        &json!({
+            "initial_state": "draft",
+            "states": [
+                {
+                    "id": "draft",
+                    "invoke": {
+                        "capability_id": "expedition.planning.validate-team-readiness",
+                        "input_from": "$.team"
+                    },
+                    "transitions": [
+                        {
+                            "on": "ready",
+                            "to": "approved",
+                            "with_last_payload": true
+                        },
+                        {
+                            "on": "revise",
+                            "to": "draft"
+                        }
+                    ]
+                },
+                {
+                    "id": "approved",
+                    "transitions": []
+                }
+            ]
+        }),
+    );
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("valid app state machine should load");
+    let state_machine = bundle
+        .state_machine
+        .expect("state machine should be materialized");
+
+    assert_eq!(state_machine.initial_state, "draft");
+    assert_eq!(state_machine.states.len(), 2);
+    assert_eq!(
+        state_machine.states[0]
+            .invoke
+            .as_ref()
+            .expect("draft state should invoke capability")
+            .capability_id,
+        "expedition.planning.validate-team-readiness"
+    );
+    assert!(state_machine.states[0].transitions[0].with_last_payload);
+}
+
+#[test]
+fn rejects_invalid_application_state_machine_shapes() {
+    let cases = [
+        (
+            "state-machine-empty-initial",
+            json!({
+                "initial_state": "",
+                "states": [{"id": "draft", "transitions": []}]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+        ),
+        (
+            "state-machine-duplicate-state",
+            json!({
+                "initial_state": "draft",
+                "states": [
+                    {"id": "draft", "transitions": []},
+                    {"id": "draft", "transitions": []}
+                ]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+        ),
+        (
+            "state-machine-missing-initial",
+            json!({
+                "initial_state": "missing",
+                "states": [{"id": "draft", "transitions": []}]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineUndefinedState,
+        ),
+        (
+            "state-machine-missing-target",
+            json!({
+                "initial_state": "draft",
+                "states": [{
+                    "id": "draft",
+                    "transitions": [{"on": "submit", "to": "missing"}]
+                }]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineUndefinedState,
+        ),
+        (
+            "state-machine-unreachable",
+            json!({
+                "initial_state": "draft",
+                "states": [
+                    {"id": "draft", "transitions": []},
+                    {"id": "orphan", "transitions": []}
+                ]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineUnreachableState,
+        ),
+    ];
+
+    for (name, state_machine, expected_code) in cases {
+        let fixture = AppFixture::new(name);
+        fixture.write_app_manifest_with_state_machine(&json!([]), &state_machine);
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("invalid state machine should fail");
+
+        assert_eq!(failure.errors[0].code, expected_code);
+    }
+}
+
+#[test]
+fn rejects_state_machine_invoke_capability_not_declared_by_components() {
+    let fixture = AppFixture::new("state-machine-unknown-capability");
+    fixture.write_app_manifest_with_state_machine(
+        &json!([]),
+        &json!({
+            "initial_state": "draft",
+            "states": [{
+                "id": "draft",
+                "invoke": {
+                    "capability_id": "expedition.planning.validate-team-readiness",
+                    "input_from": "$.team"
+                },
+                "transitions": []
+            }]
+        }),
+    );
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("state machine invoke must reference app component capability");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::AppStateMachineUndefinedCapability
+    );
+}
+
+#[test]
 fn loads_valid_governed_model_dependency_schema() {
     let fixture = AppFixture::new("valid-model-dependency");
     fixture.write_app_manifest_with_model_dependencies(
@@ -1784,6 +1939,23 @@ impl AppFixture {
         self.write_app_manifest_full(components, workflows, &json!([]));
     }
 
+    fn write_app_manifest_with_state_machine(
+        &self,
+        components: &serde_json::Value,
+        state_machine: &serde_json::Value,
+    ) {
+        self.write_app_manifest_full_with_state_machine(
+            components,
+            &json!([]),
+            &json!([]),
+            &json!({
+                "type": "object"
+            }),
+            &json!({}),
+            Some(state_machine),
+        );
+    }
+
     fn write_app_manifest_with_config(
         &self,
         components: &serde_json::Value,
@@ -1824,7 +1996,26 @@ impl AppFixture {
         config_schema: &serde_json::Value,
         default_config: &serde_json::Value,
     ) {
-        let app = json!({
+        self.write_app_manifest_full_with_state_machine(
+            components,
+            workflows,
+            model_dependencies,
+            config_schema,
+            default_config,
+            None,
+        );
+    }
+
+    fn write_app_manifest_full_with_state_machine(
+        &self,
+        components: &serde_json::Value,
+        workflows: &serde_json::Value,
+        model_dependencies: &serde_json::Value,
+        config_schema: &serde_json::Value,
+        default_config: &serde_json::Value,
+        state_machine: Option<&serde_json::Value>,
+    ) {
+        let mut app = json!({
             "app_id": "hello.world.app",
             "version": "1.0.0",
             "schema_version": "1.0.0",
@@ -1842,6 +2033,11 @@ impl AppFixture {
             },
             "public_surfaces": ["cli"]
         });
+        if let Some(state_machine) = state_machine {
+            app.as_object_mut()
+                .expect("app manifest should be an object")
+                .insert("state_machine".to_string(), state_machine.clone());
+        }
         fs::write(self.app_manifest_path(), app.to_string()).expect("app manifest should write");
     }
 
