@@ -26,9 +26,9 @@ use traverse_registry::{
     BinaryReference, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
     ComposabilityMetadata, CompositionKind, CompositionPattern, ConnectorRegistration,
     DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind, LookupScope,
-    RegistryBundle, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-    WorkflowDefinition, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    load_application_bundle_manifest, load_registry_bundle,
+    PublicRegistryIndex, RegistryBundle, RegistryProvenance, RegistryScope, SourceKind,
+    SourceReference, WorkflowDefinition, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
+    load_application_bundle_manifest, load_registry_bundle, write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -58,6 +58,10 @@ enum Command {
     },
     AppRegister {
         manifest_path: PathBuf,
+        workspace_id: String,
+        json_output: bool,
+    },
+    RegistrySync {
         workspace_id: String,
         json_output: bool,
     },
@@ -241,6 +245,10 @@ fn run_command(command: Command) -> Result<String, CliError> {
             workspace_id,
             json_output,
         } => app_register(&manifest_path, &workspace_id, json_output),
+        Command::RegistrySync {
+            workspace_id,
+            json_output,
+        } => registry_sync(&workspace_id, json_output),
         Command::ComponentNew { component_id } => component_new(&component_id),
         Command::BrowserAdapterServe { .. } | Command::Serve { .. } => {
             Err(CliError::UsageError(usage()))
@@ -314,6 +322,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         (Some("app"), Some("new")) => parse_app_new_command(args),
         (Some("app"), Some("validate")) => parse_app_validate_command(args),
         (Some("app"), Some("register")) => parse_app_register_command(args),
+        (Some("registry"), Some("sync")) => parse_registry_sync_command(args),
         (Some("component"), Some("new")) => parse_component_new_command(args),
         (Some("federation"), Some(_)) => parse_federation_command(args),
         (Some("agent"), Some("execute")) => parse_agent_execute_command(args),
@@ -335,6 +344,8 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("app"), Some("validate")) => help_app_validate(),
         (Some("app"), Some("register")) => help_app_register(),
         (Some("app"), _) => help_app(),
+        (Some("registry"), Some("sync")) => help_registry_sync(),
+        (Some("registry"), _) => help_registry(),
         (Some("component"), Some("new")) => help_component_new(),
         (Some("component"), _) => help_component(),
         (Some("agent"), Some("inspect")) => help_agent_inspect(),
@@ -444,6 +455,36 @@ fn help_app() -> String {
     register --manifest <path>   Validate and persist local app registration.
 
   Run `traverse-cli app <subcommand> --help` for subcommand-specific help."
+        .to_string()
+}
+
+fn help_registry_sync() -> String {
+    "traverse-cli registry sync --workspace <workspace-id> --json
+
+  Purpose:
+    Fetch the latest public registry index from traverse-framework/registry and
+    atomically persist it as local workspace public-tier registry state. Runtime
+    execution reads local state only and never live-fetches the registry.
+
+  Required flags:
+    --workspace <id>   Local workspace id to sync into.
+    --json             Emit machine-readable sync evidence.
+
+  Optional flags:
+    --help             Print this help text.
+
+  Example:
+    traverse-cli registry sync --workspace local-default --json"
+        .to_string()
+}
+
+fn help_registry() -> String {
+    "traverse-cli registry <subcommand> [options]
+
+  Subcommands:
+    sync --workspace <id> --json   Sync the public registry index locally.
+
+  Run `traverse-cli registry sync --help` for subcommand-specific help."
         .to_string()
 }
 
@@ -929,6 +970,18 @@ fn parse_app_register_command(args: &[String]) -> Result<Command, String> {
     }
     Ok(Command::AppRegister {
         manifest_path: PathBuf::from(manifest_path),
+        workspace_id,
+        json_output: true,
+    })
+}
+
+fn parse_registry_sync_command(args: &[String]) -> Result<Command, String> {
+    let workspace_id = parse_string_flag(args, "--workspace")
+        .ok_or_else(|| "registry sync requires --workspace <workspace-id>".to_string())?;
+    if !args.iter().any(|a| a == "--json") {
+        return Err("registry sync requires --json for stable sync evidence".to_string());
+    }
+    Ok(Command::RegistrySync {
         workspace_id,
         json_output: true,
     })
@@ -1646,6 +1699,263 @@ fn app_register_at(
 
     serde_json::to_string_pretty(&state)
         .map_err(|e| CliError::IoError(format!("failed to serialize app registration: {e}")))
+}
+
+const DEFAULT_PUBLIC_REGISTRY_SOURCE: &str = "traverse-framework/registry";
+
+#[derive(Debug, Clone)]
+struct FetchedRegistryIndex {
+    source_repo: String,
+    release_tag: String,
+    index: PublicRegistryIndex,
+}
+
+trait RegistryIndexFetcher {
+    fn fetch_latest_index(&self) -> Result<FetchedRegistryIndex, RegistrySyncError>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CurlGitHubRegistryIndexFetcher {
+    source_repo: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegistrySyncError {
+    code: &'static str,
+    message: String,
+}
+
+impl RegistryIndexFetcher for CurlGitHubRegistryIndexFetcher {
+    fn fetch_latest_index(&self) -> Result<FetchedRegistryIndex, RegistrySyncError> {
+        let releases_url = format!(
+            "https://api.github.com/repos/{}/releases?per_page=100",
+            self.source_repo
+        );
+        let releases = curl_text(&releases_url)?;
+        let releases_json: Value = serde_json::from_str(&releases).map_err(|error| {
+            RegistrySyncError::new(
+                "registry_release_parse_failed",
+                format!("failed to parse GitHub Releases response: {error}"),
+            )
+        })?;
+        let (release_tag, index_asset_url) = latest_index_release_asset(&releases_json)?;
+        let index_json = curl_text(&index_asset_url)?;
+        let index: PublicRegistryIndex = serde_json::from_str(&index_json).map_err(|error| {
+            RegistrySyncError::new(
+                "registry_index_parse_failed",
+                format!("failed to parse registry index.json: {error}"),
+            )
+        })?;
+
+        Ok(FetchedRegistryIndex {
+            source_repo: self.source_repo.to_string(),
+            release_tag,
+            index,
+        })
+    }
+}
+
+impl RegistrySyncError {
+    fn new(code: &'static str, message: String) -> Self {
+        Self { code, message }
+    }
+}
+
+fn registry_sync(workspace_id: &str, json_output: bool) -> Result<String, CliError> {
+    let base_dir = std::env::current_dir()
+        .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
+    registry_sync_at(
+        &base_dir,
+        workspace_id,
+        json_output,
+        &CurlGitHubRegistryIndexFetcher {
+            source_repo: DEFAULT_PUBLIC_REGISTRY_SOURCE,
+        },
+    )
+}
+
+fn registry_sync_at(
+    base_dir: &Path,
+    workspace_id: &str,
+    json_output: bool,
+    fetcher: &dyn RegistryIndexFetcher,
+) -> Result<String, CliError> {
+    if !json_output {
+        return Err(CliError::UsageError(
+            "registry sync requires --json for stable sync evidence".to_string(),
+        ));
+    }
+    if let Some(error) = validate_workspace_id_for_cli(workspace_id) {
+        return registry_sync_failure_json(
+            workspace_id,
+            "registry_sync_invalid_workspace",
+            &error.message,
+        );
+    }
+
+    let remote_index = fetcher
+        .fetch_latest_index()
+        .map_err(|error| CliError::IoError(format!("{}: {}", error.code, error.message)))?;
+    let synced_at = current_unix_timestamp_string()?;
+    let state = write_synced_public_registry_state(
+        base_dir,
+        workspace_id,
+        &remote_index.source_repo,
+        &remote_index.release_tag,
+        &synced_at,
+        remote_index.index,
+    )
+    .map_err(|failure| {
+        CliError::ValidationFailed(
+            failure
+                .errors
+                .iter()
+                .map(|error| error.message.clone())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    let state_path = traverse_registry::synced_public_registry_state_path(base_dir, workspace_id);
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "synced",
+        "source": state.source_repo,
+        "release_tag": state.release_tag,
+        "index_version": state.index_version,
+        "record_count": state.record_count,
+        "workspace": state.workspace_id,
+        "synced_at": state.synced_at,
+        "validation_status": state.validation_status,
+        "state_path": state_path.display().to_string()
+    }))
+    .map_err(|error| {
+        CliError::IoError(format!("failed to serialize registry sync output: {error}"))
+    })
+}
+
+fn registry_sync_failure_json(
+    workspace_id: &str,
+    code: &str,
+    message: &str,
+) -> Result<String, CliError> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "failed",
+        "workspace": workspace_id,
+        "errors": [{
+            "code": code,
+            "message": message,
+            "severity": "error"
+        }]
+    }))
+    .map_err(|error| {
+        CliError::IoError(format!(
+            "failed to serialize registry sync failure: {error}"
+        ))
+    })
+}
+
+fn latest_index_release_asset(
+    releases_json: &Value,
+) -> Result<(String, String), RegistrySyncError> {
+    let releases = releases_json.as_array().ok_or_else(|| {
+        RegistrySyncError::new(
+            "registry_release_parse_failed",
+            "GitHub Releases response must be an array".to_string(),
+        )
+    })?;
+
+    let mut selected: Option<(u64, String, String)> = None;
+    for release in releases {
+        let Some(tag) = release.get("tag_name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(index_version) = tag.strip_prefix("index-v").and_then(parse_u64) else {
+            continue;
+        };
+        let Some(asset_url) = release
+            .get("assets")
+            .and_then(Value::as_array)
+            .and_then(|assets| index_asset_download_url(assets))
+        else {
+            continue;
+        };
+        match &selected {
+            Some((selected_version, _, _)) if *selected_version >= index_version => {}
+            _ => selected = Some((index_version, tag.to_string(), asset_url)),
+        }
+    }
+
+    selected
+        .map(|(_, tag, asset_url)| (tag, asset_url))
+        .ok_or_else(|| {
+            RegistrySyncError::new(
+                "registry_index_release_missing",
+                "no index-v* release with an index.json asset was found".to_string(),
+            )
+        })
+}
+
+fn index_asset_download_url(assets: &[Value]) -> Option<String> {
+    assets.iter().find_map(|asset| {
+        let name = asset.get("name").and_then(Value::as_str)?;
+        if name != "index.json" {
+            return None;
+        }
+        asset
+            .get("browser_download_url")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    })
+}
+
+fn parse_u64(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok()
+}
+
+fn curl_text(url: &str) -> Result<String, RegistrySyncError> {
+    let output = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "User-Agent: traverse-cli-registry-sync",
+            url,
+        ])
+        .output()
+        .map_err(|error| {
+            RegistrySyncError::new(
+                "registry_fetch_failed",
+                format!("failed to execute curl for {url}: {error}"),
+            )
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            format!("curl exited with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(RegistrySyncError::new(
+            "registry_fetch_failed",
+            format!("failed to fetch {url}: {detail}"),
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|error| {
+        RegistrySyncError::new(
+            "registry_fetch_failed",
+            format!("response from {url} was not valid UTF-8: {error}"),
+        )
+    })
+}
+
+fn current_unix_timestamp_string() -> Result<String, CliError> {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| {
+            CliError::IoError(format!("system clock is before Unix epoch: {error}"))
+        })?;
+    Ok(format!("unix:{}", duration.as_secs()))
 }
 
 fn render_app_registration_state(
@@ -3039,7 +3349,7 @@ fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
 }
 
 fn usage() -> String {
-    "usage: traverse-cli app <new|validate|register> [options] | traverse-cli component new <component-id> | traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
+    "usage: traverse-cli app <new|validate|register> [options] | traverse-cli registry sync --workspace <id> --json | traverse-cli component new <component-id> | traverse-cli <bundle|agent|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli browser-adapter serve [--bind <address>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
 }
 
 fn write_trace_artifact(path: &Path, trace: &RuntimeTrace) -> Result<(), CliError> {
@@ -3879,9 +4189,11 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        Command, app_new_at, app_register_at, app_registration_state_path, app_validate,
-        component_new_at, execute_agent, execute_expedition, inspect_agent, inspect_bundle,
-        inspect_event, inspect_trace, inspect_workflow, parse_command, register_bundle,
+        Command, FetchedRegistryIndex, RegistryIndexFetcher, RegistrySyncError, app_new_at,
+        app_register_at, app_registration_state_path, app_validate, component_new_at,
+        execute_agent, execute_expedition, inspect_agent, inspect_bundle, inspect_event,
+        inspect_trace, inspect_workflow, latest_index_release_asset, parse_command,
+        register_bundle, registry_sync_at,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -3889,7 +4201,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use traverse_contracts::parse_contract;
-    use traverse_registry::load_application_bundle_manifest;
+    use traverse_registry::{
+        PublicRegistryCapabilityRecord, PublicRegistryIndex, load_application_bundle_manifest,
+        load_synced_public_registry_state,
+    };
 
     #[test]
     fn parse_command_accepts_supported_inspect_commands() {
@@ -3976,7 +4291,6 @@ mod tests {
             "new".to_string(),
             "knowledge.retrieve".to_string(),
         ];
-
         assert!(parse_command(&bundle).is_ok());
         assert!(parse_command(&bundle_register).is_ok());
         assert!(parse_command(&agent_inspect).is_ok());
@@ -4106,6 +4420,48 @@ mod tests {
             "examples/applications/expedition-readiness/app.manifest.json".to_string(),
             "--workspace".to_string(),
             "local-dev".to_string(),
+        ];
+        assert!(parse_command(&missing_json).is_err());
+    }
+
+    #[test]
+    fn parse_registry_sync_requires_workspace_and_json_flags() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "registry".to_string(),
+            "sync".to_string(),
+            "--workspace".to_string(),
+            "local-default".to_string(),
+            "--json".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("registry sync should parse");
+
+        match command {
+            Command::RegistrySync {
+                workspace_id,
+                json_output,
+            } => {
+                assert_eq!(workspace_id, "local-default");
+                assert!(json_output);
+            }
+            other => assert!(matches!(other, Command::RegistrySync { .. })),
+        }
+
+        let missing_workspace = vec![
+            "traverse-cli".to_string(),
+            "registry".to_string(),
+            "sync".to_string(),
+            "--json".to_string(),
+        ];
+        assert!(parse_command(&missing_workspace).is_err());
+
+        let missing_json = vec![
+            "traverse-cli".to_string(),
+            "registry".to_string(),
+            "sync".to_string(),
+            "--workspace".to_string(),
+            "local-default".to_string(),
         ];
         assert!(parse_command(&missing_json).is_err());
     }
@@ -4367,6 +4723,100 @@ mod tests {
             "ollama_api_key"
         );
         assert!(!output.contains("do-not-render"));
+    }
+
+    #[test]
+    fn registry_sync_writes_public_index_state_and_json_evidence() {
+        let state_root = unique_temp_dir();
+        let fetcher = StaticRegistryFetcher {
+            result: Ok(FetchedRegistryIndex {
+                source_repo: "traverse-framework/registry".to_string(),
+                release_tag: "index-v7".to_string(),
+                index: registry_index_fixture(),
+            }),
+        };
+
+        let output = registry_sync_at(&state_root, "local-default", true, &fetcher)
+            .expect("registry sync should succeed");
+        let json: Value = serde_json::from_str(&output).expect("sync output must be JSON");
+        let state = load_synced_public_registry_state(&state_root, "local-default")
+            .expect("synced public registry state should load");
+
+        assert_eq!(json["status"], "synced");
+        assert_eq!(json["source"], "traverse-framework/registry");
+        assert_eq!(json["release_tag"], "index-v7");
+        assert_eq!(json["index_version"], 7);
+        assert_eq!(json["record_count"], 1);
+        assert_eq!(json["workspace"], "local-default");
+        assert_eq!(state.record_count, 1);
+        assert_eq!(state.capabilities[0].id, "traverse-starter.process");
+    }
+
+    #[test]
+    fn registry_sync_malformed_index_leaves_existing_state_unchanged() {
+        let state_root = unique_temp_dir();
+        let first_fetcher = StaticRegistryFetcher {
+            result: Ok(FetchedRegistryIndex {
+                source_repo: "traverse-framework/registry".to_string(),
+                release_tag: "index-v7".to_string(),
+                index: registry_index_fixture(),
+            }),
+        };
+        registry_sync_at(&state_root, "local-default", true, &first_fetcher)
+            .expect("initial registry sync should succeed");
+        let state_path =
+            traverse_registry::synced_public_registry_state_path(&state_root, "local-default");
+        let before = fs::read_to_string(&state_path).expect("synced state should read");
+
+        let mut malformed = registry_index_fixture();
+        malformed.capabilities[0].artifact_url = String::new();
+        let bad_fetcher = StaticRegistryFetcher {
+            result: Ok(FetchedRegistryIndex {
+                source_repo: "traverse-framework/registry".to_string(),
+                release_tag: "index-v8".to_string(),
+                index: malformed,
+            }),
+        };
+        let failure = registry_sync_at(&state_root, "local-default", true, &bad_fetcher)
+            .expect_err("malformed index should fail");
+        let after = fs::read_to_string(&state_path).expect("synced state should remain");
+
+        assert!(failure.message().contains("artifact_url"));
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn latest_index_release_asset_selects_highest_index_version() {
+        let releases = serde_json::json!([
+            {
+                "tag_name": "index-v7",
+                "assets": [
+                    {
+                        "name": "index.json",
+                        "browser_download_url": "https://example.test/index-v7/index.json"
+                    }
+                ]
+            },
+            {
+                "tag_name": "notes-v1",
+                "assets": []
+            },
+            {
+                "tag_name": "index-v9",
+                "assets": [
+                    {
+                        "name": "index.json",
+                        "browser_download_url": "https://example.test/index-v9/index.json"
+                    }
+                ]
+            }
+        ]);
+
+        let (tag, url) =
+            latest_index_release_asset(&releases).expect("latest release should resolve");
+
+        assert_eq!(tag, "index-v9");
+        assert_eq!(url, "https://example.test/index-v9/index.json");
     }
 
     #[test]
@@ -5238,6 +5688,33 @@ mod tests {
         let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}"));
         fs::create_dir_all(&path).expect("temporary directory should create");
         path
+    }
+
+    #[derive(Clone)]
+    struct StaticRegistryFetcher {
+        result: Result<FetchedRegistryIndex, RegistrySyncError>,
+    }
+
+    impl RegistryIndexFetcher for StaticRegistryFetcher {
+        fn fetch_latest_index(&self) -> Result<FetchedRegistryIndex, RegistrySyncError> {
+            self.result.clone()
+        }
+    }
+
+    fn registry_index_fixture() -> PublicRegistryIndex {
+        PublicRegistryIndex {
+            index_version: 7,
+            generated_at: "2026-07-06T00:00:00Z".to_string(),
+            source_commit: Some("abc123".to_string()),
+            capabilities: vec![PublicRegistryCapabilityRecord {
+                namespace: "traverse-starter".to_string(),
+                id: "traverse-starter.process".to_string(),
+                version: "1.0.0".to_string(),
+                digest: "sha256:5647c39a".to_string(),
+                artifact_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/traverse-starter.wasm".to_string(),
+                deprecated: false,
+            }],
+        }
     }
 
     fn write_app_validate_fixture(
