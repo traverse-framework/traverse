@@ -122,6 +122,35 @@ paths:
           $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
+  /v1/workspaces/{workspace_id}/apps/{app_id}/events:
+    get:
+      summary: Subscribe to app state events
+      operationId: getAppStateEvents
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/AppId"
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-Sent Events stream for app state updates
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                capabilityResult:
+                  value: |
+                    id: exec_01HX:capability_result
+                    event: capability_result
+                    data: {"workspace_id":"local-default","app_id":"traverse-starter","session_id":"sess_01HX","execution_id":"exec_01HX","state":"results","previous_state":"processing","output":{}}
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
   /v1/workspaces/{workspace_id}/capabilities:
     post:
       summary: Register a capability
@@ -257,6 +286,13 @@ components:
       required: true
       schema:
         type: string
+    AppId:
+      name: app_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._-]+$"
     IdempotencyKey:
       name: Idempotency-Key
       in: header

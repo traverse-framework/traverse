@@ -219,6 +219,39 @@ The API returns a stable public trace envelope, not the raw internal trace artif
 
 OpenTelemetry export is governed by `029-integrated-observability`.
 
+### App State Event Stream
+
+`GET /v1/workspaces/{workspace_id}/apps/{app_id}/events`
+
+The API returns a Server-Sent Events stream for app-scoped runtime state updates. Browser clients can consume it with native `EventSource`; mobile and desktop clients can consume it as an HTTP text stream.
+
+Required response headers:
+
+```text
+Content-Type: text/event-stream
+Cache-Control: no-cache
+```
+
+If `Last-Event-ID` is supplied, the server MUST replay app events after the matching event id when those events are still available in runtime memory. If no app events are available, the server MUST return a `heartbeat` event so clients can validate the stream shape.
+
+Implemented event types for this slice:
+
+- `state_changed`
+- `capability_invoked`
+- `capability_result`
+- `error`
+- `heartbeat`
+
+Example event:
+
+```text
+id: exec_01HX...:capability_result
+event: capability_result
+data: {"workspace_id":"local-default","app_id":"traverse-starter","session_id":"sess_01HX...","execution_id":"exec_01HX...","state":"results","previous_state":"processing","output":{}}
+```
+
+Live command-driven broadcast is completed by the command dispatch slice. This endpoint establishes the app-scoped `text/event-stream` contract, replay behavior, and runtime event payload shape.
+
 ## Server Startup and Discovery
 
 - `traverse-cli serve` MUST default to `127.0.0.1:8787`.
@@ -328,27 +361,29 @@ Rules:
 - **FR-004**: The API MUST expose `POST /v1/workspaces/{workspace_id}/execute`.
 - **FR-005**: The API MUST expose `GET /v1/workspaces/{workspace_id}/executions/{execution_id}`.
 - **FR-006**: The API MUST expose `GET /v1/workspaces/{workspace_id}/traces/{execution_id}`.
-- **FR-007**: The API MUST support synchronous and asynchronous execution.
-- **FR-008**: Synchronous success MUST return a stable execution envelope.
-- **FR-009**: Asynchronous acceptance MUST return `202` with `execution_id`, status URL, trace URL, and optional subscription URL.
-- **FR-010**: Trace fetch MUST return a public trace envelope.
-- **FR-011**: All errors MUST use RFC 9457 Problem Details with `traverse_code`.
-- **FR-012**: Validation failures MUST use `422`.
-- **FR-013**: Immutable registry conflicts MUST use `409`.
-- **FR-014**: Unauthenticated access MUST use `401`; unauthorized access MUST use `403`.
-- **FR-015**: Mutation endpoints SHOULD support optional `Idempotency-Key`.
-- **FR-016**: The server MUST write `.traverse/server.json` in dev-loopback mode.
-- **FR-017**: Discovery files containing a token MUST be owner-read/write only (`0600`) on Unix-like systems.
-- **FR-018**: The server MUST expose coarse `auth_mode` in health output.
-- **FR-019**: Local dev MAY use `local-default` when `workspace_id` is omitted; production MUST require explicit workspace.
-- **FR-020**: The API MUST reject unknown request fields in core API envelopes and governed payloads.
-- **FR-021**: The API MUST include `api_version` in response envelopes.
-- **FR-022**: The API MUST include stable links for next actions.
-- **FR-023**: CORS MUST follow the dev-loopback and production rules above.
-- **FR-024**: CI MUST validate `specs/033-http-json-api/openapi.yaml`.
-- **FR-025**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
-- **FR-026**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
-- **FR-027**: `--auth dev-any` MUST support real-device LAN development by accepting RFC 1918 private IPv4 callers and rejecting public callers.
+- **FR-007**: The API MUST expose `GET /v1/workspaces/{workspace_id}/apps/{app_id}/events` as an app-scoped Server-Sent Events stream.
+- **FR-008**: The API MUST support synchronous and asynchronous execution.
+- **FR-009**: Synchronous success MUST return a stable execution envelope.
+- **FR-010**: Asynchronous acceptance MUST return `202` with `execution_id`, status URL, trace URL, and optional subscription URL.
+- **FR-011**: Trace fetch MUST return a public trace envelope.
+- **FR-012**: App event streams MUST use `text/event-stream`, stable event ids, named event types, and `Last-Event-ID` replay when retained events exist.
+- **FR-013**: All errors MUST use RFC 9457 Problem Details with `traverse_code`.
+- **FR-014**: Validation failures MUST use `422`.
+- **FR-015**: Immutable registry conflicts MUST use `409`.
+- **FR-016**: Unauthenticated access MUST use `401`; unauthorized access MUST use `403`.
+- **FR-017**: Mutation endpoints SHOULD support optional `Idempotency-Key`.
+- **FR-018**: The server MUST write `.traverse/server.json` in dev-loopback mode.
+- **FR-019**: Discovery files containing a token MUST be owner-read/write only (`0600`) on Unix-like systems.
+- **FR-020**: The server MUST expose coarse `auth_mode` in health output.
+- **FR-021**: Local dev MAY use `local-default` when `workspace_id` is omitted; production MUST require explicit workspace.
+- **FR-022**: The API MUST reject unknown request fields in core API envelopes and governed payloads.
+- **FR-023**: The API MUST include `api_version` in response envelopes.
+- **FR-024**: The API MUST include stable links for next actions.
+- **FR-025**: CORS MUST follow the dev-loopback and production rules above.
+- **FR-026**: CI MUST validate `specs/033-http-json-api/openapi.yaml`.
+- **FR-027**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
+- **FR-028**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
+- **FR-029**: `--auth dev-any` MUST support real-device LAN development by accepting RFC 1918 private IPv4 callers and rejecting public callers.
 
 ## Quality Gates
 
@@ -365,5 +400,6 @@ Rules:
 - **SC-003**: A non-loopback binding requires Bearer auth and exact CORS origin configuration.
 - **SC-004**: A client can execute synchronously and receive an execution envelope.
 - **SC-005**: A client can request async execution, poll execution status, and fetch a public trace envelope.
-- **SC-006**: Invalid requests produce RFC 9457 Problem Details with stable `traverse_code`.
-- **SC-007**: The OpenAPI YAML validates in CI.
+- **SC-006**: A browser client can subscribe to an app-scoped SSE endpoint and receive named runtime state events or a heartbeat.
+- **SC-007**: Invalid requests produce RFC 9457 Problem Details with stable `traverse_code`.
+- **SC-008**: The OpenAPI YAML validates in CI.

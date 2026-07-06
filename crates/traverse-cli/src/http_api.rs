@@ -30,10 +30,12 @@ const SERVER_DISCOVERY_SCHEMA_VERSION: &str = "1.0.0";
 const DEFAULT_IDEMPOTENCY_RETENTION_SECONDS: u64 = 24 * 60 * 60;
 const MIN_IDEMPOTENCY_RETENTION_SECONDS: u64 = 60;
 const CORS_ALLOW_METHODS: &str = "GET, POST, OPTIONS";
-const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, Idempotency-Key, Prefer";
+const CORS_ALLOW_HEADERS: &str =
+    "Authorization, Content-Type, Idempotency-Key, Last-Event-ID, Prefer";
 const CORS_MAX_AGE_SECONDS: &str = "600";
 const SCOPE_RUNTIME_EXECUTE: &str = "runtime:execute";
 const SCOPE_RUNTIME_TRACE_READ: &str = "runtime:trace:read";
+const SCOPE_RUNTIME_EVENTS_READ: &str = "runtime:events:read";
 const SCOPE_REGISTRY_READ: &str = "registry:read";
 const SCOPE_REGISTRY_WRITE: &str = "registry:write";
 const SCOPE_GRANTS_APPROVE: &str = "grants:approve";
@@ -89,6 +91,7 @@ struct WorkspaceState<E> {
     loaded_from_disk: bool,
     executions: HashMap<String, ExecutionStatusRecord>,
     traces: HashMap<String, RuntimeTrace>,
+    app_events: Vec<AppStateEventRecord>,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -98,6 +101,20 @@ struct ExecutionStatusRecord {
     status: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AppStateEventRecord {
+    event_id: String,
+    event_type: String,
+    workspace_id: String,
+    app_id: String,
+    session_id: String,
+    execution_id: String,
+    state: String,
+    previous_state: Option<String>,
+    timestamp: String,
+    data: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +249,7 @@ enum WorkspaceOperation {
     ApproveRuntimeGrant(String),
     ExecutionStatus(String, String),
     Trace(String, String),
+    AppEvents(String, String),
 }
 
 /// Start the HTTP/JSON API server, blocking until the listener fails.
@@ -312,6 +330,7 @@ where
             loaded_from_disk: true,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            app_events: Vec::new(),
             runtime_grants: Vec::new(),
         },
     );
@@ -505,6 +524,7 @@ where
                 loaded_from_disk: false,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                app_events: Vec::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -607,6 +627,7 @@ where
                 loaded_from_disk: false,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                app_events: Vec::new(),
                 runtime_grants: Vec::new(),
             });
 
@@ -2489,6 +2510,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             loaded_from_disk: false,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            app_events: Vec::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -2537,6 +2559,7 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
             loaded_from_disk: false,
             executions: HashMap::new(),
             traces: HashMap::new(),
+            app_events: Vec::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -3182,6 +3205,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::Trace(workspace_id, execution_id) => {
             handle_trace_fetch(w, request, state, loopback, &workspace_id, &execution_id)
+        }
+        WorkspaceOperation::AppEvents(workspace_id, app_id) => {
+            handle_app_events(w, request, state, loopback, &workspace_id, &app_id)
         }
     }
 }
@@ -4346,6 +4372,7 @@ fn handle_sync_workspace_execution<W: Write, E: LocalExecutor + Clone>(
         &outcome.result.execution_id,
         outcome.trace.clone(),
     )?;
+    record_app_execution_events(state, workspace_id, &outcome)?;
     for grant in &runtime_grants {
         audit_workspace_event(
             state,
@@ -4498,6 +4525,11 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
                 workspace_trace_path(path).map(|(workspace_id, execution_id)| {
                     WorkspaceOperation::Trace(workspace_id, execution_id)
                 })
+            })
+            .or_else(|| {
+                workspace_app_events_path(path).map(|(workspace_id, app_id)| {
+                    WorkspaceOperation::AppEvents(workspace_id, app_id)
+                })
             }),
         _ => None,
     }
@@ -4519,6 +4551,20 @@ fn workspace_trace_path(path: &str) -> Option<(String, String)> {
         return None;
     }
     Some((workspace_id.to_string(), tail.to_string()))
+}
+
+fn workspace_app_events_path(path: &str) -> Option<(String, String)> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let (workspace_id, tail) = suffix.split_once("/apps/")?;
+    let app_id = tail.strip_suffix("/events")?;
+    if workspace_id.trim().is_empty()
+        || app_id.trim().is_empty()
+        || workspace_id.contains('/')
+        || app_id.contains('/')
+    {
+        return None;
+    }
+    Some((workspace_id.to_string(), app_id.to_string()))
 }
 
 fn request_prefers_async(request: &HttpRequest) -> bool {
@@ -4548,6 +4594,133 @@ fn execution_links(workspace_id: &str, execution_id: &str, include_subscription:
         );
     }
     Value::Object(links)
+}
+
+fn handle_app_events<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+    app_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EVENTS_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let last_event_id = request.headers.get("last-event-id").map(String::as_str);
+    let events = state.with_workspace_mut(workspace_id, |ws| {
+        Ok(replay_app_events(&ws.app_events, app_id, last_event_id))
+    })?;
+    let body = if events.is_empty() {
+        serialize_sse_event(
+            None,
+            "heartbeat",
+            &json!({
+                "workspace_id": workspace_id,
+                "app_id": app_id,
+                "timestamp": generated_registered_at().map_err(|e| e.message)?,
+            }),
+        )?
+    } else {
+        let mut body = String::new();
+        for event in events {
+            body.push_str(&serialize_sse_event(
+                Some(&event.event_id),
+                &event.event_type,
+                &event.data,
+            )?);
+        }
+        body
+    };
+
+    write_raw_with_headers(
+        w,
+        200,
+        "OK",
+        "text/event-stream",
+        body.as_bytes(),
+        &[
+            HeaderLine {
+                name: "Cache-Control".to_string(),
+                value: "no-cache".to_string(),
+            },
+            HeaderLine {
+                name: "X-Accel-Buffering".to_string(),
+                value: "no".to_string(),
+            },
+        ],
+    )
+}
+
+fn replay_app_events(
+    events: &[AppStateEventRecord],
+    app_id: &str,
+    last_event_id: Option<&str>,
+) -> Vec<AppStateEventRecord> {
+    let mut after_last_event = last_event_id.is_none();
+    events
+        .iter()
+        .filter_map(|event| {
+            if event.app_id != app_id {
+                return None;
+            }
+            if !after_last_event {
+                after_last_event = last_event_id == Some(event.event_id.as_str());
+                return None;
+            }
+            Some(event.clone())
+        })
+        .collect()
+}
+
+fn serialize_sse_event(
+    event_id: Option<&str>,
+    event_type: &str,
+    data: &Value,
+) -> Result<String, String> {
+    let mut rendered = String::new();
+    if let Some(event_id) = event_id {
+        rendered.push_str("id: ");
+        rendered.push_str(event_id);
+        rendered.push('\n');
+    }
+    rendered.push_str("event: ");
+    rendered.push_str(event_type);
+    rendered.push('\n');
+    let data = serde_json::to_string(data)
+        .map_err(|e| format!("failed to serialize SSE event data: {e}"))?;
+    rendered.push_str("data: ");
+    rendered.push_str(&data);
+    rendered.push_str("\n\n");
+    Ok(rendered)
 }
 
 fn record_execution_status<E: LocalExecutor + Clone>(
@@ -4581,6 +4754,118 @@ fn record_execution_trace<E: LocalExecutor + Clone>(
         ws.traces.insert(execution_id.to_string(), trace);
         Ok(())
     })
+}
+
+fn record_app_execution_events<E: LocalExecutor + Clone>(
+    state: &ApiState<E>,
+    workspace_id: &str,
+    outcome: &RuntimeExecutionOutcome,
+) -> Result<(), String> {
+    let execution_id = outcome.result.execution_id.clone();
+    let app_id = app_id_for_outcome(outcome);
+    let session_id = outcome
+        .trace
+        .request
+        .context
+        .correlation_id
+        .clone()
+        .unwrap_or_else(|| execution_id.clone());
+    let timestamp = generated_registered_at().map_err(|e| e.message)?;
+    let final_state = if outcome.result.status == RuntimeResultStatus::Error {
+        "error"
+    } else {
+        "results"
+    };
+    let result_event_type = if outcome.result.status == RuntimeResultStatus::Error {
+        "error"
+    } else {
+        "capability_result"
+    };
+
+    let events = vec![
+        AppStateEventRecord {
+            event_id: format!("{execution_id}:state_changed:processing"),
+            event_type: "state_changed".to_string(),
+            workspace_id: workspace_id.to_string(),
+            app_id: app_id.clone(),
+            session_id: session_id.clone(),
+            execution_id: execution_id.clone(),
+            state: "processing".to_string(),
+            previous_state: Some("idle".to_string()),
+            timestamp: timestamp.clone(),
+            data: json!({
+                "workspace_id": workspace_id,
+                "app_id": app_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
+                "state": "processing",
+                "previous_state": "idle",
+                "timestamp": timestamp,
+            }),
+        },
+        AppStateEventRecord {
+            event_id: format!("{execution_id}:capability_invoked"),
+            event_type: "capability_invoked".to_string(),
+            workspace_id: workspace_id.to_string(),
+            app_id: app_id.clone(),
+            session_id: session_id.clone(),
+            execution_id: execution_id.clone(),
+            state: "processing".to_string(),
+            previous_state: None,
+            timestamp: timestamp.clone(),
+            data: json!({
+                "workspace_id": workspace_id,
+                "app_id": app_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
+                "capability_id": outcome.trace.request.intent.capability_id,
+                "capability_version": outcome.trace.request.intent.capability_version,
+                "state": "processing",
+                "timestamp": timestamp,
+            }),
+        },
+        AppStateEventRecord {
+            event_id: format!("{execution_id}:{result_event_type}"),
+            event_type: result_event_type.to_string(),
+            workspace_id: workspace_id.to_string(),
+            app_id: app_id.clone(),
+            session_id: session_id.clone(),
+            execution_id: execution_id.clone(),
+            state: final_state.to_string(),
+            previous_state: Some("processing".to_string()),
+            timestamp: timestamp.clone(),
+            data: json!({
+                "workspace_id": workspace_id,
+                "app_id": app_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
+                "state": final_state,
+                "previous_state": "processing",
+                "timestamp": timestamp,
+                "output": outcome.result.output,
+                "error": outcome.result.error.as_ref().map(|e| json!({
+                    "code": format!("{:?}", e.code).to_lowercase(),
+                    "message": e.message,
+                })),
+            }),
+        },
+    ];
+
+    state.with_workspace_mut(workspace_id, |ws| {
+        ws.app_events.extend(events);
+        Ok(())
+    })
+}
+
+fn app_id_for_outcome(outcome: &RuntimeExecutionOutcome) -> String {
+    outcome
+        .trace
+        .request
+        .intent
+        .capability_id
+        .as_deref()
+        .and_then(|id| id.rsplit_once('.').map(|(prefix, _)| prefix.to_string()))
+        .unwrap_or_else(|| "default".to_string())
 }
 
 fn idempotency_replay_or_conflict<E: LocalExecutor + Clone>(
@@ -5831,6 +6116,7 @@ mod tests {
                 loaded_from_disk: true,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                app_events: Vec::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -5883,6 +6169,7 @@ mod tests {
                 loaded_from_disk: true,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                app_events: Vec::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -5922,6 +6209,7 @@ mod tests {
                 loaded_from_disk: true,
                 executions: HashMap::new(),
                 traces: HashMap::new(),
+                app_events: Vec::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6091,6 +6379,16 @@ mod tests {
         let prefix = format!("{name}: ");
         text.lines()
             .find_map(|line| line.strip_prefix(&prefix).map(ToString::to_string))
+    }
+
+    fn response_body_text(response: &[u8]) -> String {
+        let pos = response
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("response must contain \\r\\n\\r\\n");
+        std::str::from_utf8(&response[pos + 4..])
+            .expect("response body must be UTF-8")
+            .to_string()
     }
 
     // ------------------------------------------------------------------
@@ -7108,6 +7406,99 @@ mod tests {
         assert_eq!(response_content_type(&out), "application/problem+json");
         let resp = parse_response_body(&out);
         assert_eq!(resp["traverse_code"], "not_found");
+    }
+
+    #[test]
+    fn app_events_path_parses_workspace_and_app_id() {
+        assert_eq!(
+            workspace_app_events_path("/v1/workspaces/ws-test/apps/traverse-starter/events"),
+            Some(("ws-test".to_string(), "traverse-starter".to_string()))
+        );
+        assert!(workspace_app_events_path("/v1/workspaces/ws-test/apps//events").is_none());
+        assert!(
+            workspace_app_events_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn app_events_endpoint_returns_event_stream_heartbeat_when_empty() {
+        let state = empty_state();
+        let req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+
+        let mut out = Vec::new();
+        handle_app_events(&mut out, &req, &state, true, "ws-test", "traverse-starter")
+            .expect("events endpoint must write a response");
+
+        assert_eq!(response_status(&out), 200);
+        assert_eq!(response_content_type(&out), "text/event-stream");
+        assert_eq!(
+            response_header(&out, "Cache-Control").as_deref(),
+            Some("no-cache")
+        );
+        let body = response_body_text(&out);
+        assert!(body.contains("event: heartbeat"));
+        assert!(body.contains("\"app_id\":\"traverse-starter\""));
+    }
+
+    #[test]
+    fn app_events_endpoint_replays_execution_events() {
+        let body = make_runtime_request_body("traverse-starter.process");
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        let execute_req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+        let mut execute_out = Vec::new();
+        handle_execute_workspace(&mut execute_out, &execute_req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        let mut out = Vec::new();
+        handle_app_events(&mut out, &req, &state, true, "ws-test", "traverse-starter")
+            .expect("events endpoint must write a response");
+
+        assert_eq!(response_status(&out), 200);
+        assert_eq!(response_content_type(&out), "text/event-stream");
+        let body = response_body_text(&out);
+        assert!(body.contains("event: state_changed"));
+        assert!(body.contains("event: capability_invoked"));
+        assert!(body.contains("event: capability_result"));
+        assert!(body.contains("\"state\":\"results\""));
+        assert!(body.contains("\"result\":\"ok\""));
+    }
+
+    #[test]
+    fn app_events_endpoint_honors_last_event_id_replay() {
+        let body = make_runtime_request_body("traverse-starter.process");
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        let execute_req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+        let mut execute_out = Vec::new();
+        handle_execute_workspace(&mut execute_out, &execute_req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let mut req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        req.headers.insert(
+            "last-event-id".to_string(),
+            "exec_test-req-001:state_changed:processing".to_string(),
+        );
+        let mut out = Vec::new();
+        handle_app_events(&mut out, &req, &state, true, "ws-test", "traverse-starter")
+            .expect("events endpoint must write a response");
+
+        let body = response_body_text(&out);
+        assert!(!body.contains("event: state_changed"));
+        assert!(body.contains("event: capability_invoked"));
+        assert!(body.contains("event: capability_result"));
     }
 
     #[test]
