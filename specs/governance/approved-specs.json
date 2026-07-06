@@ -566,6 +566,20 @@
       ]
     },
     {
+      "id": "053-conditional-state-transitions",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/053-conditional-state-transitions/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-registry/",
+        "examples/applications/",
+        "specs/053-conditional-state-transitions/",
+        "specs/governance/"
+      ]
+    },
+    {
       "id": "049-v1-milestone-gate",
       "version": "1.0.0",
       "status": "approved",

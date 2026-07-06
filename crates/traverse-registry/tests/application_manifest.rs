@@ -10,10 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use traverse_contracts::{ExecutionTarget, parse_event_contract};
 use traverse_registry::{
     ApplicationManifestErrorCode, ApplicationRegistrationErrorCode, ApplicationRegistrationRequest,
-    ApplicationRegistrationStatus, ApplicationRegistry, CapabilityRegistry, EventRegistration,
-    EventRegistry, LookupScope, ModelCandidateRejectionCode, ModelResolutionEvidence,
-    ModelResolutionPhase, RegistryScope, SelectedModelCandidate, WorkflowRegistry,
-    load_application_bundle_manifest,
+    ApplicationRegistrationStatus, ApplicationRegistry, ApplicationStateTransitionConditionOp,
+    CapabilityRegistry, EventRegistration, EventRegistry, LookupScope, ModelCandidateRejectionCode,
+    ModelResolutionEvidence, ModelResolutionPhase, RegistryScope, SelectedModelCandidate,
+    WorkflowRegistry, load_application_bundle_manifest,
 };
 
 #[test]
@@ -188,6 +188,160 @@ fn loads_valid_application_state_machine() {
         "expedition.planning.validate-team-readiness"
     );
     assert!(state_machine.states[0].transitions[0].with_last_payload);
+}
+
+#[test]
+fn loads_conditional_application_state_machine_transitions() {
+    let fixture = AppFixture::new("conditional-state-machine");
+    let wasm_digest = fixture.write_wasm("component bytes");
+    fixture.write_component_manifest(&json!({
+        "wasm_digest": format!("sha256:{wasm_digest}"),
+        "dependencies": []
+    }));
+    fixture.write_app_manifest_with_state_machine(
+        &json!([component_ref(
+            "expedition.readiness.validate-team-readiness-component",
+            "1.0.0",
+            &format!("sha256:{wasm_digest}"),
+            "components/validate-team-readiness/component.manifest.json",
+        )]),
+        &json!({
+            "initial_state": "extracting",
+            "states": [
+                {
+                    "id": "extracting",
+                    "invoke": {
+                        "capability_id": "expedition.planning.validate-team-readiness",
+                        "input_from": "command.payload"
+                    },
+                    "transitions": [
+                        {
+                            "on": "capability_succeeded",
+                            "condition": {
+                                "field": "output.confidence_score",
+                                "op": "gte",
+                                "value": 0.85
+                            },
+                            "to": "auto_approved"
+                        },
+                        {
+                            "on": "capability_succeeded",
+                            "condition": {
+                                "field": "output.confidence_score",
+                                "op": "lt",
+                                "value": 0.85
+                            },
+                            "to": "pending_review"
+                        },
+                        {
+                            "on": "capability_failed",
+                            "condition": {
+                                "field": "output.error_code",
+                                "op": "exists"
+                            },
+                            "to": "extraction_error"
+                        }
+                    ]
+                },
+                {"id": "auto_approved", "transitions": []},
+                {"id": "pending_review", "transitions": []},
+                {"id": "extraction_error", "transitions": []}
+            ]
+        }),
+    );
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("conditional state machine should validate");
+    let transitions = &bundle
+        .state_machine
+        .expect("state machine should be materialized")
+        .states[0]
+        .transitions;
+
+    assert_eq!(transitions[0].to, "auto_approved");
+    let condition = transitions[0]
+        .condition
+        .as_ref()
+        .expect("success transition should be conditional");
+    assert_eq!(condition.field, "output.confidence_score");
+    assert_eq!(condition.op, ApplicationStateTransitionConditionOp::Gte);
+    assert_eq!(condition.value, Some(json!(0.85)));
+    assert_eq!(
+        transitions[2]
+            .condition
+            .as_ref()
+            .expect("error transition should check existence")
+            .op,
+        ApplicationStateTransitionConditionOp::Exists
+    );
+}
+
+#[test]
+fn rejects_invalid_conditional_transition_shapes() {
+    let cases = [
+        (
+            "condition-private-field",
+            json!({
+                "field": "session.context.confidence_score",
+                "op": "gte",
+                "value": 0.85
+            }),
+        ),
+        (
+            "condition-empty-path-segment",
+            json!({
+                "field": "output..confidence_score",
+                "op": "gte",
+                "value": 0.85
+            }),
+        ),
+        (
+            "condition-unknown-op",
+            json!({
+                "field": "output.confidence_score",
+                "op": "between",
+                "value": [0.5, 0.85]
+            }),
+        ),
+        (
+            "condition-missing-value",
+            json!({
+                "field": "output.confidence_score",
+                "op": "gte"
+            }),
+        ),
+    ];
+
+    for (name, condition) in cases {
+        let fixture = AppFixture::new(name);
+        fixture.write_app_manifest_with_state_machine(
+            &json!([]),
+            &json!({
+                "initial_state": "extracting",
+                "states": [
+                    {
+                        "id": "extracting",
+                        "transitions": [
+                            {
+                                "on": "capability_succeeded",
+                                "condition": condition,
+                                "to": "done"
+                            }
+                        ]
+                    },
+                    {"id": "done", "transitions": []}
+                ]
+            }),
+        );
+
+        let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+            .expect_err("invalid transition condition should fail");
+
+        assert_eq!(
+            failure.errors[0].code,
+            ApplicationManifestErrorCode::AppStateMachineInvalid
+        );
+    }
 }
 
 #[test]

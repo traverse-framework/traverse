@@ -58,7 +58,30 @@ pub struct ApplicationStateInvoke {
 pub struct ApplicationStateTransition {
     pub on: String,
     pub to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<ApplicationStateTransitionCondition>,
     pub with_last_payload: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationStateTransitionCondition {
+    pub field: String,
+    pub op: ApplicationStateTransitionConditionOp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationStateTransitionConditionOp {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    In,
+    Exists,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -496,7 +519,17 @@ struct ApplicationStateTransitionSerde {
     on: String,
     to: String,
     #[serde(default)]
+    condition: Option<ApplicationStateTransitionConditionSerde>,
+    #[serde(default)]
     with_last_payload: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationStateTransitionConditionSerde {
+    field: String,
+    op: String,
+    #[serde(default)]
+    value: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1101,13 +1134,96 @@ fn materialize_state_machine_state(
         transitions: state
             .transitions
             .iter()
-            .map(|transition| ApplicationStateTransition {
-                on: transition.on.clone(),
-                to: transition.to.clone(),
-                with_last_payload: transition.with_last_payload,
-            })
-            .collect(),
+            .map(|transition| materialize_state_machine_transition(&state.id, transition))
+            .collect::<Result<Vec<_>, _>>()?,
     })
+}
+
+fn materialize_state_machine_transition(
+    state_id: &str,
+    transition: &ApplicationStateTransitionSerde,
+) -> Result<ApplicationStateTransition, ApplicationManifestFailure> {
+    Ok(ApplicationStateTransition {
+        on: transition.on.clone(),
+        to: transition.to.clone(),
+        condition: transition
+            .condition
+            .as_ref()
+            .map(|condition| materialize_transition_condition(state_id, transition, condition))
+            .transpose()?,
+        with_last_payload: transition.with_last_payload,
+    })
+}
+
+fn materialize_transition_condition(
+    state_id: &str,
+    transition: &ApplicationStateTransitionSerde,
+    condition: &ApplicationStateTransitionConditionSerde,
+) -> Result<ApplicationStateTransitionCondition, ApplicationManifestFailure> {
+    let field = condition.field.trim();
+    if !valid_condition_field_path(field) {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+            format!(
+                "state_machine.states.{state_id}.transitions.{}.condition.field",
+                transition.on
+            ),
+            "transition condition field must be a non-empty output.* path".to_string(),
+        ));
+    }
+
+    let op = parse_transition_condition_op(&condition.op).ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+            format!(
+                "state_machine.states.{state_id}.transitions.{}.condition.op",
+                transition.on
+            ),
+            format!(
+                "unsupported transition condition operator '{}'",
+                condition.op
+            ),
+        )
+    })?;
+    if op != ApplicationStateTransitionConditionOp::Exists && condition.value.is_none() {
+        return Err(single_error(
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
+            format!(
+                "state_machine.states.{state_id}.transitions.{}.condition.value",
+                transition.on
+            ),
+            format!(
+                "transition condition operator '{}' requires value",
+                condition.op
+            ),
+        ));
+    }
+
+    Ok(ApplicationStateTransitionCondition {
+        field: field.to_string(),
+        op,
+        value: condition.value.clone(),
+    })
+}
+
+fn parse_transition_condition_op(raw: &str) -> Option<ApplicationStateTransitionConditionOp> {
+    match raw {
+        "eq" => Some(ApplicationStateTransitionConditionOp::Eq),
+        "neq" => Some(ApplicationStateTransitionConditionOp::Neq),
+        "gt" => Some(ApplicationStateTransitionConditionOp::Gt),
+        "gte" => Some(ApplicationStateTransitionConditionOp::Gte),
+        "lt" => Some(ApplicationStateTransitionConditionOp::Lt),
+        "lte" => Some(ApplicationStateTransitionConditionOp::Lte),
+        "in" => Some(ApplicationStateTransitionConditionOp::In),
+        "exists" => Some(ApplicationStateTransitionConditionOp::Exists),
+        _ => None,
+    }
+}
+
+fn valid_condition_field_path(field: &str) -> bool {
+    field
+        .strip_prefix("output.")
+        .is_some_and(|suffix| suffix.split('.').all(has_text))
 }
 
 fn load_effective_config(
