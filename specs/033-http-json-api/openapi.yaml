@@ -151,6 +151,53 @@ paths:
           $ref: "#/components/responses/Problem"
         "403":
           $ref: "#/components/responses/Problem"
+  /v1/workspaces/{workspace_id}/apps/{app_id}/sessions:
+    get:
+      summary: List app state-machine sessions
+      operationId: listAppSessions
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/AppId"
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - created_asc
+              - created_desc
+            default: created_desc
+      responses:
+        "200":
+          description: App session listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSessionsEnvelope"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
   /v1/workspaces/{workspace_id}/capabilities:
     post:
       summary: Register a capability
@@ -453,6 +500,50 @@ components:
         links:
           $ref: "#/components/schemas/Links"
       additionalProperties: true
+    AppSessionsEnvelope:
+      type: object
+      required:
+        - api_version
+        - app_id
+        - sessions
+        - total
+      properties:
+        api_version:
+          type: string
+        app_id:
+          type: string
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AppSession"
+        total:
+          type: integer
+        next_cursor:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    AppSession:
+      type: object
+      required:
+        - session_id
+        - current_state
+        - created_at
+        - updated_at
+        - context
+      properties:
+        session_id:
+          type: string
+        current_state:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        context:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
     RegistrationRequest:
       type: object
       required:

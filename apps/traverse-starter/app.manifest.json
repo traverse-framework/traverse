@@ -53,5 +53,66 @@
   "public_surfaces": [
     "cli",
     "http_json"
-  ]
+  ],
+  "state_machine": {
+    "initial_state": "idle",
+    "list_context_fields": [
+      "output.title",
+      "output.tags",
+      "output.noteType",
+      "output.suggestedNextAction",
+      "output.status"
+    ],
+    "states": [
+      {
+        "id": "idle",
+        "transitions": [
+          {
+            "on": "submit",
+            "to": "processing"
+          }
+        ]
+      },
+      {
+        "id": "processing",
+        "invoke": {
+          "capability_id": "traverse-starter.process",
+          "input_from": "command.payload"
+        },
+        "transitions": [
+          {
+            "on": "capability_succeeded",
+            "to": "results"
+          },
+          {
+            "on": "capability_failed",
+            "to": "error"
+          }
+        ]
+      },
+      {
+        "id": "results",
+        "transitions": [
+          {
+            "on": "reset",
+            "to": "idle"
+          }
+        ]
+      },
+      {
+        "id": "error",
+        "transitions": [
+          {
+            "on": "retry",
+            "to": "processing",
+            "with_last_payload": true
+          },
+          {
+            "on": "reset",
+            "to": "idle"
+          }
+        ]
+      }
+    ]
+  }
 }
