@@ -144,6 +144,7 @@ fn loads_valid_application_state_machine() {
         )]),
         &json!({
             "initial_state": "draft",
+            "list_context_fields": ["output.summary", "output.confidence_score"],
             "states": [
                 {
                     "id": "draft",
@@ -178,6 +179,13 @@ fn loads_valid_application_state_machine() {
         .expect("state machine should be materialized");
 
     assert_eq!(state_machine.initial_state, "draft");
+    assert_eq!(
+        state_machine.list_context_fields,
+        vec![
+            "output.summary".to_string(),
+            "output.confidence_score".to_string()
+        ]
+    );
     assert_eq!(state_machine.states.len(), 2);
     assert_eq!(
         state_machine.states[0]
@@ -395,6 +403,15 @@ fn rejects_invalid_application_state_machine_shapes() {
                 ]
             }),
             ApplicationManifestErrorCode::AppStateMachineUnreachableState,
+        ),
+        (
+            "state-machine-invalid-list-context-field",
+            json!({
+                "initial_state": "draft",
+                "list_context_fields": ["session.context.summary"],
+                "states": [{"id": "draft", "transitions": []}]
+            }),
+            ApplicationManifestErrorCode::AppStateMachineInvalid,
         ),
     ];
 

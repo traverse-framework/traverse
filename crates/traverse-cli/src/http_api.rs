@@ -14,6 +14,7 @@ use traverse_registry::{
     CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
     LookupScope, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
     WorkflowDefinition, WorkflowRegistration, WorkflowRegistry, WorkspaceAppStateErrorCode,
+    load_application_bundle_manifest,
 };
 use traverse_runtime::{
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
@@ -92,6 +93,7 @@ struct WorkspaceState<E> {
     executions: HashMap<String, ExecutionStatusRecord>,
     traces: HashMap<String, RuntimeTrace>,
     app_events: Vec<AppStateEventRecord>,
+    app_list_context_fields: HashMap<String, Vec<String>>,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -250,6 +252,7 @@ enum WorkspaceOperation {
     ExecutionStatus(String, String),
     Trace(String, String),
     AppEvents(String, String),
+    AppSessions(String, String),
 }
 
 /// Start the HTTP/JSON API server, blocking until the listener fails.
@@ -331,6 +334,7 @@ where
             executions: HashMap::new(),
             traces: HashMap::new(),
             app_events: Vec::new(),
+            app_list_context_fields: HashMap::new(),
             runtime_grants: Vec::new(),
         },
     );
@@ -525,6 +529,7 @@ where
                 executions: HashMap::new(),
                 traces: HashMap::new(),
                 app_events: Vec::new(),
+                app_list_context_fields: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -628,6 +633,7 @@ where
                 executions: HashMap::new(),
                 traces: HashMap::new(),
                 app_events: Vec::new(),
+                app_list_context_fields: HashMap::new(),
                 runtime_grants: Vec::new(),
             });
 
@@ -2455,6 +2461,8 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
         env!("CARGO_PKG_VERSION"),
     ) {
         Ok(runtime) => {
+            ws.app_list_context_fields =
+                load_workspace_app_list_context_fields(workspace_root, &runtime);
             ws.runtime = runtime;
             Ok(())
         }
@@ -2471,6 +2479,29 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
             render_workspace_app_state_failure(&failure)
         )),
     }
+}
+
+fn load_workspace_app_list_context_fields<E: LocalExecutor>(
+    workspace_root: &Path,
+    runtime: &Runtime<E>,
+) -> HashMap<String, Vec<String>> {
+    let mut fields = HashMap::new();
+    for app in runtime.workspace_applications() {
+        let manifest_path = PathBuf::from(&app.manifest_path);
+        let manifest_path = if manifest_path.is_absolute() {
+            manifest_path
+        } else {
+            workspace_root.join(manifest_path)
+        };
+        let Ok(manifest) = load_application_bundle_manifest(&manifest_path) else {
+            continue;
+        };
+        let Some(state_machine) = manifest.state_machine else {
+            continue;
+        };
+        fields.insert(app.app_id.clone(), state_machine.list_context_fields);
+    }
+    fields
 }
 
 fn render_workspace_app_state_failure(
@@ -2511,6 +2542,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             executions: HashMap::new(),
             traces: HashMap::new(),
             app_events: Vec::new(),
+            app_list_context_fields: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -2560,6 +2592,7 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
             executions: HashMap::new(),
             traces: HashMap::new(),
             app_events: Vec::new(),
+            app_list_context_fields: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -3208,6 +3241,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::AppEvents(workspace_id, app_id) => {
             handle_app_events(w, request, state, loopback, &workspace_id, &app_id)
+        }
+        WorkspaceOperation::AppSessions(workspace_id, app_id) => {
+            handle_app_sessions(w, request, state, loopback, &workspace_id, &app_id)
         }
     }
 }
@@ -4530,6 +4566,11 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
                 workspace_app_events_path(path).map(|(workspace_id, app_id)| {
                     WorkspaceOperation::AppEvents(workspace_id, app_id)
                 })
+            })
+            .or_else(|| {
+                workspace_app_sessions_path(path).map(|(workspace_id, app_id)| {
+                    WorkspaceOperation::AppSessions(workspace_id, app_id)
+                })
             }),
         _ => None,
     }
@@ -4557,6 +4598,20 @@ fn workspace_app_events_path(path: &str) -> Option<(String, String)> {
     let suffix = path.strip_prefix("/v1/workspaces/")?;
     let (workspace_id, tail) = suffix.split_once("/apps/")?;
     let app_id = tail.strip_suffix("/events")?;
+    if workspace_id.trim().is_empty()
+        || app_id.trim().is_empty()
+        || workspace_id.contains('/')
+        || app_id.contains('/')
+    {
+        return None;
+    }
+    Some((workspace_id.to_string(), app_id.to_string()))
+}
+
+fn workspace_app_sessions_path(path: &str) -> Option<(String, String)> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let (workspace_id, tail) = suffix.split_once("/apps/")?;
+    let app_id = tail.strip_suffix("/sessions")?;
     if workspace_id.trim().is_empty()
         || app_id.trim().is_empty()
         || workspace_id.contains('/')
@@ -4678,6 +4733,224 @@ fn handle_app_events<W: Write, E: LocalExecutor + Clone>(
             },
         ],
     )
+}
+
+fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+    app_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EVENTS_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let state_filter = request.query.get("state").map(String::as_str);
+    let limit = match parse_sessions_limit(request.query.get("limit").map(String::as_str)) {
+        Ok(limit) => limit,
+        Err(message) => {
+            return write_json(
+                w,
+                400,
+                "Bad Request",
+                &error_envelope("invalid_query", &message),
+            );
+        }
+    };
+    let cursor = request.query.get("cursor").map(String::as_str);
+    let order = match parse_sessions_order(request.query.get("order").map(String::as_str)) {
+        Ok(order) => order,
+        Err(message) => {
+            return write_json(
+                w,
+                400,
+                "Bad Request",
+                &error_envelope("invalid_query", &message),
+            );
+        }
+    };
+    let response = state.with_workspace_mut(workspace_id, |ws| {
+        Ok(app_sessions_response(
+            &ws.app_events,
+            ws.app_list_context_fields
+                .get(app_id)
+                .map_or(&[], Vec::as_slice),
+            app_id,
+            state_filter,
+            limit,
+            cursor,
+            order,
+        ))
+    })?;
+
+    write_json(w, 200, "OK", &response)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionsOrder {
+    CreatedAsc,
+    CreatedDesc,
+}
+
+fn parse_sessions_order(value: Option<&str>) -> Result<SessionsOrder, String> {
+    match value.unwrap_or("created_desc") {
+        "created_asc" => Ok(SessionsOrder::CreatedAsc),
+        "created_desc" => Ok(SessionsOrder::CreatedDesc),
+        other => Err(format!(
+            "unsupported sessions order '{other}' (expected created_asc or created_desc)"
+        )),
+    }
+}
+
+fn parse_sessions_limit(value: Option<&str>) -> Result<usize, String> {
+    let Some(value) = value else {
+        return Ok(50);
+    };
+    let limit = value
+        .parse::<usize>()
+        .map_err(|_| "limit must be a positive integer".to_string())?;
+    if limit == 0 || limit > 200 {
+        return Err("limit must be between 1 and 200".to_string());
+    }
+    Ok(limit)
+}
+
+fn app_sessions_response(
+    events: &[AppStateEventRecord],
+    list_context_fields: &[String],
+    app_id: &str,
+    state_filter: Option<&str>,
+    limit: usize,
+    cursor: Option<&str>,
+    order: SessionsOrder,
+) -> Value {
+    let mut sessions = materialize_app_sessions(events, list_context_fields, app_id);
+    if let Some(state_filter) = state_filter {
+        sessions.retain(|session| session["current_state"].as_str() == Some(state_filter));
+    }
+    sessions.sort_by(|a, b| {
+        let left = a["created_at"].as_str().unwrap_or_default();
+        let right = b["created_at"].as_str().unwrap_or_default();
+        match order {
+            SessionsOrder::CreatedAsc => left.cmp(right),
+            SessionsOrder::CreatedDesc => right.cmp(left),
+        }
+    });
+    let total = sessions.len();
+    if let Some(cursor) = cursor
+        && let Some(index) = sessions
+            .iter()
+            .position(|session| session["session_id"].as_str() == Some(cursor))
+    {
+        sessions = sessions.into_iter().skip(index + 1).collect();
+    }
+    let next_cursor = sessions
+        .get(limit)
+        .and_then(|session| session["session_id"].as_str())
+        .map(ToString::to_string);
+    sessions.truncate(limit);
+    json!({
+        "api_version": "v1",
+        "app_id": app_id,
+        "sessions": sessions,
+        "total": total,
+        "next_cursor": next_cursor,
+    })
+}
+
+fn materialize_app_sessions(
+    events: &[AppStateEventRecord],
+    list_context_fields: &[String],
+    app_id: &str,
+) -> Vec<Value> {
+    let mut grouped: HashMap<String, Vec<&AppStateEventRecord>> = HashMap::new();
+    for event in events {
+        if event.app_id == app_id {
+            grouped
+                .entry(event.session_id.clone())
+                .or_default()
+                .push(event);
+        }
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(session_id, mut events)| {
+            events.sort_by(|a, b| {
+                a.timestamp
+                    .cmp(&b.timestamp)
+                    .then(a.event_id.cmp(&b.event_id))
+            });
+            let first = events.first()?;
+            let last = events.last()?;
+            let context = events
+                .iter()
+                .rev()
+                .find_map(|event| event.data.get("output"))
+                .map_or_else(
+                    || Value::Object(serde_json::Map::new()),
+                    |output| project_list_context(output, list_context_fields),
+                );
+            Some(json!({
+                "session_id": session_id,
+                "current_state": last.state,
+                "created_at": first.timestamp,
+                "updated_at": last.timestamp,
+                "context": context,
+            }))
+        })
+        .collect()
+}
+
+fn project_list_context(output: &Value, list_context_fields: &[String]) -> Value {
+    let mut context = serde_json::Map::new();
+    for field in list_context_fields {
+        let Some(path) = field.strip_prefix("output.") else {
+            continue;
+        };
+        let Some(value) = get_json_path(output, path) else {
+            continue;
+        };
+        context.insert(path.replace('.', "_"), value.clone());
+    }
+    Value::Object(context)
+}
+
+fn get_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
 }
 
 fn replay_app_events(
@@ -6117,6 +6390,7 @@ mod tests {
                 executions: HashMap::new(),
                 traces: HashMap::new(),
                 app_events: Vec::new(),
+                app_list_context_fields: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6170,6 +6444,7 @@ mod tests {
                 executions: HashMap::new(),
                 traces: HashMap::new(),
                 app_events: Vec::new(),
+                app_list_context_fields: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6210,6 +6485,7 @@ mod tests {
                 executions: HashMap::new(),
                 traces: HashMap::new(),
                 app_events: Vec::new(),
+                app_list_context_fields: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6342,6 +6618,53 @@ mod tests {
         })
         .to_string()
         .into_bytes()
+    }
+
+    fn seed_list_context_fields(state: &ApiState<TestExecutor>, fields: &[&str]) {
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.app_list_context_fields.insert(
+                    "traverse-starter".to_string(),
+                    fields.iter().map(|field| (*field).to_string()).collect(),
+                );
+                Ok(())
+            })
+            .expect("list context fields must be seeded");
+    }
+
+    fn seed_app_session_event(
+        state: &ApiState<TestExecutor>,
+        session_id: &str,
+        current_state: &str,
+        timestamp: &str,
+        output: &Value,
+    ) {
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.app_events.push(AppStateEventRecord {
+                    event_id: format!("{session_id}:{current_state}"),
+                    event_type: "capability_result".to_string(),
+                    workspace_id: "ws-test".to_string(),
+                    app_id: "traverse-starter".to_string(),
+                    session_id: session_id.to_string(),
+                    execution_id: format!("exec_{session_id}"),
+                    state: current_state.to_string(),
+                    previous_state: Some("processing".to_string()),
+                    timestamp: timestamp.to_string(),
+                    data: json!({
+                        "workspace_id": "ws-test",
+                        "app_id": "traverse-starter",
+                        "session_id": session_id,
+                        "execution_id": format!("exec_{session_id}"),
+                        "state": current_state,
+                        "previous_state": "processing",
+                        "timestamp": timestamp,
+                        "output": output,
+                    }),
+                });
+                Ok(())
+            })
+            .expect("app session event must be seeded");
     }
 
     fn parse_response_body(response: &[u8]) -> Value {
@@ -7499,6 +7822,185 @@ mod tests {
         assert!(!body.contains("event: state_changed"));
         assert!(body.contains("event: capability_invoked"));
         assert!(body.contains("event: capability_result"));
+    }
+
+    #[test]
+    fn app_sessions_path_parses_workspace_and_app_id() {
+        assert_eq!(
+            workspace_app_sessions_path("/v1/workspaces/ws-test/apps/traverse-starter/sessions"),
+            Some(("ws-test".to_string(), "traverse-starter".to_string()))
+        );
+        assert!(workspace_app_sessions_path("/v1/workspaces/ws-test/apps//sessions").is_none());
+        assert!(
+            workspace_app_sessions_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn app_sessions_endpoint_filters_state_and_projects_context_fields() {
+        let state = empty_state();
+        seed_app_session_event(
+            &state,
+            "sess-a",
+            "pending_review",
+            "unix:1",
+            &json!({
+                "document_type": "invoice",
+                "confidence_score": 0.72,
+                "secret_notes": "must not leak",
+                "extracted_fields": { "summary": "Invoice from Acme Corp" }
+            }),
+        );
+        seed_app_session_event(
+            &state,
+            "sess-b",
+            "auto_approved",
+            "unix:2",
+            &json!({
+                "document_type": "policy",
+                "confidence_score": 0.91,
+                "extracted_fields": { "summary": "Policy update" }
+            }),
+        );
+        seed_app_session_event(
+            &state,
+            "sess-c",
+            "pending_review",
+            "unix:3",
+            &json!({
+                "document_type": "contract",
+                "confidence_score": 0.61,
+                "extracted_fields": { "summary": "Contract draft" }
+            }),
+        );
+        seed_list_context_fields(
+            &state,
+            &[
+                "output.document_type",
+                "output.confidence_score",
+                "output.extracted_fields.summary",
+            ],
+        );
+
+        let mut req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/sessions",
+            Vec::new(),
+        );
+        req.query
+            .insert("state".to_string(), "pending_review".to_string());
+        let mut out = Vec::new();
+        handle_app_sessions(&mut out, &req, &state, true, "ws-test", "traverse-starter")
+            .expect("sessions endpoint must write a response");
+
+        assert_eq!(response_status(&out), 200);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["api_version"], "v1");
+        assert_eq!(resp["total"], 2);
+        let sessions = resp["sessions"].as_array().expect("sessions must be array");
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0]["session_id"], "sess-c");
+        assert_eq!(sessions[0]["current_state"], "pending_review");
+        assert_eq!(sessions[0]["context"]["document_type"], "contract");
+        assert_eq!(sessions[0]["context"]["confidence_score"], 0.61);
+        assert_eq!(
+            sessions[0]["context"]["extracted_fields_summary"],
+            "Contract draft"
+        );
+        assert!(sessions[0]["context"].get("secret_notes").is_none());
+    }
+
+    #[test]
+    fn app_sessions_endpoint_paginates_with_cursor() {
+        let state = empty_state();
+        seed_app_session_event(
+            &state,
+            "sess-a",
+            "results",
+            "unix:1",
+            &json!({ "document_type": "invoice" }),
+        );
+        seed_app_session_event(
+            &state,
+            "sess-b",
+            "results",
+            "unix:2",
+            &json!({ "document_type": "contract" }),
+        );
+        seed_app_session_event(
+            &state,
+            "sess-c",
+            "results",
+            "unix:3",
+            &json!({ "document_type": "policy" }),
+        );
+        seed_list_context_fields(&state, &["output.document_type"]);
+
+        let mut first_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/sessions",
+            Vec::new(),
+        );
+        first_req.query.insert("limit".to_string(), "2".to_string());
+        let mut first = Vec::new();
+        handle_app_sessions(
+            &mut first,
+            &first_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("first page must write a response");
+        let first_resp = parse_response_body(&first);
+        assert_eq!(first_resp["sessions"][0]["session_id"], "sess-c");
+        assert_eq!(first_resp["sessions"][1]["session_id"], "sess-b");
+        assert_eq!(first_resp["next_cursor"], "sess-a");
+
+        let mut second_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/sessions",
+            Vec::new(),
+        );
+        second_req
+            .query
+            .insert("cursor".to_string(), "sess-c".to_string());
+        second_req
+            .query
+            .insert("order".to_string(), "created_desc".to_string());
+        let mut second = Vec::new();
+        handle_app_sessions(
+            &mut second,
+            &second_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("second page must write a response");
+        let second_resp = parse_response_body(&second);
+        assert_eq!(second_resp["sessions"][0]["session_id"], "sess-b");
+        assert_eq!(second_resp["sessions"][1]["session_id"], "sess-a");
+    }
+
+    #[test]
+    fn app_sessions_endpoint_rejects_invalid_limit() {
+        let state = empty_state();
+        let mut req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/sessions",
+            Vec::new(),
+        );
+        req.query.insert("limit".to_string(), "0".to_string());
+
+        let mut out = Vec::new();
+        handle_app_sessions(&mut out, &req, &state, true, "ws-test", "traverse-starter")
+            .expect("sessions endpoint must write a response");
+
+        assert_eq!(response_status(&out), 400);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        assert_eq!(parse_response_body(&out)["traverse_code"], "invalid_query");
     }
 
     #[test]
