@@ -642,6 +642,47 @@
         "specs/056-capability-publish/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "057-embeddable-runtime-host",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/057-embeddable-runtime-host/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/",
+        "examples/",
+        "specs/057-embeddable-runtime-host/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "058-workflow-pipeline-execution",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/058-workflow-pipeline-execution/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-registry/",
+        "examples/",
+        "specs/058-workflow-pipeline-execution/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "059-http-command-dispatch",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/059-http-command-dispatch/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/",
+        "specs/059-http-command-dispatch/",
+        "specs/governance/"
+      ]
     }
   ]
 }
