@@ -601,6 +601,47 @@
         "Cargo.toml",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "054-public-scope-registry-ref",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/054-public-scope-registry-ref/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-registry/",
+        "apps/",
+        "examples/",
+        "specs/054-public-scope-registry-ref/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "055-registry-sync",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/055-registry-sync/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-registry/",
+        "specs/055-registry-sync/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "056-capability-publish",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/056-capability-publish/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "contracts/",
+        "specs/056-capability-publish/",
+        "specs/governance/"
+      ]
     }
   ]
 }
