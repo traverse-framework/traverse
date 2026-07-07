@@ -17,7 +17,7 @@ v1.0.0 signals that Traverse public API surfaces are stable, all six crates are 
 | G-07 | MCP library surface callable without subprocess (`discover_capabilities`, `execute_capability`) | Integration tests |
 | G-08 | 100% test coverage on all governed crate paths | Coverage gate |
 | G-09 | Zero open P0/P1 bugs in Project 1 | `gh issue list --label bug` filtered to P0/P1 priority labels |
-| G-10 | `Cargo.toml` and all doc badges point to `traverse-framework/Traverse` | metadata and documentation grep |
+| G-10 | `Cargo.toml` and all doc badges point to `traverse-framework/traverse` | metadata and documentation grep |
 
 ## How to check locally
 
