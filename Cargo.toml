@@ -12,7 +12,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/traverse-framework/Traverse"
+repository = "https://github.com/traverse-framework/traverse"
 rust-version = "1.94"
 version = "0.7.0"
 

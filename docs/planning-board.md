@@ -145,4 +145,4 @@ Only tickets with real active execution should appear in this section.
 
 This planning board is mirrored into:
 
-- [GitHub Project 1](https://github.com/users/enricopiovesan/projects/1/)
+- [GitHub Project 1](https://github.com/orgs/traverse-framework/projects/1/)
