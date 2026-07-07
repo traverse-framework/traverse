@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-repo="traverse-framework/Traverse"
+repo="traverse-framework/traverse"
 
-project_items_json=$(gh project item-list 1 --owner traverse-framework --limit 500 --format json)
+project_items_json=$(gh project item-list 1 --owner traverse-framework --format json --limit 500)
 
 failures=0
 
