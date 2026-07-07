@@ -1,0 +1,12 @@
+# Org-wide governance baseline gate — see traverse-framework/.github (governance v1.0.1).
+name: governance
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    uses: traverse-framework/.github/.github/workflows/reusable-governance.yml@bootstrap-governance

@@ -1,0 +1,20 @@
+# Org-wide CLA gate — see traverse-framework/.github (governance v1.0.1).
+name: cla
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    uses: traverse-framework/.github/.github/workflows/reusable-cla.yml@bootstrap-governance
+    secrets:
+      cla-assistant-pat: ${{ secrets.CLA_ASSISTANT_PAT }}
