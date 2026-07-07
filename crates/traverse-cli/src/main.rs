@@ -18,7 +18,8 @@ use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use traverse_contracts::{
-    EventContract, EventValidationContext, parse_event_contract, validate_event_contract,
+    EventContract, EventValidationContext, ValidationContext, parse_contract, parse_event_contract,
+    validate_contract, validate_event_contract,
 };
 use traverse_contracts::{ViolationRecord, reference_connector_contracts};
 use traverse_registry::{
@@ -64,6 +65,13 @@ enum Command {
     RegistrySync {
         workspace_id: String,
         json_output: bool,
+    },
+    CapabilityPublish {
+        contract_path: PathBuf,
+        artifact_path: PathBuf,
+        registry_repo_path: PathBuf,
+        json_output: bool,
+        dry_run: bool,
     },
     ComponentNew {
         component_id: String,
@@ -249,6 +257,19 @@ fn run_command(command: Command) -> Result<String, CliError> {
             workspace_id,
             json_output,
         } => registry_sync(&workspace_id, json_output),
+        Command::CapabilityPublish {
+            contract_path,
+            artifact_path,
+            registry_repo_path,
+            json_output,
+            dry_run,
+        } => capability_publish(
+            &contract_path,
+            &artifact_path,
+            &registry_repo_path,
+            json_output,
+            dry_run,
+        ),
         Command::ComponentNew { component_id } => component_new(&component_id),
         Command::BrowserAdapterServe { .. } | Command::Serve { .. } => {
             Err(CliError::UsageError(usage()))
@@ -330,6 +351,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         (Some("wasm"), Some("abi")) => parse_wasm_abi_command(args),
         (Some("expedition"), Some("execute")) => parse_expedition_execute_command(args),
         (Some("capability"), Some("discover")) => parse_capability_discover_command(args),
+        (Some("capability"), Some("publish")) => parse_capability_publish_command(args),
         (Some("workflow"), Some(_)) => parse_workflow_command(args),
         _ => parse_fixed_arity_command(args),
     }
@@ -363,6 +385,7 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("expedition"), _) => help_expedition(),
         (Some("capability"), Some("inspect")) => help_capability_inspect(),
         (Some("capability"), Some("discover")) => help_capability_discover(),
+        (Some("capability"), Some("publish")) => help_capability_publish(),
         (Some("capability"), _) => help_capability(),
         (Some("event"), Some("inspect")) => help_event_inspect(),
         (Some("event"), _) => help_event(),
@@ -485,6 +508,33 @@ fn help_registry() -> String {
     sync --workspace <id> --json   Sync the public registry index locally.
 
   Run `traverse-cli registry sync --help` for subcommand-specific help."
+        .to_string()
+}
+
+fn help_capability_publish() -> String {
+    "traverse-cli capability publish --contract <path> --artifact <path> --registry-repo <path> --json [--dry-run]
+
+  Purpose:
+    Validate a public capability contract and artifact, prepare the publication
+    candidate under a local traverse-framework/registry checkout, and open a
+    human-reviewed registry PR. The command never publishes directly.
+
+  Required flags:
+    --contract <path>       Capability contract JSON to publish.
+    --artifact <path>       Capability artifact used for digest verification.
+    --registry-repo <path>  Local checkout of traverse-framework/registry.
+    --json                  Emit machine-readable publish evidence.
+
+  Optional flags:
+    --dry-run               Validate and report planned branch/path without writes.
+    --help                  Print this help text.
+
+  Example:
+    traverse-cli capability publish \\
+      --contract contracts/examples/traverse-starter/capabilities/process/contract.json \\
+      --artifact artifacts/process-agent.wasm \\
+      --registry-repo ../registry \\
+      --json"
         .to_string()
 }
 
@@ -824,6 +874,7 @@ fn help_capability() -> String {
   Subcommands:
     inspect <contract-path>         Parse and validate a capability contract.
     discover <manifest-path>        List capabilities from a registry bundle.
+    publish --contract <path>       Open a governed registry publication PR.
 
   Run `traverse-cli capability <subcommand> --help` for subcommand-specific help."
         .to_string()
@@ -984,6 +1035,26 @@ fn parse_registry_sync_command(args: &[String]) -> Result<Command, String> {
     Ok(Command::RegistrySync {
         workspace_id,
         json_output: true,
+    })
+}
+
+fn parse_capability_publish_command(args: &[String]) -> Result<Command, String> {
+    let contract_path = parse_string_flag(args, "--contract")
+        .ok_or_else(|| "capability publish requires --contract <path>".to_string())?;
+    let artifact_path = parse_string_flag(args, "--artifact")
+        .ok_or_else(|| "capability publish requires --artifact <path>".to_string())?;
+    let registry_repo_path = parse_string_flag(args, "--registry-repo")
+        .ok_or_else(|| "capability publish requires --registry-repo <path>".to_string())?;
+    if !args.iter().any(|a| a == "--json") {
+        return Err("capability publish requires --json for stable publish evidence".to_string());
+    }
+
+    Ok(Command::CapabilityPublish {
+        contract_path: PathBuf::from(contract_path),
+        artifact_path: PathBuf::from(artifact_path),
+        registry_repo_path: PathBuf::from(registry_repo_path),
+        json_output: true,
+        dry_run: args.iter().any(|a| a == "--dry-run"),
     })
 }
 
@@ -1852,6 +1923,483 @@ fn registry_sync_failure_json(
             "failed to serialize registry sync failure: {error}"
         ))
     })
+}
+
+const CAPABILITY_PUBLISH_GOVERNING_SPEC: &str = "056-capability-publish";
+const CAPABILITY_PUBLISH_VALIDATOR_VERSION: &str = "traverse-cli capability publish";
+const DEFAULT_REGISTRY_REPO: &str = "traverse-framework/registry";
+
+#[derive(Debug, Clone)]
+struct CapabilityPublishRequest {
+    contract_path: PathBuf,
+    artifact_path: PathBuf,
+    registry_repo_path: PathBuf,
+    json_output: bool,
+    dry_run: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityPublishPlan {
+    namespace: String,
+    capability_id: String,
+    version: String,
+    artifact_digest: String,
+    registry_relative_path: PathBuf,
+    registry_path: PathBuf,
+    branch: String,
+    title: String,
+    contract_json: String,
+}
+
+#[derive(Debug, Clone)]
+struct PublishCommandOutput {
+    stdout: String,
+}
+
+trait PublishProcessRunner {
+    fn run(
+        &self,
+        cwd: &Path,
+        program: &str,
+        args: &[String],
+    ) -> Result<PublishCommandOutput, String>;
+}
+
+struct RealPublishProcessRunner;
+
+impl PublishProcessRunner for RealPublishProcessRunner {
+    fn run(
+        &self,
+        cwd: &Path,
+        program: &str,
+        args: &[String],
+    ) -> Result<PublishCommandOutput, String> {
+        let output = std::process::Command::new(program)
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .map_err(|error| format!("failed to execute {program}: {error}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !output.status.success() {
+            let detail = if stderr.is_empty() {
+                format!("{program} exited with status {}", output.status)
+            } else {
+                stderr.clone()
+            };
+            return Err(detail);
+        }
+        Ok(PublishCommandOutput { stdout })
+    }
+}
+
+fn capability_publish(
+    contract_path: &Path,
+    artifact_path: &Path,
+    registry_repo_path: &Path,
+    json_output: bool,
+    dry_run: bool,
+) -> Result<String, CliError> {
+    capability_publish_at(
+        &CapabilityPublishRequest {
+            contract_path: contract_path.to_path_buf(),
+            artifact_path: artifact_path.to_path_buf(),
+            registry_repo_path: registry_repo_path.to_path_buf(),
+            json_output,
+            dry_run,
+        },
+        &RealPublishProcessRunner,
+    )
+}
+
+fn capability_publish_at(
+    request: &CapabilityPublishRequest,
+    runner: &dyn PublishProcessRunner,
+) -> Result<String, CliError> {
+    if !request.json_output {
+        return Err(CliError::UsageError(
+            "capability publish requires --json for stable publish evidence".to_string(),
+        ));
+    }
+
+    let plan = match capability_publish_plan(request) {
+        Ok(plan) => plan,
+        Err((code, message)) => {
+            return capability_publish_failure_json(code, &message, None, None, None);
+        }
+    };
+
+    if plan.registry_path.exists() {
+        return capability_publish_failure_json(
+            "capability_publish_immutable_conflict",
+            "target registry path already exists; published versions are immutable",
+            Some(&plan),
+            None,
+            None,
+        );
+    }
+
+    if request.dry_run {
+        return capability_publish_success_json("dry_run", &plan, None);
+    }
+
+    if let Err(error) = ensure_clean_registry_checkout(&request.registry_repo_path, runner) {
+        return capability_publish_failure_json(
+            "capability_publish_registry_dirty",
+            &error,
+            Some(&plan),
+            None,
+            None,
+        );
+    }
+
+    match prepare_and_open_registry_pr(request, &plan, runner) {
+        Ok(url) => capability_publish_success_json("pr_opened", &plan, Some(&url)),
+        Err((code, message, partial_state)) => capability_publish_failure_json(
+            code,
+            &message,
+            Some(&plan),
+            partial_state.as_deref(),
+            None,
+        ),
+    }
+}
+
+fn capability_publish_plan(
+    request: &CapabilityPublishRequest,
+) -> Result<CapabilityPublishPlan, (&'static str, String)> {
+    if !request.registry_repo_path.is_dir() {
+        return Err((
+            "capability_publish_registry_missing",
+            format!(
+                "registry repo path does not exist or is not a directory: {}",
+                request.registry_repo_path.display()
+            ),
+        ));
+    }
+
+    let contract_text = fs::read_to_string(&request.contract_path).map_err(|error| {
+        (
+            "capability_publish_contract_read_failed",
+            format!("failed to read capability contract: {error}"),
+        )
+    })?;
+    reject_private_contract_scope(&contract_text)?;
+
+    let contract = parse_contract(&contract_text).map_err(|failure| {
+        (
+            "capability_publish_contract_parse_failed",
+            render_validation_failure("capability contract", &request.contract_path, failure),
+        )
+    })?;
+    let validation = validate_contract(
+        contract,
+        &ValidationContext {
+            governing_spec: CAPABILITY_PUBLISH_GOVERNING_SPEC,
+            validator_version: CAPABILITY_PUBLISH_VALIDATOR_VERSION,
+            existing_published: None,
+        },
+    )
+    .map_err(|failure| {
+        (
+            "capability_publish_contract_validation_failed",
+            render_validation_failure("capability contract", &request.contract_path, failure),
+        )
+    })?;
+
+    let normalized = validation.normalized;
+    validate_registry_path_segment(&normalized.namespace, "namespace")?;
+    validate_registry_path_segment(&normalized.id, "capability id")?;
+    validate_registry_path_segment(&normalized.version, "version")?;
+    let artifact_digest = publish_file_sha256_digest(&request.artifact_path)?;
+
+    let registry_relative_path = PathBuf::from("capabilities")
+        .join(&normalized.namespace)
+        .join(&normalized.id)
+        .join(&normalized.version)
+        .join("contract.json");
+    let registry_path = request.registry_repo_path.join(&registry_relative_path);
+    let branch = format!(
+        "publish/{}-{}",
+        sanitize_branch_component(&normalized.id),
+        sanitize_branch_component(&normalized.version)
+    );
+    let title = format!("Publish {} {}", normalized.id, normalized.version);
+    let contract_json = serde_json::to_string_pretty(&normalized).map_err(|error| {
+        (
+            "capability_publish_contract_serialize_failed",
+            format!("failed to serialize normalized capability contract: {error}"),
+        )
+    })?;
+
+    Ok(CapabilityPublishPlan {
+        namespace: normalized.namespace,
+        capability_id: normalized.id,
+        version: normalized.version,
+        artifact_digest,
+        registry_relative_path,
+        registry_path,
+        branch,
+        title,
+        contract_json,
+    })
+}
+
+fn reject_private_contract_scope(contract_text: &str) -> Result<(), (&'static str, String)> {
+    let value: Value = serde_json::from_str(contract_text).map_err(|error| {
+        (
+            "capability_publish_contract_parse_failed",
+            format!("failed to parse capability contract JSON: {error}"),
+        )
+    })?;
+    if value.get("scope").and_then(Value::as_str) == Some("private") {
+        return Err((
+            "capability_publish_private_scope",
+            "private-scoped capability content cannot be published to the public registry"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_registry_path_segment(
+    value: &str,
+    label: &'static str,
+) -> Result<(), (&'static str, String)> {
+    if value.trim().is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+    {
+        return Err((
+            "capability_publish_invalid_registry_path",
+            format!("{label} is not safe for a registry path: {value}"),
+        ));
+    }
+    Ok(())
+}
+
+fn publish_file_sha256_digest(path: &Path) -> Result<String, (&'static str, String)> {
+    let bytes = fs::read(path).map_err(|error| {
+        (
+            "capability_publish_artifact_read_failed",
+            format!("failed to read capability artifact for digest computation: {error}"),
+        )
+    })?;
+    Ok(format!("sha256:{}", sha256_hex(&bytes)))
+}
+
+fn ensure_clean_registry_checkout(
+    registry_repo_path: &Path,
+    runner: &dyn PublishProcessRunner,
+) -> Result<(), String> {
+    let output = runner.run(
+        registry_repo_path,
+        "git",
+        &["status".to_string(), "--porcelain".to_string()],
+    )?;
+    if !output.stdout.trim().is_empty() {
+        return Err("registry checkout has uncommitted changes; commit, stash, or use a clean checkout before publishing".to_string());
+    }
+    Ok(())
+}
+
+fn prepare_and_open_registry_pr(
+    request: &CapabilityPublishRequest,
+    plan: &CapabilityPublishPlan,
+    runner: &dyn PublishProcessRunner,
+) -> Result<String, (&'static str, String, Option<String>)> {
+    run_publish_command(
+        runner,
+        &request.registry_repo_path,
+        "git",
+        &[
+            "checkout".to_string(),
+            "-B".to_string(),
+            plan.branch.clone(),
+        ],
+        "capability_publish_branch_failed",
+        plan,
+    )?;
+    if let Some(parent) = plan.registry_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            (
+                "capability_publish_write_failed",
+                format!("failed to create registry target directory: {error}"),
+                Some(partial_state(plan)),
+            )
+        })?;
+    }
+    fs::write(&plan.registry_path, format!("{}\n", plan.contract_json)).map_err(|error| {
+        (
+            "capability_publish_write_failed",
+            format!("failed to write registry contract: {error}"),
+            Some(partial_state(plan)),
+        )
+    })?;
+    run_publish_command(
+        runner,
+        &request.registry_repo_path,
+        "git",
+        &[
+            "add".to_string(),
+            plan.registry_relative_path.display().to_string(),
+        ],
+        "capability_publish_git_add_failed",
+        plan,
+    )?;
+    run_publish_command(
+        runner,
+        &request.registry_repo_path,
+        "git",
+        &[
+            "commit".to_string(),
+            "-m".to_string(),
+            format!("Publish {} {}", plan.capability_id, plan.version),
+        ],
+        "capability_publish_git_commit_failed",
+        plan,
+    )?;
+    run_publish_command(
+        runner,
+        &request.registry_repo_path,
+        "git",
+        &[
+            "push".to_string(),
+            "-u".to_string(),
+            "origin".to_string(),
+            plan.branch.clone(),
+        ],
+        "capability_publish_git_push_failed",
+        plan,
+    )?;
+    let body = capability_publish_pr_body(plan);
+    let output = run_publish_command(
+        runner,
+        &request.registry_repo_path,
+        "gh",
+        &[
+            "pr".to_string(),
+            "create".to_string(),
+            "--repo".to_string(),
+            DEFAULT_REGISTRY_REPO.to_string(),
+            "--base".to_string(),
+            "main".to_string(),
+            "--head".to_string(),
+            plan.branch.clone(),
+            "--title".to_string(),
+            plan.title.clone(),
+            "--body".to_string(),
+            body,
+        ],
+        "capability_publish_pr_create_failed",
+        plan,
+    )?;
+    Ok(output.stdout)
+}
+
+fn run_publish_command(
+    runner: &dyn PublishProcessRunner,
+    cwd: &Path,
+    program: &str,
+    args: &[String],
+    code: &'static str,
+    plan: &CapabilityPublishPlan,
+) -> Result<PublishCommandOutput, (&'static str, String, Option<String>)> {
+    runner
+        .run(cwd, program, args)
+        .map_err(|error| (code, error, Some(partial_state(plan))))
+}
+
+fn capability_publish_pr_body(plan: &CapabilityPublishPlan) -> String {
+    format!(
+        "## Summary\n\n- publish `{}` version `{}` to the public capability registry\n- add `{}`\n\n## Governing Specs\n\n- `056-capability-publish`\n- `054-public-scope-registry-ref`\n\n## Validation\n\n- local capability contract validation passed\n- artifact digest computed: `{}`\n",
+        plan.capability_id,
+        plan.version,
+        plan.registry_relative_path.display(),
+        plan.artifact_digest
+    )
+}
+
+fn partial_state(plan: &CapabilityPublishPlan) -> String {
+    format!(
+        "branch `{}` may contain `{}`; retry after fixing the reported error or clean up the branch manually",
+        plan.branch,
+        plan.registry_relative_path.display()
+    )
+}
+
+fn capability_publish_success_json(
+    status: &str,
+    plan: &CapabilityPublishPlan,
+    pull_request_url: Option<&str>,
+) -> Result<String, CliError> {
+    let mut value = serde_json::json!({
+        "status": status,
+        "registry_repo": DEFAULT_REGISTRY_REPO,
+        "branch": plan.branch,
+        "registry_path": plan.registry_relative_path.display().to_string(),
+        "namespace": plan.namespace,
+        "capability_id": plan.capability_id,
+        "version": plan.version,
+        "artifact_digest": plan.artifact_digest,
+        "validation_status": "passed"
+    });
+    if let Some(url) = pull_request_url {
+        value["pull_request_url"] = Value::String(url.to_string());
+    }
+    serde_json::to_string_pretty(&value).map_err(|error| {
+        CliError::IoError(format!(
+            "failed to serialize capability publish output: {error}"
+        ))
+    })
+}
+
+fn capability_publish_failure_json(
+    code: &str,
+    message: &str,
+    plan: Option<&CapabilityPublishPlan>,
+    partial_state: Option<&str>,
+    pull_request_url: Option<&str>,
+) -> Result<String, CliError> {
+    let mut value = serde_json::json!({
+        "status": "failed",
+        "registry_repo": DEFAULT_REGISTRY_REPO,
+        "errors": [{
+            "code": code,
+            "message": message,
+            "severity": "error"
+        }]
+    });
+    if let Some(plan) = plan {
+        value["branch"] = Value::String(plan.branch.clone());
+        value["registry_path"] = Value::String(plan.registry_relative_path.display().to_string());
+        value["artifact_digest"] = Value::String(plan.artifact_digest.clone());
+    }
+    if let Some(partial_state) = partial_state {
+        value["partial_state"] = Value::String(partial_state.to_string());
+    }
+    if let Some(url) = pull_request_url {
+        value["pull_request_url"] = Value::String(url.to_string());
+    }
+    serde_json::to_string_pretty(&value).map_err(|error| {
+        CliError::IoError(format!(
+            "failed to serialize capability publish failure: {error}"
+        ))
+    })
+}
+
+fn sanitize_branch_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            output.push(ch);
+        } else {
+            output.push('-');
+        }
+    }
+    output.trim_matches('-').to_string()
 }
 
 fn latest_index_release_asset(
@@ -4189,14 +4737,16 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        Command, FetchedRegistryIndex, RegistryIndexFetcher, RegistrySyncError, app_new_at,
-        app_register_at, app_registration_state_path, app_validate, component_new_at,
+        CapabilityPublishRequest, Command, FetchedRegistryIndex, PublishCommandOutput,
+        PublishProcessRunner, RegistryIndexFetcher, RegistrySyncError, app_new_at, app_register_at,
+        app_registration_state_path, app_validate, capability_publish_at, component_new_at,
         execute_agent, execute_expedition, inspect_agent, inspect_bundle, inspect_event,
         inspect_trace, inspect_workflow, latest_index_release_asset, parse_command,
         register_bundle, registry_sync_at,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
+    use std::cell::RefCell;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4464,6 +5014,171 @@ mod tests {
             "local-default".to_string(),
         ];
         assert!(parse_command(&missing_json).is_err());
+    }
+
+    #[test]
+    fn parse_capability_publish_requires_contract_artifact_registry_and_json_flags() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "capability".to_string(),
+            "publish".to_string(),
+            "--contract".to_string(),
+            "contracts/examples/traverse-starter/capabilities/process/contract.json".to_string(),
+            "--artifact".to_string(),
+            "target/traverse-starter.wasm".to_string(),
+            "--registry-repo".to_string(),
+            "../registry".to_string(),
+            "--json".to_string(),
+            "--dry-run".to_string(),
+        ];
+
+        let command = parse_command(&args).expect("capability publish should parse");
+
+        match command {
+            Command::CapabilityPublish {
+                contract_path,
+                artifact_path,
+                registry_repo_path,
+                json_output,
+                dry_run,
+            } => {
+                assert_eq!(
+                    contract_path,
+                    PathBuf::from(
+                        "contracts/examples/traverse-starter/capabilities/process/contract.json"
+                    )
+                );
+                assert_eq!(artifact_path, PathBuf::from("target/traverse-starter.wasm"));
+                assert_eq!(registry_repo_path, PathBuf::from("../registry"));
+                assert!(json_output);
+                assert!(dry_run);
+            }
+            other => assert!(matches!(other, Command::CapabilityPublish { .. })),
+        }
+
+        let mut missing_json = args.clone();
+        missing_json.retain(|arg| arg != "--json");
+        assert!(parse_command(&missing_json).is_err());
+    }
+
+    #[test]
+    fn capability_publish_dry_run_reports_plan_without_writes() {
+        let fixture = capability_publish_fixture();
+        let runner = RecordingPublishRunner::default();
+
+        let output = capability_publish_at(&fixture.request(true), &runner)
+            .expect("dry-run publish should return JSON");
+        let json: Value = serde_json::from_str(&output).expect("publish output must be JSON");
+
+        assert_eq!(json["status"], "dry_run");
+        assert_eq!(json["registry_repo"], "traverse-framework/registry");
+        assert_eq!(
+            json["registry_path"],
+            "capabilities/traverse-starter/traverse-starter.process/1.0.0/contract.json"
+        );
+        assert!(
+            json["artifact_digest"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("sha256:")
+        );
+        assert!(!fixture.registry_contract_path().exists());
+        assert!(runner.commands.borrow().is_empty());
+    }
+
+    #[test]
+    fn capability_publish_refuses_existing_registry_path_before_commands() {
+        let fixture = capability_publish_fixture();
+        let target_path = fixture.registry_contract_path();
+        fs::create_dir_all(target_path.parent().expect("target path must have parent"))
+            .expect("target parent should create");
+        fs::write(&target_path, "{}").expect("existing registry contract should write");
+        let runner = RecordingPublishRunner::default();
+
+        let output = capability_publish_at(&fixture.request(false), &runner)
+            .expect("immutable conflict should return JSON");
+        let json: Value = serde_json::from_str(&output).expect("publish output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(
+            json["errors"][0]["code"],
+            "capability_publish_immutable_conflict"
+        );
+        assert!(runner.commands.borrow().is_empty());
+    }
+
+    #[test]
+    fn capability_publish_success_prepares_registry_file_and_pr() {
+        let fixture = capability_publish_fixture();
+        let runner = RecordingPublishRunner::default();
+
+        let output = capability_publish_at(&fixture.request(false), &runner)
+            .expect("publish should open PR with fake runner");
+        let json: Value = serde_json::from_str(&output).expect("publish output must be JSON");
+        let commands = runner.commands.borrow().join("\n");
+
+        assert_eq!(json["status"], "pr_opened");
+        assert_eq!(
+            json["pull_request_url"],
+            "https://github.com/traverse-framework/registry/pull/123"
+        );
+        assert!(fixture.registry_contract_path().exists());
+        assert!(commands.contains("git checkout -B publish/traverse-starter.process-1.0.0"));
+        assert!(commands.contains("gh pr create"));
+        assert!(commands.contains("056-capability-publish"));
+    }
+
+    #[test]
+    fn capability_publish_pr_failure_reports_partial_state() {
+        let fixture = capability_publish_fixture();
+        let runner = RecordingPublishRunner {
+            fail_program: Some("gh"),
+            commands: RefCell::new(Vec::new()),
+        };
+
+        let output = capability_publish_at(&fixture.request(false), &runner)
+            .expect("PR failure should return JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("publish output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(
+            json["errors"][0]["code"],
+            "capability_publish_pr_create_failed"
+        );
+        assert!(
+            json["partial_state"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("publish/traverse-starter.process-1.0.0")
+        );
+        assert!(fixture.registry_contract_path().exists());
+    }
+
+    #[test]
+    fn capability_publish_validation_failure_runs_no_commands() {
+        let fixture = capability_publish_fixture();
+        let mut contract: Value = serde_json::from_str(
+            &fs::read_to_string(&fixture.contract).expect("contract fixture should read"),
+        )
+        .expect("contract fixture should parse");
+        contract["version"] = Value::String("not-semver".to_string());
+        fs::write(
+            &fixture.contract,
+            serde_json::to_string_pretty(&contract).expect("contract fixture should serialize"),
+        )
+        .expect("invalid contract should write");
+        let runner = RecordingPublishRunner::default();
+
+        let output = capability_publish_at(&fixture.request(false), &runner)
+            .expect("validation failure should return JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("publish output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(
+            json["errors"][0]["code"],
+            "capability_publish_contract_validation_failed"
+        );
+        assert!(runner.commands.borrow().is_empty());
     }
 
     #[test]
@@ -5688,6 +6403,79 @@ mod tests {
         let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}"));
         fs::create_dir_all(&path).expect("temporary directory should create");
         path
+    }
+
+    struct CapabilityPublishFixture {
+        contract: PathBuf,
+        artifact: PathBuf,
+        registry_repo: PathBuf,
+    }
+
+    impl CapabilityPublishFixture {
+        fn request(&self, dry_run: bool) -> CapabilityPublishRequest {
+            CapabilityPublishRequest {
+                contract_path: self.contract.clone(),
+                artifact_path: self.artifact.clone(),
+                registry_repo_path: self.registry_repo.clone(),
+                json_output: true,
+                dry_run,
+            }
+        }
+
+        fn registry_contract_path(&self) -> PathBuf {
+            self.registry_repo
+                .join("capabilities/traverse-starter/traverse-starter.process/1.0.0/contract.json")
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingPublishRunner {
+        fail_program: Option<&'static str>,
+        commands: RefCell<Vec<String>>,
+    }
+
+    impl PublishProcessRunner for RecordingPublishRunner {
+        fn run(
+            &self,
+            cwd: &Path,
+            program: &str,
+            args: &[String],
+        ) -> Result<PublishCommandOutput, String> {
+            let rendered = format!("{} {} {}", cwd.display(), program, args.join(" "));
+            self.commands.borrow_mut().push(rendered);
+            if self.fail_program == Some(program) {
+                return Err(format!("{program} failed in fixture"));
+            }
+            if program == "gh" {
+                return Ok(PublishCommandOutput {
+                    stdout: "https://github.com/traverse-framework/registry/pull/123".to_string(),
+                });
+            }
+            Ok(PublishCommandOutput {
+                stdout: String::new(),
+            })
+        }
+    }
+
+    fn capability_publish_fixture() -> CapabilityPublishFixture {
+        let temp_dir = unique_temp_dir();
+        let contract_path = temp_dir.join("contract.json");
+        let artifact_path = temp_dir.join("artifact.wasm");
+        let registry_repo_path = temp_dir.join("registry");
+        fs::copy(
+            repo_root()
+                .join("contracts/examples/traverse-starter/capabilities/process/contract.json"),
+            &contract_path,
+        )
+        .expect("capability contract fixture should copy");
+        fs::write(&artifact_path, b"fixture wasm bytes").expect("artifact fixture should write");
+        fs::create_dir_all(&registry_repo_path).expect("registry fixture should create");
+
+        CapabilityPublishFixture {
+            contract: contract_path,
+            artifact: artifact_path,
+            registry_repo: registry_repo_path,
+        }
     }
 
     #[derive(Clone)]
