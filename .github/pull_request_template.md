@@ -10,7 +10,7 @@ Reference the governing approved spec version.
 
 Link the GitHub issue or project item from:
 
-- https://github.com/users/enricopiovesan/projects/1/
+- https://github.com/orgs/traverse-framework/projects/1/
 
 ## What Changed
 

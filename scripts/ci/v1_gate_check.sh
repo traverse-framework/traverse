@@ -81,10 +81,10 @@ check G-09 "no open P0/P1 bugs (requires gh CLI)" bash -c '
 '
 
 # G-10: canonical repository metadata
-check G-10 "Cargo.toml and docs point to traverse-framework/Traverse" bash -c '
-    grep -q "traverse-framework/Traverse" Cargo.toml
-    grep -q "traverse-framework/Traverse/actions/workflows/ci.yml" README.md
-    grep -q "github.com/traverse-framework/Traverse/releases" README.md
+check G-10 "Cargo.toml and docs point to traverse-framework/traverse" bash -c '
+    grep -q "traverse-framework/traverse" Cargo.toml
+    grep -q "traverse-framework/traverse/actions/workflows/ci.yml" README.md
+    grep -q "github.com/traverse-framework/traverse/releases" README.md
     ! grep -R -E "enricopiovesan/Traverse|github.com/users/enricopiovesan/projects/1" README.md docs Cargo.toml >/dev/null
 '
 
