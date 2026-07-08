@@ -15,8 +15,8 @@ TRAVERSE OPS
 
 ## Workflow
 
-1. Read `.specify/memory/constitution.md` before implementation work.
-2. Read `AGENTS.md` and follow the agent coordination rules.
+1. Read `AGENTS.md` and follow the agent coordination rules.
+2. Read the constitution (via `traverse-framework/.github`, pinned in `.governance-version`) only when the ticket touches architecture, contracts, or versioned surfaces — lazy-read map in the org's `docs/ai-agent-hardening.md`.
 3. Inspect current GitHub and Project 1 state.
 4. Prefer finishing existing open PRs before claiming new Ready work.
 5. Keep cycling through open PRs and Ready Project 1 issues until no actionable
@@ -31,37 +31,30 @@ TRAVERSE OPS
    - set Project 1 `Status` to `In Progress`
 9. Use a dedicated `codex/issue-NNN-*` branch.
 10. Keep work scoped to the claimed issue and governing spec.
-11. Open a dedicated PR with validation evidence.
+11. Open a dedicated PR using the org body superset (`## Summary`, `## Governing Spec`, `## Project Item`, `## Definition of Done`, `## Validation`) with validation evidence, then immediately queue it: `gh pr merge <N> --squash --auto`. Do not poll checks — continue the loop and release on a later pass once merged. This repo requires branches up to date with `main` (strict checks): rebase when behind, or auto-merge cannot fire.
 12. The stop condition is strict: no mergeable or fixable open PRs, no Ready
     Project 1 tickets that pass pre-flight, no uncompleted `agent:codex`
     tickets, and only explicitly blocked work remains. If a Ready ticket is
     blocked, update its ticket/Project state with the concrete blocker before
     continuing to the next Ready ticket.
 
+## Gates & Failure Playbook
+
+Every PR must pass the org gates `cla / cla` and `baseline / governance-baseline` plus this repo's CI. When a governance gate fails, don't debug from scratch — use the failure playbook in `traverse-framework/.github` `docs/runbook.md` (CLA `recheck` comment; re-runs pin stale gate snapshots, push a commit instead; secret-visibility check). Dependabot PRs get their bodies auto-filled by the org `dependabot-hygiene` workflow — never hand-write them; for one that predates it, comment `@dependabot rebase`, queue `gh pr merge --squash --auto`, and let CI decide.
+
 ## Token Discipline
 
-Use a lean-by-default operating style so long-running Traverse ops sessions do
-not waste context on raw logs.
+Org-canon token rules live in `traverse-framework/.github` `docs/ai-agent-hardening.md`
+(pinned via `.governance-version`): bounded `--limit` queries with server-side `--jq`,
+no raw board/CI/test log dumps, targeted diffs before large ones, short progress
+updates. Traverse-specific additions:
 
-- Prefer targeted GitHub queries over full board dumps. For Ready work, use
-  `gh project item-list 1 --owner traverse-framework --format json --limit 300 --jq '...'`
-  and return only issue number, title, labels, and item id.
-- Do not paste full `gh project item-list`, `gh pr checks --watch`, test, clippy,
-  coverage, or CI logs into the conversation. Summarize pass/fail counts and
-  only quote the failing lines needed to fix the issue.
-- Use `git diff --stat`, `git diff --name-only`, and focused file hunks before
-  large diffs. Open exact line ranges only when a decision depends on them.
-- Use `rg` with narrow patterns before broad recursive reads. Avoid reading
-  generated files, target directories, lockfile-scale artifacts, and full specs
-  unless the active issue requires them.
-- Keep progress updates short: current action, discovered blocker if any, and
-  next action. Avoid repeating unchanged state.
-- After CI starts, poll with bounded output. If checks are pending, report only
-  changed status; if a job fails, fetch that job log and extract the actionable
-  failure.
-- Prefer local reproduction of a failing gate before fetching large remote logs.
-- In final updates, include merged PRs, validations, and next recommended issue;
-  do not restate every command output.
+- After CI starts, poll with bounded output; on failure fetch only that job's log
+  and extract the actionable lines.
+- Prefer local reproduction (`cargo test`, `bash scripts/ci/spec_alignment_check.sh`)
+  before fetching large remote logs.
+- Final updates: merged PRs, validations, next recommended issue — not every
+  command output.
 
 ## Minimality Ladder
 
