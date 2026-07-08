@@ -18,7 +18,8 @@ use traverse_registry::{
 };
 use traverse_runtime::security::RuntimeSecurityConfig;
 use traverse_runtime::{
-    LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
+    LocalExecutor, PlacementTarget, Runtime, RuntimeContext, RuntimeExecutionOutcome,
+    RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest, RuntimeResultStatus,
     RuntimeTrace, parse_runtime_request,
 };
 
@@ -4675,19 +4676,89 @@ fn parse_execute_runtime_request<W: Write>(
 
     match parse_runtime_request(body_str) {
         Ok(value) => Ok(value),
-        Err(e) => {
-            let _ = write_json(
-                w,
-                400,
-                "Bad Request",
-                &error_envelope(
-                    "invalid_request",
-                    &format!("failed to parse RuntimeRequest: {e}"),
-                ),
-            );
-            Err(())
-        }
+        Err(e) => match parse_simplified_workspace_execute_request(body_str) {
+            Ok(value) => Ok(value),
+            Err(()) => {
+                let _ = write_json(
+                    w,
+                    400,
+                    "Bad Request",
+                    &error_envelope(
+                        "invalid_request",
+                        &format!("failed to parse RuntimeRequest: {e}"),
+                    ),
+                );
+                Err(())
+            }
+        },
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SimplifiedWorkspaceExecuteRequest {
+    capability_id: String,
+    #[serde(default)]
+    capability_version: Option<String>,
+    input: Value,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
+fn parse_simplified_workspace_execute_request(body: &str) -> Result<RuntimeRequest, ()> {
+    let request: SimplifiedWorkspaceExecuteRequest = serde_json::from_str(body).map_err(|_| ())?;
+    let capability_id = request.capability_id.trim();
+    if capability_id.is_empty() {
+        return Err(());
+    }
+    let capability_version = request
+        .capability_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("1.0.0")
+        .to_string();
+    let request_id = request
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "http_{}",
+                capability_id
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect::<String>()
+            )
+        });
+
+    Ok(RuntimeRequest {
+        kind: "runtime_request".to_string(),
+        schema_version: "1.0.0".to_string(),
+        request_id,
+        intent: RuntimeIntent {
+            capability_id: Some(capability_id.to_string()),
+            capability_version: Some(capability_version),
+            version_range: None,
+            intent_key: None,
+        },
+        input: request.input,
+        lookup: RuntimeLookup {
+            scope: RuntimeLookupScope::PreferPrivate,
+            allow_ambiguity: false,
+        },
+        context: RuntimeContext {
+            requested_target: PlacementTarget::Local,
+            correlation_id: None,
+            caller: Some("workspace-execute".to_string()),
+            traceparent: None,
+            tracestate: None,
+            metadata: None,
+            identity: None,
+        },
+        governing_spec: "006-runtime-request-execution".to_string(),
+    })
 }
 
 fn workspace_execute_path(path: &str) -> Option<String> {
@@ -7844,6 +7915,32 @@ mod tests {
             resp["links"]["trace"],
             "/v1/workspaces/ws-test/traces/exec_test-req-001"
         );
+    }
+
+    #[test]
+    fn workspace_execute_endpoint_accepts_simplified_capability_request() {
+        let body = json!({
+            "capability_id": "test.api.do-something",
+            "input": {
+                "value": "demo"
+            }
+        })
+        .to_string()
+        .into_bytes();
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+
+        let mut out = Vec::new();
+        handle_execute_workspace(&mut out, &req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let status = response_status(&out);
+        let resp = parse_response_body(&out);
+
+        assert_eq!(status, 200);
+        assert_eq!(resp["status"], "succeeded");
+        assert_eq!(resp["output"]["result"], "ok");
+        assert_eq!(resp["execution_id"], "exec_http_test_api_do_something");
     }
 
     #[test]
