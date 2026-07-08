@@ -148,6 +148,52 @@ fn current_fd_or_handle_count() -> Option<u64> {
     None
 }
 
+/// Measured create-use-drop cycles in `stress_no_fd_leak`. A real per-cycle
+/// leak grows the descriptor count by hundreds over this many cycles, far
+/// beyond `FD_LEAK_TOLERANCE`.
+const FD_LEAK_CYCLES: u64 = 1_000;
+
+/// Cycles run before the baseline is captured, so lazy process-wide
+/// initialization (stdio, threading, platform probes) opens its descriptors
+/// outside the measured window.
+const FD_LEAK_WARMUP_CYCLES: u64 = 50;
+
+/// Allowance for descriptor churn unrelated to the executor (test-harness
+/// threads, background activity on shared CI runners). Must stay far below
+/// the growth a genuine per-cycle leak produces over `FD_LEAK_CYCLES`.
+const FD_LEAK_TOLERANCE: u64 = 8;
+
+/// Samples taken per measurement; the minimum filters out descriptors that
+/// unrelated runner activity opens transiently during sampling.
+const FD_SAMPLES_PER_MEASUREMENT: u32 = 5;
+
+/// Re-measurements allowed before the growth assertion fails, giving
+/// transient descriptor churn time to settle.
+const FD_MEASUREMENT_RETRIES: u32 = 3;
+
+fn run_fd_leak_cycles(cycles: std::ops::Range<u64>) -> TestResult<()> {
+    for i in cycles {
+        let executor = executor(2, |input| Ok(input.clone()))?;
+        let input = json!({ "cycle": i });
+        let output = execute(&executor, &input)?;
+        assert_eq!(output, input);
+    }
+    Ok(())
+}
+
+fn stable_fd_or_handle_count() -> Option<u64> {
+    let mut stable: Option<u64> = None;
+    for sample in 0..FD_SAMPLES_PER_MEASUREMENT {
+        if sample > 0 {
+            thread::sleep(Duration::from_millis(100));
+        }
+        if let Some(count) = current_fd_or_handle_count() {
+            stable = Some(stable.map_or(count, |current| current.min(count)));
+        }
+    }
+    stable
+}
+
 #[ignore = "runs only in the dedicated ThreadPoolExecutor stress CI job"]
 #[test]
 fn stress_50_threads_burst() -> TestResult<()> {
@@ -329,19 +375,32 @@ fn stress_memory_stable_60s() -> TestResult<()> {
 #[ignore = "runs only in the dedicated ThreadPoolExecutor stress CI job"]
 #[test]
 fn stress_no_fd_leak() -> TestResult<()> {
-    let before = current_fd_or_handle_count();
+    run_fd_leak_cycles(0..FD_LEAK_WARMUP_CYCLES)?;
+    let Some(baseline) = stable_fd_or_handle_count() else {
+        return Ok(());
+    };
 
-    for i in 0_u64..1_000 {
-        let executor = executor(2, |input| Ok(input.clone()))?;
-        let input = json!({ "cycle": i });
-        let output = execute(&executor, &input)?;
-        assert_eq!(output, json!({ "cycle": i }));
+    run_fd_leak_cycles(FD_LEAK_WARMUP_CYCLES..FD_LEAK_WARMUP_CYCLES + FD_LEAK_CYCLES)?;
+
+    let allowed = baseline + FD_LEAK_TOLERANCE;
+    let mut after = None;
+    for attempt in 0..=FD_MEASUREMENT_RETRIES {
+        if attempt > 0 {
+            thread::sleep(Duration::from_millis(500));
+        }
+        after = stable_fd_or_handle_count();
+        match after {
+            Some(count) if count > allowed => {}
+            _ => break,
+        }
     }
 
-    if let (Some(before), Some(after)) = (before, current_fd_or_handle_count()) {
+    if let Some(after) = after {
         assert!(
-            after <= before,
-            "file descriptor or handle count increased: before={before} after={after}"
+            after <= allowed,
+            "file descriptor or handle count grew beyond tolerance over \
+             {FD_LEAK_CYCLES} create-use-drop cycles: \
+             baseline={baseline} after={after} allowed={allowed}"
         );
     }
 
