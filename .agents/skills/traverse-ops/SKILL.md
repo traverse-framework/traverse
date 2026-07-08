@@ -19,17 +19,24 @@ TRAVERSE OPS
 2. Read `AGENTS.md` and follow the agent coordination rules.
 3. Inspect current GitHub and Project 1 state.
 4. Prefer finishing existing open PRs before claiming new Ready work.
-5. If no active PR needs attention, pick one Ready Project 1 issue.
-6. Before work on an issue, run the Claude pre-flight checks from `AGENTS.md`:
+5. Keep cycling through open PRs and Ready Project 1 issues until no actionable
+   Ready tickets remain. Do not stop after one PR, one issue, or one merge.
+6. If no active PR needs attention, pick the next Ready Project 1 issue.
+7. Before work on an issue, run the Claude pre-flight checks from `AGENTS.md`:
    - issue must not have `agent:claude`
    - no remote `claude/issue-NNN-*` branch may exist
-7. If pre-flight passes, claim the issue:
+8. If pre-flight passes, claim the issue:
    - add `agent:codex`
    - set Project 1 `Agent` to `Codex`
    - set Project 1 `Status` to `In Progress`
-8. Use a dedicated `codex/issue-NNN-*` branch.
-9. Keep work scoped to the claimed issue and governing spec.
-10. Open a dedicated PR with validation evidence.
+9. Use a dedicated `codex/issue-NNN-*` branch.
+10. Keep work scoped to the claimed issue and governing spec.
+11. Open a dedicated PR with validation evidence.
+12. The stop condition is strict: no mergeable or fixable open PRs, no Ready
+    Project 1 tickets that pass pre-flight, no uncompleted `agent:codex`
+    tickets, and only explicitly blocked work remains. If a Ready ticket is
+    blocked, update its ticket/Project state with the concrete blocker before
+    continuing to the next Ready ticket.
 
 ## Token Discipline
 
@@ -77,6 +84,24 @@ tickets for useful adjacent improvements instead of expanding an active slice.
 - **Ready-ticket worker**: claim one Ready Project 1 issue and implement it end to end.
 - **PR finisher**: inspect open PRs, fix CI/review issues, update stale branches, and merge when green if allowed.
 - **Backlog gardener**: audit Project 1 statuses, labels, blockers, notes, and missing tickets.
+
+## Stop Condition
+
+Traverse ops is a drain loop, not a single-ticket worker. Continue alternating
+between the PR finisher and Ready-ticket worker lanes until Project 1 has no
+actionable Ready work left.
+
+Only stop when one of these is true:
+
+- all open PRs are merged, blocked by an external dependency, or no longer
+  actionable for Codex;
+- every Ready Project 1 ticket has either been completed or moved out of Ready
+  with a concrete blocker recorded;
+- a required external permission, token, network/API quota, or user decision
+  prevents both PR finishing and Ready-ticket progress.
+
+When stopping for a blocker, report the exact blocked PR or ticket, what was
+verified, and what external action would unblock the next pass.
 
 ## Guardrails
 
