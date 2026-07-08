@@ -1,0 +1,21 @@
+{
+  "kind": "runtime_request",
+  "schema_version": "1.0.0",
+  "request_id": "meeting-notes-process-001",
+  "intent": {
+    "capability_id": "meeting-notes.process",
+    "capability_version": "1.0.0"
+  },
+  "input": {
+    "transcript": "Kickoff notes for Traverse reference app.\nAction: @Mira draft parser by Friday\nTODO: by Luca add HTTP validation before demo\nDecided: we will ship deterministic extraction first\nFollow up next steps with app team"
+  },
+  "lookup": {
+    "scope": "prefer_private",
+    "allow_ambiguity": false
+  },
+  "context": {
+    "requested_target": "local",
+    "caller": "meeting-notes-example"
+  },
+  "governing_spec": "006-runtime-request-execution"
+}
