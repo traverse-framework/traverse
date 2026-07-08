@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run zero-to-hero acceptance
         run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/zero_to_hero_acceptance.sh
