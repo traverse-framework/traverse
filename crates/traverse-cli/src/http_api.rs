@@ -9,15 +9,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_registry::{
-    ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-    CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
-    LookupScope, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-    WorkflowDefinition, WorkflowRegistration, WorkflowRegistry, WorkspaceAppStateErrorCode,
-    load_application_bundle_manifest,
+    ApplicationStateMachine, ArtifactDigests, BinaryFormat, BinaryReference,
+    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
+    CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry,
+    ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
+    SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
+    WorkspaceAppStateErrorCode, load_application_bundle_manifest,
 };
 use traverse_runtime::{
-    LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
+    LocalExecutor, PlacementTarget, Runtime, RuntimeContext, RuntimeExecutionOutcome,
+    RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest, RuntimeResultStatus,
     RuntimeTrace, parse_runtime_request,
 };
 
@@ -94,6 +95,7 @@ struct WorkspaceState<E> {
     traces: HashMap<String, RuntimeTrace>,
     app_events: Vec<AppStateEventRecord>,
     app_list_context_fields: HashMap<String, Vec<String>>,
+    app_state_machines: HashMap<String, ApplicationStateMachine>,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -253,6 +255,7 @@ enum WorkspaceOperation {
     Trace(String, String),
     AppEvents(String, String),
     AppSessions(String, String),
+    AppCommands(String, String),
 }
 
 /// Start the HTTP/JSON API server, blocking until the listener fails.
@@ -335,6 +338,7 @@ where
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         },
     );
@@ -530,6 +534,7 @@ where
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -634,6 +639,7 @@ where
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             });
 
@@ -2461,8 +2467,12 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
         env!("CARGO_PKG_VERSION"),
     ) {
         Ok(runtime) => {
-            ws.app_list_context_fields =
-                load_workspace_app_list_context_fields(workspace_root, &runtime);
+            let machines = load_workspace_app_state_machines(workspace_root, &runtime);
+            ws.app_list_context_fields = machines
+                .iter()
+                .map(|(app_id, machine)| (app_id.clone(), machine.list_context_fields.clone()))
+                .collect();
+            ws.app_state_machines = machines;
             ws.runtime = runtime;
             Ok(())
         }
@@ -2481,11 +2491,11 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
     }
 }
 
-fn load_workspace_app_list_context_fields<E: LocalExecutor>(
+fn load_workspace_app_state_machines<E: LocalExecutor>(
     workspace_root: &Path,
     runtime: &Runtime<E>,
-) -> HashMap<String, Vec<String>> {
-    let mut fields = HashMap::new();
+) -> HashMap<String, ApplicationStateMachine> {
+    let mut machines = HashMap::new();
     for app in runtime.workspace_applications() {
         let manifest_path = PathBuf::from(&app.manifest_path);
         let manifest_path = if manifest_path.is_absolute() {
@@ -2499,9 +2509,9 @@ fn load_workspace_app_list_context_fields<E: LocalExecutor>(
         let Some(state_machine) = manifest.state_machine else {
             continue;
         };
-        fields.insert(app.app_id.clone(), state_machine.list_context_fields);
+        machines.insert(app.app_id.clone(), state_machine);
     }
-    fields
+    machines
 }
 
 fn render_workspace_app_state_failure(
@@ -2543,6 +2553,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -2593,6 +2604,7 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -3244,6 +3256,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::AppSessions(workspace_id, app_id) => {
             handle_app_sessions(w, request, state, loopback, &workspace_id, &app_id)
+        }
+        WorkspaceOperation::AppCommands(workspace_id, app_id) => {
+            handle_app_commands(w, request, state, loopback, &workspace_id, &app_id)
         }
     }
 }
@@ -4552,6 +4567,11 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
             .or_else(|| workspace_bundles_path(path).map(WorkspaceOperation::RegisterBundle))
             .or_else(|| {
                 workspace_runtime_grants_path(path).map(WorkspaceOperation::ApproveRuntimeGrant)
+            })
+            .or_else(|| {
+                workspace_app_commands_path(path).map(|(workspace_id, app_id)| {
+                    WorkspaceOperation::AppCommands(workspace_id, app_id)
+                })
             }),
         "GET" => workspace_execution_status_path(path)
             .map(|(workspace_id, execution_id)| {
@@ -4598,6 +4618,20 @@ fn workspace_app_events_path(path: &str) -> Option<(String, String)> {
     let suffix = path.strip_prefix("/v1/workspaces/")?;
     let (workspace_id, tail) = suffix.split_once("/apps/")?;
     let app_id = tail.strip_suffix("/events")?;
+    if workspace_id.trim().is_empty()
+        || app_id.trim().is_empty()
+        || workspace_id.contains('/')
+        || app_id.contains('/')
+    {
+        return None;
+    }
+    Some((workspace_id.to_string(), app_id.to_string()))
+}
+
+fn workspace_app_commands_path(path: &str) -> Option<(String, String)> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let (workspace_id, tail) = suffix.split_once("/apps/")?;
+    let app_id = tail.strip_suffix("/commands")?;
     if workspace_id.trim().is_empty()
         || app_id.trim().is_empty()
         || workspace_id.contains('/')
@@ -4813,6 +4847,458 @@ fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
     })?;
 
     write_json(w, 200, "OK", &response)
+}
+
+fn handle_app_commands<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+    app_id: &str,
+) -> Result<(), String> {
+    let identity =
+        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
+            Ok(identity) => identity,
+            Err(err) => {
+                audit_workspace_event(
+                    state,
+                    workspace_id,
+                    "auth_failure",
+                    None,
+                    Some("app_command_dispatch"),
+                    "failure",
+                    Some(err.code),
+                )?;
+                return write_json(
+                    w,
+                    err.status,
+                    err.reason,
+                    &error_envelope(err.code, &err.message),
+                );
+            }
+        };
+
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EXECUTE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                Some(&identity),
+                Some("app_command_dispatch"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let parsed = match parse_app_command_request(&request.body) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            return write_json(
+                w,
+                400,
+                "Bad Request",
+                &error_envelope("invalid_request", &message),
+            );
+        }
+    };
+
+    let (status, reason, body) = state.with_workspace_mut(workspace_id, |ws| {
+        dispatch_app_command(ws, workspace_id, app_id, &parsed)
+    })?;
+    write_json(w, status, reason, &body)
+}
+
+struct AppCommandRequest {
+    command: String,
+    payload: Value,
+    session_id: Option<String>,
+}
+
+fn parse_app_command_request(body: &[u8]) -> Result<AppCommandRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("request body is not valid JSON: {e}"))?;
+    let Some(object) = value.as_object() else {
+        return Err("request body must be a JSON object".to_string());
+    };
+    let command = match object.get("command") {
+        Some(Value::String(command)) if !command.trim().is_empty() => command.clone(),
+        _ => return Err("'command' must be a non-empty string".to_string()),
+    };
+    let session_id = match object.get("session_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(session_id)) if !session_id.trim().is_empty() => {
+            Some(session_id.clone())
+        }
+        _ => return Err("'session_id' must be a non-empty string when present".to_string()),
+    };
+    let payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
+    Ok(AppCommandRequest {
+        command,
+        payload,
+        session_id,
+    })
+}
+
+fn dispatch_app_command<E: LocalExecutor + Clone>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    request: &AppCommandRequest,
+) -> Result<(u16, &'static str, Value), String> {
+    let Some(machine) = ws.app_state_machines.get(app_id).cloned() else {
+        return Ok((
+            404,
+            "Not Found",
+            error_envelope(
+                "app_not_registered",
+                &format!(
+                    "app '{app_id}' is not registered with a state machine \
+                     in workspace '{workspace_id}'"
+                ),
+            ),
+        ));
+    };
+
+    let (session_id, current_state) = match &request.session_id {
+        Some(session_id) => {
+            let last_state = ws
+                .app_events
+                .iter()
+                .rev()
+                .find(|event| event.app_id == app_id && &event.session_id == session_id)
+                .map(|event| event.state.clone());
+            (
+                session_id.clone(),
+                last_state.unwrap_or_else(|| machine.initial_state.clone()),
+            )
+        }
+        None => (
+            format!("sess-{:08}", ws.app_events.len() + 1),
+            machine.initial_state.clone(),
+        ),
+    };
+
+    let accepted_state =
+        match resolve_app_command_transition(&machine, &session_id, &current_state, request) {
+            Ok(accepted_state) => accepted_state,
+            Err(rejection) => return Ok(rejection),
+        };
+    let command_id = format!("cmd-{:08}", ws.app_events.len() + 1);
+    let timestamp = generated_registered_at().map_err(|e| e.message)?;
+    push_app_state_changed_event(
+        ws,
+        workspace_id,
+        app_id,
+        &session_id,
+        &command_id,
+        &accepted_state,
+        &current_state,
+        &timestamp,
+    );
+
+    let execution_id = run_app_command_invoke(
+        ws,
+        workspace_id,
+        app_id,
+        &session_id,
+        &machine,
+        &accepted_state,
+        &command_id,
+        &request.payload,
+        &timestamp,
+    );
+
+    let body = json!({
+        "api_version": "v1",
+        "status": "accepted",
+        "workspace_id": workspace_id,
+        "app_id": app_id,
+        "session_id": session_id,
+        "command": request.command,
+        "state": accepted_state,
+        "execution_id": execution_id,
+        "links": {
+            "events": format!("/v1/workspaces/{workspace_id}/apps/{app_id}/events"),
+            "sessions": format!("/v1/workspaces/{workspace_id}/apps/{app_id}/sessions"),
+        },
+    });
+    Ok((202, "Accepted", body))
+}
+
+fn resolve_app_command_transition(
+    machine: &ApplicationStateMachine,
+    session_id: &str,
+    current_state: &str,
+    request: &AppCommandRequest,
+) -> Result<String, (u16, &'static str, Value)> {
+    let Some(state_definition) = machine.states.iter().find(|s| s.id == current_state) else {
+        return Err((
+            409,
+            "Conflict",
+            error_envelope(
+                "invalid_transition",
+                &format!(
+                    "session '{session_id}' is in state '{current_state}', \
+                     which is not declared by the app state machine"
+                ),
+            ),
+        ));
+    };
+
+    let Some(transition) = state_definition
+        .transitions
+        .iter()
+        .find(|transition| transition.on == request.command)
+    else {
+        let known_command = machine.states.iter().any(|state| {
+            state
+                .transitions
+                .iter()
+                .any(|transition| transition.on == request.command)
+        });
+        if known_command {
+            return Err((
+                409,
+                "Conflict",
+                error_envelope(
+                    "invalid_transition",
+                    &format!(
+                        "command '{}' is not a valid transition from state '{current_state}'",
+                        request.command
+                    ),
+                ),
+            ));
+        }
+        return Err((
+            422,
+            "Unprocessable Entity",
+            error_envelope(
+                "unknown_command",
+                &format!(
+                    "command '{}' is not declared by the app state machine",
+                    request.command
+                ),
+            ),
+        ));
+    };
+
+    Ok(transition.to.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_app_command_invoke<E: LocalExecutor + Clone>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    machine: &ApplicationStateMachine,
+    accepted_state: &str,
+    command_id: &str,
+    payload: &Value,
+    timestamp: &str,
+) -> Option<String> {
+    let invoke = machine
+        .states
+        .iter()
+        .find(|state| state.id == accepted_state)
+        .and_then(|state| state.invoke.clone())?;
+    let runtime_request = RuntimeRequest {
+        kind: "runtime_request".to_string(),
+        schema_version: "1.0.0".to_string(),
+        request_id: command_id.to_string(),
+        intent: RuntimeIntent {
+            capability_id: Some(invoke.capability_id.clone()),
+            capability_version: None,
+            version_range: None,
+            intent_key: None,
+        },
+        input: payload.clone(),
+        lookup: RuntimeLookup {
+            scope: RuntimeLookupScope::PreferPrivate,
+            allow_ambiguity: false,
+        },
+        context: RuntimeContext {
+            requested_target: PlacementTarget::Local,
+            correlation_id: Some(session_id.to_string()),
+            caller: None,
+            traceparent: None,
+            tracestate: None,
+            metadata: None,
+            identity: None,
+        },
+        governing_spec: "006-runtime-request-execution".to_string(),
+    };
+    let outcome = ws.runtime.execute(runtime_request);
+    let execution_id = outcome.result.execution_id.clone();
+    let succeeded = outcome.result.status != RuntimeResultStatus::Error;
+    ws.executions.insert(
+        execution_id.clone(),
+        ExecutionStatusRecord {
+            execution_id: execution_id.clone(),
+            status: if succeeded { "succeeded" } else { "failed" }.to_string(),
+            created_at: timestamp.to_string(),
+            updated_at: timestamp.to_string(),
+        },
+    );
+    ws.traces
+        .insert(execution_id.clone(), outcome.trace.clone());
+    push_app_command_outcome_events(
+        ws,
+        workspace_id,
+        app_id,
+        session_id,
+        machine,
+        accepted_state,
+        &invoke.capability_id,
+        &outcome,
+        timestamp,
+    );
+    Some(execution_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_app_state_changed_event<E>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    execution_id: &str,
+    state: &str,
+    previous_state: &str,
+    timestamp: &str,
+) {
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:state_changed:{state}"),
+        event_type: "state_changed".to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.to_string(),
+        state: state.to_string(),
+        previous_state: Some(previous_state.to_string()),
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "state": state,
+            "previous_state": previous_state,
+            "timestamp": timestamp,
+        }),
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_app_command_outcome_events<E>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    machine: &ApplicationStateMachine,
+    invoking_state: &str,
+    capability_id: &str,
+    outcome: &RuntimeExecutionOutcome,
+    timestamp: &str,
+) {
+    let execution_id = outcome.result.execution_id.clone();
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:capability_invoked"),
+        event_type: "capability_invoked".to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.clone(),
+        state: invoking_state.to_string(),
+        previous_state: None,
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "capability_id": capability_id,
+            "state": invoking_state,
+            "timestamp": timestamp,
+        }),
+    });
+
+    let succeeded = outcome.result.status != RuntimeResultStatus::Error;
+    let lifecycle_event = if succeeded {
+        "capability_succeeded"
+    } else {
+        "capability_failed"
+    };
+    let final_state = machine
+        .states
+        .iter()
+        .find(|state| state.id == invoking_state)
+        .and_then(|state| {
+            state
+                .transitions
+                .iter()
+                .find(|transition| transition.on == lifecycle_event)
+        })
+        .map_or_else(|| invoking_state.to_string(), |t| t.to.clone());
+    if final_state != invoking_state {
+        push_app_state_changed_event(
+            ws,
+            workspace_id,
+            app_id,
+            session_id,
+            &execution_id,
+            &final_state,
+            invoking_state,
+            timestamp,
+        );
+    }
+
+    let result_event_type = if succeeded {
+        "capability_result"
+    } else {
+        "error"
+    };
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:{result_event_type}"),
+        event_type: result_event_type.to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.clone(),
+        state: final_state.clone(),
+        previous_state: Some(invoking_state.to_string()),
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "state": final_state,
+            "previous_state": invoking_state,
+            "timestamp": timestamp,
+            "output": outcome.result.output,
+            "error": outcome.result.error.as_ref().map(|e| json!({
+                "code": format!("{:?}", e.code).to_lowercase(),
+                "message": e.message,
+            })),
+        }),
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5990,10 +6476,11 @@ mod tests {
     };
     use traverse_registry::ResolvedCapability;
     use traverse_registry::{
-        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-        CapabilityRegistration, ComposabilityMetadata, CompositionKind, CompositionPattern,
-        ImplementationKind, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-        WorkflowEdge, WorkflowNode, WorkflowNodeInput, WorkflowNodeOutput,
+        ApplicationState, ApplicationStateInvoke, ApplicationStateTransition, ArtifactDigests,
+        BinaryFormat, BinaryReference, CapabilityArtifactRecord, CapabilityRegistration,
+        ComposabilityMetadata, CompositionKind, CompositionPattern, ImplementationKind,
+        RegistryProvenance, RegistryScope, SourceKind, SourceReference, WorkflowEdge, WorkflowNode,
+        WorkflowNodeInput, WorkflowNodeOutput,
     };
     use traverse_runtime::{LocalExecutionFailure, LocalExecutionFailureCode};
 
@@ -6391,6 +6878,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6445,6 +6933,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6486,6 +6975,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -7742,6 +8232,248 @@ mod tests {
             workspace_app_events_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
                 .is_none()
         );
+    }
+
+    fn seed_app_state_machine(state: &ApiState<TestExecutor>, app_id: &str, capability_id: &str) {
+        let machine = ApplicationStateMachine {
+            initial_state: "idle".to_string(),
+            list_context_fields: Vec::new(),
+            states: vec![
+                ApplicationState {
+                    id: "idle".to_string(),
+                    invoke: None,
+                    transitions: vec![ApplicationStateTransition {
+                        on: "submit".to_string(),
+                        to: "processing".to_string(),
+                        condition: None,
+                        with_last_payload: false,
+                    }],
+                },
+                ApplicationState {
+                    id: "processing".to_string(),
+                    invoke: Some(ApplicationStateInvoke {
+                        capability_id: capability_id.to_string(),
+                        input_from: "command.payload".to_string(),
+                    }),
+                    transitions: vec![
+                        ApplicationStateTransition {
+                            on: "capability_succeeded".to_string(),
+                            to: "results".to_string(),
+                            condition: None,
+                            with_last_payload: false,
+                        },
+                        ApplicationStateTransition {
+                            on: "capability_failed".to_string(),
+                            to: "error".to_string(),
+                            condition: None,
+                            with_last_payload: false,
+                        },
+                    ],
+                },
+                ApplicationState {
+                    id: "results".to_string(),
+                    invoke: None,
+                    transitions: Vec::new(),
+                },
+                ApplicationState {
+                    id: "error".to_string(),
+                    invoke: None,
+                    transitions: Vec::new(),
+                },
+            ],
+        };
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.app_state_machines.insert(app_id.to_string(), machine);
+                Ok(())
+            })
+            .expect("state machine must be seeded");
+    }
+
+    fn make_app_command_body(command: &str, payload: &Value, session_id: Option<&str>) -> Vec<u8> {
+        let mut body = json!({
+            "command": command,
+            "payload": payload,
+        });
+        if let (Some(session_id), Value::Object(root)) = (session_id, &mut body) {
+            root.insert(
+                "session_id".to_string(),
+                Value::String(session_id.to_string()),
+            );
+        }
+        body.to_string().into_bytes()
+    }
+
+    #[test]
+    fn app_commands_path_parses_workspace_and_app_id() {
+        assert_eq!(
+            workspace_app_commands_path("/v1/workspaces/ws-test/apps/traverse-starter/commands"),
+            Some(("ws-test".to_string(), "traverse-starter".to_string()))
+        );
+        assert!(workspace_app_commands_path("/v1/workspaces/ws-test/apps//commands").is_none());
+        assert!(
+            workspace_app_commands_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn app_command_returns_404_for_app_without_state_machine() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 404);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "app_not_registered");
+    }
+
+    #[test]
+    fn app_command_returns_422_for_unknown_command() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("does-not-exist", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 422);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "unknown_command");
+        assert_eq!(resp["status"], 422);
+    }
+
+    #[test]
+    fn app_command_returns_409_for_invalid_transition_from_current_state() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "first"}), Some("sess-repeat")),
+        );
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("command dispatch must write a response");
+        assert_eq!(response_status(&first_out), 202);
+
+        let second_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "second"}), Some("sess-repeat")),
+        );
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&second_out), 409);
+        assert_eq!(
+            response_content_type(&second_out),
+            "application/problem+json"
+        );
+        let resp = parse_response_body(&second_out);
+        assert_eq!(resp["traverse_code"], "invalid_transition");
+        assert_eq!(resp["status"], 409);
+    }
+
+    #[test]
+    fn app_command_returns_400_for_malformed_body() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            b"{\"payload\": {}}".to_vec(),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 400);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "invalid_request");
+    }
+
+    #[test]
+    fn app_command_dispatch_emits_state_changed_and_capability_result_on_sse() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+
+        let command_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "Meeting with design team"}), None),
+        );
+        let mut command_out = Vec::new();
+        handle_workspace_operation(&mut command_out, &command_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&command_out), 202);
+        let accepted = parse_response_body(&command_out);
+        assert_eq!(accepted["api_version"], "v1");
+        assert_eq!(accepted["status"], "accepted");
+        assert_eq!(accepted["command"], "submit");
+        assert_eq!(accepted["state"], "processing");
+        let session_id = accepted["session_id"]
+            .as_str()
+            .expect("session_id must be a string")
+            .to_string();
+        assert!(!session_id.is_empty());
+        assert!(
+            accepted["execution_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+        assert_eq!(
+            accepted["links"]["events"],
+            "/v1/workspaces/ws-test/apps/traverse-starter/events"
+        );
+
+        let events_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        let mut events_out = Vec::new();
+        handle_app_events(
+            &mut events_out,
+            &events_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("events endpoint must write a response");
+
+        assert_eq!(response_status(&events_out), 200);
+        assert_eq!(response_content_type(&events_out), "text/event-stream");
+        let body = response_body_text(&events_out);
+        assert!(body.contains("event: state_changed"));
+        assert!(body.contains("\"state\":\"processing\""));
+        assert!(body.contains("\"previous_state\":\"idle\""));
+        assert!(body.contains("event: capability_invoked"));
+        assert!(body.contains("\"capability_id\":\"traverse-starter.process\""));
+        assert!(body.contains("event: capability_result"));
+        assert!(body.contains("\"state\":\"results\""));
+        assert!(body.contains("\"previous_state\":\"processing\""));
+        assert!(body.contains("\"result\":\"ok\""));
+        assert!(body.contains(&format!("\"session_id\":\"{session_id}\"")));
     }
 
     #[test]
