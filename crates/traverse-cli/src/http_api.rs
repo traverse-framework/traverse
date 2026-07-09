@@ -7136,14 +7136,156 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: Vec::new(),
+                    publish_to_state_as: None,
                 },
             }],
             edges: Vec::<WorkflowEdge>::new(),
             start_node: "run_capability".to_string(),
             terminal_nodes: vec!["run_capability".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["test".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }
+    }
+
+    fn pipeline_workflow_definition_body(steps: &[(&str, &str, &str)]) -> Vec<u8> {
+        let nodes = steps
+            .iter()
+            .map(|(node_id, capability_id, namespace)| {
+                json!({
+                    "node_id": node_id,
+                    "capability_id": capability_id,
+                    "capability_version": "1.0.0",
+                    "input": {"from_workflow_input": []},
+                    "output": {
+                        "to_workflow_state": [],
+                        "publish_to_state_as": namespace
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let edges = steps
+            .windows(2)
+            .map(|pair| {
+                json!({
+                    "edge_id": format!("{}_to_{}", pair[0].0, pair[1].0),
+                    "from": pair[0].0,
+                    "to": pair[1].0,
+                    "trigger": "direct",
+                    "event": null
+                })
+            })
+            .collect::<Vec<_>>();
+        let projection = steps
+            .iter()
+            .map(|(_, _, namespace)| (*namespace).to_string())
+            .collect::<Vec<_>>();
+        json!({
+            "scope": "workspace_persisted",
+            "registry_scope": "private",
+            "workflow": {
+                "kind": "workflow_definition",
+                "schema_version": "1.0.0",
+                "id": "test.pipeline.run",
+                "name": "run",
+                "version": "1.0.0",
+                "lifecycle": "active",
+                "owner": {"team": "test-team", "contact": "test@example.com"},
+                "summary": "test pipeline workflow",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {
+                    "type": "object",
+                    "required": projection,
+                    "additionalProperties": false
+                }},
+                "nodes": nodes,
+                "edges": edges,
+                "start_node": steps[0].0,
+                "terminal_nodes": [steps[steps.len() - 1].0],
+                "output_projection": projection,
+                "tags": ["test"],
+                "governing_spec": "007-workflow-registry-traversal"
+            }
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn execute_endpoint_runs_pipeline_workflow_capability_with_merged_output() {
+        let state = empty_state();
+        for capability_id in [
+            "test.pipeline.validate",
+            "test.pipeline.process",
+            "test.pipeline.summarize",
+        ] {
+            state
+                .with_workspace_mut("ws-test", |ws| {
+                    ws.runtime
+                        .register_capability(test_registration(capability_id, "1.0.0"))
+                        .map_err(|failure| format!("{failure:?}"))?;
+                    Ok(())
+                })
+                .expect("step capability must register");
+        }
+
+        let workflow_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            pipeline_workflow_definition_body(&[
+                ("validate_step", "test.pipeline.validate", "validate"),
+                ("process_step", "test.pipeline.process", "process"),
+                ("summarize_step", "test.pipeline.summarize", "summarize"),
+            ]),
+        );
+        let mut workflow_out = Vec::new();
+        handle_workspace_operation(&mut workflow_out, &workflow_req, &state, true)
+            .expect("workflow registration must write a response");
+        assert_eq!(response_status(&workflow_out), 201);
+
+        let mut pipeline_registration = test_registration("test.pipeline.pipeline", "1.0.0");
+        pipeline_registration.artifact.implementation_kind = ImplementationKind::Workflow;
+        pipeline_registration.artifact.binary = None;
+        pipeline_registration.artifact.digests.binary_digest = None;
+        pipeline_registration.artifact.workflow_ref = Some(traverse_registry::WorkflowReference {
+            workflow_id: "test.pipeline.run".to_string(),
+            workflow_version: "1.0.0".to_string(),
+        });
+        pipeline_registration.composability = ComposabilityMetadata {
+            kind: CompositionKind::Composite,
+            patterns: vec![CompositionPattern::Sequential],
+            provides: vec!["test.pipeline.pipeline".to_string()],
+            requires: Vec::new(),
+        };
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.runtime
+                    .register_capability(pipeline_registration)
+                    .map_err(|failure| format!("{failure:?}"))?;
+                Ok(())
+            })
+            .expect("pipeline capability must register");
+
+        let execute_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/execute",
+            make_runtime_request_body("test.pipeline.pipeline"),
+        );
+        let mut execute_out = Vec::new();
+        handle_workspace_operation(&mut execute_out, &execute_req, &state, true)
+            .expect("workspace execute must write a response");
+
+        assert_eq!(response_status(&execute_out), 200);
+        let executed = parse_response_body(&execute_out);
+        assert_eq!(executed["status"], "succeeded");
+        assert_eq!(
+            executed["output"],
+            json!({
+                "validate": {},
+                "process": {},
+                "summarize": {}
+            })
+        );
     }
 
     fn valid_workflow_registration_body(id: &str, version: &str, capability_id: &str) -> Vec<u8> {

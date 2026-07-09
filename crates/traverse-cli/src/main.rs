@@ -4977,13 +4977,14 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        CapabilityPublishRequest, Command, FetchedRegistryIndex, PublishCommandOutput,
-        PublishProcessRunner, RegistryIndexFetcher, RegistrySyncError, app_new_at, app_register_at,
-        app_registration_state_path, app_validate, capability_publish_at, component_new_at,
-        execute_agent, execute_expedition, execute_traverse_starter_process,
-        execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
-        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, latest_index_release_asset,
-        parse_command, register_bundle, registry_sync_at,
+        CapabilityPublishRequest, Command, ExpeditionExampleExecutor, FetchedRegistryIndex,
+        PublishCommandOutput, PublishProcessRunner, RegistryIndexFetcher, RegistrySyncError,
+        app_new_at, app_register_at, app_registration_state_path, app_validate,
+        capability_publish_at, component_new_at, execute_agent, execute_expedition,
+        execute_traverse_starter_process, execute_traverse_starter_summarize,
+        execute_traverse_starter_validate, inspect_agent, inspect_bundle, inspect_event,
+        inspect_trace, inspect_workflow, latest_index_release_asset, load_registered_bundle,
+        load_runtime_request, parse_command, register_bundle, registry_sync_at,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -6510,6 +6511,58 @@ mod tests {
             "summary: Review Traverse starter app (project) - tags: review, traverse, starter; next action: expand"
         ));
         assert!(output.contains("wordCount: 13"));
+    }
+
+    #[test]
+    fn traverse_starter_pipeline_bundle_executes_with_merged_namespaced_output() {
+        let bundle_path =
+            repo_root().join("examples/traverse-starter/registry-bundle/manifest.json");
+        let request_path =
+            repo_root().join("examples/traverse-starter/runtime-requests/pipeline.json");
+
+        let registered =
+            load_registered_bundle(&bundle_path).expect("starter bundle should register");
+        let runtime = traverse_runtime::Runtime::new(
+            registered.capability_registry,
+            ExpeditionExampleExecutor,
+        )
+        .with_workflow_registry(registered.workflow_registry);
+
+        let first_request =
+            load_runtime_request(&request_path).expect("pipeline request should load");
+        let second_request =
+            load_runtime_request(&request_path).expect("pipeline request should load");
+        let first = runtime.execute(first_request);
+        let second = runtime.execute(second_request);
+
+        assert_eq!(
+            first.result.status,
+            traverse_runtime::RuntimeResultStatus::Completed
+        );
+        let output = first
+            .result
+            .output
+            .clone()
+            .expect("pipeline output expected");
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "validate": {"valid": true, "issues": []},
+                "process": {
+                    "title": "Review Traverse starter app registration",
+                    "tags": ["review", "traverse", "starter"],
+                    "noteType": "project",
+                    "suggestedNextAction": "expand",
+                    "status": "complete"
+                },
+                "summarize": {
+                    "summary": "Review Traverse starter app registration (project) - tags: review, traverse, starter; next action: expand",
+                    "wordCount": 14
+                }
+            })
+        );
+        assert_eq!(first.result.output, second.result.output);
+        assert_eq!(first.result.status, second.result.status);
     }
 
     #[test]
