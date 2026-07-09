@@ -2103,10 +2103,7 @@ mod tests {
                     "suggestedNextAction": "archive",
                     "status": "complete"
                 }),
-                "content.comments.pipeline-summarize" => {
-                    json!({"summary": "Hello world (fleeting)", "wordCount": 3})
-                }
-                _ => json!({}),
+                _ => json!({"summary": "Hello world (fleeting)", "wordCount": 3}),
             };
             Ok(output)
         }
