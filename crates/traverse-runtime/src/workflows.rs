@@ -600,7 +600,8 @@ where
             }
 
             if workflow.definition.terminal_nodes.contains(&node.node_id) {
-                let final_output = Value::Object(state.clone());
+                let final_output =
+                    final_workflow_output(&state, &workflow.definition.output_projection);
                 if let Err(error) = validate_payload_against_contract(
                     &final_output,
                     &workflow.definition.outputs.schema,
@@ -752,6 +753,22 @@ fn update_state(state: &mut Map<String, Value>, node: &WorkflowNode, output: &Va
             state.insert(key.clone(), value.clone());
         }
     }
+    if let Some(namespace) = &node.output.publish_to_state_as {
+        state.insert(namespace.clone(), output.clone());
+    }
+}
+
+fn final_workflow_output(state: &Map<String, Value>, output_projection: &[String]) -> Value {
+    if output_projection.is_empty() {
+        return Value::Object(state.clone());
+    }
+    let mut projected = Map::new();
+    for key in output_projection {
+        if let Some(value) = state.get(key) {
+            projected.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(projected)
 }
 
 fn emitted_events(output: &Value) -> Vec<EmittedEventRecord> {
@@ -1081,6 +1098,7 @@ mod tests {
             },
             output: WorkflowNodeOutput {
                 to_workflow_state: vec!["draft_id".to_string()],
+                publish_to_state_as: None,
             },
         };
         assert_eq!(node_input(&state, &node), json!({"comment_text": "hello"}));
@@ -1810,6 +1828,308 @@ mod tests {
         let _ = MissingEventWorkflowExecutor.execute(&unknown, &json!({}));
     }
 
+    #[test]
+    fn pipeline_workflow_merges_namespaced_step_outputs_deterministically() {
+        let registry = pipeline_capability_registry();
+        let mut workflows = WorkflowRegistry::new();
+        register_workflow_ok(&mut workflows, &registry, pipeline_workflow_registration());
+        let runtime = Runtime::new(registry, PipelineExecutor).with_workflow_registry(workflows);
+
+        let first = runtime.execute_workflow(pipeline_workflow_request());
+        let second = runtime.execute_workflow(pipeline_workflow_request());
+
+        assert_eq!(first.result.status, WorkflowTraversalStatus::Completed);
+        assert_eq!(
+            first.result.output,
+            Some(json!({
+                "validate": {"valid": true, "issues": []},
+                "process": {
+                    "title": "Hello world",
+                    "tags": ["hello", "world"],
+                    "noteType": "fleeting",
+                    "suggestedNextAction": "archive",
+                    "status": "complete"
+                },
+                "summarize": {"summary": "Hello world (fleeting)", "wordCount": 3}
+            }))
+        );
+        assert_eq!(first.result, second.result);
+        assert_eq!(first.evidence.visited_nodes, second.evidence.visited_nodes);
+
+        let steps = &first.evidence.visited_nodes;
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].step_index, 0);
+        assert_eq!(steps[0].capability_id, "content.comments.pipeline-validate");
+        assert_eq!(steps[1].step_index, 1);
+        assert_eq!(steps[1].capability_id, "content.comments.pipeline-process");
+        assert_eq!(steps[2].step_index, 2);
+        assert_eq!(
+            steps[2].capability_id,
+            "content.comments.pipeline-summarize"
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|step| step.status == WorkflowTraversalStepStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn pipeline_workflow_stops_on_failed_step_with_failed_step_id_in_trace() {
+        let registry = pipeline_capability_registry();
+        let mut workflows = WorkflowRegistry::new();
+        register_workflow_ok(&mut workflows, &registry, pipeline_workflow_registration());
+        let runtime =
+            Runtime::new(registry, FailingPipelineExecutor).with_workflow_registry(workflows);
+
+        let outcome = runtime.execute_workflow(pipeline_workflow_request());
+
+        assert_eq!(outcome.result.status, WorkflowTraversalStatus::Error);
+        assert_eq!(
+            outcome.evidence.result.failure_reason,
+            Some(WorkflowTraversalFailureReason::StepExecutionFailed)
+        );
+        let steps = &outcome.evidence.visited_nodes;
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].status, WorkflowTraversalStepStatus::Completed);
+        assert_eq!(steps[1].node_id, "process_note");
+        assert_eq!(steps[1].status, WorkflowTraversalStepStatus::Failed);
+    }
+
+    fn pipeline_capability_registry() -> CapabilityRegistry {
+        let mut registry = CapabilityRegistry::new();
+        for id in [
+            "content.comments.pipeline-validate",
+            "content.comments.pipeline-process",
+            "content.comments.pipeline-summarize",
+        ] {
+            register_capability_ok(
+                &mut registry,
+                CapabilityRegistration {
+                    scope: RegistryScope::Public,
+                    contract: capability_contract(
+                        id,
+                        Vec::new(),
+                        json!({"type": "object", "additionalProperties": true}),
+                        json!({"type": "object", "additionalProperties": true}),
+                    ),
+                    contract_path: format!("contracts/{id}.json"),
+                    artifact: CapabilityArtifactRecord {
+                        artifact_ref: format!("artifact-{id}"),
+                        implementation_kind: ImplementationKind::Executable,
+                        source: SourceReference {
+                            kind: SourceKind::Git,
+                            location: format!("https://example.com/{id}.git"),
+                        },
+                        binary: Some(BinaryReference {
+                            format: BinaryFormat::Wasm,
+                            location: format!("{id}.wasm"),
+                            signature: None,
+                        }),
+                        workflow_ref: None,
+                        digests: ArtifactDigests {
+                            source_digest: "source".to_string(),
+                            binary_digest: Some("binary".to_string()),
+                        },
+                        provenance: RegistryProvenance {
+                            source: "fixtures".to_string(),
+                            author: "Enrico".to_string(),
+                            created_at: "2026-03-27T00:00:00Z".to_string(),
+                        },
+                    },
+                    registered_at: "2026-03-27T00:00:00Z".to_string(),
+                    tags: vec!["pipeline".to_string()],
+                    composability: ComposabilityMetadata {
+                        kind: CompositionKind::Atomic,
+                        patterns: vec![CompositionPattern::Sequential],
+                        provides: vec!["pipeline-step".to_string()],
+                        requires: Vec::new(),
+                    },
+                    governing_spec: "005-capability-registry".to_string(),
+                    validator_version: "validator".to_string(),
+                },
+            );
+        }
+        registry
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn pipeline_workflow_registration() -> WorkflowRegistration {
+        WorkflowRegistration {
+            scope: RegistryScope::Public,
+            definition: WorkflowDefinition {
+                kind: "workflow_definition".to_string(),
+                schema_version: "1.0.0".to_string(),
+                id: "content.comments.pipeline".to_string(),
+                name: "pipeline".to_string(),
+                version: "1.0.0".to_string(),
+                lifecycle: Lifecycle::Active,
+                owner: Owner {
+                    team: "traverse-core".to_string(),
+                    contact: "test@example.com".to_string(),
+                },
+                summary: "Deterministic three-step pipeline fixture.".to_string(),
+                inputs: SchemaContainer {
+                    schema: json!({
+                        "type": "object",
+                        "required": ["note"],
+                        "properties": {"note": {"type": "string"}},
+                        "additionalProperties": false
+                    }),
+                },
+                outputs: SchemaContainer {
+                    schema: json!({
+                        "type": "object",
+                        "required": ["validate", "process", "summarize"],
+                        "properties": {
+                            "validate": {"type": "object"},
+                            "process": {"type": "object"},
+                            "summarize": {"type": "object"}
+                        },
+                        "additionalProperties": false
+                    }),
+                },
+                nodes: vec![
+                    WorkflowNode {
+                        node_id: "validate_note".to_string(),
+                        capability_id: "content.comments.pipeline-validate".to_string(),
+                        capability_version: "1.0.0".to_string(),
+                        input: WorkflowNodeInput {
+                            from_workflow_input: vec!["note".to_string()],
+                        },
+                        output: WorkflowNodeOutput {
+                            to_workflow_state: Vec::new(),
+                            publish_to_state_as: Some("validate".to_string()),
+                        },
+                    },
+                    WorkflowNode {
+                        node_id: "process_note".to_string(),
+                        capability_id: "content.comments.pipeline-process".to_string(),
+                        capability_version: "1.0.0".to_string(),
+                        input: WorkflowNodeInput {
+                            from_workflow_input: vec!["note".to_string()],
+                        },
+                        output: WorkflowNodeOutput {
+                            to_workflow_state: vec![
+                                "title".to_string(),
+                                "tags".to_string(),
+                                "noteType".to_string(),
+                                "suggestedNextAction".to_string(),
+                                "status".to_string(),
+                            ],
+                            publish_to_state_as: Some("process".to_string()),
+                        },
+                    },
+                    WorkflowNode {
+                        node_id: "summarize_note".to_string(),
+                        capability_id: "content.comments.pipeline-summarize".to_string(),
+                        capability_version: "1.0.0".to_string(),
+                        input: WorkflowNodeInput {
+                            from_workflow_input: vec![
+                                "title".to_string(),
+                                "tags".to_string(),
+                                "noteType".to_string(),
+                                "suggestedNextAction".to_string(),
+                                "status".to_string(),
+                            ],
+                        },
+                        output: WorkflowNodeOutput {
+                            to_workflow_state: Vec::new(),
+                            publish_to_state_as: Some("summarize".to_string()),
+                        },
+                    },
+                ],
+                edges: vec![
+                    WorkflowEdge {
+                        edge_id: "validate_to_process".to_string(),
+                        from: "validate_note".to_string(),
+                        to: "process_note".to_string(),
+                        trigger: WorkflowEdgeTrigger::Direct,
+                        event: None,
+                        predicate: None,
+                    },
+                    WorkflowEdge {
+                        edge_id: "process_to_summarize".to_string(),
+                        from: "process_note".to_string(),
+                        to: "summarize_note".to_string(),
+                        trigger: WorkflowEdgeTrigger::Direct,
+                        event: None,
+                        predicate: None,
+                    },
+                ],
+                start_node: "validate_note".to_string(),
+                terminal_nodes: vec!["summarize_note".to_string()],
+                output_projection: vec![
+                    "validate".to_string(),
+                    "process".to_string(),
+                    "summarize".to_string(),
+                ],
+                tags: vec!["pipeline".to_string()],
+                governing_spec: "007-workflow-registry-traversal".to_string(),
+            },
+            workflow_path: "workflows/content.comments.pipeline/workflow.json".to_string(),
+            registered_at: "2026-07-08T00:00:00Z".to_string(),
+            validator_version: "validator".to_string(),
+        }
+    }
+
+    fn pipeline_workflow_request() -> WorkflowExecutionRequest {
+        WorkflowExecutionRequest {
+            kind: "workflow_execution_request".to_string(),
+            schema_version: "1.0.0".to_string(),
+            request_id: "pipeline-request".to_string(),
+            workflow_id: "content.comments.pipeline".to_string(),
+            workflow_version: "1.0.0".to_string(),
+            scope: WorkflowLookupScope::PublicOnly,
+            input: json!({"note": "Hello world"}),
+            governing_spec: "007-workflow-registry-traversal".to_string(),
+        }
+    }
+
+    struct PipelineExecutor;
+
+    impl LocalExecutor for PipelineExecutor {
+        fn execute(
+            &self,
+            capability: &ResolvedCapability,
+            _input: &Value,
+        ) -> Result<Value, LocalExecutionFailure> {
+            let output = match capability.record.id.as_str() {
+                "content.comments.pipeline-validate" => json!({"valid": true, "issues": []}),
+                "content.comments.pipeline-process" => json!({
+                    "title": "Hello world",
+                    "tags": ["hello", "world"],
+                    "noteType": "fleeting",
+                    "suggestedNextAction": "archive",
+                    "status": "complete"
+                }),
+                "content.comments.pipeline-summarize" => {
+                    json!({"summary": "Hello world (fleeting)", "wordCount": 3})
+                }
+                _ => json!({}),
+            };
+            Ok(output)
+        }
+    }
+
+    struct FailingPipelineExecutor;
+
+    impl LocalExecutor for FailingPipelineExecutor {
+        fn execute(
+            &self,
+            capability: &ResolvedCapability,
+            _input: &Value,
+        ) -> Result<Value, LocalExecutionFailure> {
+            match capability.record.id.as_str() {
+                "content.comments.pipeline-validate" => Ok(json!({"valid": true, "issues": []})),
+                other => Err(LocalExecutionFailure {
+                    code: LocalExecutionFailureCode::ExecutionFailed,
+                    message: format!("step failed: {other}"),
+                }),
+            }
+        }
+    }
+
     fn capability_registry_fixture() -> CapabilityRegistry {
         build_capability_registry(false)
     }
@@ -2019,6 +2339,7 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["draft_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
                 WorkflowNode {
@@ -2030,6 +2351,7 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["draft_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
                 WorkflowNode {
@@ -2041,12 +2363,14 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["comment_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
             ],
             edges,
             start_node: "create_draft".to_string(),
             terminal_nodes: vec!["persist_comment".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["comments".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }

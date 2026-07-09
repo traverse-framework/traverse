@@ -1,0 +1,35 @@
+{
+  "bundle_id": "traverse-starter.seed-bundle",
+  "version": "1.0.0",
+  "scope": "public",
+  "capabilities": [
+    {
+      "id": "traverse-starter.validate",
+      "version": "1.0.0",
+      "path": "../../../contracts/examples/traverse-starter/capabilities/validate/contract.json"
+    },
+    {
+      "id": "traverse-starter.process",
+      "version": "1.0.0",
+      "path": "../../../contracts/examples/traverse-starter/capabilities/process/contract.json"
+    },
+    {
+      "id": "traverse-starter.summarize",
+      "version": "1.0.0",
+      "path": "../../../contracts/examples/traverse-starter/capabilities/summarize/contract.json"
+    },
+    {
+      "id": "traverse-starter.pipeline",
+      "version": "1.0.0",
+      "path": "../../../contracts/examples/traverse-starter/capabilities/pipeline/contract.json"
+    }
+  ],
+  "events": [],
+  "workflows": [
+    {
+      "id": "traverse-starter.pipeline",
+      "version": "1.0.0",
+      "path": "../../../workflows/examples/traverse-starter/pipeline/workflow.json"
+    }
+  ]
+}

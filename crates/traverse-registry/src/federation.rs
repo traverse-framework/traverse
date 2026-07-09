@@ -2768,11 +2768,13 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: vec!["response".to_string()],
+                    publish_to_state_as: None,
                 },
             }],
             edges: vec![],
             start_node: "route-node".to_string(),
             terminal_nodes: vec!["route-node".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["federation".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }

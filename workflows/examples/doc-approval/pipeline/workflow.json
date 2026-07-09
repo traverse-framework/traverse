@@ -1,0 +1,122 @@
+{
+  "kind": "workflow_definition",
+  "schema_version": "1.0.0",
+  "id": "doc-approval.pipeline",
+  "name": "pipeline",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Extract, analyze, and recommend on one document as a deterministic multi-capability pipeline.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "document"
+      ],
+      "properties": {
+        "document": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "extract",
+        "analyze",
+        "recommend"
+      ],
+      "properties": {
+        "extract": {
+          "type": "object"
+        },
+        "analyze": {
+          "type": "object"
+        },
+        "recommend": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "extract_document",
+      "capability_id": "doc-approval.extract",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "document"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [],
+        "publish_to_state_as": "extract"
+      }
+    },
+    {
+      "node_id": "analyze_document",
+      "capability_id": "doc-approval.analyze",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "document"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [],
+        "publish_to_state_as": "analyze"
+      }
+    },
+    {
+      "node_id": "recommend_document",
+      "capability_id": "doc-approval.recommend",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "document"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [],
+        "publish_to_state_as": "recommend"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "extract_to_analyze",
+      "from": "extract_document",
+      "to": "analyze_document",
+      "trigger": "direct"
+    },
+    {
+      "edge_id": "analyze_to_recommend",
+      "from": "analyze_document",
+      "to": "recommend_document",
+      "trigger": "direct"
+    }
+  ],
+  "start_node": "extract_document",
+  "terminal_nodes": [
+    "recommend_document"
+  ],
+  "output_projection": [
+    "extract",
+    "analyze",
+    "recommend"
+  ],
+  "tags": [
+    "doc-approval",
+    "pipeline",
+    "reference-app"
+  ],
+  "governing_spec": "007-workflow-registry-traversal"
+}
