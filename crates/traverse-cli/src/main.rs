@@ -3855,23 +3855,27 @@ fn render_agent_execution_summary(
             }
         }
         "meeting-notes.process" => {
-            if let Some(summary) = output.get("summary").and_then(Value::as_str) {
-                lines.push(format!("summary: {summary}"));
-            }
-            if let Some(action_items) = output.get("action_items").and_then(Value::as_array) {
-                lines.push(format!("action_items: {}", action_items.len()));
-            }
-            if let Some(decisions) = output.get("decisions").and_then(Value::as_array) {
-                lines.push(format!("decisions: {}", decisions.len()));
-            }
-            if let Some(follow_ups) = output.get("follow_ups").and_then(Value::as_array) {
-                lines.push(format!("follow_ups: {}", follow_ups.len()));
-            }
+            append_meeting_notes_summary(&mut lines, output);
         }
         _ => {}
     }
 
     lines.join("\n")
+}
+
+fn append_meeting_notes_summary(lines: &mut Vec<String>, output: &Value) {
+    if let Some(summary) = output.get("summary").and_then(Value::as_str) {
+        lines.push(format!("summary: {summary}"));
+    }
+    for (field, label) in [
+        ("action_items", "action_items"),
+        ("decisions", "decisions"),
+        ("follow_ups", "follow_ups"),
+    ] {
+        if let Some(values) = output.get(field).and_then(Value::as_array) {
+            lines.push(format!("{label}: {}", values.len()));
+        }
+    }
 }
 
 fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
