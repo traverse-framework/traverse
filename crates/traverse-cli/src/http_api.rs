@@ -5061,27 +5061,26 @@ fn handle_app_commands<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     app_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("app_command_dispatch"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("app_command_dispatch"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
