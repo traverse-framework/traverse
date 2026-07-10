@@ -3047,6 +3047,7 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3781,6 +3782,74 @@ mod tests {
     }
 
     #[test]
+    fn governed_artifact_without_checksum_is_rejected_before_execution() {
+        let bytes = b"governed checksum missing";
+        let path = temp_artifact_path("missing-checksum");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.digests.binary_digest = None;
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("missing_checksum")
+        );
+    }
+
+    #[test]
+    fn governed_artifact_with_mismatched_checksum_is_rejected_before_execution() {
+        let bytes = b"governed checksum mismatch";
+        let path = temp_artifact_path("checksum-mismatch");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.digests.binary_digest = Some(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("checksum_mismatch")
+        );
+    }
+
+    #[test]
+    fn local_artifact_checksum_does_not_override_local_development_policy() {
+        let bytes = b"local checksum is advisory";
+        let path = temp_artifact_path("local-checksum");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.source.kind = SourceKind::Local;
+        registration.artifact.digests.binary_digest = Some(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+    }
+
+    #[test]
     fn local_dev_unsigned_artifact_warns_and_executes_in_development_mode() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
@@ -4377,6 +4446,9 @@ mod tests {
             location: path.display().to_string(),
             signature,
         });
+        let bytes = fs::read(path).unwrap_or_default();
+        registration.artifact.digests.binary_digest =
+            Some(format!("sha256:{:x}", Sha256::digest(bytes)));
         registration
     }
 
