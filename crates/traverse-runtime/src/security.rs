@@ -44,8 +44,11 @@ impl RuntimeSecurityConfig {
 }
 
 impl Default for RuntimeSecurityConfig {
+    /// Production is the default security posture: unsigned local artifacts are
+    /// rejected unless a caller explicitly opts into [`Self::development`]
+    /// (spec 030-security-identity-model FR-013).
     fn default() -> Self {
-        Self::development()
+        Self::production()
     }
 }
 

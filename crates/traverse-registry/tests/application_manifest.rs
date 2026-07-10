@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::fs;
@@ -37,7 +37,261 @@ fn loads_checked_in_application_manifest_with_real_wasm_component() {
     );
     assert_eq!(
         bundle.components[0].verified_wasm_digest,
-        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99"
+        Some("sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99".to_string())
+    );
+}
+
+#[test]
+fn defaults_component_execution_mode_to_wasm() {
+    let fixture = AppFixture::new("default-wasm-mode");
+    let wasm_digest = fixture.write_wasm("component bytes");
+    fixture.write_component_manifest(&json!({
+        "wasm_digest": format!("sha256:{wasm_digest}"),
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        &format!("sha256:{wasm_digest}"),
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("omitted execution_mode should preserve wasm compatibility");
+
+    assert_eq!(
+        bundle.components[0].manifest.execution_mode,
+        traverse_registry::ComponentExecutionMode::Wasm
+    );
+    assert_eq!(
+        bundle.components[0].verified_wasm_digest,
+        Some(format!("sha256:{wasm_digest}"))
+    );
+}
+
+#[test]
+fn component_execution_mode_renders_manifest_values() {
+    assert_eq!(
+        traverse_registry::ComponentExecutionMode::Wasm.as_str(),
+        "wasm"
+    );
+    assert_eq!(
+        traverse_registry::ComponentExecutionMode::Compatible.as_str(),
+        "compatible"
+    );
+}
+
+#[test]
+fn loads_compatible_component_manifest_without_wasm_artifact() {
+    let fixture = AppFixture::new("compatible-mode");
+    let wrapper_path = fixture.write_compatible_wrapper();
+    let reference_digest = sha256_hex(b"compatible component manifest reference");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "compatible",
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "platforms": ["linux"],
+        "wrapper_path": wrapper_path,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        &format!("sha256:{reference_digest}"),
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let bundle = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect("compatible component should validate without wasm fields");
+
+    assert_eq!(
+        bundle.components[0].manifest.execution_mode,
+        traverse_registry::ComponentExecutionMode::Compatible
+    );
+    assert_eq!(bundle.components[0].verified_wasm_digest, None);
+    assert_eq!(bundle.components[0].wasm_binary_path, None);
+    assert_eq!(
+        bundle.components[0].manifest.platforms,
+        vec!["linux".to_string()]
+    );
+}
+
+#[test]
+fn rejects_compatible_component_with_wasm_fields() {
+    let fixture = AppFixture::new("compatible-wasm-fields");
+    let wrapper_path = fixture.write_compatible_wrapper();
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "compatible",
+        "platforms": ["linux"],
+        "wrapper_path": wrapper_path,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("compatible component must reject wasm fields");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::CompatibleComponentInvalidWasmFields
+    );
+}
+
+#[test]
+fn rejects_unknown_component_execution_mode() {
+    let fixture = AppFixture::new("unknown-execution-mode");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "native",
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("unknown execution_mode must fail");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::InvalidExecutionMode
+    );
+}
+
+#[test]
+fn rejects_compatible_component_without_platforms() {
+    let fixture = AppFixture::new("compatible-no-platforms");
+    let wrapper_path = fixture.write_compatible_wrapper();
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "compatible",
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "platforms": [],
+        "wrapper_path": wrapper_path,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("compatible component must declare platforms");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::CompatibleComponentMissingPlatforms
+    );
+}
+
+#[test]
+fn rejects_compatible_component_without_wrapper_path() {
+    let fixture = AppFixture::new("compatible-no-wrapper-path");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "compatible",
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "platforms": ["linux"],
+        "wrapper_path": null,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("compatible component must declare wrapper_path");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::CompatibleComponentMissingWrapper
+    );
+}
+
+#[test]
+fn rejects_compatible_component_with_missing_wrapper_path() {
+    let fixture = AppFixture::new("compatible-missing-wrapper-path");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "compatible",
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "platforms": ["linux"],
+        "wrapper_path": "missing-wrapper",
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("compatible component wrapper path must exist");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::CompatibleComponentMissingWrapper
+    );
+}
+
+#[test]
+fn rejects_wasm_component_without_wasm_digest() {
+    let fixture = AppFixture::new("wasm-no-digest");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "wasm",
+        "wasm_digest": null,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("wasm component must declare wasm_digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::WasmComponentMissingWasmFields
+    );
+}
+
+#[test]
+fn rejects_wasm_component_without_wasm_binary_path() {
+    let fixture = AppFixture::new("wasm-no-binary-path");
+    fixture.write_component_manifest(&json!({
+        "execution_mode": "wasm",
+        "wasm_binary_path": null,
+        "dependencies": []
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("wasm component must declare wasm_binary_path");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::WasmComponentMissingWasmFields
     );
 }
 
@@ -2251,10 +2505,9 @@ impl AppFixture {
             .get("version")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("1.0.0");
-        let wasm_digest = overrides
-            .get("wasm_digest")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99");
+        let wasm_digest = overrides.get("wasm_digest").cloned().unwrap_or_else(|| {
+            json!("sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99")
+        });
         let capability_id = overrides
             .get("capability_id")
             .and_then(serde_json::Value::as_str)
@@ -2263,6 +2516,10 @@ impl AppFixture {
             .get("capability_version")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("1.0.0");
+        let execution_mode = overrides
+            .get("execution_mode")
+            .cloned()
+            .unwrap_or_else(|| json!("wasm"));
         let dependencies = overrides
             .get("dependencies")
             .cloned()
@@ -2278,15 +2535,26 @@ impl AppFixture {
             .get("wasm_binary_path")
             .cloned()
             .unwrap_or_else(|| json!("component.wasm"));
+        let platforms = overrides
+            .get("platforms")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let wrapper_path = overrides
+            .get("wrapper_path")
+            .cloned()
+            .unwrap_or(Value::Null);
         let component = json!({
             "component_id": component_id,
             "version": version,
             "schema_version": "1.0.0",
+            "execution_mode": execution_mode,
             "capability_id": capability_id,
             "capability_version": capability_version,
             "contract_path": contract_path,
             "wasm_binary_path": wasm_binary_path,
             "wasm_digest": wasm_digest,
+            "platforms": platforms,
+            "wrapper_path": wrapper_path,
             "runtime_constraints": {
                 "host_api_access": "none",
                 "network_access": "forbidden",
@@ -2304,6 +2572,12 @@ impl AppFixture {
     fn write_wasm(&self, contents: &str) -> String {
         fs::write(self.wasm_path(), contents.as_bytes()).expect("wasm fixture should write");
         sha256_hex(contents.as_bytes())
+    }
+
+    fn write_compatible_wrapper(&self) -> String {
+        let wrapper_path = self.root.join("components/validate-team-readiness/wrapper");
+        fs::create_dir_all(&wrapper_path).expect("compatible wrapper should write");
+        "wrapper".to_string()
     }
 
     fn registration_request(&self) -> ApplicationRegistrationRequest {
