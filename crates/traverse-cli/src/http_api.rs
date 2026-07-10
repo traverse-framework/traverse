@@ -4676,9 +4676,10 @@ fn parse_execute_runtime_request<W: Write>(
 
     match parse_runtime_request(body_str) {
         Ok(value) => Ok(value),
-        Err(e) => match parse_simplified_workspace_execute_request(body_str) {
-            Ok(value) => Ok(value),
-            Err(()) => {
+        Err(e) => {
+            if let Ok(value) = parse_simplified_workspace_execute_request(body_str) {
+                Ok(value)
+            } else {
                 let _ = write_json(
                     w,
                     400,
@@ -4690,7 +4691,7 @@ fn parse_execute_runtime_request<W: Write>(
                 );
                 Err(())
             }
-        },
+        }
     }
 }
 
@@ -4722,16 +4723,18 @@ fn parse_simplified_workspace_execute_request(body: &str) -> Result<RuntimeReque
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "http_{}",
-                capability_id
-                    .chars()
-                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                    .collect::<String>()
-            )
-        });
+        .map_or_else(
+            || {
+                format!(
+                    "http_{}",
+                    capability_id
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                        .collect::<String>()
+                )
+            },
+            ToString::to_string,
+        );
 
     Ok(RuntimeRequest {
         kind: "runtime_request".to_string(),
