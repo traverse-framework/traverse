@@ -3257,7 +3257,8 @@ fn execute_agent(manifest_path: &Path, request_path: &Path) -> Result<String, Cl
     registry
         .register(package.capability_registration())
         .map_err(|f| CliError::RegistrationConflict(render_registry_failure(f)))?;
-    let runtime = Runtime::new(registry, AgentPackageExampleExecutor);
+    let runtime = Runtime::new(registry, AgentPackageExampleExecutor)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     let outcome = runtime.execute(request);
 
     if outcome.result.status == RuntimeResultStatus::Error {
@@ -4376,7 +4377,8 @@ fn execute_expedition_outcome(request_path: &Path) -> Result<RuntimeExecutionOut
     let request = load_runtime_request(request_path)?;
     let registered = load_registered_bundle(&canonical_expedition_bundle_path())?;
     let runtime = Runtime::new(registered.capability_registry, ExpeditionExampleExecutor)
-        .with_workflow_registry(registered.workflow_registry);
+        .with_workflow_registry(registered.workflow_registry)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     Ok(runtime.execute(request))
 }
 
