@@ -4,7 +4,7 @@ Auto-generated. Last updated: 2026-07-03
 
 ## Governance
 
-This repo's constitution, NFRs, quality standards, antipatterns, compatibility policy, exception process, and CLA are **not** duplicated here — they live in [`traverse-framework/.github`](https://github.com/traverse-framework/.github), pinned at **governance version 1.0.0**. Read that repo's `constitution.md` before any implementation work.
+This repo's constitution, NFRs, quality standards, antipatterns, compatibility policy, exception process, and CLA are **not** duplicated here — they live in [`traverse-framework/.github`](https://github.com/traverse-framework/.github), pinned at the version recorded in `.governance-version`. Read that repo's `constitution.md` before any implementation work.
 
 Repo-specific product scope stays here: see `specs/001-foundation-v0-1/spec.md` for this repo's v0.1 scope, and `specs/051-registry-extraction/spec.md` for the in-progress registry extraction.
 
@@ -60,17 +60,11 @@ All work must be tracked: GitHub issue + Project 1 item + PR.
 
 ## Approved Specs
 
-| ID  | Name |
-|-----|------|
-| 001 | foundation-v0-1 |
-| 002 | capability-contracts |
-| 003 | event-contracts |
-| 004 | spec-alignment-gate |
-| 005 | capability-registry |
-| 006 | runtime-request-execution |
-| 007 | workflow-registry-traversal |
-| 008 | expedition-example-domain |
-| 009 | expedition-example-artifacts |
+Never list specs here — the registry is the source of truth:
+
+```bash
+jq -r '.specs[].id' specs/governance/approved-specs.json
+```
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
