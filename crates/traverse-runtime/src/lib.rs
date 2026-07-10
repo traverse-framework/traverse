@@ -3047,6 +3047,7 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -4377,6 +4378,9 @@ mod tests {
             location: path.display().to_string(),
             signature,
         });
+        let bytes = fs::read(path).unwrap_or_default();
+        registration.artifact.digests.binary_digest =
+            Some(format!("sha256:{:x}", Sha256::digest(bytes)));
         registration
     }
 
