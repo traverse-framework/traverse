@@ -1204,6 +1204,9 @@ fn run_serve(
             .join(".traverse/registry"),
         executor: ExpeditionExampleExecutor,
         idempotency_retention_seconds: None,
+        jwt_verification_key_hex: std::env::var("TRAVERSE_JWT_VERIFICATION_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
     };
 
     http_api::serve_http_api(config).map_err(|e| e.to_string())
@@ -3257,7 +3260,8 @@ fn execute_agent(manifest_path: &Path, request_path: &Path) -> Result<String, Cl
     registry
         .register(package.capability_registration())
         .map_err(|f| CliError::RegistrationConflict(render_registry_failure(f)))?;
-    let runtime = Runtime::new(registry, AgentPackageExampleExecutor);
+    let runtime = Runtime::new(registry, AgentPackageExampleExecutor)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     let outcome = runtime.execute(request);
 
     if outcome.result.status == RuntimeResultStatus::Error {
@@ -3531,6 +3535,7 @@ fn build_in_process_api() -> Result<http_api::InProcessApi<ExpeditionExampleExec
             .join(".traverse/registry"),
         executor: ExpeditionExampleExecutor,
         idempotency_retention_seconds: None,
+        jwt_verification_key_hex: None,
     }))
 }
 
@@ -3849,10 +3854,28 @@ fn render_agent_execution_summary(
                 lines.push(format!("starter_status: {status}"));
             }
         }
+        "meeting-notes.process" => {
+            append_meeting_notes_summary(&mut lines, output);
+        }
         _ => {}
     }
 
     lines.join("\n")
+}
+
+fn append_meeting_notes_summary(lines: &mut Vec<String>, output: &Value) {
+    if let Some(summary) = output.get("summary").and_then(Value::as_str) {
+        lines.push(format!("summary: {summary}"));
+    }
+    for (field, label) in [
+        ("action_items", "action_items"),
+        ("decisions", "decisions"),
+        ("follow_ups", "follow_ups"),
+    ] {
+        if let Some(values) = output.get(field).and_then(Value::as_array) {
+            lines.push(format!("{label}: {}", values.len()));
+        }
+    }
 }
 
 fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
@@ -3981,6 +4004,7 @@ impl LocalExecutor for ExpeditionExampleExecutor {
             }
             "expedition.planning.validate-team-readiness" => execute_validate_team_readiness(input),
             "traverse-starter.process" => execute_traverse_starter_process(input),
+            "meeting-notes.process" => execute_meeting_notes_process(input),
             "expedition.planning.assemble-expedition-plan" => {
                 execute_assemble_expedition_plan(input)
             }
@@ -4003,6 +4027,7 @@ impl LocalExecutor for AgentPackageExampleExecutor {
         match capability.contract.id.as_str() {
             "hello.world.say-hello" => execute_hello_world(input),
             "traverse-starter.process" => execute_traverse_starter_process(input),
+            "meeting-notes.process" => execute_meeting_notes_process(input),
             "expedition.planning.interpret-expedition-intent" => {
                 execute_interpret_expedition_intent(input)
             }
@@ -4376,7 +4401,8 @@ fn execute_expedition_outcome(request_path: &Path) -> Result<RuntimeExecutionOut
     let request = load_runtime_request(request_path)?;
     let registered = load_registered_bundle(&canonical_expedition_bundle_path())?;
     let runtime = Runtime::new(registered.capability_registry, ExpeditionExampleExecutor)
-        .with_workflow_registry(registered.workflow_registry);
+        .with_workflow_registry(registered.workflow_registry)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     Ok(runtime.execute(request))
 }
 
@@ -4624,6 +4650,141 @@ fn execute_traverse_starter_process(input: &Value) -> Result<Value, LocalExecuti
         "suggestedNextAction": suggested_next_action,
         "status": "complete"
     }))
+}
+
+fn execute_meeting_notes_process(input: &Value) -> Result<Value, LocalExecutionFailure> {
+    let map = input_object(input)?;
+    let transcript = required_string(map, "transcript")?;
+    let trimmed = transcript.trim();
+    let mut action_items = Vec::new();
+    let mut decisions = Vec::new();
+    let mut follow_ups = Vec::new();
+
+    for line in trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("action:")
+            || lower.contains("todo:")
+            || lower.contains("will do")
+            || lower.contains("to do")
+            || line.contains('@')
+        {
+            action_items.push(serde_json::json!({
+                "task": clean_meeting_marker(line),
+                "owner": meeting_owner(line),
+                "due": meeting_due(line)
+            }));
+        }
+        if lower.contains("decided:")
+            || lower.contains("agreed:")
+            || lower.contains("we will")
+            || lower.contains("resolution:")
+        {
+            decisions.push(serde_json::json!({
+                "text": clean_meeting_marker(line),
+                "made_by": meeting_owner(line)
+            }));
+        }
+        if lower.contains("follow up")
+            || lower.contains("check in")
+            || lower.contains("revisit")
+            || lower.contains("next steps")
+        {
+            follow_ups.push(Value::String(clean_meeting_marker(line)));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "action_items": action_items,
+        "decisions": decisions,
+        "follow_ups": follow_ups,
+        "summary": meeting_summary(trimmed)
+    }))
+}
+
+fn clean_meeting_marker(line: &str) -> String {
+    let trimmed = line.trim();
+    for marker in ["action:", "todo:", "decided:", "agreed:", "resolution:"] {
+        if trimmed
+            .get(..marker.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
+        {
+            return trimmed[marker.len()..].trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn meeting_owner(line: &str) -> Value {
+    if let Some(owner) = line
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix('@'))
+        .map(|word| word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric()))
+        .filter(|word| !word.is_empty())
+    {
+        return Value::String(owner.to_string());
+    }
+
+    let words = line.split_whitespace().collect::<Vec<_>>();
+    for pair in words.windows(2) {
+        if pair[0].eq_ignore_ascii_case("by") {
+            let owner = pair[1].trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+            if !owner.is_empty() {
+                return Value::String(owner.to_string());
+            }
+        }
+    }
+    Value::Null
+}
+
+fn meeting_due(line: &str) -> Value {
+    let words = line.split_whitespace().collect::<Vec<_>>();
+    for pair in words.windows(2) {
+        if pair[0].eq_ignore_ascii_case("by")
+            || pair[0].eq_ignore_ascii_case("before")
+            || pair[0].eq_ignore_ascii_case("due")
+        {
+            let due = pair[1].trim_matches(|ch: char| ch == '.' || ch == ',' || ch == ';');
+            if looks_like_due_token(due) {
+                return Value::String(due.to_string());
+            }
+        }
+    }
+    Value::Null
+}
+
+fn looks_like_due_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let lower = token.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "today"
+            | "tomorrow"
+            | "monday"
+            | "tuesday"
+            | "wednesday"
+            | "thursday"
+            | "friday"
+            | "saturday"
+            | "sunday"
+    ) || token.chars().any(|ch| ch.is_ascii_digit())
+}
+
+fn meeting_summary(transcript: &str) -> String {
+    if transcript.is_empty() {
+        return String::new();
+    }
+    let first_paragraph = transcript
+        .split("\n\n")
+        .find(|paragraph| !paragraph.trim().is_empty())
+        .unwrap_or(transcript)
+        .trim();
+    first_paragraph.chars().take(280).collect()
 }
 
 fn derive_starter_tags(note: &str) -> Vec<String> {
@@ -6248,6 +6409,55 @@ mod tests {
     }
 
     #[test]
+    fn execute_agent_runs_meeting_notes_process_request() {
+        let fixture = create_meeting_notes_agent_fixture();
+        let request_path = repo_root().join("examples/meeting-notes/runtime-requests/process.json");
+
+        let output = execute_agent(&fixture.manifest_path, &request_path)
+            .expect("meeting-notes agent execution should succeed");
+
+        assert!(output.contains("package_id: meeting-notes.process-agent"));
+        assert!(output.contains("capability_id: meeting-notes.process"));
+        assert!(output.contains("status: completed"));
+        assert!(output.contains("summary: Kickoff notes for Traverse reference app."));
+        assert!(output.contains("action_items: 2"));
+        assert!(output.contains("decisions: 1"));
+        assert!(output.contains("follow_ups: 1"));
+    }
+
+    #[test]
+    fn meeting_notes_process_is_deterministic_and_handles_empty_transcript() {
+        let input = serde_json::json!({
+            "transcript": "Kickoff notes.\nAction: @Mira draft parser by Friday\nDecided: we will ship deterministic extraction\nFollow up next steps with app team"
+        });
+
+        let first = crate::execute_meeting_notes_process(&input).expect("first run should succeed");
+        let second =
+            crate::execute_meeting_notes_process(&input).expect("second run should succeed");
+        assert_eq!(first, second);
+        assert_eq!(first["action_items"][0]["owner"], "Mira");
+        assert_eq!(first["action_items"][0]["due"], "Friday");
+        assert_eq!(
+            first["decisions"][0]["text"],
+            "we will ship deterministic extraction"
+        );
+
+        let empty = crate::execute_meeting_notes_process(&serde_json::json!({"transcript": ""}))
+            .expect("empty transcript should succeed");
+        assert_eq!(empty["summary"], "");
+        assert_eq!(empty["action_items"].as_array().map(Vec::len), Some(0));
+        assert_eq!(empty["decisions"].as_array().map(Vec::len), Some(0));
+        assert_eq!(empty["follow_ups"].as_array().map(Vec::len), Some(0));
+
+        let owner_only = crate::execute_meeting_notes_process(&serde_json::json!({
+            "transcript": "TODO: by Luca add HTTP validation before demo"
+        }))
+        .expect("owner-only by marker should succeed");
+        assert_eq!(owner_only["action_items"][0]["owner"], "Luca");
+        assert_eq!(owner_only["action_items"][0]["due"], Value::Null);
+    }
+
+    #[test]
     fn execute_expedition_writes_trace_artifact_when_requested() {
         let request_path =
             repo_root().join("examples/expedition/runtime-requests/plan-expedition.json");
@@ -6741,6 +6951,19 @@ mod tests {
             model_interface: "traverse-starter-deterministic-v1",
             model_purpose: "Process one starter note into deterministic structured metadata without model inference.",
             workflow_id: "traverse-starter.process",
+        })
+    }
+
+    fn create_meeting_notes_agent_fixture() -> AgentFixture {
+        create_agent_package_fixture(&AgentPackageFixtureSpec {
+            package_id: "meeting-notes.process-agent",
+            capability_id: "meeting-notes.process",
+            binary_name: "process-agent.wasm",
+            summary: "Governed WASM agent package for the meeting-notes reference app.",
+            contract_path: "contracts/examples/meeting-notes/capabilities/process/contract.json",
+            model_interface: "meeting-notes-deterministic-v1",
+            model_purpose: "Extract meeting summary, action items, decisions, and follow-ups without model inference.",
+            workflow_id: "meeting-notes.process",
         })
     }
 

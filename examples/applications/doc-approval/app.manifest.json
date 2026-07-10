@@ -1,0 +1,51 @@
+{
+  "app_id": "doc-approval",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "workspace_defaults": {
+    "workspace_id": "local-default",
+    "registry_scope": "private"
+  },
+  "components": [
+    {
+      "component_id": "doc-approval.analyze-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/analyze/component.manifest.json"
+    }
+  ],
+  "workflows": [],
+  "model_dependencies": [],
+  "config_schema": {
+    "type": "object",
+    "required": [
+      "workspace_id"
+    ],
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "analysis_mode": {
+        "type": "string",
+        "enum": [
+          "deterministic"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "default_config": {
+    "workspace_id": "local-default",
+    "analysis_mode": "deterministic"
+  },
+  "placement_policy": {
+    "preferred_targets": [
+      "local"
+    ],
+    "allow_fallback": false
+  },
+  "public_surfaces": [
+    "cli",
+    "http_json"
+  ]
+}

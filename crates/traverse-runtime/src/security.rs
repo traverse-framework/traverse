@@ -44,8 +44,11 @@ impl RuntimeSecurityConfig {
 }
 
 impl Default for RuntimeSecurityConfig {
+    /// Production is the default security posture: unsigned local artifacts are
+    /// rejected unless a caller explicitly opts into [`Self::development`]
+    /// (spec 030-security-identity-model FR-013).
     fn default() -> Self {
-        Self::development()
+        Self::production()
     }
 }
 
@@ -91,6 +94,8 @@ pub struct RuntimeWarning {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactVerificationFailure {
+    MissingChecksum(ArtifactVerificationRecord),
+    ChecksumMismatch(ArtifactVerificationRecord),
     MissingSignature(ArtifactVerificationRecord),
     SignatureVerificationFailed(ArtifactVerificationRecord),
     SigstoreUnreachable(ArtifactVerificationRecord),
@@ -100,6 +105,8 @@ impl ArtifactVerificationFailure {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::MissingChecksum(_) => "missing_checksum",
+            Self::ChecksumMismatch(_) => "checksum_mismatch",
             Self::MissingSignature(_) => "missing_signature",
             Self::SignatureVerificationFailed(_) => "signature_verification_failed",
             Self::SigstoreUnreachable(_) => "sigstore_unreachable",
@@ -109,13 +116,25 @@ impl ArtifactVerificationFailure {
     #[must_use]
     pub fn record(&self) -> &ArtifactVerificationRecord {
         match self {
-            Self::MissingSignature(record)
+            Self::MissingChecksum(record)
+            | Self::ChecksumMismatch(record)
+            | Self::MissingSignature(record)
             | Self::SignatureVerificationFailed(record)
             | Self::SigstoreUnreachable(record) => record,
         }
     }
 }
 
+/// Attribute a caller identity from a JWT bearer token for **tracing and audit
+/// only**.
+///
+/// This decodes the token payload without verifying its signature and returns a
+/// [`RuntimeIdentity`] (subject, optional actor, token hash) used purely to
+/// label execution traces. It carries **no privilege claim** and MUST NOT be
+/// used for any authorization decision. Access control lives at the HTTP
+/// boundary (`traverse-cli` `http_api`), which verifies the JWT signature and
+/// an `alg` allow-list before honoring any privileged claim (see spec
+/// 033-http-json-api and issue #580).
 #[must_use]
 pub fn derive_identity_from_jwt(token: &str) -> Option<RuntimeIdentity> {
     let mut parts = token.split('.');
@@ -178,9 +197,35 @@ pub fn verify_artifact(
         return Err(ArtifactVerificationFailure::MissingSignature(record));
     };
 
-    match signature.scheme {
+    let verification = match signature.scheme {
         ArtifactSignatureScheme::Ed25519 => verify_ed25519(signature, artifact_bytes, trust_level),
         ArtifactSignatureScheme::Sigstore => verify_sigstore(signature, trust_level),
+    }?;
+    verify_checksum(capability, artifact_bytes, trust_level)?;
+    Ok(verification)
+}
+
+fn verify_checksum(
+    capability: &ResolvedCapability,
+    artifact_bytes: &[u8],
+    trust_level: ArtifactTrustLevel,
+) -> Result<(), ArtifactVerificationFailure> {
+    if trust_level != ArtifactTrustLevel::PublishedGoverned {
+        return Ok(());
+    }
+    let Some(expected) = capability.artifact.digests.binary_digest.as_deref() else {
+        return Err(ArtifactVerificationFailure::MissingChecksum(
+            rejected_record(trust_level, None, "missing_checksum"),
+        ));
+    };
+    let expected = expected.strip_prefix("sha256:").unwrap_or(expected);
+    let actual = sha256_hex(artifact_bytes);
+    if expected.eq_ignore_ascii_case(&actual) {
+        Ok(())
+    } else {
+        Err(ArtifactVerificationFailure::ChecksumMismatch(
+            rejected_record(trust_level, None, "checksum_mismatch"),
+        ))
     }
 }
 
