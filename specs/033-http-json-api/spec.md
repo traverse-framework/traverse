@@ -127,6 +127,35 @@ Allowed `auth_mode` values:
 - `dev-any`
 - `bearer-required` (token-authenticated production/non-loopback mode)
 
+### Bearer Token Authentication
+
+In `bearer-required` mode the server authenticates callers with **signed JWT
+bearer tokens**. A JWT is a *signed assertion*, not a transport encoding: the
+server MUST verify the signature before trusting any claim it carries.
+
+- The server MUST verify the token signature over the `header.payload` signing
+  input against a configured verification key before deriving any identity.
+- The server MUST enforce an explicit `alg` allow-list. The only accepted
+  algorithm is `EdDSA` (Ed25519). `alg: none` and any other algorithm MUST be
+  rejected with `401` and a distinct `traverse_code` of `token_alg_not_allowed`,
+  so an attacker cannot strip verification.
+- Privilege claims (`traverse_admin`, `roles`, `role`) MUST only be honored for a
+  signature-verified token. An unverified token MUST NOT yield an administrative
+  identity or access to the privileged system workspace.
+- The server MUST validate `exp` and `nbf` when present, rejecting expired
+  (`token_expired`) and not-yet-valid (`token_not_yet_valid`) tokens.
+- When `bearer-required` mode is active and no verification key is configured,
+  the server MUST **fail closed**: every bearer token is rejected with `401`
+  (`jwt_verification_unavailable`). It MUST NOT fall back to trusting unverified
+  token payloads.
+- The opaque "bearer token equals subject id" convenience is permitted only in
+  the `dev-loopback` and `dev-any` modes and MUST NOT yield an administrative
+  identity on a network-facing (`bearer-required`) listener.
+
+Identity attribution derived elsewhere in the runtime (for example, trace and
+audit labeling from a caller token) is not an authorization decision and MUST
+NOT gate access; access control is enforced at this HTTP boundary.
+
 ### Execute
 
 `POST /v1/workspaces/{workspace_id}/execute`
@@ -425,6 +454,11 @@ Rules:
 - **FR-030**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
 - **FR-031**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
 - **FR-032**: `--auth dev-any` MUST support real-device LAN development by accepting RFC 1918 private IPv4 callers and rejecting public callers.
+- **FR-033**: In `bearer-required` mode the server MUST verify the JWT signature against a configured `Ed25519` verification key before trusting any claim, and MUST reject unverifiable tokens with `401`.
+- **FR-034**: The server MUST enforce a JWT `alg` allow-list of `EdDSA` only and MUST reject `alg: none` and every other algorithm with `401` (`token_alg_not_allowed`).
+- **FR-035**: Administrative privilege (and system-workspace access) MUST only be granted from a signature-verified token; an unverified token MUST NOT yield `is_admin`.
+- **FR-036**: In `bearer-required` mode with no verification key configured, the server MUST fail closed and reject all bearer tokens (`jwt_verification_unavailable`).
+- **FR-037**: The server MUST validate JWT `exp` and `nbf` when present, rejecting expired (`token_expired`) and not-yet-valid (`token_not_yet_valid`) tokens.
 
 ## Quality Gates
 

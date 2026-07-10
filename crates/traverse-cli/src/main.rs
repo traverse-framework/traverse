@@ -1204,6 +1204,9 @@ fn run_serve(
             .join(".traverse/registry"),
         executor: ExpeditionExampleExecutor,
         idempotency_retention_seconds: None,
+        jwt_verification_key_hex: std::env::var("TRAVERSE_JWT_VERIFICATION_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
     };
 
     http_api::serve_http_api(config).map_err(|e| e.to_string())
@@ -3532,6 +3535,7 @@ fn build_in_process_api() -> Result<http_api::InProcessApi<ExpeditionExampleExec
             .join(".traverse/registry"),
         executor: ExpeditionExampleExecutor,
         idempotency_retention_seconds: None,
+        jwt_verification_key_hex: None,
     }))
 }
 
