@@ -3671,15 +3671,15 @@ mod tests {
     fn runtime_otel_trace_propagates_w3c_context_and_exporter_config() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor).with_observability_config(
-            super::RuntimeObservabilityConfig {
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development())
+            .with_observability_config(super::RuntimeObservabilityConfig {
                 exporter: super::OTelExporterConfig {
                     endpoint: Some("http://collector:4318".to_string()),
                     protocol: super::OtlpProtocol::Http,
                 },
                 ..super::RuntimeObservabilityConfig::deterministic_test("seed-1")
-            },
-        );
+            });
         let mut request = valid_request();
         request.context.traceparent =
             Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string());
@@ -4206,7 +4206,8 @@ mod tests {
 
     #[test]
     fn collect_candidates_handles_missing_target_and_public_discovery() {
-        let runtime = super::Runtime::new(CapabilityRegistry::new(), NoopExecutor);
+        let runtime = super::Runtime::new(CapabilityRegistry::new(), NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let mut request = valid_request();
         request.intent.capability_id = None;
         request.intent.capability_version = None;
@@ -4222,7 +4223,8 @@ mod tests {
         let outcome = registry.register(public_registration());
         assert!(outcome.is_ok());
 
-        let runtime = super::Runtime::new(registry, NoopExecutor);
+        let runtime = super::Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let mut request = valid_request();
         request.lookup.scope = PublicOnly;
         request.intent.capability_id = None;
@@ -4355,7 +4357,8 @@ mod tests {
     fn runtime_outcome_for_browser_subscription() -> super::RuntimeExecutionOutcome {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         runtime.execute(valid_request())
     }
 
@@ -4827,7 +4830,8 @@ mod tests {
     fn failed_trace() -> super::RuntimeTrace {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, FailingExecutor);
+        let runtime = Runtime::new(registry, FailingExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         runtime.execute(valid_request()).trace
     }
 
@@ -4844,7 +4848,8 @@ mod tests {
     fn selected_capability_id_returns_none_when_no_selection() {
         let registry = CapabilityRegistry::new();
         // empty registry — no capability matches
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let trace = runtime.execute(valid_request()).trace;
         assert!(trace.selected_capability_id().is_none());
     }
