@@ -1,0 +1,130 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "doc-approval.analyze",
+  "namespace": "doc-approval",
+  "name": "analyze",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Analyze a submitted document into deterministic approval-review fields.",
+  "description": "Portable deterministic document approval analysis capability used by doc-approval reference clients. It extracts flat UI-facing fields without model, network, randomness, or host state dependencies.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "document"
+      ],
+      "properties": {
+        "document": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "docType",
+        "parties",
+        "amounts",
+        "confidence",
+        "recommendation"
+      ],
+      "properties": {
+        "docType": {
+          "type": "string"
+        },
+        "parties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "amounts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "document-provided",
+      "description": "The caller provides a document string to analyze."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "analysis-fields-produced",
+      "description": "The capability returns deterministic document type, parties, amounts, confidence, and recommendation fields."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Produces one deterministic analysis payload for the provided document."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "doc-approval.analyze"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-07T00:00:00Z",
+    "spec_ref": "058-workflow-pipeline-execution@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}

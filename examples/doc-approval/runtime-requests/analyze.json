@@ -1,0 +1,21 @@
+{
+  "kind": "runtime_request",
+  "schema_version": "1.0.0",
+  "request_id": "doc-approval-analyze-demo",
+  "intent": {
+    "capability_id": "doc-approval.analyze",
+    "capability_version": "1.0.0"
+  },
+  "input": {
+    "document": "Invoice from Acme Corp for $500"
+  },
+  "lookup": {
+    "scope": "public_only",
+    "allow_ambiguity": false
+  },
+  "context": {
+    "requested_target": "local",
+    "caller": "doc-approval-reference"
+  },
+  "governing_spec": "006-runtime-request-execution"
+}
