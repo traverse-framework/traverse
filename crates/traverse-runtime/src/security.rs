@@ -119,6 +119,16 @@ impl ArtifactVerificationFailure {
     }
 }
 
+/// Attribute a caller identity from a JWT bearer token for **tracing and audit
+/// only**.
+///
+/// This decodes the token payload without verifying its signature and returns a
+/// [`RuntimeIdentity`] (subject, optional actor, token hash) used purely to
+/// label execution traces. It carries **no privilege claim** and MUST NOT be
+/// used for any authorization decision. Access control lives at the HTTP
+/// boundary (`traverse-cli` `http_api`), which verifies the JWT signature and
+/// an `alg` allow-list before honoring any privileged claim (see spec
+/// 033-http-json-api and issue #580).
 #[must_use]
 pub fn derive_identity_from_jwt(token: &str) -> Option<RuntimeIdentity> {
     let mut parts = token.split('.');
