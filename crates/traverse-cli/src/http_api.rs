@@ -72,6 +72,11 @@ pub struct ApiServerConfig<E> {
     pub executor: E,
     /// Optional Idempotency-Key retention in seconds. Values below 60 seconds are floored to 60.
     pub idempotency_retention_seconds: Option<u64>,
+    /// Optional hex-encoded `Ed25519` public key used to verify JWT bearer-token
+    /// signatures (`EdDSA`). Required for the `bearer-required` auth mode: without
+    /// it, every bearer token is rejected (fail closed). Ignored for the dev
+    /// auth modes when absent, where unverified tokens can never yield admin.
+    pub jwt_verification_key_hex: Option<String>,
 }
 
 struct ApiState<E> {
@@ -83,6 +88,7 @@ struct ApiState<E> {
     workspaces: RefCell<HashMap<String, WorkspaceState<E>>>,
     idempotency_records: RefCell<HashMap<String, IdempotencyRecord>>,
     idempotency_retention_seconds: u64,
+    jwt_verification_key: Option<ed25519_dalek::VerifyingKey>,
 }
 
 struct WorkspaceState<E> {
@@ -306,6 +312,11 @@ where
             render_mobile_connect_qr(&mobile_connect_url).map_err(ServeError::BindFailed)?
         );
     }
+    let jwt_verification_key = resolve_jwt_verification_key(
+        config.jwt_verification_key_hex.as_deref(),
+        auth_mode,
+        config.allow_unauthenticated,
+    )?;
     let _ = std::io::stderr().flush();
 
     write_server_discovery(
@@ -350,6 +361,7 @@ where
         idempotency_retention_seconds: configured_idempotency_retention(
             config.idempotency_retention_seconds,
         ),
+        jwt_verification_key,
     };
 
     for connection in listener.incoming() {
@@ -546,6 +558,7 @@ where
                 idempotency_retention_seconds: configured_idempotency_retention(
                     config.idempotency_retention_seconds,
                 ),
+                jwt_verification_key: None,
             },
         }
     }
@@ -918,10 +931,51 @@ fn require_workspace_id_query(request: &HttpRequest) -> Result<String, ApiError>
         })
 }
 
+fn is_dev_auth_mode(auth_mode: &str) -> bool {
+    matches!(auth_mode, "dev-loopback" | "dev-any")
+}
+
+fn resolve_jwt_verification_key(
+    key_hex: Option<&str>,
+    auth_mode: &str,
+    allow_unauthenticated: bool,
+) -> Result<Option<ed25519_dalek::VerifyingKey>, ServeError> {
+    let key = if let Some(hex) = key_hex {
+        Some(parse_ed25519_verifying_key(hex).map_err(ServeError::BindFailed)?)
+    } else {
+        None
+    };
+    if auth_mode == "bearer-required" && key.is_none() && !allow_unauthenticated {
+        eprintln!(
+            "WARNING: bearer-required auth mode without a configured JWT verification key. \
+             All bearer tokens will be rejected (fail closed). Set the \
+             TRAVERSE_JWT_VERIFICATION_KEY environment variable to a hex-encoded \
+             Ed25519 public key."
+        );
+    }
+    Ok(key)
+}
+
+fn subject_from_state<E>(
+    headers: &HashMap<String, String>,
+    state: &ApiState<E>,
+    loopback: bool,
+) -> Result<DerivedIdentity, ApiError> {
+    subject_from_request(
+        headers,
+        &state.auth_mode,
+        state.allow_unauthenticated,
+        loopback,
+        state.jwt_verification_key.as_ref(),
+    )
+}
+
 fn subject_from_request(
     headers: &HashMap<String, String>,
+    auth_mode: &str,
     allow_unauthenticated: bool,
     loopback: bool,
+    jwt_key: Option<&ed25519_dalek::VerifyingKey>,
 ) -> Result<DerivedIdentity, ApiError> {
     let token = headers
         .get("authorization")
@@ -931,12 +985,23 @@ fn subject_from_request(
         .map(ToString::to_string);
 
     if let Some(token) = token {
-        if let Some(identity) = derive_identity_from_jwt(&token)? {
-            return Ok(identity);
+        if is_jwt_shaped(&token) {
+            return derive_identity_from_jwt(&token, auth_mode, jwt_key);
         }
 
-        // Fallback: accept non-JWT bearer tokens as direct subject identifiers.
-        // This is intended for local/dev environments that don't provide JWTs yet.
+        // Non-JWT bearer tokens are accepted as direct subject identifiers only
+        // in the local/dev auth modes. A network-facing (`bearer-required`)
+        // listener requires a signature-verified JWT and never trusts an opaque
+        // token, so it can never yield an admin identity.
+        if !is_dev_auth_mode(auth_mode) {
+            return Err(ApiError {
+                status: 401,
+                reason: "Unauthorized",
+                code: "unauthorized",
+                message: "a signed JWT bearer token is required".to_string(),
+            });
+        }
+
         validate_subject_id(&token).map_err(|msg| ApiError {
             status: 401,
             reason: "Unauthorized",
@@ -967,6 +1032,16 @@ fn subject_from_request(
     })
 }
 
+fn is_jwt_shaped(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    !header.is_empty() && !payload.is_empty() && !signature.is_empty()
+}
+
 fn validate_subject_id(subject_id: &str) -> Result<(), String> {
     if subject_id.trim().is_empty() {
         return Err("subject_id must be non-empty".to_string());
@@ -980,19 +1055,51 @@ fn validate_subject_id(subject_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiError> {
-    let mut parts = token.split('.');
-    let header = parts.next();
-    let payload = parts.next();
-    let signature = parts.next();
-
-    if header.is_none() || payload.is_none() || signature.is_none() || parts.next().is_some() {
-        return Ok(None);
+fn unauthorized(code: &'static str, message: impl Into<String>) -> ApiError {
+    ApiError {
+        status: 401,
+        reason: "Unauthorized",
+        code,
+        message: message.into(),
     }
+}
 
-    let Some(payload_b64) = payload else {
-        return Ok(None);
+/// Derive a caller identity from a JWT bearer token.
+///
+/// The token signature is verified against the configured `Ed25519` key before
+/// any claim is trusted. A token is only allowed to yield an admin identity
+/// when its signature verified. In the dev auth modes, when no key is
+/// configured, claims are accepted as unverified but `is_admin` is forced to
+/// `false`. In `bearer-required` mode a missing key rejects every token
+/// (fail closed).
+fn derive_identity_from_jwt(
+    token: &str,
+    auth_mode: &str,
+    jwt_key: Option<&ed25519_dalek::VerifyingKey>,
+) -> Result<DerivedIdentity, ApiError> {
+    let mut parts = token.split('.');
+    let (Some(header_b64), Some(payload_b64), Some(signature_b64), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(unauthorized("unauthorized", "malformed JWT bearer token"));
     };
+
+    verify_jwt_header_alg(header_b64)?;
+
+    let signature_verified = if let Some(key) = jwt_key {
+        verify_jwt_signature(header_b64, payload_b64, signature_b64, key)?;
+        true
+    } else if is_dev_auth_mode(auth_mode) {
+        false
+    } else {
+        // Fail closed: a network-facing listener with no verification key
+        // configured cannot trust any token.
+        return Err(unauthorized(
+            "jwt_verification_unavailable",
+            "server has no JWT verification key configured; bearer tokens are rejected",
+        ));
+    };
+
     let payload_bytes = base64url_decode(payload_b64).map_err(|msg| ApiError {
         status: 401,
         reason: "Unauthorized",
@@ -1026,44 +1133,21 @@ fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiE
         message: msg,
     })?;
 
-    if let Some(exp) = value.get("exp").and_then(Value::as_i64) {
-        if exp <= 0 {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "token_expired",
-                message: "token is expired".to_string(),
-            });
-        }
+    validate_jwt_time_claims(&value)?;
 
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| ApiError {
-                status: 500,
-                reason: "Internal Server Error",
-                code: "internal_error",
-                message: format!("failed to read system time: {e}"),
-            })?
-            .as_secs();
+    // Privilege claims are only honored for a signature-verified token. An
+    // unverified (dev, no-key) token can name a subject but never escalates.
+    let is_admin = signature_verified && jwt_claims_admin(&value);
 
-        let now = i64::try_from(now_secs).map_err(|_| ApiError {
-            status: 500,
-            reason: "Internal Server Error",
-            code: "internal_error",
-            message: "system time overflow".to_string(),
-        })?;
+    Ok(DerivedIdentity {
+        subject_id,
+        is_admin,
+        scopes: parse_jwt_scopes(&value),
+    })
+}
 
-        if now > exp {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "token_expired",
-                message: "token is expired".to_string(),
-            });
-        }
-    }
-
-    let is_admin = value
+fn jwt_claims_admin(value: &Value) -> bool {
+    value
         .get("traverse_admin")
         .and_then(Value::as_bool)
         .unwrap_or(false)
@@ -1079,13 +1163,126 @@ fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiE
         || value
             .get("role")
             .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "traverse_admin" || s == SYSTEM_ADMIN_SUBJECT);
+            .is_some_and(|s| s == "traverse_admin" || s == SYSTEM_ADMIN_SUBJECT)
+}
 
-    Ok(Some(DerivedIdentity {
-        subject_id,
-        is_admin,
-        scopes: parse_jwt_scopes(&value),
-    }))
+fn validate_jwt_time_claims(value: &Value) -> Result<(), ApiError> {
+    let exp = value.get("exp").and_then(Value::as_i64);
+    let nbf = value.get("nbf").and_then(Value::as_i64);
+    if exp.is_none() && nbf.is_none() {
+        return Ok(());
+    }
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ApiError {
+            status: 500,
+            reason: "Internal Server Error",
+            code: "internal_error",
+            message: format!("failed to read system time: {e}"),
+        })?
+        .as_secs();
+    let now = i64::try_from(now_secs).map_err(|_| ApiError {
+        status: 500,
+        reason: "Internal Server Error",
+        code: "internal_error",
+        message: "system time overflow".to_string(),
+    })?;
+
+    if let Some(exp) = exp
+        && (exp <= 0 || now > exp)
+    {
+        return Err(unauthorized("token_expired", "token is expired"));
+    }
+    if let Some(nbf) = nbf
+        && now < nbf
+    {
+        return Err(unauthorized(
+            "token_not_yet_valid",
+            "token is not yet valid",
+        ));
+    }
+    Ok(())
+}
+
+const JWT_ALLOWED_ALG: &str = "EdDSA";
+
+/// Enforce the JWT `alg` allow-list. Only `EdDSA` is accepted; `none` and every
+/// other algorithm are rejected so an attacker cannot strip the signature.
+fn verify_jwt_header_alg(header_b64: &str) -> Result<(), ApiError> {
+    let header_bytes = base64url_decode(header_b64)
+        .map_err(|msg| unauthorized("unauthorized", format!("invalid JWT header: {msg}")))?;
+    let header: Value = serde_json::from_slice(&header_bytes)
+        .map_err(|e| unauthorized("unauthorized", format!("invalid JWT header: {e}")))?;
+    let alg = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unauthorized("token_alg_not_allowed", "JWT header missing 'alg'"))?;
+    if alg != JWT_ALLOWED_ALG {
+        return Err(unauthorized(
+            "token_alg_not_allowed",
+            format!("JWT alg '{alg}' is not allowed; only {JWT_ALLOWED_ALG} is accepted"),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify the Ed25519 signature over the `header.payload` signing input.
+fn verify_jwt_signature(
+    header_b64: &str,
+    payload_b64: &str,
+    signature_b64: &str,
+    key: &ed25519_dalek::VerifyingKey,
+) -> Result<(), ApiError> {
+    use ed25519_dalek::Verifier;
+
+    let signature_bytes = base64url_decode(signature_b64)
+        .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?;
+    let signature_array = <[u8; 64]>::try_from(signature_bytes.as_slice())
+        .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?;
+    let signature = ed25519_dalek::Signature::from_bytes(&signature_array);
+
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    key.verify(signing_input.as_bytes(), &signature)
+        .map_err(|_| {
+            unauthorized(
+                "signature_verification_failed",
+                "JWT signature verification failed",
+            )
+        })
+}
+
+fn parse_ed25519_verifying_key(hex: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let bytes = hex_decode(hex).map_err(|msg| format!("invalid JWT verification key: {msg}"))?;
+    let array = <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| "JWT verification key must be 32 bytes (Ed25519 public key)".to_string())?;
+    ed25519_dalek::VerifyingKey::from_bytes(&array)
+        .map_err(|e| format!("invalid Ed25519 verification key: {e}"))
+}
+
+fn hex_decode(input: &str) -> Result<Vec<u8>, String> {
+    if !input.len().is_multiple_of(2) {
+        return Err("hex input must have an even number of digits".to_string());
+    }
+    let mut out = Vec::with_capacity(input.len() / 2);
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = hex_nibble(bytes[i])?;
+        let lo = hex_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err("hex input contains a non-hex character".to_string()),
+    }
 }
 
 fn parse_jwt_scopes(value: &Value) -> Vec<String> {
@@ -3463,27 +3660,26 @@ fn handle_list_capabilities<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    &workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("registry_read"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                &workspace_id,
+                "auth_failure",
+                None,
+                Some("registry_read"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -3542,18 +3738,17 @@ fn handle_register_capability<W: Write, E: LocalExecutor + Clone>(
     state: &ApiState<E>,
     loopback: bool,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (workspace_id, scope, persisted_registration) = match parse_register_body(&request.body) {
         Ok(parsed) => parsed,
@@ -3654,18 +3849,17 @@ fn handle_register_workspace_capability<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted_registration) =
         match parse_register_body_for_workspace(&request.body, workspace_id) {
@@ -3827,18 +4021,17 @@ fn handle_register_workspace_event_contract<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted_registration) =
         match parse_event_register_body_for_workspace(&request.body, workspace_id) {
@@ -3938,18 +4131,17 @@ fn handle_register_workspace_workflow<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted) =
         match parse_workflow_register_body_for_workspace(&request.body, workspace_id) {
@@ -4033,18 +4225,17 @@ fn handle_register_workspace_bundle<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let bundle = match parse_bundle_register_body_for_workspace(&request.body, workspace_id) {
         Ok(bundle) => bundle,
@@ -4107,27 +4298,26 @@ fn handle_approve_runtime_grant<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("runtime_grants"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("runtime_grants"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4242,18 +4432,17 @@ fn handle_execute<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4304,27 +4493,26 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
         return Ok(());
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("workspace_execute"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("workspace_execute"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4659,18 +4847,17 @@ fn handle_app_events<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     app_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4743,18 +4930,17 @@ fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     app_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5282,18 +5468,17 @@ fn handle_execution_status<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     execution_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5348,18 +5533,17 @@ fn handle_trace_fetch<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     execution_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5464,18 +5648,17 @@ fn handle_register_workflow<W: Write, E: LocalExecutor + Clone>(
     state: &ApiState<E>,
     loopback: bool,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (workspace_id, scope, persisted) = match parse_workflow_register_body(&request.body) {
         Ok(parsed) => parsed,
@@ -5563,18 +5746,17 @@ fn handle_list_workflows<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5662,18 +5844,17 @@ fn handle_get_workflow<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -6404,6 +6585,7 @@ mod tests {
             workspaces: RefCell::new(workspaces),
             idempotency_records: RefCell::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6458,6 +6640,7 @@ mod tests {
             workspaces: RefCell::new(workspaces),
             idempotency_records: RefCell::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6499,6 +6682,7 @@ mod tests {
             workspaces: RefCell::new(workspaces),
             idempotency_records: RefCell::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6568,23 +6752,54 @@ mod tests {
         out
     }
 
+    fn test_jwt_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32])
+    }
+
+    fn test_jwt_verifying_key_hex() -> String {
+        use std::fmt::Write as _;
+        let mut hex = String::new();
+        for byte in test_jwt_signing_key().verifying_key().to_bytes() {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        hex
+    }
+
+    fn sign_jwt_eddsa(payload: &Value, key: &ed25519_dalek::SigningKey) -> String {
+        use ed25519_dalek::Signer;
+        let header = base64url_encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
+        let payload_b64 = base64url_encode(payload.to_string().as_bytes());
+        let signing_input = format!("{header}.{payload_b64}");
+        let signature = key.sign(signing_input.as_bytes());
+        let signature_b64 = base64url_encode(&signature.to_bytes());
+        format!("{header}.{payload_b64}.{signature_b64}")
+    }
+
     fn make_jwt(sub: &str, exp: i64, admin: bool) -> String {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
         let mut payload = json!({ "sub": sub, "exp": exp });
         if admin {
             payload["traverse_admin"] = json!(true);
         }
-        let payload_b64 = base64url_encode(payload.to_string().as_bytes());
-        format!("{header}.{payload_b64}.sig")
+        sign_jwt_eddsa(&payload, &test_jwt_signing_key())
     }
 
     fn make_scoped_jwt(sub: &str, exp: i64, scopes: &[&str]) -> String {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
         let payload = json!({
             "sub": sub,
             "exp": exp,
             "scope": scopes.join(" ")
         });
+        sign_jwt_eddsa(&payload, &test_jwt_signing_key())
+    }
+
+    /// Forge a token with `alg:none` and no real signature — the shape an
+    /// attacker uses to strip verification.
+    fn forge_unsigned_jwt(sub: &str, exp: i64, admin: bool) -> String {
+        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let mut payload = json!({ "sub": sub, "exp": exp });
+        if admin {
+            payload["traverse_admin"] = json!(true);
+        }
         let payload_b64 = base64url_encode(payload.to_string().as_bytes());
         format!("{header}.{payload_b64}.sig")
     }
@@ -7409,14 +7624,13 @@ mod tests {
     }
 
     #[test]
-    fn system_workspace_allows_admin_jwt() {
-        let state = empty_state();
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time must be valid")
-            .as_secs();
-        let now = i64::try_from(now_secs).expect("time must fit i64");
-        let token = make_jwt("admin-user", now + 3600, true);
+    fn system_workspace_allows_verified_admin_jwt() {
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("admin-user", future_exp(), true);
         let req = with_bearer(
             with_workspace_query(
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
@@ -7427,6 +7641,135 @@ mod tests {
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
         assert_eq!(response_status(&out), 200);
+    }
+
+    #[test]
+    fn forged_unsigned_admin_token_is_denied_system_workspace() {
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = forge_unsigned_jwt("attacker", future_exp(), true);
+        let req = with_bearer(
+            with_workspace_query(
+                make_http_request("GET", "/v1/capabilities", Vec::new()),
+                SYSTEM_WORKSPACE_ID,
+            ),
+            &token,
+        );
+        let mut out = Vec::new();
+        handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
+        assert_eq!(response_status(&out), 401);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "token_alg_not_allowed"
+        );
+    }
+
+    #[test]
+    fn tampered_payload_of_signed_token_is_rejected() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("alice", future_exp(), false);
+        let mut parts = token.split('.');
+        let header = parts.next().expect("header");
+        let signature = parts.nth(1).expect("signature");
+        let forged_payload = base64url_encode(
+            json!({ "sub": "alice", "exp": future_exp(), "traverse_admin": true })
+                .to_string()
+                .as_bytes(),
+        );
+        let tampered = format!("{header}.{forged_payload}.{signature}");
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {tampered}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+            .expect_err("tampered token must be rejected");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "signature_verification_failed");
+    }
+
+    #[test]
+    fn bearer_required_without_key_rejects_all_tokens() {
+        let token = make_jwt("alice", future_exp(), false);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, None)
+            .expect_err("fail closed without a verification key");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "jwt_verification_unavailable");
+    }
+
+    #[test]
+    fn bearer_required_rejects_opaque_non_jwt_token() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "Bearer system_admin".to_string(),
+        );
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, None)
+            .expect_err("opaque tokens are not accepted on a network listener");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "unauthorized");
+    }
+
+    #[test]
+    fn dev_mode_unverified_jwt_cannot_be_admin() {
+        // dev-loopback, no key configured: a signed-shaped token still parses a
+        // subject but can never yield admin because it was not verified.
+        let token = make_jwt("admin-user", future_exp(), true);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let identity = subject_from_request(&headers, "dev-loopback", false, true, None)
+            .expect("dev token must resolve to a subject");
+        assert_eq!(identity.subject_id, "admin-user");
+        assert!(!identity.is_admin);
+    }
+
+    #[test]
+    fn verified_jwt_yields_admin_when_signed() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("admin-user", future_exp(), true);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let identity =
+            subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+                .expect("verified token must resolve");
+        assert_eq!(identity.subject_id, "admin-user");
+        assert!(identity.is_admin);
+    }
+
+    #[test]
+    fn nbf_in_future_rejects_token() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let payload = json!({ "sub": "alice", "exp": future_exp(), "nbf": future_exp() });
+        let token = sign_jwt_eddsa(&payload, &test_jwt_signing_key());
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+            .expect_err("not-yet-valid token must be rejected");
+        assert_eq!(err.code, "token_not_yet_valid");
+    }
+
+    #[test]
+    fn parse_ed25519_verifying_key_rejects_wrong_length() {
+        assert!(parse_ed25519_verifying_key("00ff").is_err());
+        assert!(parse_ed25519_verifying_key("zz").is_err());
+        assert!(parse_ed25519_verifying_key(&test_jwt_verifying_key_hex()).is_ok());
     }
 
     // ------------------------------------------------------------------
