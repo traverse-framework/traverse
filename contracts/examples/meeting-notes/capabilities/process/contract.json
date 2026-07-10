@@ -1,0 +1,168 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "meeting-notes.process",
+  "namespace": "meeting-notes",
+  "name": "process",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Extract deterministic structured meeting notes from one transcript.",
+  "description": "Reference app capability for meeting notes that extracts action items, decisions, follow-ups, and summary fields without model inference.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "transcript"
+      ],
+      "properties": {
+        "transcript": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "action_items",
+        "decisions",
+        "follow_ups",
+        "summary"
+      ],
+      "properties": {
+        "action_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "task",
+              "owner",
+              "due"
+            ],
+            "properties": {
+              "task": {
+                "type": "string"
+              },
+              "owner": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "due": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "text",
+              "made_by"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "made_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "follow_ups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "transcript-provided",
+      "description": "The caller provides a transcript string. Empty transcripts are accepted and produce empty collections."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "structured-meeting-notes-produced",
+      "description": "The capability returns deterministic structured meeting-note fields for the provided transcript."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Produces deterministic meeting-note metadata from the provided input."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "meeting-notes.process"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-07T00:00:00Z",
+    "spec_ref": "044-application-bundle-manifest@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}

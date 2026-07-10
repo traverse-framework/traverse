@@ -1,0 +1,84 @@
+{
+  "kind": "workflow_definition",
+  "schema_version": "1.0.0",
+  "id": "meeting-notes.process",
+  "name": "process",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Run the meeting-notes transcript processing flow as one governed workflow-backed example.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "transcript"
+      ],
+      "properties": {
+        "transcript": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "action_items",
+        "decisions",
+        "follow_ups",
+        "summary"
+      ],
+      "properties": {
+        "action_items": {
+          "type": "array"
+        },
+        "decisions": {
+          "type": "array"
+        },
+        "follow_ups": {
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "process_transcript",
+      "capability_id": "meeting-notes.process",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "transcript"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [
+          "action_items",
+          "decisions",
+          "follow_ups",
+          "summary"
+        ]
+      }
+    }
+  ],
+  "edges": [],
+  "start_node": "process_transcript",
+  "terminal_nodes": [
+    "process_transcript"
+  ],
+  "tags": [
+    "meeting-notes",
+    "reference-app",
+    "deterministic"
+  ],
+  "governing_spec": "007-workflow-registry-traversal"
+}

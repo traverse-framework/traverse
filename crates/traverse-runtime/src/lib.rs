@@ -3047,6 +3047,7 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3671,15 +3672,15 @@ mod tests {
     fn runtime_otel_trace_propagates_w3c_context_and_exporter_config() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor).with_observability_config(
-            super::RuntimeObservabilityConfig {
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development())
+            .with_observability_config(super::RuntimeObservabilityConfig {
                 exporter: super::OTelExporterConfig {
                     endpoint: Some("http://collector:4318".to_string()),
                     protocol: super::OtlpProtocol::Http,
                 },
                 ..super::RuntimeObservabilityConfig::deterministic_test("seed-1")
-            },
-        );
+            });
         let mut request = valid_request();
         request.context.traceparent =
             Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string());
@@ -3781,6 +3782,74 @@ mod tests {
     }
 
     #[test]
+    fn governed_artifact_without_checksum_is_rejected_before_execution() {
+        let bytes = b"governed checksum missing";
+        let path = temp_artifact_path("missing-checksum");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.digests.binary_digest = None;
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("missing_checksum")
+        );
+    }
+
+    #[test]
+    fn governed_artifact_with_mismatched_checksum_is_rejected_before_execution() {
+        let bytes = b"governed checksum mismatch";
+        let path = temp_artifact_path("checksum-mismatch");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.digests.binary_digest = Some(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("checksum_mismatch")
+        );
+    }
+
+    #[test]
+    fn local_artifact_checksum_does_not_override_local_development_policy() {
+        let bytes = b"local checksum is advisory";
+        let path = temp_artifact_path("local-checksum");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.source.kind = SourceKind::Local;
+        registration.artifact.digests.binary_digest = Some(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+    }
+
+    #[test]
     fn local_dev_unsigned_artifact_warns_and_executes_in_development_mode() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
@@ -3806,6 +3875,40 @@ mod tests {
                 .as_ref()
                 .map(|record| record.status),
             Some(ArtifactVerificationStatus::Warning)
+        );
+    }
+
+    #[test]
+    fn default_security_config_is_production() {
+        assert_eq!(
+            RuntimeSecurityConfig::default(),
+            RuntimeSecurityConfig::production()
+        );
+        assert_ne!(
+            RuntimeSecurityConfig::default(),
+            RuntimeSecurityConfig::development()
+        );
+    }
+
+    #[test]
+    fn unsigned_local_artifact_rejected_under_default_security_config() {
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(public_registration()).is_ok());
+        // No explicit security config: the default (Production) posture must
+        // reject the unsigned local artifact before execution.
+        let runtime = Runtime::new(registry, NoopExecutor);
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("missing_signature")
         );
     }
 
@@ -4172,7 +4275,8 @@ mod tests {
 
     #[test]
     fn collect_candidates_handles_missing_target_and_public_discovery() {
-        let runtime = super::Runtime::new(CapabilityRegistry::new(), NoopExecutor);
+        let runtime = super::Runtime::new(CapabilityRegistry::new(), NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let mut request = valid_request();
         request.intent.capability_id = None;
         request.intent.capability_version = None;
@@ -4188,7 +4292,8 @@ mod tests {
         let outcome = registry.register(public_registration());
         assert!(outcome.is_ok());
 
-        let runtime = super::Runtime::new(registry, NoopExecutor);
+        let runtime = super::Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let mut request = valid_request();
         request.lookup.scope = PublicOnly;
         request.intent.capability_id = None;
@@ -4321,7 +4426,8 @@ mod tests {
     fn runtime_outcome_for_browser_subscription() -> super::RuntimeExecutionOutcome {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         runtime.execute(valid_request())
     }
 
@@ -4340,6 +4446,9 @@ mod tests {
             location: path.display().to_string(),
             signature,
         });
+        let bytes = fs::read(path).unwrap_or_default();
+        registration.artifact.digests.binary_digest =
+            Some(format!("sha256:{:x}", Sha256::digest(bytes)));
         registration
     }
 
@@ -4793,7 +4902,8 @@ mod tests {
     fn failed_trace() -> super::RuntimeTrace {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
-        let runtime = Runtime::new(registry, FailingExecutor);
+        let runtime = Runtime::new(registry, FailingExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         runtime.execute(valid_request()).trace
     }
 
@@ -4810,7 +4920,8 @@ mod tests {
     fn selected_capability_id_returns_none_when_no_selection() {
         let registry = CapabilityRegistry::new();
         // empty registry — no capability matches
-        let runtime = Runtime::new(registry, NoopExecutor);
+        let runtime = Runtime::new(registry, NoopExecutor)
+            .with_security_config(RuntimeSecurityConfig::development());
         let trace = runtime.execute(valid_request()).trace;
         assert!(trace.selected_capability_id().is_none());
     }

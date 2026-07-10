@@ -1798,6 +1798,7 @@ dependencies = [
 name = "traverse-cli"
 version = "0.7.0"
 dependencies = [
+ "ed25519-dalek",
  "qrcode",
  "semver",
  "serde",
