@@ -3832,6 +3832,24 @@ mod tests {
     }
 
     #[test]
+    fn local_artifact_checksum_does_not_override_local_development_policy() {
+        let bytes = b"local checksum is advisory";
+        let path = temp_artifact_path("local-checksum");
+        assert!(fs::write(&path, bytes).is_ok());
+        let mut registration = governed_registration(&path, Some(ed25519_signature_for(bytes)));
+        registration.artifact.source.kind = SourceKind::Local;
+        registration.artifact.digests.binary_digest = Some(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(registration).is_ok());
+
+        let outcome = Runtime::new(registry, NoopExecutor).execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+    }
+
+    #[test]
     fn local_dev_unsigned_artifact_warns_and_executes_in_development_mode() {
         let mut registry = CapabilityRegistry::new();
         assert!(registry.register(public_registration()).is_ok());
