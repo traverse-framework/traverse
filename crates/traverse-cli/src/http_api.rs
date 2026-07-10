@@ -16,10 +16,23 @@ use traverse_registry::{
     WorkflowDefinition, WorkflowRegistration, WorkflowRegistry, WorkspaceAppStateErrorCode,
     load_application_bundle_manifest,
 };
+use traverse_runtime::security::RuntimeSecurityConfig;
 use traverse_runtime::{
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
     RuntimeTrace, parse_runtime_request,
 };
+
+/// Map an HTTP auth mode to the runtime security posture: the dev auth modes
+/// run local unsigned example artifacts (development), while the network-facing
+/// `bearer-required` mode enforces the production posture that rejects unsigned
+/// artifacts (spec 030-security-identity-model FR-013).
+fn runtime_security_for_auth_mode(auth_mode: &str) -> RuntimeSecurityConfig {
+    if matches!(auth_mode, "dev-loopback" | "dev-any") {
+        RuntimeSecurityConfig::development()
+    } else {
+        RuntimeSecurityConfig::production()
+    }
+}
 
 const MAX_REQUEST_BODY: usize = 4 * 1024 * 1024; // 4 MiB
 const SYSTEM_WORKSPACE_ID: &str = "system";
@@ -322,7 +335,8 @@ where
         SYSTEM_WORKSPACE_ID.to_string(),
         WorkspaceState {
             runtime: Runtime::new(config.capability_registry, config.executor.clone())
-                .with_workflow_registry(config.workflow_registry),
+                .with_workflow_registry(config.workflow_registry)
+                .with_security_config(runtime_security_for_auth_mode(auth_mode)),
             event_registry: EventRegistry::new(),
             persisted: PersistedWorkspaceRegistryV1 {
                 schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -517,7 +531,8 @@ where
             SYSTEM_WORKSPACE_ID.to_string(),
             WorkspaceState {
                 runtime: Runtime::new(config.capability_registry, config.executor.clone())
-                    .with_workflow_registry(config.workflow_registry),
+                    .with_workflow_registry(config.workflow_registry)
+                    .with_security_config(RuntimeSecurityConfig::development()),
                 event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -621,7 +636,8 @@ where
             .entry(workspace_id.to_string())
             .or_insert_with(|| WorkspaceState {
                 runtime: Runtime::new(CapabilityRegistry::new(), self.executor.clone())
-                    .with_workflow_registry(WorkflowRegistry::new()),
+                    .with_workflow_registry(WorkflowRegistry::new())
+                    .with_security_config(RuntimeSecurityConfig::development()),
                 event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -2530,7 +2546,8 @@ fn apply_registration<E: LocalExecutor + Clone>(
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
             runtime: Runtime::new(CapabilityRegistry::new(), state.executor.clone())
-                .with_workflow_registry(WorkflowRegistry::new()),
+                .with_workflow_registry(WorkflowRegistry::new())
+                .with_security_config(runtime_security_for_auth_mode(&state.auth_mode)),
             event_registry: EventRegistry::new(),
             persisted: PersistedWorkspaceRegistryV1 {
                 schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -2580,7 +2597,8 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
             runtime: Runtime::new(CapabilityRegistry::new(), state.executor.clone())
-                .with_workflow_registry(WorkflowRegistry::new()),
+                .with_workflow_registry(WorkflowRegistry::new())
+                .with_security_config(runtime_security_for_auth_mode(&state.auth_mode)),
             event_registry: EventRegistry::new(),
             persisted: PersistedWorkspaceRegistryV1 {
                 schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -6378,7 +6396,8 @@ mod tests {
             workspace_id.to_string(),
             WorkspaceState {
                 runtime: Runtime::new(registry, executor.clone())
-                    .with_workflow_registry(WorkflowRegistry::new()),
+                    .with_workflow_registry(WorkflowRegistry::new())
+                    .with_security_config(RuntimeSecurityConfig::development()),
                 event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -6432,7 +6451,8 @@ mod tests {
             workspace_id.to_string(),
             WorkspaceState {
                 runtime: Runtime::new(registry, executor.clone())
-                    .with_workflow_registry(WorkflowRegistry::new()),
+                    .with_workflow_registry(WorkflowRegistry::new())
+                    .with_security_config(RuntimeSecurityConfig::development()),
                 event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -6473,7 +6493,8 @@ mod tests {
             workspace_id.to_string(),
             WorkspaceState {
                 runtime: Runtime::new(CapabilityRegistry::new(), executor.clone())
-                    .with_workflow_registry(WorkflowRegistry::new()),
+                    .with_workflow_registry(WorkflowRegistry::new())
+                    .with_security_config(RuntimeSecurityConfig::development()),
                 event_registry: EventRegistry::new(),
                 persisted: PersistedWorkspaceRegistryV1 {
                     schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
@@ -9047,5 +9068,21 @@ mod tests {
         assert_eq!(env["type"], "https://traverse.dev/problems/unauthorized");
         assert_eq!(env["detail"], "Bearer token required");
         assert_eq!(env["traverse_code"], "unauthorized");
+    }
+
+    #[test]
+    fn runtime_security_follows_auth_mode() {
+        assert_eq!(
+            runtime_security_for_auth_mode("dev-loopback"),
+            RuntimeSecurityConfig::development()
+        );
+        assert_eq!(
+            runtime_security_for_auth_mode("dev-any"),
+            RuntimeSecurityConfig::development()
+        );
+        assert_eq!(
+            runtime_security_for_auth_mode("bearer-required"),
+            RuntimeSecurityConfig::production()
+        );
     }
 }

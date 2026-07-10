@@ -115,7 +115,7 @@ pub struct ApplicationRegisteredComponent {
     pub component_version: String,
     pub capability_id: String,
     pub capability_version: String,
-    pub wasm_digest: String,
+    pub wasm_digest: Option<String>,
     pub artifact_ref: String,
 }
 
@@ -348,8 +348,8 @@ pub struct ApplicationComponent {
     pub manifest: WasmComponentManifest,
     pub contract_path: PathBuf,
     pub contract: CapabilityContract,
-    pub wasm_binary_path: PathBuf,
-    pub verified_wasm_digest: String,
+    pub wasm_binary_path: Option<PathBuf>,
+    pub verified_wasm_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,16 +412,35 @@ pub struct WasmComponentManifest {
     pub component_id: String,
     pub version: String,
     pub schema_version: String,
+    pub execution_mode: ComponentExecutionMode,
     pub capability_id: String,
     pub capability_version: String,
     pub contract_path: String,
-    pub wasm_binary_path: String,
-    pub wasm_digest: String,
+    pub wasm_binary_path: Option<String>,
+    pub wasm_digest: Option<String>,
+    pub platforms: Vec<String>,
+    pub wrapper_path: Option<String>,
     pub runtime_constraints: Value,
     pub permitted_targets: Vec<ExecutionTarget>,
     pub dependencies: Vec<WasmComponentDependency>,
     pub connector_requirements: Vec<ConnectorRequirement>,
     pub validation_evidence: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentExecutionMode {
+    Wasm,
+    Compatible,
+}
+
+impl ComponentExecutionMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm",
+            Self::Compatible => "compatible",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -451,6 +470,11 @@ pub enum ApplicationManifestErrorCode {
     ComponentWasmMissing,
     InvalidDigestMetadata,
     ComponentDigestMismatch,
+    InvalidExecutionMode,
+    CompatibleComponentMissingWrapper,
+    CompatibleComponentMissingPlatforms,
+    CompatibleComponentInvalidWasmFields,
+    WasmComponentMissingWasmFields,
     ComponentDependencyMustBeConcrete,
     UnsupportedModelInterface,
     ModelDependencyMissingCandidates,
@@ -548,11 +572,19 @@ struct WasmComponentManifestSerde {
     component_id: String,
     version: String,
     schema_version: String,
+    #[serde(default)]
+    execution_mode: Option<String>,
     capability_id: String,
     capability_version: String,
     contract_path: String,
-    wasm_binary_path: String,
-    wasm_digest: String,
+    #[serde(default)]
+    wasm_binary_path: Option<String>,
+    #[serde(default)]
+    wasm_digest: Option<String>,
+    #[serde(default)]
+    platforms: Vec<String>,
+    #[serde(default)]
+    wrapper_path: Option<String>,
     runtime_constraints: Value,
     permitted_targets: Vec<ExecutionTarget>,
     dependencies: Vec<WasmComponentDependency>,
@@ -789,15 +821,18 @@ fn build_application_capability_registration(
             kind: SourceKind::Local,
             location: component.manifest_path.display().to_string(),
         },
-        binary: Some(BinaryReference {
-            format: BinaryFormat::Wasm,
-            location: component.wasm_binary_path.display().to_string(),
-            signature: None,
-        }),
+        binary: component
+            .wasm_binary_path
+            .as_ref()
+            .map(|wasm_binary_path| BinaryReference {
+                format: BinaryFormat::Wasm,
+                location: wasm_binary_path.display().to_string(),
+                signature: None,
+            }),
         workflow_ref: None,
         digests: ArtifactDigests {
             source_digest: governed_content_digest(&component.contract),
-            binary_digest: Some(component.verified_wasm_digest.clone()),
+            binary_digest: component.verified_wasm_digest.clone(),
         },
         provenance: RegistryProvenance {
             source: format!("application_bundle:{}", manifest.app_id),
@@ -1713,20 +1748,43 @@ fn load_component(
             )
         })?;
 
-    let expected_wasm_digest =
-        ensure_component_reference_matches(reference, &component, &manifest_path)?;
+    let execution_mode = parse_component_execution_mode(&component, &manifest_path)?;
+    let expected_component_digest =
+        ensure_component_reference_matches(reference, &component, execution_mode, &manifest_path)?;
+    validate_component_execution_mode(&component, execution_mode, &manifest_path)?;
     ensure_concrete_component_dependencies(&component.dependencies, &manifest_path)?;
 
     let component_dir = manifest_path.parent().unwrap_or(manifest_dir);
     let contract_path = component_dir.join(&component.contract_path);
     let contract = load_component_contract(&contract_path, &component)?;
-    let wasm_binary_path = component_dir.join(&component.wasm_binary_path);
-    let verified_wasm_digest = verify_wasm_digest(&wasm_binary_path, &expected_wasm_digest)?;
+    let (wasm_binary_path, verified_wasm_digest) = if execution_mode == ComponentExecutionMode::Wasm
+    {
+        let path = component
+            .wasm_binary_path
+            .as_deref()
+            .filter(|path| has_text(path))
+            .ok_or_else(|| {
+                single_error(
+                    ApplicationManifestErrorCode::WasmComponentMissingWasmFields,
+                    manifest_path.display().to_string(),
+                    format!(
+                        "wasm component {}@{} requires wasm_binary_path",
+                        component.component_id, component.version
+                    ),
+                )
+            })?;
+        let wasm_binary_path = component_dir.join(path);
+        let verified_wasm_digest =
+            verify_wasm_digest(&wasm_binary_path, &expected_component_digest)?;
+        (Some(wasm_binary_path), Some(verified_wasm_digest))
+    } else {
+        (None, None)
+    };
 
     Ok(ApplicationComponent {
         reference: reference.clone(),
         manifest_path,
-        manifest: to_component_manifest(component),
+        manifest: to_component_manifest(component, execution_mode),
         contract_path,
         contract,
         wasm_binary_path,
@@ -1737,6 +1795,7 @@ fn load_component(
 fn ensure_component_reference_matches(
     reference: &ApplicationComponentRef,
     component: &WasmComponentManifestSerde,
+    execution_mode: ComponentExecutionMode,
     manifest_path: &Path,
 ) -> Result<String, ApplicationManifestFailure> {
     if reference.component_id != component.component_id || reference.version != component.version {
@@ -1763,27 +1822,123 @@ fn ensure_component_reference_matches(
             ),
         )
     })?;
-    let component_digest = normalize_sha256_digest(&component.wasm_digest).ok_or_else(|| {
-        single_error(
-            ApplicationManifestErrorCode::InvalidDigestMetadata,
-            "$.wasm_digest".to_string(),
-            format!(
-                "component manifest {}@{} declares invalid wasm_digest metadata",
-                component.component_id, component.version
-            ),
-        )
-    })?;
-    if expected_digest != component_digest {
-        return Err(single_error(
-            ApplicationManifestErrorCode::ComponentDigestMismatch,
-            manifest_path.display().to_string(),
-            format!(
-                "component digest mismatch for {}@{}: app declared {}, component manifest declared {}",
-                component.component_id, component.version, reference.digest, component.wasm_digest
-            ),
-        ));
+    if execution_mode == ComponentExecutionMode::Wasm {
+        let wasm_digest = component.wasm_digest.as_deref().ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::WasmComponentMissingWasmFields,
+                "$.wasm_digest".to_string(),
+                format!(
+                    "wasm component {}@{} requires wasm_digest",
+                    component.component_id, component.version
+                ),
+            )
+        })?;
+        let component_digest = normalize_sha256_digest(wasm_digest).ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::InvalidDigestMetadata,
+                "$.wasm_digest".to_string(),
+                format!(
+                    "component manifest {}@{} declares invalid wasm_digest metadata",
+                    component.component_id, component.version
+                ),
+            )
+        })?;
+        if expected_digest != component_digest {
+            return Err(single_error(
+                ApplicationManifestErrorCode::ComponentDigestMismatch,
+                manifest_path.display().to_string(),
+                format!(
+                    "component digest mismatch for {}@{}: app declared {}, component manifest declared {}",
+                    component.component_id, component.version, reference.digest, wasm_digest
+                ),
+            ));
+        }
     }
     Ok(expected_digest)
+}
+
+fn parse_component_execution_mode(
+    component: &WasmComponentManifestSerde,
+    manifest_path: &Path,
+) -> Result<ComponentExecutionMode, ApplicationManifestFailure> {
+    match component.execution_mode.as_deref().unwrap_or("wasm") {
+        "wasm" => Ok(ComponentExecutionMode::Wasm),
+        "compatible" => Ok(ComponentExecutionMode::Compatible),
+        other => Err(single_error(
+            ApplicationManifestErrorCode::InvalidExecutionMode,
+            manifest_path.display().to_string(),
+            format!(
+                "component {}@{} declares unsupported execution_mode {other}",
+                component.component_id, component.version
+            ),
+        )),
+    }
+}
+
+fn validate_component_execution_mode(
+    component: &WasmComponentManifestSerde,
+    execution_mode: ComponentExecutionMode,
+    manifest_path: &Path,
+) -> Result<(), ApplicationManifestFailure> {
+    match execution_mode {
+        ComponentExecutionMode::Wasm => {}
+        ComponentExecutionMode::Compatible => {
+            if component.wasm_binary_path.is_some() || component.wasm_digest.is_some() {
+                return Err(single_error(
+                    ApplicationManifestErrorCode::CompatibleComponentInvalidWasmFields,
+                    manifest_path.display().to_string(),
+                    format!(
+                        "compatible component {}@{} must not declare wasm_binary_path or wasm_digest",
+                        component.component_id, component.version
+                    ),
+                ));
+            }
+            let wrapper_path = match component.wrapper_path.as_deref() {
+                Some(path) if has_text(path) => path,
+                _ => {
+                    return Err(single_error(
+                        ApplicationManifestErrorCode::CompatibleComponentMissingWrapper,
+                        manifest_path.display().to_string(),
+                        format!(
+                            "compatible component {}@{} requires wrapper_path",
+                            component.component_id, component.version
+                        ),
+                    ));
+                }
+            };
+            if !manifest_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(wrapper_path)
+                .exists()
+            {
+                return Err(single_error(
+                    ApplicationManifestErrorCode::CompatibleComponentMissingWrapper,
+                    manifest_path.display().to_string(),
+                    format!(
+                        "compatible component {}@{} wrapper_path does not exist",
+                        component.component_id, component.version
+                    ),
+                ));
+            }
+            if component.platforms.is_empty()
+                || component
+                    .platforms
+                    .iter()
+                    .any(|platform| !has_text(platform))
+            {
+                return Err(single_error(
+                    ApplicationManifestErrorCode::CompatibleComponentMissingPlatforms,
+                    manifest_path.display().to_string(),
+                    format!(
+                        "compatible component {}@{} requires non-empty platforms",
+                        component.component_id, component.version
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_concrete_component_dependencies(
@@ -1905,16 +2060,22 @@ fn verify_wasm_digest(
     Ok(format!("sha256:{actual}"))
 }
 
-fn to_component_manifest(component: WasmComponentManifestSerde) -> WasmComponentManifest {
+fn to_component_manifest(
+    component: WasmComponentManifestSerde,
+    execution_mode: ComponentExecutionMode,
+) -> WasmComponentManifest {
     WasmComponentManifest {
         component_id: component.component_id,
         version: component.version,
         schema_version: component.schema_version,
+        execution_mode,
         capability_id: component.capability_id,
         capability_version: component.capability_version,
         contract_path: component.contract_path,
         wasm_binary_path: component.wasm_binary_path,
         wasm_digest: component.wasm_digest,
+        platforms: component.platforms,
+        wrapper_path: component.wrapper_path,
         runtime_constraints: component.runtime_constraints,
         permitted_targets: component.permitted_targets,
         dependencies: component.dependencies,

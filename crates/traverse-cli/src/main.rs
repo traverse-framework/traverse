@@ -2607,12 +2607,15 @@ fn app_registration_components(
             serde_json::json!({
                 "component_id": component.manifest.component_id.clone(),
                 "component_version": component.manifest.version.clone(),
+                "execution_mode": component.manifest.execution_mode.as_str(),
                 "capability_id": component.manifest.capability_id.clone(),
                 "capability_version": component.manifest.capability_version.clone(),
                 "wasm_digest": component.verified_wasm_digest.clone(),
                 "manifest_path": component.manifest_path.display().to_string(),
                 "contract_path": component.contract_path.display().to_string(),
-                "artifact_ref": component.wasm_binary_path.display().to_string()
+                "artifact_ref": component.wasm_binary_path.as_ref().map(|path| path.display().to_string()),
+                "platforms": component.manifest.platforms.clone(),
+                "wrapper_path": component.manifest.wrapper_path.clone()
             })
         })
         .collect()
@@ -2647,13 +2650,15 @@ fn app_registration_digest_verification(
     manifest
         .components
         .iter()
-        .map(|component| {
-            serde_json::json!({
-                "component_id": component.manifest.component_id.clone(),
-                "component_version": component.manifest.version.clone(),
-                "path": component.wasm_binary_path.display().to_string(),
-                "wasm_digest": component.verified_wasm_digest.clone(),
-                "status": "verified"
+        .filter_map(|component| {
+            component.wasm_binary_path.as_ref().map(|wasm_binary_path| {
+                serde_json::json!({
+                    "component_id": component.manifest.component_id.clone(),
+                    "component_version": component.manifest.version.clone(),
+                    "path": wasm_binary_path.display().to_string(),
+                    "wasm_digest": component.verified_wasm_digest.clone(),
+                    "status": "verified"
+                })
             })
         })
         .collect()
@@ -2849,13 +2854,15 @@ fn render_app_validation_success(
     let digest_results = manifest
         .components
         .iter()
-        .map(|component| {
-            serde_json::json!({
-                "component_id": component.manifest.component_id.clone(),
-                "component_version": component.manifest.version.clone(),
-                "path": component.wasm_binary_path.display().to_string(),
-                "wasm_digest": component.verified_wasm_digest.clone(),
-                "status": "verified"
+        .filter_map(|component| {
+            component.wasm_binary_path.as_ref().map(|wasm_binary_path| {
+                serde_json::json!({
+                    "component_id": component.manifest.component_id.clone(),
+                    "component_version": component.manifest.version.clone(),
+                    "path": wasm_binary_path.display().to_string(),
+                    "wasm_digest": component.verified_wasm_digest.clone(),
+                    "status": "verified"
+                })
             })
         })
         .collect::<Vec<_>>();
@@ -2886,11 +2893,14 @@ fn render_app_validation_success(
             serde_json::json!({
                 "component_id": component.manifest.component_id.clone(),
                 "component_version": component.manifest.version.clone(),
+                "execution_mode": component.manifest.execution_mode.as_str(),
                 "capability_id": component.manifest.capability_id.clone(),
                 "capability_version": component.manifest.capability_version.clone(),
                 "manifest_path": component.manifest_path.display().to_string(),
                 "contract_path": component.contract_path.display().to_string(),
-                "wasm_digest": component.verified_wasm_digest.clone()
+                "wasm_digest": component.verified_wasm_digest.clone(),
+                "platforms": component.manifest.platforms.clone(),
+                "wrapper_path": component.manifest.wrapper_path.clone()
             })
         }).collect::<Vec<_>>(),
         "workflows": manifest.workflows.iter().map(|workflow| {
@@ -3247,7 +3257,8 @@ fn execute_agent(manifest_path: &Path, request_path: &Path) -> Result<String, Cl
     registry
         .register(package.capability_registration())
         .map_err(|f| CliError::RegistrationConflict(render_registry_failure(f)))?;
-    let runtime = Runtime::new(registry, AgentPackageExampleExecutor);
+    let runtime = Runtime::new(registry, AgentPackageExampleExecutor)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     let outcome = runtime.execute(request);
 
     if outcome.result.status == RuntimeResultStatus::Error {
@@ -4366,7 +4377,8 @@ fn execute_expedition_outcome(request_path: &Path) -> Result<RuntimeExecutionOut
     let request = load_runtime_request(request_path)?;
     let registered = load_registered_bundle(&canonical_expedition_bundle_path())?;
     let runtime = Runtime::new(registered.capability_registry, ExpeditionExampleExecutor)
-        .with_workflow_registry(registered.workflow_registry);
+        .with_workflow_registry(registered.workflow_registry)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
     Ok(runtime.execute(request))
 }
 
