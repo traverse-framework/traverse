@@ -11,6 +11,7 @@ use traverse_registry::{
     CompositionPattern, ImplementationKind, RegistryProvenance, RegistryScope, SourceKind,
     SourceReference,
 };
+use traverse_runtime::security::RuntimeSecurityConfig;
 use traverse_runtime::{
     BrowserRuntimeSubscriptionLifecycleStatus, BrowserRuntimeSubscriptionMessage,
     BrowserRuntimeSubscriptionRequest, CandidateReason, ExecutionFailureReason, ExecutionStatus,
@@ -44,7 +45,8 @@ fn executes_one_exact_registered_capability_locally() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -121,7 +123,8 @@ fn exact_lookup_uses_private_overlay_before_public() {
             ),
         ]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -133,7 +136,8 @@ fn exact_lookup_uses_private_overlay_before_public() {
 
 #[test]
 fn discovers_by_intent_key_and_fails_when_no_candidate_matches() {
-    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_id = None;
     request.intent.capability_version = None;
@@ -176,7 +180,8 @@ fn rejects_ambiguous_intent_matches() {
             ),
         ]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_id = None;
     request.intent.capability_version = None;
@@ -194,7 +199,8 @@ fn rejects_ambiguous_intent_matches() {
 
 #[test]
 fn rejects_invalid_request_before_discovery() {
-    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.lookup.allow_ambiguity = true;
 
@@ -234,7 +240,8 @@ fn rejects_non_runnable_candidates_before_execution() {
         Lifecycle::Active,
     );
     not_runnable.contract.execution.constraints.network_access = NetworkAccess::Required;
-    let runtime = Runtime::new(registry_with(vec![not_runnable]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![not_runnable]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -263,7 +270,8 @@ fn rejects_draft_contract_paths_before_execution() {
     draft.contract_path =
         "drafts/contracts/content.comments.create-comment-draft/1.0.0/contract.json".to_string();
 
-    let runtime = Runtime::new(registry_with(vec![draft]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![draft]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     assert_eq!(
@@ -292,7 +300,8 @@ fn rejects_non_runtime_lifecycle_candidates() {
             Lifecycle::Archived,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -316,7 +325,8 @@ fn rejects_invalid_input_against_contract() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.input = json!({"resource_id": "res-1"});
 
@@ -342,7 +352,8 @@ fn surfaces_executor_failures() {
             Lifecycle::Active,
         )]),
         FailingExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -379,7 +390,8 @@ fn rejects_invalid_executor_output_against_contract() {
             Lifecycle::Active,
         )]),
         WrongOutputExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -403,7 +415,8 @@ fn records_local_placement_decision_for_successful_execution() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
 
     let outcome = runtime.execute(base_request_exact());
 
@@ -440,7 +453,8 @@ fn rejects_unsupported_non_local_placement_requests() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.context.requested_target = PlacementTarget::Cloud;
 
@@ -487,7 +501,8 @@ fn uses_public_only_scope_when_requested() {
             ),
         ]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.lookup.scope = RuntimeLookupScope::PublicOnly;
 
@@ -513,7 +528,8 @@ fn browser_subscription_by_request_id_emits_ordered_messages() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     let messages = browser_subscription_messages(
@@ -553,7 +569,8 @@ fn browser_subscription_by_execution_id_emits_trace_artifact() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     let messages = browser_subscription_messages(
@@ -578,7 +595,8 @@ fn browser_subscription_by_execution_id_emits_trace_artifact() {
 
 #[test]
 fn browser_subscription_rejects_invalid_targeting_requests() {
-    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     let both = browser_subscription_messages(
@@ -624,7 +642,8 @@ fn executes_capability_resolved_via_semver_range() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_version = None;
     request.intent.version_range = Some("^1.0.0".to_string());
@@ -649,7 +668,8 @@ fn returns_capability_not_found_when_no_version_satisfies_range() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_version = None;
     request.intent.version_range = Some("^1.0.0".to_string());
@@ -666,7 +686,8 @@ fn returns_capability_not_found_when_no_version_satisfies_range() {
 
 #[test]
 fn rejects_version_range_without_capability_id() {
-    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_id = None;
     request.intent.capability_version = None;
@@ -690,7 +711,8 @@ fn rejects_version_range_without_capability_id() {
 
 #[test]
 fn rejects_version_range_combined_with_capability_version() {
-    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor);
+    let runtime = Runtime::new(registry_with(vec![]), EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.version_range = Some("^1.0.0".to_string());
     // capability_id and capability_version are both set from base_request_exact()
@@ -723,7 +745,8 @@ fn executes_version_range_resolved_from_public_scope() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_version = None;
     request.intent.version_range = Some("^1.0.0".to_string());
@@ -750,7 +773,8 @@ fn version_range_with_empty_range_string_falls_through_to_discovery() {
             Lifecycle::Active,
         )]),
         EchoExecutor,
-    );
+    )
+    .with_security_config(RuntimeSecurityConfig::development());
     let mut request = base_request_exact();
     request.intent.capability_version = None;
     request.intent.version_range = Some(String::new());
@@ -834,7 +858,8 @@ fn capability_registry_accessor_returns_registered_capabilities() {
         "1.0.0",
         Lifecycle::Active,
     )]);
-    let runtime = Runtime::new(reg, EchoExecutor);
+    let runtime =
+        Runtime::new(reg, EchoExecutor).with_security_config(RuntimeSecurityConfig::development());
     let cap = runtime.capability_registry().find_exact(
         LookupScope::PublicOnly,
         "content.comments.create-comment-draft",
@@ -858,7 +883,8 @@ fn workflow_registry_accessors_are_accessible() {
         "1.0.0",
         Lifecycle::Active,
     )]);
-    let mut runtime = Runtime::new(reg, EchoExecutor);
+    let mut runtime =
+        Runtime::new(reg, EchoExecutor).with_security_config(RuntimeSecurityConfig::development());
 
     let _reg_ref = runtime.workflow_registry();
     let _reg_mut = runtime.workflow_registry_mut();
@@ -912,7 +938,8 @@ fn workflow_registry_accessors_are_accessible() {
 #[test]
 fn runtime_register_capability_forwards_to_registry_and_is_idempotent() {
     let reg = CapabilityRegistry::new();
-    let mut runtime = Runtime::new(reg, EchoExecutor);
+    let mut runtime =
+        Runtime::new(reg, EchoExecutor).with_security_config(RuntimeSecurityConfig::development());
 
     let first_result = runtime.register_capability(registration(
         RegistryScope::Public,
@@ -1199,7 +1226,8 @@ fn runtime_rejects_execution_when_dependency_missing() {
         "registration with declared dep should succeed"
     );
 
-    let runtime = Runtime::new(registry, EchoExecutor);
+    let runtime = Runtime::new(registry, EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     // Dependency "content.logging.logger" is not in the registry, so execution
@@ -1254,7 +1282,8 @@ fn runtime_rejects_execution_when_circular_dependency_detected() {
         "register B with back-dep should succeed"
     );
 
-    let runtime = Runtime::new(registry, EchoExecutor);
+    let runtime = Runtime::new(registry, EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
@@ -1309,7 +1338,8 @@ fn runtime_rejects_execution_when_max_dep_depth_exceeded() {
         "main capability registration should succeed"
     );
 
-    let runtime = Runtime::new(registry, EchoExecutor);
+    let runtime = Runtime::new(registry, EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     assert_eq!(
@@ -1445,7 +1475,8 @@ fn runtime_executes_successfully_when_all_dependencies_satisfied() {
         "registration with satisfied dep should succeed"
     );
 
-    let runtime = Runtime::new(registry, EchoExecutor);
+    let runtime = Runtime::new(registry, EchoExecutor)
+        .with_security_config(RuntimeSecurityConfig::development());
     let outcome = runtime.execute(base_request_exact());
 
     assert_eq!(

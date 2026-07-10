@@ -716,7 +716,8 @@ mod tests {
         let capability_registry_for_mcp = public_capability_registry_fixture();
         let event_registry = EventRegistry::new();
         let workflow_registry = WorkflowRegistry::new();
-        let runtime = Runtime::new(capability_registry_for_runtime, EchoExecutor);
+        let runtime = Runtime::new(capability_registry_for_runtime, EchoExecutor)
+            .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
         let mcp = TraverseMcp::new(
             &capability_registry_for_mcp,
             &event_registry,
@@ -815,7 +816,9 @@ mod tests {
         let _ = workflow_registry;
         let registry = capability_registry_fixture();
         let workflows = workflow_registry_fixture(&registry);
-        Runtime::new(registry, EchoExecutor).with_workflow_registry(workflows)
+        Runtime::new(registry, EchoExecutor)
+            .with_workflow_registry(workflows)
+            .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development())
     }
 
     fn capability_registry_fixture() -> CapabilityRegistry {
@@ -1257,8 +1260,9 @@ mod tests {
     fn execute_capability_returns_json_with_status_and_ids() {
         let registry = capability_registry_fixture();
         let workflow_registry = workflow_registry_fixture(&registry);
-        let runtime =
-            Runtime::new(registry, EchoExecutor).with_workflow_registry(workflow_registry);
+        let runtime = Runtime::new(registry, EchoExecutor)
+            .with_workflow_registry(workflow_registry)
+            .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
         let result = super::execute_capability(&runtime, runtime_request());
         assert!(result.get("status").is_some(), "must include status");
         assert!(
