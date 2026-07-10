@@ -3810,6 +3810,40 @@ mod tests {
     }
 
     #[test]
+    fn default_security_config_is_production() {
+        assert_eq!(
+            RuntimeSecurityConfig::default(),
+            RuntimeSecurityConfig::production()
+        );
+        assert_ne!(
+            RuntimeSecurityConfig::default(),
+            RuntimeSecurityConfig::development()
+        );
+    }
+
+    #[test]
+    fn unsigned_local_artifact_rejected_under_default_security_config() {
+        let mut registry = CapabilityRegistry::new();
+        assert!(registry.register(public_registration()).is_ok());
+        // No explicit security config: the default (Production) posture must
+        // reject the unsigned local artifact before execution.
+        let runtime = Runtime::new(registry, NoopExecutor);
+
+        let outcome = runtime.execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(
+            outcome
+                .result
+                .error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("missing_signature")
+        );
+    }
+
+    #[test]
     fn governed_artifact_accepts_verified_sigstore_bundle() {
         let path = temp_artifact_path("sigstore-valid");
         assert!(fs::write(&path, b"sigstore governed bytes").is_ok());
