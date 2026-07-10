@@ -198,6 +198,45 @@ paths:
           $ref: "#/components/responses/Problem"
         "403":
           $ref: "#/components/responses/Problem"
+  /v1/workspaces/{workspace_id}/apps/{app_id}/commands:
+    post:
+      summary: Dispatch a command to an app state machine
+      description: >-
+        Sends a command to the runtime-owned app state machine (spec
+        059-http-command-dispatch). The runtime validates the command against
+        the current session state, performs the transition, invokes the target
+        state's capability when declared, and emits state_changed and
+        capability_result events on the app SSE stream. Clients using this
+        endpoint do not poll execution status.
+      operationId: dispatchAppCommand
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/AppId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppCommandRequest"
+      responses:
+        "202":
+          description: Command accepted; transition started; events on SSE stream
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppCommandAccepted"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
   /v1/workspaces/{workspace_id}/capabilities:
     post:
       summary: Register a capability
@@ -544,6 +583,61 @@ components:
           type: object
           additionalProperties: true
       additionalProperties: false
+    AppCommandRequest:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          description: Command name matching a transition `on` value.
+        payload:
+          type: object
+          description: "Command payload mapped to `invoke.input_from: command.payload`."
+          additionalProperties: true
+        session_id:
+          type: string
+          description: >-
+            Existing session to advance. When omitted, a new session starts
+            at the state machine's initial state.
+      additionalProperties: false
+    AppCommandAccepted:
+      type: object
+      required:
+        - api_version
+        - status
+        - workspace_id
+        - app_id
+        - session_id
+        - command
+        - state
+        - links
+      properties:
+        api_version:
+          type: string
+        status:
+          type: string
+          enum:
+            - accepted
+        workspace_id:
+          type: string
+        app_id:
+          type: string
+        session_id:
+          type: string
+        command:
+          type: string
+        state:
+          type: string
+          description: State entered by the accepted transition.
+        execution_id:
+          type:
+            - string
+            - "null"
+          description: Present when the entered state declared an invoke.
+        links:
+          $ref: "#/components/schemas/Links"
+      additionalProperties: true
     RegistrationRequest:
       type: object
       required:
