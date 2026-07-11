@@ -7,7 +7,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::sync::{LazyLock, Mutex};
 use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::WasiP1Ctx;
@@ -25,6 +27,12 @@ const DEFAULT_TABLE_ELEMENT_LIMIT: usize = 1_024;
 const DEFAULT_INSTANCE_LIMIT: usize = 1;
 const DEFAULT_TABLE_LIMIT: usize = 8;
 const DEFAULT_LINEAR_MEMORY_LIMIT: usize = 1;
+const DEFAULT_MODULE_CACHE_MAX_ENTRIES: usize = 64;
+
+static HOST_ABI_V1_WHITELIST_CACHE: LazyLock<Result<HostAbiWhitelist, String>> =
+    LazyLock::new(|| {
+        serde_json::from_str::<HostAbiWhitelist>(HOST_ABI_V1_WHITELIST).map_err(|e| e.to_string())
+    });
 
 /// A host import observed in a WASM module.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,13 +52,13 @@ pub struct HostAbiValidation {
     pub imports: Vec<HostAbiImport>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct HostAbiWhitelist {
     abi_version: String,
     imports: Vec<HostAbiWhitelistImport>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct HostAbiWhitelistImport {
     module: String,
     name: String,
@@ -89,6 +97,7 @@ pub fn verify_wasm_host_abi_bytes(
 pub struct WasmExecutor {
     engine: Engine,
     limits: WasmExecutionLimits,
+    module_cache: Mutex<CompiledModuleCache>,
 }
 
 impl WasmExecutor {
@@ -107,11 +116,37 @@ impl WasmExecutor {
     ///
     /// Returns [`ExecutorError::RuntimeSetupFailed`] if Wasmtime cannot initialise.
     pub fn with_limits(limits: WasmExecutionLimits) -> Result<Self, ExecutorError> {
+        Self::with_limits_and_cache_config(limits, WasmModuleCacheConfig::default())
+    }
+
+    /// Create a [`WasmExecutor`] with explicit resource limits and module cache bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::RuntimeSetupFailed`] if Wasmtime cannot initialise.
+    pub fn with_limits_and_cache_config(
+        limits: WasmExecutionLimits,
+        cache_config: WasmModuleCacheConfig,
+    ) -> Result<Self, ExecutorError> {
         let mut config = Config::new();
         config.consume_fuel(true);
         let engine = Engine::new(&config)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("engine config: {e}")))?;
-        Ok(Self { engine, limits })
+        Ok(Self {
+            engine,
+            limits,
+            module_cache: Mutex::new(CompiledModuleCache::new(cache_config.max_entries)),
+        })
+    }
+
+    /// Return current compiled-module cache counters.
+    #[must_use]
+    pub fn module_cache_stats(&self) -> WasmModuleCacheStats {
+        let cache = self
+            .module_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.stats()
     }
 }
 
@@ -141,6 +176,95 @@ impl Default for WasmExecutionLimits {
             instances: DEFAULT_INSTANCE_LIMIT,
             tables: DEFAULT_TABLE_LIMIT,
             memories: DEFAULT_LINEAR_MEMORY_LIMIT,
+        }
+    }
+}
+
+/// Bounded compiled-module cache configuration for [`WasmExecutor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasmModuleCacheConfig {
+    /// Maximum number of compiled modules retained by checksum.
+    pub max_entries: usize,
+}
+
+impl Default for WasmModuleCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: DEFAULT_MODULE_CACHE_MAX_ENTRIES,
+        }
+    }
+}
+
+/// Snapshot of compiled-module cache counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasmModuleCacheStats {
+    /// Current retained compiled modules.
+    pub entries: usize,
+    /// Number of executions served from cache.
+    pub hits: u64,
+    /// Number of executions that compiled a module before insertion.
+    pub misses: u64,
+    /// Number of deterministic oldest-entry evictions.
+    pub evictions: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedModule {
+    module: Module,
+    validation: HostAbiValidation,
+}
+
+#[derive(Debug)]
+struct CompiledModuleCache {
+    max_entries: usize,
+    entries: HashMap<String, CachedModule>,
+    insertion_order: VecDeque<String>,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+}
+
+impl CompiledModuleCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            max_entries: max_entries.max(1),
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        }
+    }
+
+    fn get(&mut self, checksum: &str, abi_version: &str) -> Option<CachedModule> {
+        let cached = self.entries.get(checksum)?;
+        if cached.validation.abi_version != abi_version {
+            self.misses += 1;
+            return None;
+        }
+        self.hits += 1;
+        Some(cached.clone())
+    }
+
+    fn insert(&mut self, checksum: String, cached: CachedModule) {
+        self.misses += 1;
+        while self.entries.len() >= self.max_entries {
+            if let Some(oldest) = self.insertion_order.pop_front()
+                && self.entries.remove(&oldest).is_some()
+            {
+                self.evictions += 1;
+            }
+        }
+        self.insertion_order.push_back(checksum.clone());
+        self.entries.insert(checksum, cached);
+    }
+
+    fn stats(&self) -> WasmModuleCacheStats {
+        WasmModuleCacheStats {
+            entries: self.entries.len(),
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
         }
     }
 }
@@ -225,13 +349,7 @@ impl WasmExecutor {
         let input_json = serde_json::to_string(input)
             .map_err(|e| ExecutorError::ExecutionFailed(format!("input serialization: {e}")))?;
 
-        let module = Module::from_binary(&self.engine, wasm_bytes).map_err(|e| {
-            ExecutorError::MalformedWasmArtifact {
-                error_code: "malformed_wasm_artifact".to_string(),
-                detail: format!("module compile: {e}"),
-            }
-        })?;
-        validate_module_imports(&module, abi_version)?;
+        let cached_module = self.compiled_module(wasm_bytes, abi_version)?;
 
         // Clone pipe reference before passing to builder — needed to read output after execution
         let stdout_pipe = MemoryOutputPipe::new(65536);
@@ -261,7 +379,7 @@ impl WasmExecutor {
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("set fuel: {e}")))?;
 
         linker
-            .module(&mut store, "", &module)
+            .module(&mut store, "", &cached_module.module)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("module link: {e}")))?;
 
         linker
@@ -292,6 +410,39 @@ impl WasmExecutor {
             .memories(self.limits.memories)
             .trap_on_grow_failure(true)
             .build()
+    }
+
+    fn compiled_module(
+        &self,
+        wasm_bytes: &[u8],
+        abi_version: &str,
+    ) -> Result<CachedModule, ExecutorError> {
+        let checksum = sha256_hex(wasm_bytes);
+        {
+            let mut cache = self
+                .module_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(cached) = cache.get(&checksum, abi_version) {
+                return Ok(cached);
+            }
+        }
+
+        let module = Module::from_binary(&self.engine, wasm_bytes).map_err(|e| {
+            ExecutorError::MalformedWasmArtifact {
+                error_code: "malformed_wasm_artifact".to_string(),
+                detail: format!("module compile: {e}"),
+            }
+        })?;
+        let validation = validate_module_imports(&module, abi_version)?;
+        let cached = CachedModule { module, validation };
+
+        let mut cache = self
+            .module_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(checksum, cached.clone());
+        Ok(cached)
     }
 }
 
@@ -360,6 +511,8 @@ fn host_abi_whitelist(abi_version: &str) -> Result<HostAbiWhitelist, ExecutorErr
         });
     }
 
-    serde_json::from_str::<HostAbiWhitelist>(HOST_ABI_V1_WHITELIST)
+    HOST_ABI_V1_WHITELIST_CACHE
+        .as_ref()
+        .cloned()
         .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("invalid ABI whitelist: {e}")))
 }

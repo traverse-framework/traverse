@@ -15,7 +15,8 @@ pub use native::NativeExecutor;
 pub use thread_pool::{ConfigError, ThreadPoolExecutor, ThreadPoolExecutorConfig};
 pub use wasm::{
     HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits,
-    WasmExecutor, supported_host_abi_versions, verify_wasm_host_abi_bytes,
+    WasmExecutor, WasmModuleCacheConfig, WasmModuleCacheStats, supported_host_abi_versions,
+    verify_wasm_host_abi_bytes,
 };
 
 use serde_json::Value;
