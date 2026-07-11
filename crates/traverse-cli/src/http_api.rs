@@ -180,6 +180,19 @@ struct PersistedWorkspaceRegistryV1 {
     workflows: Vec<PersistedWorkflowRegistrationV1>,
 }
 
+/// A durable, append-only delta for a workspace registry snapshot. Keeping
+/// mutations separate from the legacy snapshot prevents a single registration
+/// from rewriting every previously registered artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedRegistryMutationV1 {
+    #[serde(default)]
+    registrations: Vec<PersistedCapabilityRegistrationV1>,
+    #[serde(default)]
+    events: Vec<PersistedEventRegistrationV1>,
+    #[serde(default)]
+    workflows: Vec<PersistedWorkflowRegistrationV1>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedCapabilityRegistrationV1 {
     registry_scope: String,
@@ -740,23 +753,24 @@ fn load_persisted_registry(
     workspace_id: &str,
 ) -> Result<PersistedWorkspaceRegistryV1, String> {
     let path = persisted_registry_path(registry_root, workspace_id);
-    if !path.exists() {
-        return Ok(PersistedWorkspaceRegistryV1 {
+    let mut persisted = if path.exists() {
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("failed to read persisted registry: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            format!(
+                "failed to parse persisted registry at {}: {e}",
+                path.display()
+            )
+        })?
+    } else {
+        PersistedWorkspaceRegistryV1 {
             schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
             registrations: Vec::new(),
             events: Vec::new(),
             workflows: Vec::new(),
-        });
-    }
-
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("failed to read persisted registry: {e}"))?;
-    let persisted: PersistedWorkspaceRegistryV1 = serde_json::from_slice(&bytes).map_err(|e| {
-        format!(
-            "failed to parse persisted registry at {}: {e}",
-            path.display()
-        )
-    })?;
+        }
+    };
+    load_registry_journal(registry_root, workspace_id, &mut persisted)?;
     Ok(persisted)
 }
 
@@ -765,6 +779,13 @@ fn persisted_registry_path(registry_root: &Path, workspace_id: &str) -> PathBuf 
         .join("workspaces")
         .join(workspace_id)
         .join("capabilities.json")
+}
+
+fn persisted_registry_journal_path(registry_root: &Path, workspace_id: &str) -> PathBuf {
+    registry_root
+        .join("workspaces")
+        .join(workspace_id)
+        .join("capabilities.jsonl")
 }
 
 fn workspace_metadata_path(registry_root: &Path, workspace_id: &str) -> PathBuf {
@@ -781,24 +802,61 @@ fn workspace_audit_log_path(registry_root: &Path, workspace_id: &str) -> PathBuf
         .join("audit.jsonl")
 }
 
-fn persist_registry(
+fn append_registry_mutation(
     registry_root: &Path,
     workspace_id: &str,
-    persisted: &PersistedWorkspaceRegistryV1,
+    mutation: &PersistedRegistryMutationV1,
 ) -> Result<(), String> {
-    let path = persisted_registry_path(registry_root, workspace_id);
+    let path = persisted_registry_journal_path(registry_root, workspace_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create persisted registry directory: {e}"))?;
     }
 
-    let bytes = serde_json::to_vec_pretty(persisted)
-        .map_err(|e| format!("failed to serialize persisted registry: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes)
-        .map_err(|e| format!("failed to write persisted registry temp file: {e}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("failed to atomically replace persisted registry: {e}"))?;
+    let mut bytes = serde_json::to_vec(mutation)
+        .map_err(|e| format!("failed to serialize persisted registry mutation: {e}"))?;
+    bytes.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("failed to open persisted registry journal: {e}"))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("failed to append persisted registry mutation: {e}"))?;
+    file.sync_data()
+        .map_err(|e| format!("failed to sync persisted registry mutation: {e}"))
+}
+
+fn load_registry_journal(
+    registry_root: &Path,
+    workspace_id: &str,
+    persisted: &mut PersistedWorkspaceRegistryV1,
+) -> Result<(), String> {
+    let path = persisted_registry_journal_path(registry_root, workspace_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("failed to read persisted registry journal: {e}"))?;
+    for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let mutation: PersistedRegistryMutationV1 = match serde_json::from_slice(line) {
+            Ok(mutation) => mutation,
+            Err(_error) if index + 1 == bytes.split(|byte| *byte == b'\n').count() => break,
+            Err(error) => {
+                return Err(format!(
+                    "failed to parse persisted registry journal at {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        persisted.registrations.extend(mutation.registrations);
+        persisted.events.extend(mutation.events);
+        persisted.workflows.extend(mutation.workflows);
+    }
     Ok(())
 }
 
@@ -2783,8 +2841,15 @@ fn apply_registration<E: LocalExecutor + Clone>(
     match ws.runtime.register_capability(registration) {
         Ok(outcome) => {
             if scope == RegistrationScope::WorkspacePersisted && !outcome.already_registered {
+                append_registry_mutation(
+                    &state.registry_root,
+                    workspace_id,
+                    &PersistedRegistryMutationV1 {
+                        registrations: vec![persisted_registration.clone()],
+                        ..PersistedRegistryMutationV1::default()
+                    },
+                )?;
                 ws.persisted.registrations.push(persisted_registration);
-                persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
             }
             Ok(Ok(outcome))
         }
@@ -2848,8 +2913,15 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
                 existing.record.contract_digest == outcome.record.contract_digest
             });
             if scope == RegistrationScope::WorkspacePersisted && !already_registered {
+                append_registry_mutation(
+                    &state.registry_root,
+                    workspace_id,
+                    &PersistedRegistryMutationV1 {
+                        events: vec![persisted_registration.clone()],
+                        ..PersistedRegistryMutationV1::default()
+                    },
+                )?;
                 ws.persisted.events.push(persisted_registration);
-                persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
             }
             Ok(Ok(EventRegistrationHttpOutcome {
                 already_registered,
@@ -2901,8 +2973,15 @@ fn apply_workflow_registration<E: LocalExecutor + Clone>(
         match ws.runtime.register_workflow(registration) {
             Ok(outcome) => {
                 if scope == RegistrationScope::WorkspacePersisted && !already {
+                    append_registry_mutation(
+                        &state.registry_root,
+                        workspace_id,
+                        &PersistedRegistryMutationV1 {
+                            workflows: vec![persisted.clone()],
+                            ..PersistedRegistryMutationV1::default()
+                        },
+                    )?;
                     ws.persisted.workflows.push(persisted);
-                    persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
                 }
 
                 Ok(Ok(WorkflowRegistrationHttpOutcome {
@@ -2925,6 +3004,11 @@ fn apply_bundle_registration<E: LocalExecutor + Clone>(
     bundle: ParsedBundleRegistrationV1,
 ) -> Result<Result<BundleRegistrationHttpOutcome, ApiError>, String> {
     state.with_workspace_mut(workspace_id, |ws| {
+        let persisted_lengths = (
+            ws.persisted.registrations.len(),
+            ws.persisted.events.len(),
+            ws.persisted.workflows.len(),
+        );
         let mut staged_runtime = ws.runtime.clone();
         let mut staged_event_registry = ws.event_registry.clone();
         let mut staged_persisted = ws.persisted.clone();
@@ -2977,7 +3061,15 @@ fn apply_bundle_registration<E: LocalExecutor + Clone>(
         }
 
         if bundle.scope == RegistrationScope::WorkspacePersisted {
-            persist_registry(&state.registry_root, workspace_id, &staged_persisted)?;
+            append_registry_mutation(
+                &state.registry_root,
+                workspace_id,
+                &PersistedRegistryMutationV1 {
+                    registrations: staged_persisted.registrations[persisted_lengths.0..].to_vec(),
+                    events: staged_persisted.events[persisted_lengths.1..].to_vec(),
+                    workflows: staged_persisted.workflows[persisted_lengths.2..].to_vec(),
+                },
+            )?;
         }
 
         ws.runtime = staged_runtime;
@@ -9420,6 +9512,11 @@ mod tests {
             .expect("workspace execute must write a response");
         let executed = parse_response_body(&execute_out);
         assert_eq!(executed["status"], "succeeded");
+
+        assert!(!persisted_registry_path(&state.registry_root, "ws-test").exists());
+        let reloaded = load_persisted_registry(&state.registry_root, "ws-test")
+            .expect("journaled capability registration must reload");
+        assert_eq!(reloaded.registrations.len(), 1);
     }
 
     #[test]
@@ -9864,6 +9961,19 @@ mod tests {
             })
             .expect("workspace lookup must succeed");
         assert_eq!(registered, (true, true, true));
+
+        let journal = std::fs::read_to_string(persisted_registry_journal_path(
+            &state.registry_root,
+            "ws-test",
+        ))
+        .expect("bundle registration must append a journal entry");
+        assert_eq!(journal.lines().count(), 1);
+
+        let reloaded = load_persisted_registry(&state.registry_root, "ws-test")
+            .expect("persisted bundle must reload");
+        assert_eq!(reloaded.registrations.len(), 1);
+        assert_eq!(reloaded.events.len(), 1);
+        assert_eq!(reloaded.workflows.len(), 1);
     }
 
     #[test]
