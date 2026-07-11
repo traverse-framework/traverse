@@ -14,8 +14,8 @@ pub mod wasm;
 pub use native::NativeExecutor;
 pub use thread_pool::{ConfigError, ThreadPoolExecutor, ThreadPoolExecutorConfig};
 pub use wasm::{
-    HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutor,
-    supported_host_abi_versions, verify_wasm_host_abi_bytes,
+    HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits,
+    WasmExecutor, supported_host_abi_versions, verify_wasm_host_abi_bytes,
 };
 
 use serde_json::Value;
@@ -70,6 +70,10 @@ pub enum ExecutorError {
     },
     /// The WASM module trapped or returned a non-zero exit code.
     ExecutionFailed(String),
+    /// WASM execution exhausted its configured CPU budget.
+    Timeout(String),
+    /// WASM execution exceeded its configured memory, table, or instance budget.
+    ResourceExhausted(String),
     /// The executor produced output that could not be parsed as JSON.
     OutputDeserializationFailed(String),
     /// The executor type does not support the requested capability.
@@ -105,6 +109,8 @@ impl std::fmt::Display for ExecutorError {
                 "{error_code}: ABI {abi_version} does not allow import {module}::{name}"
             ),
             Self::ExecutionFailed(msg) => write!(f, "execution failed: {msg}"),
+            Self::Timeout(msg) => write!(f, "execution timed out: {msg}"),
+            Self::ResourceExhausted(msg) => write!(f, "resource exhausted: {msg}"),
             Self::OutputDeserializationFailed(msg) => {
                 write!(f, "output deserialization failed: {msg}")
             }

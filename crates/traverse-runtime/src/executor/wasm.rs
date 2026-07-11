@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
-use wasmtime::{Engine, Linker, Module, Store};
+use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
@@ -19,6 +19,12 @@ use super::{ArtifactType, CapabilityExecutor, ExecutorCapability, ExecutorError}
 pub const SUPPORTED_HOST_ABI_VERSION: &str = "1.0.0";
 
 const HOST_ABI_V1_WHITELIST: &str = include_str!("host_abi_v1.json");
+const DEFAULT_FUEL_BUDGET: u64 = 5_000_000;
+const DEFAULT_MEMORY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+const DEFAULT_TABLE_ELEMENT_LIMIT: usize = 1_024;
+const DEFAULT_INSTANCE_LIMIT: usize = 1;
+const DEFAULT_TABLE_LIMIT: usize = 8;
+const DEFAULT_LINEAR_MEMORY_LIMIT: usize = 1;
 
 /// A host import observed in a WASM module.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +88,7 @@ pub fn verify_wasm_host_abi_bytes(
 #[derive(Debug)]
 pub struct WasmExecutor {
     engine: Engine,
+    limits: WasmExecutionLimits,
 }
 
 impl WasmExecutor {
@@ -91,9 +98,56 @@ impl WasmExecutor {
     ///
     /// Returns [`ExecutorError::RuntimeSetupFailed`] if Wasmtime cannot initialise.
     pub fn new() -> Result<Self, ExecutorError> {
-        let engine = Engine::default();
-        Ok(Self { engine })
+        Self::with_limits(WasmExecutionLimits::default())
     }
+
+    /// Create a [`WasmExecutor`] with explicit per-invocation resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::RuntimeSetupFailed`] if Wasmtime cannot initialise.
+    pub fn with_limits(limits: WasmExecutionLimits) -> Result<Self, ExecutorError> {
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config)
+            .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("engine config: {e}")))?;
+        Ok(Self { engine, limits })
+    }
+}
+
+/// Per-invocation resource limits for [`WasmExecutor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasmExecutionLimits {
+    /// Fuel units available for guest code before it traps as a timeout.
+    pub fuel_budget: u64,
+    /// Maximum bytes for each guest linear memory.
+    pub memory_bytes: usize,
+    /// Maximum elements for each guest table.
+    pub table_elements: usize,
+    /// Maximum instances in the store.
+    pub instances: usize,
+    /// Maximum tables in the store.
+    pub tables: usize,
+    /// Maximum linear memories in the store.
+    pub memories: usize,
+}
+
+impl Default for WasmExecutionLimits {
+    fn default() -> Self {
+        Self {
+            fuel_budget: DEFAULT_FUEL_BUDGET,
+            memory_bytes: DEFAULT_MEMORY_LIMIT_BYTES,
+            table_elements: DEFAULT_TABLE_ELEMENT_LIMIT,
+            instances: DEFAULT_INSTANCE_LIMIT,
+            tables: DEFAULT_TABLE_LIMIT,
+            memories: DEFAULT_LINEAR_MEMORY_LIMIT,
+        }
+    }
+}
+
+struct WasmStoreState {
+    wasi: WasiP1Ctx,
+    limits: StoreLimits,
 }
 
 impl CapabilityExecutor for WasmExecutor {
@@ -190,11 +244,21 @@ impl WasmExecutor {
             .stdout(stdout_pipe)
             .build_p1();
 
-        let mut linker: Linker<WasiP1Ctx> = Linker::new(&self.engine);
-        wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |s| s)
+        let mut linker: Linker<WasmStoreState> = Linker::new(&self.engine);
+        wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |s| &mut s.wasi)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(e.to_string()))?;
 
-        let mut store: Store<WasiP1Ctx> = Store::new(&self.engine, wasi_ctx);
+        let mut store = Store::new(
+            &self.engine,
+            WasmStoreState {
+                wasi: wasi_ctx,
+                limits: self.store_limits(),
+            },
+        );
+        store.limiter(|state| &mut state.limits);
+        store
+            .set_fuel(self.limits.fuel_budget)
+            .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("set fuel: {e}")))?;
 
         linker
             .module(&mut store, "", &module)
@@ -206,7 +270,7 @@ impl WasmExecutor {
             .typed::<(), ()>(&store)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("typed: {e}")))?
             .call(&mut store, ())
-            .map_err(|e| ExecutorError::ExecutionFailed(e.to_string()))?;
+            .map_err(|error| classify_wasm_execution_error(&error))?;
 
         // Extract captured stdout — contents() reads the buffer without consuming it
         let raw_output = stdout_ref.contents();
@@ -218,6 +282,32 @@ impl WasmExecutor {
             ))
         })
     }
+
+    fn store_limits(&self) -> StoreLimits {
+        StoreLimitsBuilder::new()
+            .memory_size(self.limits.memory_bytes)
+            .table_elements(self.limits.table_elements)
+            .instances(self.limits.instances)
+            .tables(self.limits.tables)
+            .memories(self.limits.memories)
+            .trap_on_grow_failure(true)
+            .build()
+    }
+}
+
+fn classify_wasm_execution_error(error: &wasmtime::Error) -> ExecutorError {
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    if display.contains("all fuel consumed by WebAssembly")
+        || debug.contains("all fuel consumed by WebAssembly")
+    {
+        return ExecutorError::Timeout(debug);
+    }
+    if display.contains("forcing trap when growing") || debug.contains("forcing trap when growing")
+    {
+        return ExecutorError::ResourceExhausted(debug);
+    }
+    ExecutorError::ExecutionFailed(display)
 }
 
 fn sha256_hex(data: &[u8]) -> String {
