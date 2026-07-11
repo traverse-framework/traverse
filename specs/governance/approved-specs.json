@@ -683,6 +683,19 @@
         "specs/059-http-command-dispatch/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "060-wasm-resource-limits",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/060-wasm-resource-limits/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "CHANGELOG.md",
+        "specs/060-wasm-resource-limits/",
+        "specs/governance/"
+      ]
     }
   ]
 }

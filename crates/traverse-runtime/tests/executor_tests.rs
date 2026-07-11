@@ -2,7 +2,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use traverse_runtime::executor::{
     ArtifactType, CapabilityExecutor, ExecutorCapability, ExecutorError, NativeExecutor,
-    SUPPORTED_HOST_ABI_VERSION, WasmExecutor, supported_host_abi_versions,
+    SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits, WasmExecutor, supported_host_abi_versions,
     verify_wasm_host_abi_bytes,
 };
 
@@ -241,6 +241,90 @@ fn wasm_executor_rejects_invalid_json_output() -> Result<(), String> {
 }
 
 #[test]
+fn wasm_executor_traps_infinite_loop_as_timeout() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+        fuel_budget: 1_000,
+        ..WasmExecutionLimits::default()
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (func $_start (export "_start")
+                (loop $again
+                    br $again
+                )
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected Timeout",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::Timeout(_)),
+        "expected Timeout, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_traps_memory_growth_as_resource_exhausted() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+        fuel_budget: 100_000,
+        memory_bytes: 64 * 1024,
+        ..WasmExecutionLimits::default()
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (memory (export "memory") 1)
+            (func $_start (export "_start")
+                (drop (memory.grow (i32.const 1)))
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected ResourceExhausted",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::ResourceExhausted(_)),
+        "expected ResourceExhausted, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_preserves_generic_traps_as_execution_failed() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (func $_start (export "_start")
+                unreachable
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected ExecutionFailed",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::ExecutionFailed(_)),
+        "expected ExecutionFailed, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn wasm_host_abi_verifier_accepts_sanctioned_stdio_imports() -> Result<(), String> {
     let wasm_bytes = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
 
@@ -385,6 +469,14 @@ fn executor_error_display_covers_all_variants() {
         (
             ExecutorError::ExecutionFailed("trapped".to_string()),
             "execution failed: trapped",
+        ),
+        (
+            ExecutorError::Timeout("fuel exhausted".to_string()),
+            "execution timed out: fuel exhausted",
+        ),
+        (
+            ExecutorError::ResourceExhausted("memory cap".to_string()),
+            "resource exhausted: memory cap",
         ),
         (
             ExecutorError::OutputDeserializationFailed("not json".to_string()),
