@@ -22,6 +22,7 @@ use traverse_runtime::{
     RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest, RuntimeResultStatus,
     RuntimeTrace, parse_runtime_request,
 };
+use zeroize::Zeroizing;
 
 /// Map an HTTP auth mode to the runtime security posture: the dev auth modes
 /// run local unsigned example artifacts (development), while the network-facing
@@ -1122,12 +1123,14 @@ fn derive_identity_from_jwt(
         ));
     };
 
-    let payload_bytes = base64url_decode(payload_b64).map_err(|msg| ApiError {
+    // Zeroize the decoded credential bytes on drop (success and error paths),
+    // so bearer-token material does not linger in memory (spec 030 NFR-001).
+    let payload_bytes = Zeroizing::new(base64url_decode(payload_b64).map_err(|msg| ApiError {
         status: 401,
         reason: "Unauthorized",
         code: "unauthorized",
         message: msg,
-    })?;
+    })?);
 
     let value: Value = serde_json::from_slice(&payload_bytes).map_err(|e| ApiError {
         status: 401,
@@ -1232,8 +1235,10 @@ const JWT_ALLOWED_ALG: &str = "EdDSA";
 /// Enforce the JWT `alg` allow-list. Only `EdDSA` is accepted; `none` and every
 /// other algorithm are rejected so an attacker cannot strip the signature.
 fn verify_jwt_header_alg(header_b64: &str) -> Result<(), ApiError> {
-    let header_bytes = base64url_decode(header_b64)
-        .map_err(|msg| unauthorized("unauthorized", format!("invalid JWT header: {msg}")))?;
+    let header_bytes = Zeroizing::new(
+        base64url_decode(header_b64)
+            .map_err(|msg| unauthorized("unauthorized", format!("invalid JWT header: {msg}")))?,
+    );
     let header: Value = serde_json::from_slice(&header_bytes)
         .map_err(|e| unauthorized("unauthorized", format!("invalid JWT header: {e}")))?;
     let alg = header
@@ -1258,8 +1263,10 @@ fn verify_jwt_signature(
 ) -> Result<(), ApiError> {
     use ed25519_dalek::Verifier;
 
-    let signature_bytes = base64url_decode(signature_b64)
-        .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?;
+    let signature_bytes = Zeroizing::new(
+        base64url_decode(signature_b64)
+            .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?,
+    );
     let signature_array = <[u8; 64]>::try_from(signature_bytes.as_slice())
         .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?;
     let signature = ed25519_dalek::Signature::from_bytes(&signature_array);

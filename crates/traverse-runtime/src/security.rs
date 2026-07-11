@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use traverse_registry::{
     ArtifactSignature, ArtifactSignatureScheme, ResolvedCapability, SourceKind,
 };
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeIdentity {
@@ -145,7 +146,9 @@ pub fn derive_identity_from_jwt(token: &str) -> Option<RuntimeIdentity> {
         return None;
     }
     let payload = payload?;
-    let payload_bytes = base64url_decode(payload).ok()?;
+    // Zeroize the decoded credential bytes when this scope ends, on both the
+    // success and the early-return paths (spec 030 NFR-001).
+    let payload_bytes = Zeroizing::new(base64url_decode(payload).ok()?);
     let value = serde_json::from_slice::<Value>(&payload_bytes).ok()?;
     let subject_id = value
         .get("sub")

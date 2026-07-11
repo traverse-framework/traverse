@@ -19,4 +19,4 @@ Questions, bug reports, and contribution discussions should generally go through
 
 Do not report security issues publicly in GitHub issues.
 
-Follow [SECURITY.md](/Users/piovese/Documents/cogolo/SECURITY.md) for private reporting expectations.
+Follow [SECURITY.md](SECURITY.md) for private reporting expectations.
