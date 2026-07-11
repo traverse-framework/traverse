@@ -420,6 +420,19 @@ Rules:
 - The OpenAPI document is the machine-readable contract for app consumers.
 - The prose spec wins if prose and OpenAPI conflict until the conflict is corrected.
 
+## Workspace Registry Persistence
+
+Workspace-persisted capability, event, and workflow registrations MUST use a
+durable append-only delta journal. Each logical registration operation MUST
+append only its newly accepted registrations and synchronize that append before
+returning success; multi-artifact bundle registration MUST append one combined
+delta. On load, the server MUST combine any legacy atomic registry snapshot
+with the journal in record order. An incomplete final journal record MAY be
+discarded after an interrupted write, but a malformed completed record MUST
+fail loading with an actionable error. This preserves backward compatibility
+with existing snapshots while making steady-state mutation I/O proportional to
+the accepted change rather than the registry's total size.
+
 ## Functional Requirements
 
 - **FR-001**: `traverse-cli serve` MUST start the HTTP+JSON runtime API server.
@@ -459,6 +472,7 @@ Rules:
 - **FR-035**: Administrative privilege (and system-workspace access) MUST only be granted from a signature-verified token; an unverified token MUST NOT yield `is_admin`.
 - **FR-036**: In `bearer-required` mode with no verification key configured, the server MUST fail closed and reject all bearer tokens (`jwt_verification_unavailable`).
 - **FR-037**: The server MUST validate JWT `exp` and `nbf` when present, rejecting expired (`token_expired`) and not-yet-valid (`token_not_yet_valid`) tokens.
+- **FR-038**: Workspace registry persistence MUST follow the append-only delta-journal model above.
 
 ## Quality Gates
 
