@@ -709,6 +709,21 @@
         "specs/061-wasm-module-cache/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "062-runtime-target-matrix",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/062-runtime-target-matrix/spec.md",
+      "governs": [
+        ".github/workflows/",
+        "crates/traverse-runtime/",
+        "docs/runtime-target-matrix.md",
+        "CHANGELOG.md",
+        "specs/062-runtime-target-matrix/",
+        "specs/governance/"
+      ]
     }
   ]
 }
