@@ -1,6 +1,9 @@
 //! Dedicated Traverse MCP stdio server package entrypoint.
 
-use crate::{TraverseMcp, youaskm3_mcp_consumption_validation_path};
+use crate::{
+    McpLifecycleStatus, McpObservationMessage, TraverseMcp,
+    youaskm3_mcp_consumption_validation_path,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -36,6 +39,10 @@ const SUPPORTING_COMMANDS: &[&str] = &[
 struct StdioCommandEnvelope {
     command: String,
     #[serde(default)]
+    auth: Option<StdioAuthEnvelope>,
+    #[serde(default)]
+    bearer_token: Option<String>,
+    #[serde(default)]
     content_group_id: Option<String>,
     #[serde(default)]
     entrypoint_kind: Option<String>,
@@ -45,6 +52,102 @@ struct StdioCommandEnvelope {
     version: Option<String>,
     #[serde(default)]
     request_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StdioAuthEnvelope {
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct StdioAuthConfig {
+    mode: StdioAuthMode,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum StdioAuthMode {
+    LocalTrust,
+    BearerRequired { token: String },
+}
+
+impl fmt::Debug for StdioAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.mode {
+            StdioAuthMode::LocalTrust => f
+                .debug_struct("StdioAuthConfig")
+                .field("mode", &"local_trust")
+                .finish(),
+            StdioAuthMode::BearerRequired { .. } => f
+                .debug_struct("StdioAuthConfig")
+                .field("mode", &"bearer_required")
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+impl StdioAuthConfig {
+    #[must_use]
+    pub fn local_trust() -> Self {
+        Self {
+            mode: StdioAuthMode::LocalTrust,
+        }
+    }
+
+    #[must_use]
+    pub fn bearer_required(token: impl Into<String>) -> Self {
+        Self {
+            mode: StdioAuthMode::BearerRequired {
+                token: token.into(),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("TRAVERSE_MCP_STDIO_BEARER_TOKEN") {
+            Ok(token) if !token.is_empty() => Self::bearer_required(token),
+            _ => Self::local_trust(),
+        }
+    }
+
+    fn mode_name(&self) -> &'static str {
+        match self.mode {
+            StdioAuthMode::LocalTrust => "local_trust",
+            StdioAuthMode::BearerRequired { .. } => "bearer_required",
+        }
+    }
+
+    fn verify_execute_command(
+        &self,
+        command: &StdioCommandEnvelope,
+    ) -> Result<(), StdioServerFailure> {
+        let StdioAuthMode::BearerRequired { token } = &self.mode else {
+            return Ok(());
+        };
+
+        let supplied = command
+            .auth
+            .as_ref()
+            .and_then(|auth| {
+                let auth_type = auth.r#type.as_deref().unwrap_or("bearer");
+                (auth_type == "bearer")
+                    .then_some(auth.token.as_deref())
+                    .flatten()
+            })
+            .or(command.bearer_token.as_deref());
+
+        match supplied {
+            Some(candidate) if candidate == token => Ok(()),
+            _ => Err(StdioServerFailure::new(
+                "auth_required",
+                "execute command requires a valid MCP stdio bearer token.",
+            )),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -208,6 +311,11 @@ where
             "status": "ready",
             "supported_commands": SUPPORTING_COMMANDS,
             "public_surface_id": PUBLIC_SURFACE_ID,
+            "auth_boundary": {
+                "default_mode": "local_trust",
+                "required_token_env": "TRAVERSE_MCP_STDIO_BEARER_TOKEN",
+                "required_commands": ["execute_entrypoint", "render_execution_report"],
+            },
             "content_group_count": McpDiscoveryCatalog::content_group_count(),
         })
     }
@@ -223,6 +331,12 @@ where
             "runtime_authority": "Traverse runtime authority",
             "public_surface_id": PUBLIC_SURFACE_ID,
             "supported_commands": SUPPORTING_COMMANDS,
+            "auth_boundary": {
+                "default_mode": "local_trust",
+                "required_token_env": "TRAVERSE_MCP_STDIO_BEARER_TOKEN",
+                "required_commands": ["execute_entrypoint", "render_execution_report"],
+                "token_output_policy": "never_echo_raw_token",
+            },
             "governed_surface_counts": {
                 "capabilities": self.catalog.capability_count(),
                 "events": self.catalog.event_count(),
@@ -379,7 +493,9 @@ where
     fn execute_entrypoint_envelope(
         &self,
         command: &StdioCommandEnvelope,
+        auth_config: &StdioAuthConfig,
     ) -> Result<Value, StdioServerFailure> {
+        auth_config.verify_execute_command(command)?;
         let artifacts = self.entrypoint_artifacts(command)?;
         let response = self
             .mcp
@@ -392,7 +508,7 @@ where
         let observation_messages = response
             .observation_messages
             .into_iter()
-            .map(|message| format!("{message:?}"))
+            .map(observation_message_summary)
             .collect::<Vec<_>>();
 
         Ok(json!({
@@ -406,7 +522,8 @@ where
             "request_id": request_id,
             "execution_id": execution_id,
             "result": result,
-            "trace": trace,
+            "trace": public_trace_summary(&trace),
+            "trace_redaction": trace_redaction_policy(auth_config),
             "observation_messages": observation_messages,
         }))
     }
@@ -414,7 +531,9 @@ where
     fn render_execution_report_envelope(
         &self,
         command: &StdioCommandEnvelope,
+        auth_config: &StdioAuthConfig,
     ) -> Result<Value, StdioServerFailure> {
+        auth_config.verify_execute_command(command)?;
         let artifacts = self.entrypoint_artifacts(command)?;
         let response = self
             .mcp
@@ -427,7 +546,7 @@ where
         let observation_messages = response
             .observation_messages
             .into_iter()
-            .map(|message| format!("{message:?}"))
+            .map(observation_message_summary)
             .collect::<Vec<_>>();
 
         Ok(json!({
@@ -442,7 +561,8 @@ where
                 "request_id": request_id.clone(),
                 "execution_id": execution_id.clone(),
                 "result": result,
-                "trace": trace,
+                "trace": public_trace_summary(&trace),
+                "trace_redaction": trace_redaction_policy(auth_config),
                 "observation_messages": observation_messages,
             },
             "report": {
@@ -451,6 +571,7 @@ where
                 "request_id": request_id,
                 "result_status": result.status,
                 "trace_kind": trace.kind,
+                "trace_redacted": true,
                 "observation_message_count": observation_messages.len(),
             },
         }))
@@ -579,6 +700,33 @@ where
         stdout: &mut W,
         stderr: &mut EWrite,
         simulate_startup_failure: bool,
+    ) -> Result<(), StdioServerFailure>
+    where
+        R: BufRead,
+        W: Write,
+        EWrite: Write,
+    {
+        self.run_stdio_with_auth(
+            input,
+            stdout,
+            stderr,
+            simulate_startup_failure,
+            &StdioAuthConfig::local_trust(),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    /// # Errors
+    ///
+    /// Returns `auth_required` when an execution command is submitted without the
+    /// required local bearer token.
+    pub fn run_stdio_with_auth<R, W, EWrite>(
+        &self,
+        input: R,
+        stdout: &mut W,
+        stderr: &mut EWrite,
+        simulate_startup_failure: bool,
+        auth_config: &StdioAuthConfig,
     ) -> Result<(), StdioServerFailure>
     where
         R: BufRead,
@@ -723,7 +871,7 @@ where
                     })?;
                 }
                 "execute_entrypoint" => {
-                    let envelope = match self.execute_entrypoint_envelope(&command) {
+                    let envelope = match self.execute_entrypoint_envelope(&command, auth_config) {
                         Ok(envelope) => envelope,
                         Err(failure) => {
                             let _ = write_json_line(stderr, &failure.envelope());
@@ -738,13 +886,14 @@ where
                     })?;
                 }
                 "render_execution_report" => {
-                    let envelope = match self.render_execution_report_envelope(&command) {
-                        Ok(envelope) => envelope,
-                        Err(failure) => {
-                            let _ = write_json_line(stderr, &failure.envelope());
-                            return Err(failure);
-                        }
-                    };
+                    let envelope =
+                        match self.render_execution_report_envelope(&command, auth_config) {
+                            Ok(envelope) => envelope,
+                            Err(failure) => {
+                                let _ = write_json_line(stderr, &failure.envelope());
+                                return Err(failure);
+                            }
+                        };
                     write_json_line(stdout, &envelope).map_err(|error| {
                         StdioServerFailure::new(
                             "io_error",
@@ -791,6 +940,73 @@ struct EntrypointArtifacts {
     request: RuntimeRequest,
 }
 
+fn public_trace_summary(trace: &traverse_runtime::RuntimeTrace) -> Value {
+    json!({
+        "kind": trace.kind,
+        "schema_version": trace.schema_version,
+        "trace_id": trace.trace_id,
+        "execution_id": trace.execution_id,
+        "request_id": trace.request_id,
+        "governing_spec": trace.governing_spec,
+        "selected_capability_id": trace.selected_capability_id(),
+        "runtime_status": trace.terminal_outcome.runtime_status,
+        "emitted_event_count": trace.emitted_events.len(),
+        "state_transition_count": trace.state_transitions.len(),
+        "model_resolution_count": trace.model_resolution.len(),
+        "private_fields_omitted": [
+            "request",
+            "decision_evidence",
+            "state_progression",
+            "candidate_collection",
+            "selection",
+            "execution",
+            "result",
+            "otel_trace",
+        ],
+    })
+}
+
+fn trace_redaction_policy(auth_config: &StdioAuthConfig) -> Value {
+    json!({
+        "enabled": true,
+        "tier": "public_summary",
+        "reason": "MCP stdio responses omit full runtime traces by default.",
+        "auth_mode": auth_config.mode_name(),
+    })
+}
+
+fn observation_message_summary(message: McpObservationMessage) -> Value {
+    match message {
+        McpObservationMessage::Lifecycle(message) => json!({
+            "kind": "lifecycle",
+            "sequence": message.sequence,
+            "execution_id": message.execution_id,
+            "request_id": message.request_id,
+            "status": match message.status {
+                McpLifecycleStatus::StreamStarted => "stream_started",
+                McpLifecycleStatus::StreamCompleted => "stream_completed",
+            },
+        }),
+        McpObservationMessage::State(message) => json!({
+            "kind": "state",
+            "sequence": message.sequence,
+            "state_event": message.state_event,
+        }),
+        McpObservationMessage::Trace(message) => json!({
+            "kind": "trace",
+            "sequence": message.sequence,
+            "trace": public_trace_summary(&message.trace),
+            "model_resolution_count": message.model_resolution.len(),
+            "trace_redacted": true,
+        }),
+        McpObservationMessage::Terminal(message) => json!({
+            "kind": "terminal",
+            "sequence": message.sequence,
+            "result": message.result,
+        }),
+    }
+}
+
 /// # Errors
 ///
 /// Returns `catalog_load_failed` when the canonical expedition bundle cannot be loaded.
@@ -821,11 +1037,12 @@ pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServe
 
     let mut stdout = stdout.lock();
     let mut stderr = stderr.lock();
-    server.run_stdio(
+    server.run_stdio_with_auth(
         stdin.lock(),
         &mut stdout,
         &mut stderr,
         simulate_startup_failure,
+        &StdioAuthConfig::from_env(),
     )
 }
 
@@ -1549,6 +1766,67 @@ mod tests {
         assert!(output.contains("\"status\":\"rendered\""));
         assert!(output.contains("\"kind\":\"mcp_stdio_server_shutdown\""));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn required_stdio_bearer_token_denies_unauthenticated_execution() -> Result<(), String> {
+        let server = build_test_server();
+        let input = std::io::Cursor::new(
+            br#"{"command":"execute_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+"#,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = server.run_stdio_with_auth(
+            input,
+            &mut stdout,
+            &mut stderr,
+            false,
+            &StdioAuthConfig::bearer_required("test-token"),
+        );
+
+        assert!(result.is_err());
+        let output = String::from_utf8(stdout).map_err(|error| error.to_string())?;
+        let errors = String::from_utf8(stderr).map_err(|error| error.to_string())?;
+        assert!(output.contains("\"kind\":\"mcp_stdio_server_startup\""));
+        assert!(errors.contains("\"code\":\"auth_required\""));
+        assert!(!errors.contains("test-token"));
+        Ok(())
+    }
+
+    #[test]
+    fn required_stdio_bearer_token_allows_authenticated_execution_with_redacted_trace()
+    -> Result<(), String> {
+        let server = build_test_server();
+        let input = std::io::Cursor::new(
+            br#"{"command":"execute_entrypoint","auth":{"type":"bearer","token":"test-token"},"entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+{"command":"shutdown"}
+"#,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert!(
+            server
+                .run_stdio_with_auth(
+                    input,
+                    &mut stdout,
+                    &mut stderr,
+                    false,
+                    &StdioAuthConfig::bearer_required("test-token"),
+                )
+                .is_ok()
+        );
+
+        let output = String::from_utf8(stdout).map_err(|error| error.to_string())?;
+        assert!(output.contains("\"kind\":\"mcp_stdio_server_entrypoint_execution\""));
+        assert!(output.contains("\"trace_redaction\""));
+        assert!(output.contains("\"private_fields_omitted\""));
+        assert!(output.contains("\"trace_redacted\":true"));
+        assert!(!output.contains("test-token"));
+        assert!(stderr.is_empty());
+        Ok(())
     }
 
     fn build_test_server() -> TraverseMcpStdioServer<'static, ExpeditionExampleExecutor> {
