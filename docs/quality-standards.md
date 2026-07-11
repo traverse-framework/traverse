@@ -32,7 +32,7 @@ Current phased floors:
 | Crate | Gate floor | Measured baseline | Follow-up |
 |---|---:|---:|---|
 | `traverse-cli` | 78% | 78.77% | [#618](https://github.com/traverse-framework/traverse/issues/618) |
-| `traverse-mcp` | 84% | 84.87% | [#617](https://github.com/traverse-framework/traverse/issues/617) |
+| `traverse-mcp` | 86% | 86.07% | [#617](https://github.com/traverse-framework/traverse/issues/617) |
 
 ## Nightly CI Gate
 
