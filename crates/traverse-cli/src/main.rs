@@ -1207,6 +1207,10 @@ fn run_serve(
         jwt_verification_key_hex: std::env::var("TRAVERSE_JWT_VERIFICATION_KEY")
             .ok()
             .filter(|value| !value.trim().is_empty()),
+        read_timeout: None,
+        write_timeout: None,
+        request_deadline: None,
+        max_concurrent_connections: None,
     };
 
     http_api::serve_http_api(config).map_err(|e| e.to_string())
@@ -3536,6 +3540,10 @@ fn build_in_process_api() -> Result<http_api::InProcessApi<ExpeditionExampleExec
         executor: ExpeditionExampleExecutor,
         idempotency_retention_seconds: None,
         jwt_verification_key_hex: None,
+        read_timeout: None,
+        write_timeout: None,
+        request_deadline: None,
+        max_concurrent_connections: None,
     }))
 }
 
