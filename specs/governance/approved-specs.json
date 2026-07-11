@@ -696,6 +696,19 @@
         "specs/060-wasm-resource-limits/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "061-wasm-module-cache",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/061-wasm-module-cache/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "CHANGELOG.md",
+        "specs/061-wasm-module-cache/",
+        "specs/governance/"
+      ]
     }
   ]
 }
