@@ -4,15 +4,20 @@
 //!
 //! Two concrete implementations:
 //! - [`NativeExecutor`] — executes capabilities implemented as native Rust closures.
-//! - [`WasmExecutor`] — executes capabilities compiled to `wasm32-wasi` binaries via Wasmtime.
-//! - [`ThreadPoolExecutor`] — dispatches native capability execution onto a bounded worker pool.
-
+//! - `WasmExecutor` — executes capabilities compiled to `wasm32-wasi` binaries
+//!   via Wasmtime when the `wasmtime-executor` feature is enabled.
+//! - `ThreadPoolExecutor` — dispatches native capability execution onto a bounded
+//!   worker pool when the `native-executors` feature is enabled.
 pub mod native;
+#[cfg(feature = "native-executors")]
 pub mod thread_pool;
+#[cfg(feature = "wasmtime-executor")]
 pub mod wasm;
 
 pub use native::NativeExecutor;
+#[cfg(feature = "native-executors")]
 pub use thread_pool::{ConfigError, ThreadPoolExecutor, ThreadPoolExecutorConfig};
+#[cfg(feature = "wasmtime-executor")]
 pub use wasm::{
     HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits,
     WasmExecutor, WasmModuleCacheConfig, WasmModuleCacheStats, supported_host_abi_versions,
