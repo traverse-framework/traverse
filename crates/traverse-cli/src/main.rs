@@ -3779,7 +3779,11 @@ fn render_agent_execution_summary(
         "status: completed".to_string(),
         format!("trace_ref: {}", outcome.result.trace_ref),
     ];
+    push_capability_output_lines(capability_id, output, &mut lines);
+    lines.join("\n")
+}
 
+fn push_capability_output_lines(capability_id: &str, output: &Value, lines: &mut Vec<String>) {
     match capability_id {
         "expedition.planning.interpret-expedition-intent" => {
             if let Some(intent_id) = output.get("intent_id").and_then(Value::as_str) {
@@ -3854,13 +3858,32 @@ fn render_agent_execution_summary(
                 lines.push(format!("starter_status: {status}"));
             }
         }
+        "traverse-starter.validate" => {
+            if let Some(valid) = output.get("valid").and_then(Value::as_bool) {
+                lines.push(format!("valid: {valid}"));
+            }
+            if let Some(issues) = output.get("issues").and_then(Value::as_array) {
+                let joined = issues
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(format!("issues: {joined}"));
+            }
+        }
+        "traverse-starter.summarize" => {
+            if let Some(summary) = output.get("summary").and_then(Value::as_str) {
+                lines.push(format!("summary: {summary}"));
+            }
+            if let Some(word_count) = output.get("wordCount").and_then(Value::as_u64) {
+                lines.push(format!("wordCount: {word_count}"));
+            }
+        }
         "meeting-notes.process" => {
-            append_meeting_notes_summary(&mut lines, output);
+            append_meeting_notes_summary(lines, output);
         }
         _ => {}
     }
-
-    lines.join("\n")
 }
 
 fn append_meeting_notes_summary(lines: &mut Vec<String>, output: &Value) {
@@ -4004,6 +4027,8 @@ impl LocalExecutor for ExpeditionExampleExecutor {
             }
             "expedition.planning.validate-team-readiness" => execute_validate_team_readiness(input),
             "traverse-starter.process" => execute_traverse_starter_process(input),
+            "traverse-starter.validate" => execute_traverse_starter_validate(input),
+            "traverse-starter.summarize" => execute_traverse_starter_summarize(input),
             "meeting-notes.process" => execute_meeting_notes_process(input),
             "expedition.planning.assemble-expedition-plan" => {
                 execute_assemble_expedition_plan(input)
@@ -4027,6 +4052,8 @@ impl LocalExecutor for AgentPackageExampleExecutor {
         match capability.contract.id.as_str() {
             "hello.world.say-hello" => execute_hello_world(input),
             "traverse-starter.process" => execute_traverse_starter_process(input),
+            "traverse-starter.validate" => execute_traverse_starter_validate(input),
+            "traverse-starter.summarize" => execute_traverse_starter_summarize(input),
             "meeting-notes.process" => execute_meeting_notes_process(input),
             "expedition.planning.interpret-expedition-intent" => {
                 execute_interpret_expedition_intent(input)
@@ -4618,6 +4645,48 @@ fn execute_hello_world(input: &Value) -> Result<Value, LocalExecutionFailure> {
     }))
 }
 
+const STARTER_NOTE_MAX_CHARS: usize = 2000;
+
+fn execute_traverse_starter_validate(input: &Value) -> Result<Value, LocalExecutionFailure> {
+    let map = input_object(input)?;
+    let note = required_string(map, "note")?;
+    let mut issues = Vec::new();
+    if note.trim().is_empty() {
+        issues.push("note must not be empty".to_string());
+    }
+    if note.chars().count() > STARTER_NOTE_MAX_CHARS {
+        issues.push(format!(
+            "note must be at most {STARTER_NOTE_MAX_CHARS} characters"
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "valid": issues.is_empty(),
+        "issues": issues
+    }))
+}
+
+fn execute_traverse_starter_summarize(input: &Value) -> Result<Value, LocalExecutionFailure> {
+    let map = input_object(input)?;
+    let title = required_string(map, "title")?;
+    let note_type = required_string(map, "noteType")?;
+    let suggested_next_action = required_string(map, "suggestedNextAction")?;
+    let tags = required_string_array(map, "tags")?;
+    let tag_list = if tags.is_empty() {
+        "none".to_string()
+    } else {
+        tags.join(", ")
+    };
+    let summary =
+        format!("{title} ({note_type}) - tags: {tag_list}; next action: {suggested_next_action}");
+    let word_count = summary.split_whitespace().count();
+
+    Ok(serde_json::json!({
+        "summary": summary,
+        "wordCount": word_count
+    }))
+}
+
 fn execute_traverse_starter_process(input: &Value) -> Result<Value, LocalExecutionFailure> {
     let map = input_object(input)?;
     let note = required_string(map, "note")?;
@@ -4911,9 +4980,10 @@ mod tests {
         CapabilityPublishRequest, Command, FetchedRegistryIndex, PublishCommandOutput,
         PublishProcessRunner, RegistryIndexFetcher, RegistrySyncError, app_new_at, app_register_at,
         app_registration_state_path, app_validate, capability_publish_at, component_new_at,
-        execute_agent, execute_expedition, inspect_agent, inspect_bundle, inspect_event,
-        inspect_trace, inspect_workflow, latest_index_release_asset, parse_command,
-        register_bundle, registry_sync_at,
+        execute_agent, execute_expedition, execute_traverse_starter_process,
+        execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
+        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, latest_index_release_asset,
+        parse_command, register_bundle, registry_sync_at,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -6409,6 +6479,128 @@ mod tests {
     }
 
     #[test]
+    fn execute_agent_runs_traverse_starter_validate_request() {
+        let fixture = create_traverse_starter_validate_agent_fixture();
+        let request_path =
+            repo_root().join("examples/traverse-starter/runtime-requests/validate.json");
+
+        let output = execute_agent(&fixture.manifest_path, &request_path)
+            .expect("traverse-starter validate agent execution should succeed");
+
+        assert!(output.contains("package_id: traverse-starter.validate-agent"));
+        assert!(output.contains("capability_id: traverse-starter.validate"));
+        assert!(output.contains("status: completed"));
+        assert!(output.contains("valid: true"));
+        assert!(output.contains("issues: "));
+    }
+
+    #[test]
+    fn execute_agent_runs_traverse_starter_summarize_request() {
+        let fixture = create_traverse_starter_summarize_agent_fixture();
+        let request_path =
+            repo_root().join("examples/traverse-starter/runtime-requests/summarize.json");
+
+        let output = execute_agent(&fixture.manifest_path, &request_path)
+            .expect("traverse-starter summarize agent execution should succeed");
+
+        assert!(output.contains("package_id: traverse-starter.summarize-agent"));
+        assert!(output.contains("capability_id: traverse-starter.summarize"));
+        assert!(output.contains("status: completed"));
+        assert!(output.contains(
+            "summary: Review Traverse starter app (project) - tags: review, traverse, starter; next action: expand"
+        ));
+        assert!(output.contains("wordCount: 13"));
+    }
+
+    #[test]
+    fn traverse_starter_validate_rejects_empty_note_deterministically() {
+        let input = serde_json::json!({ "note": "   " });
+
+        let first = execute_traverse_starter_validate(&input)
+            .expect("validate should succeed for empty note");
+        let second = execute_traverse_starter_validate(&input)
+            .expect("validate should succeed for empty note");
+
+        assert_eq!(first, second);
+        assert_eq!(first["valid"], serde_json::json!(false));
+        let issues = first["issues"]
+            .as_array()
+            .expect("issues should be an array");
+        assert!(!issues.is_empty());
+        assert_eq!(issues[0], "note must not be empty");
+    }
+
+    #[test]
+    fn traverse_starter_validate_accepts_valid_note_deterministically() {
+        let input = serde_json::json!({ "note": "Review Traverse starter app registration path" });
+
+        let first =
+            execute_traverse_starter_validate(&input).expect("validate should succeed for note");
+        let second =
+            execute_traverse_starter_validate(&input).expect("validate should succeed for note");
+
+        assert_eq!(first, second);
+        assert_eq!(first, serde_json::json!({ "valid": true, "issues": [] }));
+    }
+
+    #[test]
+    fn traverse_starter_validate_flags_note_over_max_length() {
+        let input = serde_json::json!({ "note": "n".repeat(2001) });
+
+        let output =
+            execute_traverse_starter_validate(&input).expect("validate should succeed for note");
+
+        assert_eq!(output["valid"], serde_json::json!(false));
+        assert_eq!(
+            output["issues"],
+            serde_json::json!(["note must be at most 2000 characters"])
+        );
+    }
+
+    #[test]
+    fn traverse_starter_summarize_produces_deterministic_summary_from_process_output() {
+        let note_input =
+            serde_json::json!({ "note": "Review Traverse starter app registration path" });
+        let process_output =
+            execute_traverse_starter_process(&note_input).expect("process should succeed for note");
+
+        let first = execute_traverse_starter_summarize(&process_output)
+            .expect("summarize should succeed for process output");
+        let second = execute_traverse_starter_summarize(&process_output)
+            .expect("summarize should succeed for process output");
+
+        assert_eq!(first, second);
+        let summary = first["summary"]
+            .as_str()
+            .expect("summary should be a string");
+        assert!(summary.contains("Review Traverse starter app"));
+        assert!(summary.contains("(project)"));
+        assert!(summary.contains("next action: expand"));
+        let word_count = first["wordCount"]
+            .as_u64()
+            .expect("wordCount should be a number");
+        assert_eq!(word_count, summary.split_whitespace().count() as u64);
+    }
+
+    #[test]
+    fn traverse_starter_summarize_reports_missing_tags_as_none() {
+        let input = serde_json::json!({
+            "title": "Untitled note",
+            "tags": [],
+            "noteType": "fleeting",
+            "suggestedNextAction": "archive"
+        });
+
+        let output = execute_traverse_starter_summarize(&input)
+            .expect("summarize should succeed for minimal input");
+
+        assert_eq!(
+            output["summary"],
+            serde_json::json!("Untitled note (fleeting) - tags: none; next action: archive")
+        );
+    }
+
+    #[test]
     fn execute_agent_runs_meeting_notes_process_request() {
         let fixture = create_meeting_notes_agent_fixture();
         let request_path = repo_root().join("examples/meeting-notes/runtime-requests/process.json");
@@ -6951,6 +7143,32 @@ mod tests {
             model_interface: "traverse-starter-deterministic-v1",
             model_purpose: "Process one starter note into deterministic structured metadata without model inference.",
             workflow_id: "traverse-starter.process",
+        })
+    }
+
+    fn create_traverse_starter_validate_agent_fixture() -> AgentFixture {
+        create_agent_package_fixture(&AgentPackageFixtureSpec {
+            package_id: "traverse-starter.validate-agent",
+            capability_id: "traverse-starter.validate",
+            binary_name: "validate-agent.wasm",
+            summary: "Governed WASM agent package for the traverse-starter pipeline showcase.",
+            contract_path: "contracts/examples/traverse-starter/capabilities/validate/contract.json",
+            model_interface: "traverse-starter-deterministic-v1",
+            model_purpose: "Validate one starter note deterministically without model inference.",
+            workflow_id: "traverse-starter.validate",
+        })
+    }
+
+    fn create_traverse_starter_summarize_agent_fixture() -> AgentFixture {
+        create_agent_package_fixture(&AgentPackageFixtureSpec {
+            package_id: "traverse-starter.summarize-agent",
+            capability_id: "traverse-starter.summarize",
+            binary_name: "summarize-agent.wasm",
+            summary: "Governed WASM agent package for the traverse-starter pipeline showcase.",
+            contract_path: "contracts/examples/traverse-starter/capabilities/summarize/contract.json",
+            model_interface: "traverse-starter-deterministic-v1",
+            model_purpose: "Summarize processed starter note metadata deterministically without model inference.",
+            workflow_id: "traverse-starter.summarize",
         })
     }
 

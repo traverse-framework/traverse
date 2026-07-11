@@ -1,0 +1,25 @@
+{
+  "kind": "runtime_request",
+  "schema_version": "1.0.0",
+  "request_id": "traverse-starter-summarize-001",
+  "intent": {
+    "capability_id": "traverse-starter.summarize",
+    "capability_version": "1.0.0"
+  },
+  "input": {
+    "title": "Review Traverse starter app",
+    "tags": ["review", "traverse", "starter"],
+    "noteType": "project",
+    "suggestedNextAction": "expand",
+    "status": "complete"
+  },
+  "lookup": {
+    "scope": "prefer_private",
+    "allow_ambiguity": false
+  },
+  "context": {
+    "requested_target": "local",
+    "caller": "traverse-starter-example"
+  },
+  "governing_spec": "006-runtime-request-execution"
+}
