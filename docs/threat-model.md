@@ -112,11 +112,15 @@ local agents (spec `042-mcp-library-surface`).
 **Threats:** unauthenticated local invocation; leakage of secrets through
 returned traces.
 
-**Controls:** MCP runs over a local stdio boundary. Execution goes through the
-same runtime verification path as other callers.
-
-**Known gaps / open items:** an explicit MCP stdio authentication boundary and
-trace redaction are tracked in issue #592.
+**Controls:** MCP runs over a local stdio boundary. The default `local_trust`
+mode is for local IDE and agent launchers where the parent process already owns
+the user session. Operators can set `TRAVERSE_MCP_STDIO_BEARER_TOKEN` to require
+a matching local bearer token on `execute_entrypoint` and
+`render_execution_report`; discovery commands remain readable for client
+bootstrap. Execution goes through the same runtime verification path as other
+callers, and MCP execution/report responses return public trace summaries with
+redaction metadata instead of full runtime trace payloads by default. Raw bearer
+tokens are not echoed in MCP envelopes or errors.
 
 ### 5. Federation
 

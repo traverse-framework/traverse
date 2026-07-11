@@ -38,6 +38,35 @@ From the repository root:
 cargo run -p traverse-mcp -- stdio
 ```
 
+By default, the stdio server runs in `local_trust` mode. This is intended for
+local IDE and agent integrations where the parent process already owns the
+local user session and can launch the server command.
+
+For stricter local launchers, require a bearer token for execution commands:
+
+```bash
+TRAVERSE_MCP_STDIO_BEARER_TOKEN="replace-with-local-secret" \
+  cargo run -p traverse-mcp -- stdio
+```
+
+When `TRAVERSE_MCP_STDIO_BEARER_TOKEN` is set, `execute_entrypoint` and
+`render_execution_report` reject requests that do not include a matching local
+bearer token. Discovery and description commands remain readable so clients can
+bootstrap safely. The token is never echoed in startup, error, execution, or
+debug output.
+
+Authenticated execution commands can pass the token either as:
+
+```json
+{"auth":{"type":"bearer","token":"replace-with-local-secret"}}
+```
+
+or as the compatibility field:
+
+```json
+{"bearer_token":"replace-with-local-secret"}
+```
+
 To simulate a deterministic startup failure for validation:
 
 ```bash
@@ -59,6 +88,18 @@ The package emits deterministic JSON envelopes for:
 - `shutdown`
 
 The server reports governed content groups, capabilities, events, and workflows from the canonical expedition bundle.
+
+## Trace Redaction
+
+Execution responses and rendered reports return a public trace summary by
+default, not the full runtime trace. The response includes `trace_redaction`
+metadata and omits private or high-volume trace fields such as the original
+runtime request, decision evidence, execution record, result record, and OTEL
+span payloads. Observation messages summarize trace events instead of embedding
+the full trace object.
+
+Use runtime trace inspection tools for local debugging when full trace evidence
+is explicitly needed.
 
 ## Content Groups
 
