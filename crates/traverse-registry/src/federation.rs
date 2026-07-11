@@ -2097,6 +2097,55 @@ mod tests {
     }
 
     #[test]
+    fn governed_path_loader_returns_empty_for_missing_or_invalid_inputs() {
+        assert!(
+            load_governed_path_prefixes_from_path("/definitely-missing/approved-specs.json")
+                .is_empty()
+        );
+        assert!(parse_governed_path_prefixes("{not-json").is_empty());
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_directory_and_normalizes_windows_separators() {
+        // "contracts/" is a real governed prefix declared in
+        // specs/governance/approved-specs.json, so this reads the actual
+        // registry file (same pattern as approved_spec_registry_contains).
+        assert!(is_governed_artifact_path(
+            "contracts/approved/comment-draft.json"
+        ));
+        assert!(is_governed_artifact_path(
+            "contracts\\approved\\comment-draft.json"
+        ));
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_bare_directory_name() {
+        assert!(is_governed_artifact_path("contracts"));
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_exact_governed_file() {
+        assert!(is_governed_artifact_path("Cargo.toml"));
+    }
+
+    #[test]
+    fn ungoverned_path_is_not_governed() {
+        assert!(!is_governed_artifact_path(
+            "workspaces/ws-test/registry/private/comment-draft@1.0.0/contract.json"
+        ));
+        assert!(!is_governed_artifact_path("Cargo.tomlx"));
+    }
+
+    #[test]
+    fn governs_path_matches_directory_prefix_and_exact_file() {
+        assert!(governs_path("contracts/", "contracts/nested/file.json"));
+        assert!(governs_path("contracts/", "contracts"));
+        assert!(!governs_path("contracts/", "not-contracts/file.json"));
+        assert!(governs_path("Cargo.toml", "Cargo.toml"));
+        assert!(!governs_path("Cargo.toml", "Cargo.toml.bak"));
+    }
+
+    #[test]
     fn route_capability_invocation_returns_error_without_matching_snapshot() {
         let mut federation = FederationRegistry::new();
         let origin_peer = peer("peer-route-empty", "Peer Route Empty");
