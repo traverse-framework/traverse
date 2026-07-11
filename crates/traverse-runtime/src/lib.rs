@@ -3147,6 +3147,7 @@ mod tests {
             crate::inference::OllamaProviderConfig {
                 base_url: "http://127.0.0.1:9".to_string(),
                 request_timeout_ms: Some(50),
+                max_response_bytes: None,
             },
         );
 
