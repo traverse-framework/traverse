@@ -24,6 +24,8 @@ pub struct PublicRegistryCapabilityRecord {
     pub version: String,
     pub digest: String,
     pub artifact_url: String,
+    pub contract_digest: String,
+    pub contract_url: String,
     pub deprecated: bool,
 }
 
@@ -105,6 +107,20 @@ pub fn validate_public_registry_index(
             "artifact_url",
             &record.artifact_url,
             "artifact_url",
+        );
+        validate_record_field(
+            &mut errors,
+            position,
+            "contract_digest",
+            &record.contract_digest,
+            "contract_digest",
+        );
+        validate_record_field(
+            &mut errors,
+            position,
+            "contract_url",
+            &record.contract_url,
+            "contract_url",
         );
         if !seen.insert((&record.namespace, &record.id, &record.version)) {
             errors.push(error(
@@ -348,6 +364,8 @@ fn capability_json_value(record: &PublicRegistryCapabilityRecord) -> Value {
         "version": record.version,
         "digest": record.digest,
         "artifact_url": record.artifact_url,
+        "contract_digest": record.contract_digest,
+        "contract_url": record.contract_url,
         "deprecated": record.deprecated
     })
 }
@@ -748,6 +766,8 @@ mod tests {
                 version: "1.0.0".to_string(),
                 digest: "sha256:5647".to_string(),
                 artifact_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/traverse-starter.wasm".to_string(),
+                contract_digest: "sha256:5647".to_string(),
+                contract_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/contract.json".to_string(),
                 deprecated: false,
             }],
         }
