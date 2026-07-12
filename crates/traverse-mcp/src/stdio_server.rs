@@ -1,6 +1,9 @@
 //! Dedicated Traverse MCP stdio server package entrypoint.
 
-use crate::{TraverseMcp, youaskm3_mcp_consumption_validation_path};
+use crate::{
+    McpLifecycleStatus, McpObservationMessage, TraverseMcp,
+    youaskm3_mcp_consumption_validation_path,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -36,6 +39,10 @@ const SUPPORTING_COMMANDS: &[&str] = &[
 struct StdioCommandEnvelope {
     command: String,
     #[serde(default)]
+    auth: Option<StdioAuthEnvelope>,
+    #[serde(default)]
+    bearer_token: Option<String>,
+    #[serde(default)]
     content_group_id: Option<String>,
     #[serde(default)]
     entrypoint_kind: Option<String>,
@@ -45,6 +52,109 @@ struct StdioCommandEnvelope {
     version: Option<String>,
     #[serde(default)]
     request_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StdioAuthEnvelope {
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct StdioAuthConfig {
+    mode: StdioAuthMode,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum StdioAuthMode {
+    LocalTrust,
+    BearerRequired { token: String },
+}
+
+impl fmt::Debug for StdioAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.mode {
+            StdioAuthMode::LocalTrust => f
+                .debug_struct("StdioAuthConfig")
+                .field("mode", &"local_trust")
+                .finish(),
+            StdioAuthMode::BearerRequired { .. } => f
+                .debug_struct("StdioAuthConfig")
+                .field("mode", &"bearer_required")
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+impl StdioAuthConfig {
+    #[must_use]
+    pub fn local_trust() -> Self {
+        Self {
+            mode: StdioAuthMode::LocalTrust,
+        }
+    }
+
+    #[must_use]
+    pub fn bearer_required(token: impl Into<String>) -> Self {
+        Self {
+            mode: StdioAuthMode::BearerRequired {
+                token: token.into(),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::from_env_var(std::env::var("TRAVERSE_MCP_STDIO_BEARER_TOKEN"))
+    }
+
+    /// Testable core of [`Self::from_env`]: takes the lookup result directly
+    /// instead of reading the process environment, since mutating env vars
+    /// from a test is `unsafe` and this workspace forbids `unsafe` entirely.
+    fn from_env_var(token: Result<String, std::env::VarError>) -> Self {
+        match token {
+            Ok(token) if !token.is_empty() => Self::bearer_required(token),
+            _ => Self::local_trust(),
+        }
+    }
+
+    fn mode_name(&self) -> &'static str {
+        match self.mode {
+            StdioAuthMode::LocalTrust => "local_trust",
+            StdioAuthMode::BearerRequired { .. } => "bearer_required",
+        }
+    }
+
+    fn verify_execute_command(
+        &self,
+        command: &StdioCommandEnvelope,
+    ) -> Result<(), StdioServerFailure> {
+        let StdioAuthMode::BearerRequired { token } = &self.mode else {
+            return Ok(());
+        };
+
+        let supplied = command
+            .auth
+            .as_ref()
+            .and_then(|auth| {
+                let auth_type = auth.r#type.as_deref().unwrap_or("bearer");
+                (auth_type == "bearer")
+                    .then_some(auth.token.as_deref())
+                    .flatten()
+            })
+            .or(command.bearer_token.as_deref());
+
+        match supplied {
+            Some(candidate) if candidate == token => Ok(()),
+            _ => Err(StdioServerFailure::new(
+                "auth_required",
+                "execute command requires a valid MCP stdio bearer token.",
+            )),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -208,6 +318,11 @@ where
             "status": "ready",
             "supported_commands": SUPPORTING_COMMANDS,
             "public_surface_id": PUBLIC_SURFACE_ID,
+            "auth_boundary": {
+                "default_mode": "local_trust",
+                "required_token_env": "TRAVERSE_MCP_STDIO_BEARER_TOKEN",
+                "required_commands": ["execute_entrypoint", "render_execution_report"],
+            },
             "content_group_count": McpDiscoveryCatalog::content_group_count(),
         })
     }
@@ -223,6 +338,12 @@ where
             "runtime_authority": "Traverse runtime authority",
             "public_surface_id": PUBLIC_SURFACE_ID,
             "supported_commands": SUPPORTING_COMMANDS,
+            "auth_boundary": {
+                "default_mode": "local_trust",
+                "required_token_env": "TRAVERSE_MCP_STDIO_BEARER_TOKEN",
+                "required_commands": ["execute_entrypoint", "render_execution_report"],
+                "token_output_policy": "never_echo_raw_token",
+            },
             "governed_surface_counts": {
                 "capabilities": self.catalog.capability_count(),
                 "events": self.catalog.event_count(),
@@ -379,7 +500,9 @@ where
     fn execute_entrypoint_envelope(
         &self,
         command: &StdioCommandEnvelope,
+        auth_config: &StdioAuthConfig,
     ) -> Result<Value, StdioServerFailure> {
+        auth_config.verify_execute_command(command)?;
         let artifacts = self.entrypoint_artifacts(command)?;
         let response = self
             .mcp
@@ -392,7 +515,7 @@ where
         let observation_messages = response
             .observation_messages
             .into_iter()
-            .map(|message| format!("{message:?}"))
+            .map(observation_message_summary)
             .collect::<Vec<_>>();
 
         Ok(json!({
@@ -406,7 +529,8 @@ where
             "request_id": request_id,
             "execution_id": execution_id,
             "result": result,
-            "trace": trace,
+            "trace": public_trace_summary(&trace),
+            "trace_redaction": trace_redaction_policy(auth_config),
             "observation_messages": observation_messages,
         }))
     }
@@ -414,7 +538,9 @@ where
     fn render_execution_report_envelope(
         &self,
         command: &StdioCommandEnvelope,
+        auth_config: &StdioAuthConfig,
     ) -> Result<Value, StdioServerFailure> {
+        auth_config.verify_execute_command(command)?;
         let artifacts = self.entrypoint_artifacts(command)?;
         let response = self
             .mcp
@@ -427,7 +553,7 @@ where
         let observation_messages = response
             .observation_messages
             .into_iter()
-            .map(|message| format!("{message:?}"))
+            .map(observation_message_summary)
             .collect::<Vec<_>>();
 
         Ok(json!({
@@ -442,7 +568,8 @@ where
                 "request_id": request_id.clone(),
                 "execution_id": execution_id.clone(),
                 "result": result,
-                "trace": trace,
+                "trace": public_trace_summary(&trace),
+                "trace_redaction": trace_redaction_policy(auth_config),
                 "observation_messages": observation_messages,
             },
             "report": {
@@ -451,6 +578,7 @@ where
                 "request_id": request_id,
                 "result_status": result.status,
                 "trace_kind": trace.kind,
+                "trace_redacted": true,
                 "observation_message_count": observation_messages.len(),
             },
         }))
@@ -579,6 +707,33 @@ where
         stdout: &mut W,
         stderr: &mut EWrite,
         simulate_startup_failure: bool,
+    ) -> Result<(), StdioServerFailure>
+    where
+        R: BufRead,
+        W: Write,
+        EWrite: Write,
+    {
+        self.run_stdio_with_auth(
+            input,
+            stdout,
+            stderr,
+            simulate_startup_failure,
+            &StdioAuthConfig::local_trust(),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    /// # Errors
+    ///
+    /// Returns `auth_required` when an execution command is submitted without the
+    /// required local bearer token.
+    pub fn run_stdio_with_auth<R, W, EWrite>(
+        &self,
+        input: R,
+        stdout: &mut W,
+        stderr: &mut EWrite,
+        simulate_startup_failure: bool,
+        auth_config: &StdioAuthConfig,
     ) -> Result<(), StdioServerFailure>
     where
         R: BufRead,
@@ -723,7 +878,7 @@ where
                     })?;
                 }
                 "execute_entrypoint" => {
-                    let envelope = match self.execute_entrypoint_envelope(&command) {
+                    let envelope = match self.execute_entrypoint_envelope(&command, auth_config) {
                         Ok(envelope) => envelope,
                         Err(failure) => {
                             let _ = write_json_line(stderr, &failure.envelope());
@@ -738,13 +893,14 @@ where
                     })?;
                 }
                 "render_execution_report" => {
-                    let envelope = match self.render_execution_report_envelope(&command) {
-                        Ok(envelope) => envelope,
-                        Err(failure) => {
-                            let _ = write_json_line(stderr, &failure.envelope());
-                            return Err(failure);
-                        }
-                    };
+                    let envelope =
+                        match self.render_execution_report_envelope(&command, auth_config) {
+                            Ok(envelope) => envelope,
+                            Err(failure) => {
+                                let _ = write_json_line(stderr, &failure.envelope());
+                                return Err(failure);
+                            }
+                        };
                     write_json_line(stdout, &envelope).map_err(|error| {
                         StdioServerFailure::new(
                             "io_error",
@@ -791,6 +947,73 @@ struct EntrypointArtifacts {
     request: RuntimeRequest,
 }
 
+fn public_trace_summary(trace: &traverse_runtime::RuntimeTrace) -> Value {
+    json!({
+        "kind": trace.kind,
+        "schema_version": trace.schema_version,
+        "trace_id": trace.trace_id,
+        "execution_id": trace.execution_id,
+        "request_id": trace.request_id,
+        "governing_spec": trace.governing_spec,
+        "selected_capability_id": trace.selected_capability_id(),
+        "runtime_status": trace.terminal_outcome.runtime_status,
+        "emitted_event_count": trace.emitted_events.len(),
+        "state_transition_count": trace.state_transitions.len(),
+        "model_resolution_count": trace.model_resolution.len(),
+        "private_fields_omitted": [
+            "request",
+            "decision_evidence",
+            "state_progression",
+            "candidate_collection",
+            "selection",
+            "execution",
+            "result",
+            "otel_trace",
+        ],
+    })
+}
+
+fn trace_redaction_policy(auth_config: &StdioAuthConfig) -> Value {
+    json!({
+        "enabled": true,
+        "tier": "public_summary",
+        "reason": "MCP stdio responses omit full runtime traces by default.",
+        "auth_mode": auth_config.mode_name(),
+    })
+}
+
+fn observation_message_summary(message: McpObservationMessage) -> Value {
+    match message {
+        McpObservationMessage::Lifecycle(message) => json!({
+            "kind": "lifecycle",
+            "sequence": message.sequence,
+            "execution_id": message.execution_id,
+            "request_id": message.request_id,
+            "status": match message.status {
+                McpLifecycleStatus::StreamStarted => "stream_started",
+                McpLifecycleStatus::StreamCompleted => "stream_completed",
+            },
+        }),
+        McpObservationMessage::State(message) => json!({
+            "kind": "state",
+            "sequence": message.sequence,
+            "state_event": message.state_event,
+        }),
+        McpObservationMessage::Trace(message) => json!({
+            "kind": "trace",
+            "sequence": message.sequence,
+            "trace": public_trace_summary(&message.trace),
+            "model_resolution_count": message.model_resolution.len(),
+            "trace_redacted": true,
+        }),
+        McpObservationMessage::Terminal(message) => json!({
+            "kind": "terminal",
+            "sequence": message.sequence,
+            "result": message.result,
+        }),
+    }
+}
+
 /// # Errors
 ///
 /// Returns `catalog_load_failed` when the canonical expedition bundle cannot be loaded.
@@ -821,11 +1044,12 @@ pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServe
 
     let mut stdout = stdout.lock();
     let mut stderr = stderr.lock();
-    server.run_stdio(
+    server.run_stdio_with_auth(
         stdin.lock(),
         &mut stdout,
         &mut stderr,
         simulate_startup_failure,
+        &StdioAuthConfig::from_env(),
     )
 }
 
@@ -1505,7 +1729,7 @@ impl std::error::Error for StdioServerFailure {}
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::panic)]
+    #![allow(clippy::expect_used)]
 
     use super::*;
 
@@ -1533,10 +1757,7 @@ mod tests {
                 .is_ok()
         );
 
-        let output = match String::from_utf8(stdout) {
-            Ok(output) => output,
-            Err(error) => panic!("stdout is not valid UTF-8: {error}"),
-        };
+        let output = String::from_utf8(stdout).expect("stdout must be valid UTF-8");
         assert!(output.contains("\"kind\":\"mcp_stdio_server_startup\""));
         assert!(output.contains("\"kind\":\"mcp_stdio_server_description\""));
         assert!(output.contains("\"kind\":\"mcp_stdio_server_content_group_list\""));
@@ -1551,11 +1772,70 @@ mod tests {
         assert!(stderr.is_empty());
     }
 
+    #[test]
+    fn required_stdio_bearer_token_denies_unauthenticated_execution() -> Result<(), String> {
+        let server = build_test_server();
+        let input = std::io::Cursor::new(
+            br#"{"command":"execute_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+"#,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = server.run_stdio_with_auth(
+            input,
+            &mut stdout,
+            &mut stderr,
+            false,
+            &StdioAuthConfig::bearer_required("test-token"),
+        );
+
+        assert!(result.is_err());
+        let output = String::from_utf8(stdout).map_err(|error| error.to_string())?;
+        let errors = String::from_utf8(stderr).map_err(|error| error.to_string())?;
+        assert!(output.contains("\"kind\":\"mcp_stdio_server_startup\""));
+        assert!(errors.contains("\"code\":\"auth_required\""));
+        assert!(!errors.contains("test-token"));
+        Ok(())
+    }
+
+    #[test]
+    fn required_stdio_bearer_token_allows_authenticated_execution_with_redacted_trace()
+    -> Result<(), String> {
+        let server = build_test_server();
+        let input = std::io::Cursor::new(
+            br#"{"command":"execute_entrypoint","auth":{"type":"bearer","token":"test-token"},"entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+{"command":"shutdown"}
+"#,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert!(
+            server
+                .run_stdio_with_auth(
+                    input,
+                    &mut stdout,
+                    &mut stderr,
+                    false,
+                    &StdioAuthConfig::bearer_required("test-token"),
+                )
+                .is_ok()
+        );
+
+        let output = String::from_utf8(stdout).map_err(|error| error.to_string())?;
+        assert!(output.contains("\"kind\":\"mcp_stdio_server_entrypoint_execution\""));
+        assert!(output.contains("\"trace_redaction\""));
+        assert!(output.contains("\"private_fields_omitted\""));
+        assert!(output.contains("\"trace_redacted\":true"));
+        assert!(!output.contains("test-token"));
+        assert!(stderr.is_empty());
+        Ok(())
+    }
+
     fn build_test_server() -> TraverseMcpStdioServer<'static, ExpeditionExampleExecutor> {
-        let execution = match CanonicalExecutionContext::load_canonical() {
-            Ok(execution) => execution,
-            Err(error) => panic!("failed to load canonical execution context: {error:?}"),
-        };
+        let execution = CanonicalExecutionContext::load_canonical()
+            .expect("failed to load canonical execution context");
         let capability_registry = Box::leak(Box::new(CapabilityRegistry::new()));
         let event_registry = Box::leak(Box::new(EventRegistry::new()));
         let workflow_registry = Box::leak(Box::new(WorkflowRegistry::new()));
@@ -1569,10 +1849,482 @@ mod tests {
             workflow_registry,
             runtime,
         )));
-        let catalog = Box::leak(Box::new(match McpDiscoveryCatalog::load_canonical() {
-            Ok(catalog) => catalog,
-            Err(error) => panic!("failed to load canonical discovery catalog: {error:?}"),
-        }));
+        let catalog = Box::leak(Box::new(
+            McpDiscoveryCatalog::load_canonical()
+                .expect("failed to load canonical discovery catalog"),
+        ));
         TraverseMcpStdioServer::new(mcp, catalog)
+    }
+
+    const PLAN_EXPEDITION_REQUEST_PATH: &str =
+        "examples/expedition/runtime-requests/plan-expedition.json";
+
+    #[test]
+    fn stdio_auth_config_debug_redacts_bearer_token_and_shows_local_trust() {
+        let local = format!("{:?}", StdioAuthConfig::local_trust());
+        assert!(local.contains("local_trust"));
+
+        let bearer = format!("{:?}", StdioAuthConfig::bearer_required("super-secret"));
+        assert!(bearer.contains("bearer_required"));
+        assert!(bearer.contains("<redacted>"));
+        assert!(!bearer.contains("super-secret"));
+    }
+
+    #[test]
+    fn stdio_auth_config_from_env_reads_bearer_token_or_falls_back_to_local_trust() {
+        assert_eq!(
+            StdioAuthConfig::from_env_var(Ok("env-token".to_string())).mode_name(),
+            "bearer_required"
+        );
+        assert_eq!(
+            StdioAuthConfig::from_env_var(Err(std::env::VarError::NotPresent)).mode_name(),
+            "local_trust"
+        );
+        assert_eq!(
+            StdioAuthConfig::from_env_var(Ok(String::new())).mode_name(),
+            "local_trust"
+        );
+    }
+
+    #[test]
+    fn stdio_auth_config_from_env_reads_real_process_environment() {
+        // Exercises StdioAuthConfig::from_env's own body (it just delegates
+        // to from_env_var, which the test above covers exhaustively); this
+        // process normally has no TRAVERSE_MCP_STDIO_BEARER_TOKEN set, so it
+        // falls back to local trust.
+        let _ = StdioAuthConfig::from_env();
+    }
+
+    #[test]
+    fn stdio_server_failure_display_formats_code_and_message() {
+        let failure = StdioServerFailure::new("some_code", "some message");
+        assert_eq!(format!("{failure}"), "some_code: some message");
+    }
+
+    #[test]
+    fn describe_entrypoint_envelope_resolves_capability_kind() {
+        let server = build_test_server();
+        let envelope = server
+            .describe_entrypoint_envelope(
+                "capability",
+                "expedition.planning.capture-expedition-objective",
+                "1.0.0",
+            )
+            .expect("known capability entrypoint must resolve");
+        assert_eq!(
+            envelope["kind"],
+            json!("mcp_stdio_server_entrypoint_description")
+        );
+        assert_eq!(envelope["entrypoint"]["artifact_kind"], json!("capability"));
+    }
+
+    #[test]
+    fn describe_entrypoint_envelope_rejects_unsupported_kind() {
+        let server = build_test_server();
+        let error = server
+            .describe_entrypoint_envelope("bogus", "id", "1.0.0")
+            .expect_err("unsupported entrypoint kind must be rejected");
+        assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn describe_content_group_envelope_reports_not_found_for_unknown_group() {
+        let server = build_test_server();
+        let error = server
+            .describe_content_group_envelope("unknown-content-group")
+            .expect_err("unknown content group must not resolve");
+        assert_eq!(error.code, "not_found");
+    }
+
+    #[test]
+    fn entrypoint_artifacts_requires_kind_id_version_and_request_path() {
+        let server = build_test_server();
+
+        let missing_kind =
+            parse_command(r#"{"command":"validate_entrypoint"}"#).expect("command must parse");
+        assert!(server.entrypoint_artifacts(&missing_kind).is_err());
+
+        let missing_id =
+            parse_command(r#"{"command":"validate_entrypoint","entrypoint_kind":"workflow"}"#)
+                .expect("command must parse");
+        assert!(server.entrypoint_artifacts(&missing_id).is_err());
+
+        let missing_version = parse_command(
+            r#"{"command":"validate_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition"}"#,
+        )
+        .expect("command must parse");
+        assert!(server.entrypoint_artifacts(&missing_version).is_err());
+
+        let missing_request_path = parse_command(
+            r#"{"command":"validate_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0"}"#,
+        )
+        .expect("command must parse");
+        assert!(server.entrypoint_artifacts(&missing_request_path).is_err());
+    }
+
+    #[test]
+    fn validate_runtime_request_covers_capability_and_workflow_branches() {
+        let server = build_test_server();
+        let mut request = load_runtime_request(PLAN_EXPEDITION_REQUEST_PATH)
+            .expect("plan-expedition fixture must load");
+
+        // Capability kind: missing capability_id / capability_version.
+        request.intent.capability_id = None;
+        assert!(
+            server
+                .validate_runtime_request("capability", "any.id", "1.0.0", &request)
+                .is_err()
+        );
+        request.intent.capability_id = Some("expedition.planning.plan-expedition".to_string());
+        request.intent.capability_version = None;
+        assert!(
+            server
+                .validate_runtime_request("capability", "any.id", "1.0.0", &request)
+                .is_err()
+        );
+        request.intent.capability_version = Some("1.0.0".to_string());
+        assert!(
+            server
+                .validate_runtime_request("capability", "different.id", "1.0.0", &request)
+                .is_err()
+        );
+
+        // Workflow kind: missing capability_id / capability_version, unknown
+        // workflow, and target mismatch.
+        request.intent.capability_id = None;
+        assert!(
+            server
+                .validate_runtime_request(
+                    "workflow",
+                    "expedition.planning.plan-expedition",
+                    "1.0.0",
+                    &request
+                )
+                .is_err()
+        );
+        request.intent.capability_id = Some("expedition.planning.plan-expedition".to_string());
+        request.intent.capability_version = None;
+        assert!(
+            server
+                .validate_runtime_request(
+                    "workflow",
+                    "expedition.planning.plan-expedition",
+                    "1.0.0",
+                    &request
+                )
+                .is_err()
+        );
+        request.intent.capability_version = Some("1.0.0".to_string());
+        assert!(
+            server
+                .validate_runtime_request("workflow", "unknown.workflow", "9.9.9", &request)
+                .is_err()
+        );
+        // Workflow resolves by id/version, but the request's own intent target
+        // does not match it.
+        request.intent.capability_id = Some("different.workflow".to_string());
+        assert!(
+            server
+                .validate_runtime_request(
+                    "workflow",
+                    "expedition.planning.plan-expedition",
+                    "1.0.0",
+                    &request
+                )
+                .is_err()
+        );
+        request.intent.capability_id = Some("expedition.planning.plan-expedition".to_string());
+        assert!(
+            server
+                .validate_runtime_request(
+                    "workflow",
+                    "expedition.planning.plan-expedition",
+                    "1.0.0",
+                    &request
+                )
+                .is_ok()
+        );
+
+        // Unsupported entrypoint_kind.
+        assert!(
+            server
+                .validate_runtime_request(
+                    "bogus",
+                    "expedition.planning.plan-expedition",
+                    "1.0.0",
+                    &request
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_content_group_id_and_entrypoint_fields_are_rejected_over_stdio() {
+        let server = build_test_server();
+
+        let cases: [&[u8]; 4] = [
+            b"{\"command\":\"describe_content_group\"}\n",
+            b"{\"command\":\"describe_entrypoint\"}\n",
+            b"{\"command\":\"describe_entrypoint\",\"entrypoint_kind\":\"workflow\"}\n",
+            b"{\"command\":\"describe_entrypoint\",\"entrypoint_kind\":\"workflow\",\"id\":\"expedition.planning.plan-expedition\"}\n",
+        ];
+        for case in cases {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result =
+                server.run_stdio(std::io::Cursor::new(case), &mut stdout, &mut stderr, false);
+            assert!(result.is_err(), "expected rejection for {case:?}");
+        }
+    }
+
+    #[test]
+    fn run_stdio_server_reports_simulated_startup_failure() {
+        let result = run_stdio_server(true);
+        assert!(result.is_err());
+    }
+
+    /// Writer that fails exactly once, on the `target`-th time it is asked to
+    /// write a lone `\n` byte. `write_json_line` always ends an envelope with
+    /// a dedicated `write_all(b"\n")` call, so counting those calls lets a
+    /// test target one specific envelope write (and its `io_error` branch)
+    /// without depending on how many raw `write` calls the JSON body itself
+    /// takes.
+    struct FailOnNthNewline {
+        target: usize,
+        seen: std::cell::Cell<usize>,
+    }
+
+    impl Write for FailOnNthNewline {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if buf == b"\n" {
+                let index = self.seen.get();
+                self.seen.set(index + 1);
+                if index == self.target {
+                    return Err(io::Error::other("simulated stdout write failure"));
+                }
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_failures_are_reported_as_io_errors_for_every_stdio_response() {
+        let server = build_test_server();
+        let session: &[u8] = br#"{"command":"describe_server"}
+{"command":"list_content_groups"}
+{"command":"describe_content_group","content_group_id":"core-runtime-example"}
+{"command":"list_entrypoints"}
+{"command":"describe_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0"}
+{"command":"validate_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+{"command":"execute_entrypoint","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+{"command":"render_execution_report","entrypoint_kind":"workflow","id":"expedition.planning.plan-expedition","version":"1.0.0","request_path":"examples/expedition/runtime-requests/plan-expedition.json"}
+{"command":"shutdown"}
+"#;
+
+        // index 0 = startup envelope, 1..=9 = the nine command responses in order.
+        for target in 0..=9 {
+            let mut stdout = FailOnNthNewline {
+                target,
+                seen: std::cell::Cell::new(0),
+            };
+            let mut stderr = Vec::new();
+            let result = server.run_stdio(
+                std::io::Cursor::new(session),
+                &mut stdout,
+                &mut stderr,
+                false,
+            );
+            assert!(result.is_err(), "expected write failure at index {target}");
+        }
+    }
+
+    #[test]
+    fn write_failure_on_stdin_closed_shutdown_envelope_is_reported() {
+        let server = build_test_server();
+        let mut stdout = FailOnNthNewline {
+            target: 1,
+            seen: std::cell::Cell::new(0),
+        };
+        let mut stderr = Vec::new();
+        let result = server.run_stdio(
+            std::io::Cursor::new(b"" as &[u8]),
+            &mut stdout,
+            &mut stderr,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(stdout.flush().is_ok());
+    }
+
+    #[test]
+    fn simulated_startup_failure_stderr_write_error_is_reported() {
+        let server = build_test_server();
+        let mut stdout = Vec::new();
+        let mut stderr = FailOnNthNewline {
+            target: 0,
+            seen: std::cell::Cell::new(0),
+        };
+        let result = server.run_stdio(
+            std::io::Cursor::new(b"" as &[u8]),
+            &mut stdout,
+            &mut stderr,
+            true,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stdin_closed_shutdown_envelope_completes_successfully_without_a_shutdown_command() {
+        let server = build_test_server();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        // Blank lines between commands must be skipped, not treated as commands.
+        let input = std::io::Cursor::new(b"\n{\"command\":\"describe_server\"}\n\n" as &[u8]);
+        let result = server.run_stdio(input, &mut stdout, &mut stderr, false);
+        assert!(result.is_ok());
+        let output = String::from_utf8(stdout).expect("stdout must be valid UTF-8");
+        assert!(output.contains("\"kind\":\"mcp_stdio_server_shutdown\""));
+    }
+
+    #[test]
+    fn malformed_json_command_line_is_rejected() {
+        let server = build_test_server();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let input = std::io::Cursor::new(b"not json\n" as &[u8]);
+        let result = server.run_stdio(input, &mut stdout, &mut stderr, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_utf8_command_line_is_reported_as_io_error() {
+        let server = build_test_server();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let input = std::io::Cursor::new(vec![0xFF, 0xFE, b'\n']);
+        let result = server.run_stdio(input, &mut stdout, &mut stderr, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unsupported_stdio_command_is_rejected() {
+        let server = build_test_server();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let input = std::io::Cursor::new(b"{\"command\":\"bogus_command\"}\n" as &[u8]);
+        let result = server.run_stdio(input, &mut stdout, &mut stderr, false);
+        assert!(result.is_err());
+        let errors = String::from_utf8(stderr).expect("stderr must be valid UTF-8");
+        assert!(errors.contains("\"code\":\"unsupported_command\""));
+    }
+
+    #[test]
+    fn validate_and_render_execution_report_commands_report_underlying_failures() {
+        let server = build_test_server();
+
+        for command in ["validate_entrypoint", "render_execution_report"] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let input = std::io::Cursor::new(
+                format!("{{\"command\":\"{command}\",\"entrypoint_kind\":\"workflow\"}}\n")
+                    .into_bytes(),
+            );
+            let result = server.run_stdio(input, &mut stdout, &mut stderr, false);
+            assert!(result.is_err(), "expected {command} to fail on missing id");
+        }
+    }
+
+    #[test]
+    fn derive_composability_metadata_requires_workflow_ref_for_workflow_kind() {
+        let capability = test_capability_bundle_artifact();
+        let error = derive_composability_metadata(ImplementationKind::Workflow, None, &capability)
+            .expect_err("workflow-backed capability without workflow_ref must be rejected");
+        assert_eq!(error.code, "invalid_request");
+    }
+
+    fn test_capability_bundle_artifact() -> traverse_registry::CapabilityBundleArtifact {
+        let server = build_test_server();
+        server.catalog.bundle.capabilities[0].clone()
+    }
+
+    #[test]
+    fn parse_workflow_ref_requires_workflow_id_and_version() {
+        let error = parse_workflow_ref(&json!({})).expect_err("missing workflow_id must fail");
+        assert_eq!(error.code, "invalid_request");
+
+        let error = parse_workflow_ref(&json!({"workflow_id": "wf"}))
+            .expect_err("missing workflow_version must fail");
+        assert_eq!(error.code, "invalid_request");
+
+        let reference =
+            parse_workflow_ref(&json!({"workflow_id": "wf", "workflow_version": "1.0.0"}))
+                .expect("fully specified workflow_ref must parse");
+        assert_eq!(reference.workflow_id, "wf");
+        assert_eq!(reference.workflow_version, "1.0.0");
+    }
+
+    #[test]
+    fn load_runtime_request_reports_missing_file_and_invalid_json() {
+        let missing = load_runtime_request("/definitely/missing/runtime-request.json")
+            .expect_err("missing file must fail");
+        assert_eq!(missing.code, "io_error");
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "traverse-mcp-invalid-runtime-request-{}.json",
+            std::process::id()
+        ));
+        fs::write(&temp_path, b"not json").expect("temp file must write");
+        let invalid = load_runtime_request(&temp_path.display().to_string())
+            .expect_err("invalid JSON runtime request must fail");
+        assert_eq!(invalid.code, "invalid_request");
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn provenance_source_label_covers_every_variant() {
+        assert_eq!(
+            provenance_source_label(&traverse_contracts::ProvenanceSource::Greenfield),
+            "greenfield"
+        );
+        assert_eq!(
+            provenance_source_label(&traverse_contracts::ProvenanceSource::BrownfieldExtracted),
+            "brownfield-extracted"
+        );
+        assert_eq!(
+            provenance_source_label(&traverse_contracts::ProvenanceSource::AiGenerated),
+            "ai-generated"
+        );
+        assert_eq!(
+            provenance_source_label(&traverse_contracts::ProvenanceSource::AiAssisted),
+            "ai-assisted"
+        );
+    }
+
+    #[test]
+    fn execute_validate_team_readiness_covers_ready_and_needs_action_branches() {
+        let not_ready = execute_validate_team_readiness(&json!({
+            "objective": {"objective_id": "obj-1"},
+            "team_profile": {"equipment_ready": false}
+        }))
+        .expect("valid input must execute");
+        assert_eq!(
+            not_ready["readiness_result"]["status"],
+            json!("needs_action")
+        );
+        assert_eq!(
+            not_ready["readiness_result"]["required_actions"],
+            json!(["complete equipment verification"])
+        );
+
+        let missing_field = execute_validate_team_readiness(&json!({}))
+            .expect_err("missing objective field must fail");
+        assert_eq!(
+            missing_field.code,
+            traverse_runtime::LocalExecutionFailureCode::ExecutionFailed
+        );
     }
 }

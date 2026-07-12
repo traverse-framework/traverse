@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added optional bearer-token authentication for MCP stdio execution commands
+  and redacted full runtime traces from MCP execution/report responses by
+  default.
 - Added a no-default-features `traverse-runtime` core build for
   `wasm32-unknown-unknown` by feature-gating native Wasmtime and Rayon
   execution adapters.
