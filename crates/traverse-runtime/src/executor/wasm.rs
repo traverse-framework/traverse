@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::fs;
 use std::sync::{LazyLock, Mutex};
 use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
@@ -464,7 +465,13 @@ fn classify_wasm_execution_error(error: &wasmtime::Error) -> ExecutorError {
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut acc, byte| {
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
 }
 
 fn validate_module_imports(

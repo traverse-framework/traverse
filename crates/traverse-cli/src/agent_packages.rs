@@ -427,3 +427,556 @@ pub fn fnv1a64(bytes: &[u8]) -> String {
     }
     format!("fnv1a64:{digest:016x}")
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::{
+        LoadedAgentPackage, fnv1a64, load_agent_package, provenance_source_label,
+        render_contract_failure,
+    };
+    use serde_json::{Value, json};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use traverse_contracts::{ErrorSeverity, ProvenanceSource, ValidationError, ValidationFailure};
+    use traverse_contracts::{ValidationErrorCode, parse_contract};
+    use traverse_runtime::executor::SUPPORTED_HOST_ABI_VERSION;
+
+    const SOURCE_BYTES: &[u8] = b"fn run() {}";
+    const BINARY_BYTES: &[u8] = b"agent-package-fixture-wasm-bytes";
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir() -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let sequence = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        path.push(format!("traverse-agent-packages-{nonce}-{sequence}"));
+        fs::create_dir_all(&path).expect("temp dir should create");
+        path
+    }
+
+    fn base_contract_value() -> Value {
+        json!({
+            "kind": "capability_contract",
+            "schema_version": "1.0.0",
+            "id": "test.agent-pkg.capability",
+            "namespace": "test.agent-pkg",
+            "name": "capability",
+            "version": "1.0.0",
+            "lifecycle": "active",
+            "owner": {"team": "traverse-core", "contact": "test@example.com"},
+            "summary": "Deterministic test capability for agent package coverage.",
+            "description": "Minimal governed capability contract used only to exercise agent package load and validation coverage paths.",
+            "inputs": {"schema": {"type": "object", "properties": {}, "additionalProperties": false}},
+            "outputs": {"schema": {"type": "object", "properties": {}, "additionalProperties": false}},
+            "preconditions": [],
+            "postconditions": [],
+            "side_effects": [{"kind": "memory_only", "description": "Produces one deterministic result with no observable side effects."}],
+            "emits": [],
+            "consumes": [],
+            "permissions": [{"id": "test.agent-pkg.capability"}],
+            "execution": {
+                "binary_format": "wasm",
+                "entrypoint": {"kind": "wasi-command", "command": "run"},
+                "preferred_targets": ["local"],
+                "constraints": {"host_api_access": "none", "network_access": "forbidden", "filesystem_access": "none"}
+            },
+            "policies": [],
+            "dependencies": [],
+            "provenance": {
+                "source": "greenfield",
+                "author": "test-author",
+                "created_at": "2026-01-01T00:00:00Z",
+                "spec_ref": "017-ai-agent-packaging@1.0.0",
+                "adr_refs": [],
+                "exception_refs": []
+            },
+            "evidence": []
+        })
+    }
+
+    fn base_manifest_value(expected_digest: &str) -> Value {
+        json!({
+            "kind": "agent_package",
+            "schema_version": "1.0.0",
+            "package_id": "test.agent-pkg",
+            "version": "1.0.0",
+            "summary": "Deterministic test agent package for coverage.",
+            "capability_ref": {
+                "id": "test.agent-pkg.capability",
+                "version": "1.0.0",
+                "contract_path": "./contract.json"
+            },
+            "workflow_refs": [
+                {"workflow_id": "test.agent-pkg.workflow", "workflow_version": "1.0.0"}
+            ],
+            "source": {"path": "./src/agent.rs", "language": "rust", "entry": "run"},
+            "binary": {
+                "path": "./artifacts/agent.wasm",
+                "format": "wasm",
+                "expected_digest": expected_digest,
+                "abi_version": SUPPORTED_HOST_ABI_VERSION
+            },
+            "constraints": {"host_api_access": "none", "network_access": "forbidden", "filesystem_access": "none"},
+            "model_dependencies": [
+                {"interface": "test-model-v1", "purpose": "Exercise agent package coverage paths."}
+            ]
+        })
+    }
+
+    /// Writes a fully valid fixture (manifest + contract + source + binary) into `dir` and
+    /// returns the manifest path. Callers mutate the returned `Value`s before calling this to
+    /// engineer specific failure branches.
+    fn write_fixture(dir: &std::path::Path, manifest: &Value, contract: &Value) -> PathBuf {
+        fs::create_dir_all(dir.join("src")).expect("src dir should create");
+        fs::create_dir_all(dir.join("artifacts")).expect("artifacts dir should create");
+        fs::write(dir.join("src/agent.rs"), SOURCE_BYTES).expect("source should write");
+        fs::write(dir.join("artifacts/agent.wasm"), BINARY_BYTES).expect("binary should write");
+        fs::write(
+            dir.join("contract.json"),
+            serde_json::to_string_pretty(contract).expect("contract should serialize"),
+        )
+        .expect("contract should write");
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        manifest_path
+    }
+
+    fn valid_fixture(dir: &std::path::Path) -> PathBuf {
+        let digest = fnv1a64(BINARY_BYTES);
+        write_fixture(dir, &base_manifest_value(&digest), &base_contract_value())
+    }
+
+    #[test]
+    fn fnv1a64_is_deterministic_and_distinguishes_input() {
+        assert_eq!(fnv1a64(b"abc"), fnv1a64(b"abc"));
+        assert_ne!(fnv1a64(b"abc"), fnv1a64(b"abd"));
+        assert!(fnv1a64(b"abc").starts_with("fnv1a64:"));
+    }
+
+    #[test]
+    fn provenance_source_label_maps_all_variants() {
+        assert_eq!(
+            provenance_source_label(&ProvenanceSource::Greenfield),
+            "greenfield"
+        );
+        assert_eq!(
+            provenance_source_label(&ProvenanceSource::BrownfieldExtracted),
+            "brownfield-extracted"
+        );
+        assert_eq!(
+            provenance_source_label(&ProvenanceSource::AiGenerated),
+            "ai-generated"
+        );
+        assert_eq!(
+            provenance_source_label(&ProvenanceSource::AiAssisted),
+            "ai-assisted"
+        );
+    }
+
+    #[test]
+    fn render_contract_failure_joins_multiple_errors_with_path() {
+        let failure = ValidationFailure {
+            errors: vec![
+                ValidationError {
+                    code: ValidationErrorCode::MissingRequiredField,
+                    message: "first problem".to_string(),
+                    path: "$.a".to_string(),
+                    severity: ErrorSeverity::Error,
+                },
+                ValidationError {
+                    code: ValidationErrorCode::InvalidFormat,
+                    message: "second problem".to_string(),
+                    path: "$.b".to_string(),
+                    severity: ErrorSeverity::Error,
+                },
+            ],
+        };
+        let rendered = render_contract_failure(std::path::Path::new("contract.json"), failure);
+        assert!(rendered.contains("contract.json"));
+        assert!(rendered.contains("first problem at $.a"));
+        assert!(rendered.contains("second problem at $.b"));
+    }
+
+    #[test]
+    fn render_summary_includes_workflow_refs_when_present() {
+        let dir = unique_temp_dir();
+        let manifest_path = valid_fixture(&dir);
+        let loaded = load_agent_package(&manifest_path).expect("package should load");
+        let summary = loaded.render_summary();
+        assert!(summary.contains("package_id: test.agent-pkg"));
+        assert!(summary.contains("model_interfaces: test-model-v1"));
+        assert!(summary.contains("workflow_refs: test.agent-pkg.workflow@1.0.0"));
+    }
+
+    #[test]
+    fn render_summary_omits_workflow_refs_section_when_empty() {
+        let dir = unique_temp_dir();
+        let mut manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        manifest["workflow_refs"] = json!([]);
+        // An empty workflow_refs fails validate_manifest_shape, so this test constructs the
+        // loaded package directly rather than through load_agent_package.
+        write_fixture(&dir, &manifest, &base_contract_value());
+        let contract = parse_contract(&base_contract_value().to_string())
+            .expect("contract should parse")
+            .clone();
+        let loaded = LoadedAgentPackage {
+            manifest_path: dir.join("manifest.json"),
+            manifest: serde_json::from_value(manifest).expect("manifest should deserialize"),
+            contract,
+            source_path: dir.join("src/agent.rs"),
+            binary_path: dir.join("artifacts/agent.wasm"),
+            binary_digest: fnv1a64(BINARY_BYTES),
+        };
+        let summary = loaded.render_summary();
+        assert!(!summary.contains("workflow_refs"));
+    }
+
+    #[test]
+    fn capability_registration_falls_back_to_empty_digest_when_source_unreadable() {
+        let dir = unique_temp_dir();
+        let contract = parse_contract(&base_contract_value().to_string())
+            .expect("contract should parse")
+            .clone();
+        let loaded = LoadedAgentPackage {
+            manifest_path: dir.join("manifest.json"),
+            manifest: serde_json::from_value(base_manifest_value(&fnv1a64(BINARY_BYTES)))
+                .expect("manifest should deserialize"),
+            contract,
+            source_path: dir.join("does-not-exist.rs"),
+            binary_path: dir.join("artifacts/agent.wasm"),
+            binary_digest: fnv1a64(BINARY_BYTES),
+        };
+        let registration = loaded.capability_registration();
+        assert_eq!(registration.artifact.digests.source_digest, fnv1a64(&[]));
+        assert_eq!(
+            registration.artifact.digests.binary_digest,
+            Some(fnv1a64(BINARY_BYTES))
+        );
+        assert_eq!(registration.governing_spec, "017-ai-agent-packaging");
+    }
+
+    #[test]
+    fn loads_valid_agent_package_successfully() {
+        let dir = unique_temp_dir();
+        let manifest_path = valid_fixture(&dir);
+        let loaded = load_agent_package(&manifest_path).expect("package should load");
+        assert_eq!(loaded.manifest.package_id, "test.agent-pkg");
+        assert_eq!(loaded.binary_digest, fnv1a64(BINARY_BYTES));
+    }
+
+    #[test]
+    fn missing_manifest_file_is_reported() {
+        let dir = unique_temp_dir();
+        let error = load_agent_package(&dir.join("manifest.json"))
+            .expect_err("load_agent_package should fail");
+        assert!(error.contains("failed to read agent package manifest"));
+    }
+
+    #[test]
+    fn malformed_manifest_json_is_reported() {
+        let dir = unique_temp_dir();
+        let manifest_path = dir.join("manifest.json");
+        fs::write(&manifest_path, "not json").expect("manifest should write");
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("failed to parse agent package manifest"));
+    }
+
+    fn shape_rejection(mutate: impl FnOnce(&mut Value)) -> String {
+        let dir = unique_temp_dir();
+        let mut manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        mutate(&mut manifest);
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        load_agent_package(&manifest_path).expect_err("load_agent_package should fail")
+    }
+
+    #[test]
+    fn rejects_wrong_kind() {
+        let error = shape_rejection(|manifest| manifest["kind"] = json!("wrong_kind"));
+        assert!(error.contains("must declare kind=agent_package"));
+    }
+
+    #[test]
+    fn rejects_wrong_schema_version() {
+        let error = shape_rejection(|manifest| manifest["schema_version"] = json!("9.9.9"));
+        assert!(error.contains("must declare schema_version=1.0.0"));
+    }
+
+    #[test]
+    fn rejects_empty_package_id() {
+        let error = shape_rejection(|manifest| manifest["package_id"] = json!("  "));
+        assert!(error.contains("package_id must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_version() {
+        let error = shape_rejection(|manifest| manifest["version"] = json!(""));
+        assert!(error.contains("agent package version must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_capability_ref_id() {
+        let error = shape_rejection(|manifest| manifest["capability_ref"]["id"] = json!(""));
+        assert!(error.contains("capability_ref must declare non-empty id and version"));
+    }
+
+    #[test]
+    fn rejects_empty_capability_ref_version() {
+        let error = shape_rejection(|manifest| manifest["capability_ref"]["version"] = json!(""));
+        assert!(error.contains("capability_ref must declare non-empty id and version"));
+    }
+
+    #[test]
+    fn rejects_empty_contract_path() {
+        let error =
+            shape_rejection(|manifest| manifest["capability_ref"]["contract_path"] = json!(""));
+        assert!(error.contains("capability_ref.contract_path must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_source_path() {
+        let error = shape_rejection(|manifest| manifest["source"]["path"] = json!(""));
+        assert!(error.contains("source.path and source.entry must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_source_entry() {
+        let error = shape_rejection(|manifest| manifest["source"]["entry"] = json!(""));
+        assert!(error.contains("source.path and source.entry must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_binary_path() {
+        let error = shape_rejection(|manifest| manifest["binary"]["path"] = json!(""));
+        assert!(error.contains("binary.path and binary.expected_digest must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_empty_binary_expected_digest() {
+        let error = shape_rejection(|manifest| manifest["binary"]["expected_digest"] = json!(""));
+        assert!(error.contains("binary.path and binary.expected_digest must be non-empty"));
+    }
+
+    #[test]
+    fn rejects_wrong_abi_version() {
+        let error = shape_rejection(|manifest| manifest["binary"]["abi_version"] = json!("0.0.1"));
+        assert!(error.contains("binary.abi_version must equal"));
+    }
+
+    #[test]
+    fn rejects_wrong_binary_format() {
+        let error = shape_rejection(|manifest| manifest["binary"]["format"] = json!("elf"));
+        assert!(error.contains("binary.format must equal wasm"));
+    }
+
+    #[test]
+    fn rejects_empty_workflow_refs() {
+        let error = shape_rejection(|manifest| manifest["workflow_refs"] = json!([]));
+        assert!(error.contains("must declare at least one approved workflow reference"));
+    }
+
+    #[test]
+    fn rejects_missing_contract_file() {
+        let dir = unique_temp_dir();
+        let manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        fs::create_dir_all(dir.join("src")).expect("src dir should create");
+        fs::create_dir_all(dir.join("artifacts")).expect("artifacts dir should create");
+        fs::write(dir.join("src/agent.rs"), SOURCE_BYTES).expect("source should write");
+        fs::write(dir.join("artifacts/agent.wasm"), BINARY_BYTES).expect("binary should write");
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("missing capability contract file"));
+    }
+
+    #[test]
+    fn rejects_missing_source_file() {
+        let dir = unique_temp_dir();
+        let manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        fs::create_dir_all(dir.join("artifacts")).expect("artifacts dir should create");
+        fs::write(dir.join("artifacts/agent.wasm"), BINARY_BYTES).expect("binary should write");
+        fs::write(
+            dir.join("contract.json"),
+            serde_json::to_string_pretty(&base_contract_value())
+                .expect("contract should serialize"),
+        )
+        .expect("contract should write");
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("missing agent source file"));
+    }
+
+    #[test]
+    fn rejects_missing_binary_file() {
+        let dir = unique_temp_dir();
+        let manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        fs::create_dir_all(dir.join("src")).expect("src dir should create");
+        fs::write(dir.join("src/agent.rs"), SOURCE_BYTES).expect("source should write");
+        fs::write(
+            dir.join("contract.json"),
+            serde_json::to_string_pretty(&base_contract_value())
+                .expect("contract should serialize"),
+        )
+        .expect("contract should write");
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("missing agent binary file"));
+    }
+
+    #[test]
+    fn rejects_malformed_contract_json() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("src")).expect("src dir should create");
+        fs::create_dir_all(dir.join("artifacts")).expect("artifacts dir should create");
+        fs::write(dir.join("src/agent.rs"), SOURCE_BYTES).expect("source should write");
+        fs::write(dir.join("artifacts/agent.wasm"), BINARY_BYTES).expect("binary should write");
+        fs::write(dir.join("contract.json"), "not json").expect("contract should write");
+        let manifest_path = dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&base_manifest_value(&fnv1a64(BINARY_BYTES)))
+                .expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("is invalid") || error.contains("failed to read"));
+    }
+
+    fn contract_rejection(mutate: impl FnOnce(&mut Value)) -> String {
+        let dir = unique_temp_dir();
+        let mut contract = base_contract_value();
+        mutate(&mut contract);
+        let manifest_path = write_fixture(
+            &dir,
+            &base_manifest_value(&fnv1a64(BINARY_BYTES)),
+            &contract,
+        );
+        load_agent_package(&manifest_path).expect_err("load_agent_package should fail")
+    }
+
+    #[test]
+    fn rejects_contract_failing_semantic_validation() {
+        let error = contract_rejection(|contract| contract["version"] = json!("not-a-semver"));
+        assert!(error.contains("capability contract"));
+        assert!(error.contains("is invalid"));
+    }
+
+    #[test]
+    fn rejects_capability_ref_mismatch_with_contract() {
+        let dir = unique_temp_dir();
+        let mut manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        manifest["capability_ref"]["id"] = json!("different.capability");
+        let manifest_path = write_fixture(&dir, &manifest, &base_contract_value());
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("does not match contract"));
+    }
+
+    #[test]
+    fn rejects_entrypoint_command_mismatch() {
+        let error = contract_rejection(|contract| {
+            contract["execution"]["entrypoint"]["command"] = json!("start");
+        });
+        assert!(error.contains("must declare a wasi-command entrypoint named run"));
+    }
+
+    #[test]
+    fn rejects_host_api_access_mismatch_on_contract_side() {
+        let error = contract_rejection(|contract| {
+            contract["execution"]["constraints"]["host_api_access"] = json!("exception_required");
+            contract["provenance"]["exception_refs"] = json!(["approved-exception"]);
+        });
+        assert!(error.contains("must keep host_api_access=none"));
+    }
+
+    #[test]
+    fn rejects_host_api_access_mismatch_on_manifest_side() {
+        let dir = unique_temp_dir();
+        let mut manifest = base_manifest_value(&fnv1a64(BINARY_BYTES));
+        manifest["constraints"]["host_api_access"] = json!("exception_required");
+        let manifest_path = write_fixture(&dir, &manifest, &base_contract_value());
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("must keep host_api_access=none"));
+    }
+
+    #[test]
+    fn rejects_network_access_mismatch() {
+        let error = contract_rejection(|contract| {
+            contract["execution"]["constraints"]["network_access"] = json!("required");
+        });
+        assert!(error.contains("must keep network_access=forbidden"));
+    }
+
+    #[test]
+    fn rejects_filesystem_access_mismatch() {
+        let error = contract_rejection(|contract| {
+            contract["execution"]["constraints"]["filesystem_access"] = json!("sandbox_only");
+        });
+        assert!(error.contains("must keep filesystem_access=none"));
+    }
+
+    #[test]
+    fn rejects_binary_digest_mismatch() {
+        let dir = unique_temp_dir();
+        let manifest = base_manifest_value("fnv1a64:0000000000000000");
+        let manifest_path = write_fixture(&dir, &manifest, &base_contract_value());
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("agent binary digest mismatch"));
+    }
+
+    fn make_unreadable(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(path)
+            .expect("fixture metadata should be available")
+            .permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(path, permissions).expect("fixture should become unreadable");
+    }
+
+    #[test]
+    fn rejects_unreadable_contract_file() {
+        let dir = unique_temp_dir();
+        let manifest_path = valid_fixture(&dir);
+        make_unreadable(&dir.join("contract.json"));
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("failed to read capability contract"));
+    }
+
+    #[test]
+    fn rejects_unreadable_binary_file() {
+        let dir = unique_temp_dir();
+        let manifest_path = valid_fixture(&dir);
+        make_unreadable(&dir.join("artifacts/agent.wasm"));
+        let error = load_agent_package(&manifest_path).expect_err("load_agent_package should fail");
+        assert!(error.contains("failed to read agent binary"));
+    }
+}
