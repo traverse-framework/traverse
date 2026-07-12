@@ -724,6 +724,59 @@
         "specs/062-runtime-target-matrix/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "063-registry-contract-materialization",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/063-registry-contract-materialization/spec.md",
+      "governs": [
+        "crates/traverse-registry/",
+        "crates/traverse-cli/",
+        "specs/063-registry-contract-materialization/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "064-production-artifact-execution",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/064-production-artifact-execution/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/",
+        "specs/064-production-artifact-execution/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "065-sigstore-bundle-verification",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/065-sigstore-bundle-verification/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "docs/",
+        "specs/065-sigstore-bundle-verification/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "066-durable-identity-event-delivery",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/066-durable-identity-event-delivery/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/",
+        "crates/traverse-mcp/",
+        "specs/066-durable-identity-event-delivery/",
+        "specs/governance/"
+      ]
     }
   ]
 }
