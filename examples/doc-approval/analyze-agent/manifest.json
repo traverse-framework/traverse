@@ -1,0 +1,35 @@
+{
+  "kind": "agent_package",
+  "schema_version": "1.0.0",
+  "package_id": "doc-approval.analyze-agent",
+  "version": "1.0.0",
+  "summary": "Deterministic governed doc-approval analysis agent package.",
+  "capability_ref": {
+    "id": "doc-approval.analyze",
+    "version": "1.0.0",
+    "contract_path": "../../../contracts/examples/doc-approval/capabilities/analyze/contract.json"
+  },
+  "workflow_refs": [
+    {
+      "workflow_id": "doc-approval.analyze",
+      "workflow_version": "1.0.0"
+    }
+  ],
+  "source": {
+    "path": "./src/agent.rs",
+    "language": "rust",
+    "entry": "run"
+  },
+  "binary": {
+    "path": "./artifacts/analyze-agent.wasm",
+    "format": "wasm",
+    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "abi_version": "1.0.0"
+  },
+  "constraints": {
+    "host_api_access": "none",
+    "network_access": "forbidden",
+    "filesystem_access": "none"
+  },
+  "model_dependencies": []
+}

@@ -127,6 +127,35 @@ Allowed `auth_mode` values:
 - `dev-any`
 - `bearer-required` (token-authenticated production/non-loopback mode)
 
+### Bearer Token Authentication
+
+In `bearer-required` mode the server authenticates callers with **signed JWT
+bearer tokens**. A JWT is a *signed assertion*, not a transport encoding: the
+server MUST verify the signature before trusting any claim it carries.
+
+- The server MUST verify the token signature over the `header.payload` signing
+  input against a configured verification key before deriving any identity.
+- The server MUST enforce an explicit `alg` allow-list. The only accepted
+  algorithm is `EdDSA` (Ed25519). `alg: none` and any other algorithm MUST be
+  rejected with `401` and a distinct `traverse_code` of `token_alg_not_allowed`,
+  so an attacker cannot strip verification.
+- Privilege claims (`traverse_admin`, `roles`, `role`) MUST only be honored for a
+  signature-verified token. An unverified token MUST NOT yield an administrative
+  identity or access to the privileged system workspace.
+- The server MUST validate `exp` and `nbf` when present, rejecting expired
+  (`token_expired`) and not-yet-valid (`token_not_yet_valid`) tokens.
+- When `bearer-required` mode is active and no verification key is configured,
+  the server MUST **fail closed**: every bearer token is rejected with `401`
+  (`jwt_verification_unavailable`). It MUST NOT fall back to trusting unverified
+  token payloads.
+- The opaque "bearer token equals subject id" convenience is permitted only in
+  the `dev-loopback` and `dev-any` modes and MUST NOT yield an administrative
+  identity on a network-facing (`bearer-required`) listener.
+
+Identity attribution derived elsewhere in the runtime (for example, trace and
+audit labeling from a caller token) is not an authorization decision and MUST
+NOT gate access; access control is enforced at this HTTP boundary.
+
 ### Execute
 
 `POST /v1/workspaces/{workspace_id}/execute`
@@ -323,6 +352,16 @@ When `token` is present, the file MUST be owner-read/write only (`0600`) on Unix
 Mobile or sandboxed clients MAY use `mobile_connect_url` instead of reading `.traverse/server.json`.
 `traverse://connect` URLs MUST carry `base_url`, `workspace_default`, and `auth_mode`; they MUST NOT include local tokens.
 
+## Connection Handling
+
+The server MUST bound the time and concurrency any single connection can consume so a slow or idle caller cannot make the API unavailable to other callers (CWE-400, "slowloris").
+
+- Each accepted connection MUST have a read timeout and a write timeout applied to the underlying socket before any request I/O, so a single blocking read or write call cannot wait indefinitely. Both are configurable with safe, non-zero defaults.
+- A whole-request deadline MUST bound the combined time spent reading the request headers and body, independent of the per-read socket timeout, so a slow trickle of bytes (each individual gap under the read timeout) cannot extend a request indefinitely. It is configurable with a safe, non-zero default.
+- Exceeding the request deadline MUST close the connection with `408 Request Timeout`.
+- Connections MUST be serviced by a bounded concurrency mechanism (for example, a fixed-size worker pool with a bounded connection queue) so that one slow or idle connection cannot block other callers. The maximum number of connections serviced or queued at once MUST be capped and configurable.
+- Request header bytes and request header count MUST each be capped, independent of and in addition to the existing request body size cap (`MAX_REQUEST_BODY`). Exceeding either cap MUST return `431 Request Header Fields Too Large`.
+
 ## Errors
 
 All API errors MUST use RFC 9457 Problem Details with `Content-Type: application/problem+json`.
@@ -352,6 +391,8 @@ Status rules:
 - Missing resource: `404`
 - Unsupported media type: `415`
 - Payload too large: `413`
+- Request header bytes or header count over the configured cap: `431`
+- Request deadline exceeded while reading headers or body: `408`
 
 ## Idempotency
 
@@ -391,6 +432,19 @@ Rules:
 - The OpenAPI document is the machine-readable contract for app consumers.
 - The prose spec wins if prose and OpenAPI conflict until the conflict is corrected.
 
+## Workspace Registry Persistence
+
+Workspace-persisted capability, event, and workflow registrations MUST use a
+durable append-only delta journal. Each logical registration operation MUST
+append only its newly accepted registrations and synchronize that append before
+returning success; multi-artifact bundle registration MUST append one combined
+delta. On load, the server MUST combine any legacy atomic registry snapshot
+with the journal in record order. An incomplete final journal record MAY be
+discarded after an interrupted write, but a malformed completed record MUST
+fail loading with an actionable error. This preserves backward compatibility
+with existing snapshots while making steady-state mutation I/O proportional to
+the accepted change rather than the registry's total size.
+
 ## Functional Requirements
 
 - **FR-001**: `traverse-cli serve` MUST start the HTTP+JSON runtime API server.
@@ -425,6 +479,16 @@ Rules:
 - **FR-030**: The server MUST expose mobile URL provisioning through a `traverse://connect` URL that carries `base_url`, `workspace_default`, and `auth_mode`.
 - **FR-031**: The server MUST render an ASCII QR code for the mobile provisioning URL when `--qr` is supplied.
 - **FR-032**: `--auth dev-any` MUST support real-device LAN development by accepting RFC 1918 private IPv4 callers and rejecting public callers.
+- **FR-033**: In `bearer-required` mode the server MUST verify the JWT signature against a configured `Ed25519` verification key before trusting any claim, and MUST reject unverifiable tokens with `401`.
+- **FR-034**: The server MUST enforce a JWT `alg` allow-list of `EdDSA` only and MUST reject `alg: none` and every other algorithm with `401` (`token_alg_not_allowed`).
+- **FR-035**: Administrative privilege (and system-workspace access) MUST only be granted from a signature-verified token; an unverified token MUST NOT yield `is_admin`.
+- **FR-036**: In `bearer-required` mode with no verification key configured, the server MUST fail closed and reject all bearer tokens (`jwt_verification_unavailable`).
+- **FR-037**: The server MUST validate JWT `exp` and `nbf` when present, rejecting expired (`token_expired`) and not-yet-valid (`token_not_yet_valid`) tokens.
+- **FR-038**: Workspace registry persistence MUST follow the append-only delta-journal model above.
+- **FR-039**: The server MUST apply a read timeout and a write timeout to every accepted connection's socket before any request I/O, with safe configurable defaults.
+- **FR-040**: The server MUST enforce a whole-request deadline spanning the header and body read phases, independent of the per-read socket timeout, and MUST close the connection with `408` when it is exceeded.
+- **FR-041**: The server MUST service connections through a bounded concurrency mechanism with a configurable maximum in-flight/queued connection count, so a single slow or idle connection cannot block other callers.
+- **FR-042**: The server MUST cap request header bytes and request header count, independent of the request body size cap, and MUST reject requests that exceed either with `431`.
 
 ## Quality Gates
 

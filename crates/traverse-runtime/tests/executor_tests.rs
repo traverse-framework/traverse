@@ -1,12 +1,15 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use traverse_runtime::executor::{
     ArtifactType, CapabilityExecutor, ExecutorCapability, ExecutorError, NativeExecutor,
-    SUPPORTED_HOST_ABI_VERSION, WasmExecutor, supported_host_abi_versions,
-    verify_wasm_host_abi_bytes,
+    SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits, WasmExecutor, WasmModuleCacheConfig,
+    supported_host_abi_versions, verify_wasm_host_abi_bytes,
 };
 
 // --- NativeExecutor tests ---
+
+static TEMPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn native_executor_runs_handler() {
@@ -241,6 +244,224 @@ fn wasm_executor_rejects_invalid_json_output() -> Result<(), String> {
 }
 
 #[test]
+fn wasm_executor_traps_infinite_loop_as_timeout() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+        fuel_budget: 1_000,
+        ..WasmExecutionLimits::default()
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (func $_start (export "_start")
+                (loop $again
+                    br $again
+                )
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected Timeout",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::Timeout(_)),
+        "expected Timeout, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_traps_memory_growth_as_resource_exhausted() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+        fuel_budget: 100_000,
+        memory_bytes: 64 * 1024,
+        ..WasmExecutionLimits::default()
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (memory (export "memory") 1)
+            (func $_start (export "_start")
+                (drop (memory.grow (i32.const 1)))
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected ResourceExhausted",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::ResourceExhausted(_)),
+        "expected ResourceExhausted, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_preserves_generic_traps_as_execution_failed() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (func $_start (export "_start")
+                unreachable
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let err = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "expected ExecutionFailed",
+    )?;
+
+    assert!(
+        matches!(err, ExecutorError::ExecutionFailed(_)),
+        "expected ExecutionFailed, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_reuses_compiled_module_by_checksum() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits_and_cache_config(
+        WasmExecutionLimits::default(),
+        WasmModuleCacheConfig { max_entries: 2 },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let wasm_bytes = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let first_input = json!({ "call": 1 });
+    let first = executor
+        .run_bytes(&wasm_bytes, &first_input)
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(first, first_input);
+
+    let after_first = executor.module_cache_stats();
+    assert_eq!(after_first.entries, 1);
+    assert_eq!(after_first.hits, 0);
+    assert_eq!(after_first.misses, 1);
+
+    let second_input = json!({ "call": 2 });
+    let second = executor
+        .run_bytes(&wasm_bytes, &second_input)
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(second, second_input);
+
+    let after_second = executor.module_cache_stats();
+    assert_eq!(after_second.entries, 1);
+    assert_eq!(after_second.hits, 1);
+    assert_eq!(after_second.misses, 1);
+    assert_eq!(after_second.evictions, 0);
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_cached_module_still_uses_fresh_store() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits_and_cache_config(
+        WasmExecutionLimits::default(),
+        WasmModuleCacheConfig { max_entries: 2 },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (import "wasi_snapshot_preview1" "fd_write"
+                (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (global $counter (mut i32) (i32.const 0))
+            (data (i32.const 8) "{\"count\":0}")
+            (func $_start (export "_start")
+                (global.set $counter (i32.add (global.get $counter) (i32.const 1)))
+                (i32.store8 (i32.const 17) (i32.add (global.get $counter) (i32.const 48)))
+                (i32.store (i32.const 0) (i32.const 8))
+                (i32.store (i32.const 4) (i32.const 11))
+                (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4)))
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let first = executor
+        .run_bytes(&wasm_bytes, &json!({}))
+        .map_err(|e| format!("{e:?}"))?;
+    let second = executor
+        .run_bytes(&wasm_bytes, &json!({}))
+        .map_err(|e| format!("{e:?}"))?;
+
+    assert_eq!(first, json!({ "count": 1 }));
+    assert_eq!(second, json!({ "count": 1 }));
+    assert_eq!(executor.module_cache_stats().hits, 1);
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_cache_evicts_oldest_entry_deterministically() -> Result<(), String> {
+    let executor = WasmExecutor::with_limits_and_cache_config(
+        WasmExecutionLimits::default(),
+        WasmModuleCacheConfig { max_entries: 1 },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let first_wasm = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
+    let second_wat = r#"
+        (module
+            (import "wasi_snapshot_preview1" "fd_write"
+                (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 8) "{}")
+            (func $_start (export "_start")
+                (i32.store (i32.const 0) (i32.const 8))
+                (i32.store (i32.const 4) (i32.const 2))
+                (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4)))
+            )
+        )
+    "#;
+    let second_wasm = wat::parse_str(second_wat).map_err(|e| format!("WAT parse: {e}"))?;
+
+    executor
+        .run_bytes(&first_wasm, &json!({ "cached": true }))
+        .map_err(|e| format!("{e:?}"))?;
+    executor
+        .run_bytes(&second_wasm, &json!({}))
+        .map_err(|e| format!("{e:?}"))?;
+    executor
+        .run_bytes(&first_wasm, &json!({ "cached": true }))
+        .map_err(|e| format!("{e:?}"))?;
+
+    let stats = executor.module_cache_stats();
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.hits, 0);
+    assert_eq!(stats.misses, 3);
+    assert_eq!(stats.evictions, 2);
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_cache_miss_when_abi_version_differs() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wasm_bytes = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
+
+    executor
+        .run_bytes(&wasm_bytes, &json!({ "abi": "1.0.0" }))
+        .map_err(|e| format!("{e:?}"))?;
+    let err = expect_err(
+        executor.run_bytes_with_host_abi(&wasm_bytes, &json!({}), "2.0.0"),
+        "expected unsupported ABI version",
+    )?;
+
+    assert!(matches!(err, ExecutorError::UnsupportedAbiVersion { .. }));
+    let stats = executor.module_cache_stats();
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.hits, 0);
+    assert_eq!(stats.misses, 2);
+    Ok(())
+}
+
+#[test]
 fn wasm_host_abi_verifier_accepts_sanctioned_stdio_imports() -> Result<(), String> {
     let wasm_bytes = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
 
@@ -387,6 +608,14 @@ fn executor_error_display_covers_all_variants() {
             "execution failed: trapped",
         ),
         (
+            ExecutorError::Timeout("fuel exhausted".to_string()),
+            "execution timed out: fuel exhausted",
+        ),
+        (
+            ExecutorError::ResourceExhausted("memory cap".to_string()),
+            "resource exhausted: memory cap",
+        ),
+        (
             ExecutorError::OutputDeserializationFailed("not json".to_string()),
             "output deserialization failed: not json",
         ),
@@ -494,6 +723,47 @@ fn wasm_executor_execute_with_matching_checksum_succeeds() -> Result<(), String>
 }
 
 #[test]
+fn wasm_executor_cached_module_does_not_bypass_checksum_mismatch() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wasm_bytes = wat::parse_str(echo_wat()).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&wasm_bytes);
+    let checksum = format!("{:x}", hasher.finalize());
+
+    let tmp = tempfile_path();
+    std::fs::write(&tmp, &wasm_bytes).map_err(|e| format!("write: {e}"))?;
+
+    let cap = ExecutorCapability {
+        capability_id: "checksum-cache".to_string(),
+        artifact_type: ArtifactType::Wasm,
+        wasm_binary_path: Some(tmp.clone()),
+        wasm_checksum: Some(checksum),
+        host_abi_version: Some("1.0.0".to_string()),
+    };
+
+    let input = json!({ "cache": true });
+    let result = executor
+        .execute(&cap, &input)
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(result, input);
+    assert_eq!(executor.module_cache_stats().entries, 1);
+
+    std::fs::write(&tmp, b"not-the-same-wasm").map_err(|e| format!("overwrite: {e}"))?;
+    let err = expect_err(
+        executor.execute(&cap, &json!({})),
+        "expected checksum mismatch",
+    )?;
+    std::fs::remove_file(&tmp).ok();
+
+    assert!(
+        matches!(err, ExecutorError::ChecksumMismatch { .. }),
+        "expected ChecksumMismatch, got {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn wasm_executor_invalid_binary_triggers_runtime_setup_failed() -> Result<(), String> {
     let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
 
@@ -532,8 +802,9 @@ fn native_capability(id: &str) -> ExecutorCapability {
 }
 
 fn tempfile_path() -> String {
+    let suffix = TEMPFILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!(
-        "/tmp/traverse-test-{}.wasm",
+        "/tmp/traverse-test-{}-{suffix}.wasm",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())

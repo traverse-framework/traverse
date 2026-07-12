@@ -297,11 +297,11 @@ fn validate_workspace_application_state(
             "workspace app state does not belong to the requested workspace".to_string(),
         ));
     }
-    if state.components.is_empty() || state.workflows.is_empty() {
+    if state.components.is_empty() {
         return Err(single_error(
             WorkspaceAppStateErrorCode::CorruptWorkspaceState,
             state_path,
-            "workspace app state must include at least one component and workflow".to_string(),
+            "workspace app state must include at least one component".to_string(),
         ));
     }
     validate_registration_fingerprint(state_path, state)?;
@@ -773,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_components_or_workflows_report_corrupt_state() {
+    fn empty_components_report_corrupt_state() {
         let workspace_root = unique_temp_dir();
         write_workspace_app_state_fixture_with(&workspace_root, "local", "1.0.0", |state| {
             state["components"] = Value::Array(Vec::new());
@@ -786,6 +786,37 @@ mod tests {
         assert_eq!(
             failure.errors[0].code,
             WorkspaceAppStateErrorCode::CorruptWorkspaceState
+        );
+    }
+
+    #[test]
+    fn component_only_workspace_app_state_loads_capability_registry() {
+        let workspace_root = unique_temp_dir();
+        write_workspace_app_state_fixture_with(&workspace_root, "local", "1.0.0", |state| {
+            state["workflows"] = Value::Array(Vec::new());
+            state["registration_fingerprint"]["workflows"] = Value::Array(Vec::new());
+        });
+
+        let loaded =
+            load_workspace_application_registries(&workspace_root, "local", "test-validator")
+                .expect("component-only app state should load");
+
+        assert_eq!(loaded.applications.len(), 1);
+        assert!(
+            loaded
+                .capability_registry
+                .find_exact(
+                    LookupScope::PreferPrivate,
+                    "expedition.planning.validate-team-readiness",
+                    "1.0.0"
+                )
+                .is_some()
+        );
+        assert!(
+            loaded
+                .workflow_registry
+                .discover(LookupScope::PreferPrivate)
+                .is_empty()
         );
     }
 

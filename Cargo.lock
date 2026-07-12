@@ -1798,6 +1798,7 @@ dependencies = [
 name = "traverse-cli"
 version = "0.7.0"
 dependencies = [
+ "ed25519-dalek",
  "qrcode",
  "semver",
  "serde",
@@ -1806,6 +1807,7 @@ dependencies = [
  "traverse-contracts",
  "traverse-registry",
  "traverse-runtime",
+ "zeroize",
 ]
 
 [[package]]
@@ -1864,6 +1866,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+ "zeroize",
 ]
 
 [[package]]

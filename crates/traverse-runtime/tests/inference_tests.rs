@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::thread;
+use std::time::{Duration, Instant};
 use traverse_contracts::{
     ExecutionTarget, governed_content_digest, parse_contract, reference_connector_contracts,
 };
@@ -50,6 +51,93 @@ fn ollama_provider_generates_real_response_through_local_http_endpoint() {
     assert!(output.done);
     assert_eq!(output.evidence.selected_provider, "ollama");
     assert_eq!(output.evidence.selected_model, "llama3.2:3b");
+}
+
+#[test]
+fn ollama_generate_rejects_oversize_response() {
+    // The tags probe response is small (under the cap); the generate response
+    // body is padded well past the cap so the capped read rejects it.
+    let oversize_body = json!({
+        "model": "llama3.2:3b",
+        "response": "x".repeat(4096),
+        "done": true
+    })
+    .to_string();
+    let base_url = start_raw_server(vec![
+        http_response(
+            200,
+            &json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+        ),
+        http_response(200, &oversize_body),
+    ]);
+    let provider = provider_with_max_bytes(&base_url, 1_024);
+
+    let failure = provider
+        .generate(&OllamaInferenceRequest {
+            model: "llama3.2:3b".to_string(),
+            prompt: "Summarize readiness.".to_string(),
+            system_prompt: None,
+            options: json!({}),
+        })
+        .expect_err("an over-size response must be rejected, not buffered to OOM");
+
+    assert_eq!(failure.code, OllamaInferenceErrorCode::InvalidResponse);
+}
+
+#[test]
+fn ollama_generate_rejects_non_utf8_response() {
+    let tags = http_response(
+        200,
+        &json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+    )
+    .into_bytes();
+    let mut bad_response =
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\nConnection: close\r\n\r\n"
+            .to_string()
+            .into_bytes();
+    bad_response.extend_from_slice(&[0xff, 0xfe, 0xfd, 0xfc]);
+    let base_url = start_raw_bytes_server(vec![tags, bad_response]);
+    let provider = provider(&base_url);
+
+    let failure = provider
+        .generate(&OllamaInferenceRequest {
+            model: "llama3.2:3b".to_string(),
+            prompt: "Summarize readiness.".to_string(),
+            system_prompt: None,
+            options: json!({}),
+        })
+        .expect_err("a non-UTF-8 response body must be rejected");
+
+    assert_eq!(failure.code, OllamaInferenceErrorCode::InvalidResponse);
+}
+
+#[test]
+fn ollama_generate_times_out_on_stalled_read() {
+    let tags = http_response(
+        200,
+        &json!({"models": [{"name": "llama3.2:3b"}]}).to_string(),
+    );
+    let base_url = start_stalling_server(tags);
+    let provider = provider_with_timeout(&base_url, 400);
+
+    let start = Instant::now();
+    let failure = provider
+        .generate(&OllamaInferenceRequest {
+            model: "llama3.2:3b".to_string(),
+            prompt: "Summarize readiness.".to_string(),
+            system_prompt: None,
+            options: json!({}),
+        })
+        .expect_err("a stalled read must time out, not hang the thread");
+
+    assert_eq!(
+        failure.code,
+        OllamaInferenceErrorCode::ModelProviderUnavailable
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(4),
+        "the call must return within the read timeout budget, not the 5s server stall"
+    );
 }
 
 #[test]
@@ -227,6 +315,7 @@ fn ollama_provider_rejects_invalid_config_and_prompt() {
     let config_failure = OllamaInferenceProvider::new(OllamaProviderConfig {
         base_url: "https://127.0.0.1:11434".to_string(),
         request_timeout_ms: None,
+        max_response_bytes: None,
     })
     .expect_err("https endpoint is not supported by stdlib local provider");
     assert_eq!(config_failure.code, OllamaInferenceErrorCode::InvalidConfig);
@@ -280,6 +369,7 @@ fn ollama_provider_rejects_invalid_endpoint_shapes() {
         let failure = OllamaInferenceProvider::new(OllamaProviderConfig {
             base_url: base_url.to_string(),
             request_timeout_ms: None,
+            max_response_bytes: None,
         })
         .expect_err("invalid endpoint should fail");
         assert_eq!(failure.code, OllamaInferenceErrorCode::InvalidConfig);
@@ -706,6 +796,42 @@ fn provider(base_url: &str) -> OllamaInferenceProvider {
     provider_with_timeout(base_url, 1_000)
 }
 
+fn provider_with_max_bytes(base_url: &str, max_bytes: u64) -> OllamaInferenceProvider {
+    OllamaInferenceProvider::new(OllamaProviderConfig {
+        base_url: base_url.to_string(),
+        request_timeout_ms: Some(2_000),
+        max_response_bytes: Some(max_bytes),
+    })
+    .expect("provider config should be valid")
+}
+
+/// Serves `first_response` on the first connection (so the model-tags probe
+/// succeeds), then accepts a second connection and stalls: it writes a partial
+/// HTTP status line and holds the socket open without sending EOF, so the
+/// client's read must be bounded by its own read timeout rather than hanging.
+fn start_stalling_server(first_response: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+    let address = listener
+        .local_addr()
+        .expect("test server address should be available");
+    thread::spawn(move || {
+        let (mut first, _) = listener.accept().expect("tags request should arrive");
+        let mut buffer = [0_u8; 2048];
+        let _ = first.read(&mut buffer);
+        let _ = first.write_all(first_response.as_bytes());
+        drop(first);
+
+        let (mut second, _) = listener.accept().expect("generate request should arrive");
+        let _ = second.read(&mut buffer);
+        let _ = second.write_all(b"HTTP/1.1 200 OK\r\n");
+        // Hold the connection open past the client's read timeout without EOF.
+        thread::sleep(Duration::from_secs(5));
+        drop(second);
+    });
+
+    format!("http://{address}")
+}
+
 fn provider_with_timeout(base_url: &str, timeout_ms: u64) -> OllamaInferenceProvider {
     OllamaInferenceProvider::new(provider_config(base_url, timeout_ms))
         .expect("provider config should be valid")
@@ -715,6 +841,7 @@ fn provider_config(base_url: &str, timeout_ms: u64) -> OllamaProviderConfig {
     OllamaProviderConfig {
         base_url: base_url.to_string(),
         request_timeout_ms: Some(timeout_ms),
+        max_response_bytes: None,
     }
 }
 
@@ -789,6 +916,10 @@ fn start_ollama_server(bodies: Vec<String>) -> String {
 }
 
 fn start_raw_server(responses: Vec<String>) -> String {
+    start_raw_bytes_server(responses.into_iter().map(String::into_bytes).collect())
+}
+
+fn start_raw_bytes_server(responses: Vec<Vec<u8>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
     let address = listener
         .local_addr()
@@ -801,7 +932,7 @@ fn start_raw_server(responses: Vec<String>) -> String {
                 .read(&mut buffer)
                 .expect("test request should be readable");
             stream
-                .write_all(response.as_bytes())
+                .write_all(&response)
                 .expect("test response should write");
         }
     });

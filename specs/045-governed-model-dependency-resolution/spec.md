@@ -108,6 +108,8 @@ As a UI or auditor, I want public trace evidence to show which model/provider wa
 - **FR-016**: Model candidate metadata MUST be versioned and validated as part of the app manifest and workspace-local config merge governed by `044-application-bundle-manifest`.
 - **FR-017**: The selected inference implementation and placement MUST be visible through both HTTP/JSON execution trace retrieval and MCP execution report surfaces when the workflow is exposed through both.
 - **FR-018**: Model dependency resolution MUST not require downstream app code changes when a new compatible provider implementation is added to the candidate set and app policy permits it.
+- **FR-019**: Inference provider HTTP requests to an operator-configured (and possibly untrusted or remote) endpoint MUST bound the **entire** exchange, not only the TCP connect: read and write timeouts MUST be applied for the connected socket so that a peer which accepts and then stalls cannot block the calling thread past the configured request timeout. A timed-out read or write MUST surface as `model_provider_unavailable`.
+- **FR-020**: The provider response read MUST be bounded by a configurable maximum size with a safe default; a response exceeding the limit MUST fail with a stable error code rather than buffering unbounded data into memory.
 
 ### Non-Functional Requirements
 

@@ -82,12 +82,16 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Run Rust checks
         run: bash scripts/ci/rust_checks.sh
+
+      - name: Check runtime wasm32 core build
+        run: cargo check -p traverse-runtime --target wasm32-unknown-unknown --no-default-features
 
       - name: Run event-driven workflow smoke path
         run: bash scripts/ci/event_driven_workflow_smoke.sh
