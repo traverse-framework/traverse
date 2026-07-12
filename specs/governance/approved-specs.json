@@ -777,6 +777,18 @@
         "specs/066-durable-identity-event-delivery/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "067-durable-journal-retention-and-write-limits",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/067-durable-journal-retention-and-write-limits/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "specs/067-durable-journal-retention-and-write-limits/",
+        "specs/governance/"
+      ]
     }
   ]
 }

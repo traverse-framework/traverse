@@ -358,3 +358,20 @@ The runtime will emit identity-bearing events through a canonical sink. The
 first durable store uses fsynced append-only journals, opaque persisted cursors,
 and bounded retention; future tickets will evaluate its measured limits and
 evolution path.
+
+## Decision 17: Bound Durable Journal Retention and Write-Path Stalls
+
+- **Date**: 2026-07-12
+- **Status**: Accepted
+- **Governing spec**: `067-durable-journal-retention-and-write-limits`
+- **Related issue**: `#593`
+
+### Decision
+
+Retention reclaims space by deleting whole segments once every event in a
+segment ages out, with segments rolling over on a configured max size or max
+duration to bound how long one old event can pin a segment. A durable write
+that stalls past a configured timeout rejects the event with a distinct
+`journal_write_timeout` error and audit event, rather than blocking
+indefinitely or silently degrading to in-memory-only delivery. This closes the
+remaining gap in issue #593's Definition of Done left open by Decision 16.
