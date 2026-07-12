@@ -3031,6 +3031,8 @@ fn runtime_state_name(state: RuntimeState) -> &'static str {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::fmt::Write as _;
+
     use super::security::{
         ArtifactVerificationFailure, ArtifactVerificationScheme, ArtifactVerificationStatus,
         RuntimeSecurityConfig, derive_identity_from_jwt, verify_artifact,
@@ -4448,8 +4450,13 @@ mod tests {
             signature,
         });
         let bytes = fs::read(path).unwrap_or_default();
-        registration.artifact.digests.binary_digest =
-            Some(format!("sha256:{:x}", Sha256::digest(bytes)));
+        let hex_digest = Sha256::digest(bytes)
+            .iter()
+            .fold(String::new(), |mut acc, byte| {
+                let _ = write!(acc, "{byte:02x}");
+                acc
+            });
+        registration.artifact.digests.binary_digest = Some(format!("sha256:{hex_digest}"));
         registration
     }
 
