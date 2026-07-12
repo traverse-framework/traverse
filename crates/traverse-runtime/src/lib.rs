@@ -2,6 +2,8 @@
 
 mod workflows;
 pub use workflows::*;
+mod artifact_router;
+pub use artifact_router::*;
 pub mod data_store;
 pub mod events;
 pub mod executor;
