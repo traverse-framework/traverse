@@ -1,3 +1,4 @@
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -56,6 +57,9 @@ pub enum PublicRegistryStateErrorCode {
     IncompatibleSchemaVersion,
     IncompatibleWorkspaceState,
     StateWriteFailed,
+    InvalidVersionRange,
+    NoMatchingVersion,
+    OnlyDeprecatedVersions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +253,67 @@ pub fn resolve_synced_public_registry_record(
             && record.version == version
             && !record.deprecated
     }))
+}
+
+/// Resolves the highest non-deprecated public record that satisfies a semver range.
+///
+/// # Errors
+///
+/// Returns stable resolution errors for malformed ranges, an absent matching
+/// version, or a range whose only matches are deprecated records. This function
+/// reads local synced state only and never contacts a registry service.
+pub fn resolve_synced_public_registry_range(
+    workspace_root: &Path,
+    workspace_id: &str,
+    namespace: &str,
+    id: &str,
+    version_range: &str,
+) -> Result<PublicRegistryCapabilityRecord, PublicRegistryStateFailure> {
+    let requirement = VersionReq::parse(version_range).map_err(|error| {
+        single_error(
+            PublicRegistryStateErrorCode::InvalidVersionRange,
+            Path::new(version_range),
+            format!("invalid registry_ref version_range {version_range}: {error}"),
+        )
+    })?;
+    let state = load_synced_public_registry_state(workspace_root, workspace_id)?;
+    let matching = state
+        .capabilities
+        .into_iter()
+        .filter_map(|record| {
+            if record.namespace != namespace || record.id != id {
+                return None;
+            }
+            Version::parse(&record.version)
+                .ok()
+                .filter(|version| requirement.matches(version))
+                .map(|version| (version, record))
+        })
+        .collect::<Vec<_>>();
+    let mut active = matching
+        .iter()
+        .filter(|(_, record)| !record.deprecated)
+        .cloned()
+        .collect::<Vec<_>>();
+    active.sort_by(|left, right| right.0.cmp(&left.0));
+    if let Some((_, record)) = active.into_iter().next() {
+        return Ok(record);
+    }
+    let code = if matching.is_empty() {
+        PublicRegistryStateErrorCode::NoMatchingVersion
+    } else {
+        PublicRegistryStateErrorCode::OnlyDeprecatedVersions
+    };
+    let message = match code {
+        PublicRegistryStateErrorCode::NoMatchingVersion => format!(
+            "no synced public registry version for {namespace}:{id} satisfies {version_range}"
+        ),
+        PublicRegistryStateErrorCode::OnlyDeprecatedVersions => format!(
+            "only deprecated public registry versions for {namespace}:{id} satisfy {version_range}"
+        ),
+        _ => String::new(),
+    };
+    Err(single_error(code, Path::new(version_range), message))
 }
 
 fn validate_synced_public_registry_state(
@@ -647,6 +712,51 @@ mod tests {
 
         assert!(deprecated.is_none());
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn range_resolution_selects_highest_active_version_and_reports_yanked_only() {
+        let workspace_root = unique_temp_dir();
+        let mut index = valid_index();
+        let mut newer = index.capabilities[0].clone();
+        newer.version = "1.2.0".to_string();
+        index.capabilities.push(newer);
+        let mut yanked = index.capabilities[0].clone();
+        yanked.version = "2.0.0".to_string();
+        yanked.deprecated = true;
+        index.capabilities.push(yanked);
+        write_synced_public_registry_state(
+            &workspace_root,
+            "local",
+            "traverse-framework/registry",
+            "index-v7",
+            "2026-07-06T00:00:00Z",
+            index,
+        )
+        .expect("state should write");
+
+        let selected = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "^1.0",
+        )
+        .expect("active range match should resolve");
+        assert_eq!(selected.version, "1.2.0");
+
+        let yanked_only = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "^2.0",
+        )
+        .expect_err("yanked-only range should fail");
+        assert_eq!(
+            yanked_only.errors[0].code,
+            PublicRegistryStateErrorCode::OnlyDeprecatedVersions
+        );
     }
 
     #[test]
