@@ -2136,7 +2136,10 @@ fn parse_event_register_body_for_workspace(
         .and_then(|v| v.as_str())
         .unwrap_or("private")
         .to_string();
-    let registered_at = generated_registered_at().unwrap_or_else(|_| "unix:0".to_string());
+    // Derived from the contract's own provenance rather than wall-clock time so
+    // that re-registering an identical contract produces an identical record for
+    // the duplicate-detection equality check in `EventRegistry::register`.
+    let registered_at = contract.provenance.created_at.clone();
 
     Ok((
         scope,
@@ -10099,6 +10102,38 @@ mod tests {
             parse_response_body(&conflict_out)["traverse_code"],
             "registration_conflict"
         );
+    }
+
+    #[test]
+    fn workspace_event_contract_registration_duplicate_is_stable_across_a_clock_tick() {
+        // Regression test for a CI flake (issue link in PR description): the
+        // duplicate-vs-conflict decision must not depend on wall-clock time, or
+        // two back-to-back identical registrations straddling a second boundary
+        // spuriously return 409 instead of 200. Sleeping past a full second here
+        // reproduces that race deterministically.
+        let state = empty_state();
+        let body = valid_event_registration_body("test.api.event-clock-tick", "1.0.0");
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            body.clone(),
+        );
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("first event registration must write a response");
+        assert_eq!(response_status(&first_out), 201);
+
+        thread::sleep(Duration::from_millis(1100));
+
+        let second_req = make_http_request("POST", "/v1/workspaces/ws-test/event-contracts", body);
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("second event registration must write a response");
+
+        assert_eq!(response_status(&second_out), 200);
+        let duplicate = parse_response_body(&second_out);
+        assert_eq!(duplicate["registered"], false);
+        assert_eq!(duplicate["already_registered"], true);
     }
 
     #[test]
