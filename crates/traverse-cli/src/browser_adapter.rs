@@ -3,6 +3,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::time::{Duration, Instant};
 use traverse_runtime::{
     BrowserRuntimeSubscriptionErrorCode, BrowserRuntimeSubscriptionMessage,
     BrowserRuntimeSubscriptionRequest, RuntimeExecutionOutcome, browser_subscription_messages,
@@ -14,6 +15,16 @@ const ADAPTER_GOVERNING_SPEC: &str = "019-local-browser-adapter-transport";
 const SETUP_ERROR_KIND: &str = "local_browser_subscription_setup_error";
 const STREAM_ERROR_KIND: &str = "local_browser_subscription_stream_error";
 const LISTENING_PREFIX: &str = "local browser adapter listening on ";
+const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
+// This adapter serves one connection at a time by design (spec
+// 019-local-browser-adapter-transport, local dev tool). Bounded socket
+// timeouts still apply so a slow or idle caller cannot hang the process
+// indefinitely (spec 033-http-json-api connection-handling model, issue
+// #581); a bounded worker pool was not added here since this transport is
+// not intended to serve concurrent production traffic.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 struct CreateSubscriptionRequest {
@@ -48,6 +59,12 @@ pub fn serve_local_browser_adapter(bind_address: &str) -> Result<(), String> {
     for connection in listener.incoming() {
         match connection {
             Ok(mut stream) => {
+                if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err()
+                    || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
+                {
+                    eprintln!("local browser adapter: failed to configure connection timeouts");
+                    continue;
+                }
                 if let Err(error) = adapter.handle_connection(&mut stream) {
                     let _ = write_plain_response(
                         &mut stream,
@@ -76,7 +93,8 @@ impl LocalBrowserAdapter {
     }
 
     fn handle_connection(&mut self, stream: &mut TcpStream) -> Result<(), String> {
-        let request = read_http_request(stream)?;
+        let deadline = Instant::now() + REQUEST_DEADLINE;
+        let request = read_http_request(stream, deadline)?;
         match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/local/browser-subscriptions") => {
                 self.handle_create_subscription(stream, &request)
@@ -246,24 +264,34 @@ impl LocalBrowserAdapter {
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
+fn read_http_request(stream: &mut TcpStream, deadline: Instant) -> Result<HttpRequest, String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
     loop {
+        if Instant::now() >= deadline {
+            return Err("browser adapter request timed out reading headers".to_string());
+        }
         let mut chunk = [0_u8; 1024];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("failed to read browser adapter request: {error}"))?;
+        let read = stream.read(&mut chunk).map_err(|error| {
+            if is_timeout_error(&error) {
+                "browser adapter request timed out reading headers".to_string()
+            } else {
+                format!("failed to read browser adapter request: {error}")
+            }
+        })?;
         if read == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
+        // Enforce the size cap before checking for the terminator so a
+        // header block that completes in the same read that pushes it over
+        // the cap is still rejected.
+        if buffer.len() > MAX_REQUEST_HEADER_BYTES {
+            return Err("browser adapter request too large".to_string());
+        }
         if let Some(index) = find_header_end(&buffer) {
             header_end = Some(index);
             break;
-        }
-        if buffer.len() > 64 * 1024 {
-            return Err("browser adapter request too large".to_string());
         }
     }
 
@@ -301,10 +329,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         .unwrap_or(0);
     let mut body = buffer[header_end + 4..].to_vec();
     while body.len() < content_length {
+        if Instant::now() >= deadline {
+            return Err("browser adapter request timed out reading body".to_string());
+        }
         let mut chunk = vec![0_u8; content_length - body.len()];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("failed to read browser adapter request body: {error}"))?;
+        let read = stream.read(&mut chunk).map_err(|error| {
+            if is_timeout_error(&error) {
+                "browser adapter request timed out reading body".to_string()
+            } else {
+                format!("failed to read browser adapter request body: {error}")
+            }
+        })?;
         if read == 0 {
             break;
         }
@@ -318,6 +353,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         headers,
         body,
     })
+}
+
+fn is_timeout_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {

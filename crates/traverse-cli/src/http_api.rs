@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_registry::{
     ApplicationStateMachine, ArtifactDigests, BinaryFormat, BinaryReference,
@@ -37,6 +39,12 @@ fn runtime_security_for_auth_mode(auth_mode: &str) -> RuntimeSecurityConfig {
 }
 
 const MAX_REQUEST_BODY: usize = 4 * 1024 * 1024; // 4 MiB
+const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024; // 16 KiB
+const MAX_REQUEST_HEADER_COUNT: usize = 100;
+const DEFAULT_READ_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_WRITE_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_REQUEST_DEADLINE_SECS: u64 = 30;
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 64;
 const SYSTEM_WORKSPACE_ID: &str = "system";
 const SYSTEM_ADMIN_SUBJECT: &str = "system_admin";
 const PERSISTED_REGISTRY_SCHEMA_VERSION: &str = "1.0.0";
@@ -92,6 +100,19 @@ pub struct ApiServerConfig<E> {
     /// it, every bearer token is rejected (fail closed). Ignored for the dev
     /// auth modes when absent, where unverified tokens can never yield admin.
     pub jwt_verification_key_hex: Option<String>,
+    /// Per-read/write socket timeout applied to every accepted connection before
+    /// any I/O; bounds a single blocking read/write call. Defaults to
+    /// [`DEFAULT_READ_TIMEOUT_SECS`] / [`DEFAULT_WRITE_TIMEOUT_SECS`].
+    pub read_timeout: Option<Duration>,
+    pub write_timeout: Option<Duration>,
+    /// Whole-request deadline spanning the header and body read phases, so a
+    /// slow trickle cannot extend a request past this bound even though each
+    /// individual read stays within `read_timeout`. Defaults to
+    /// [`DEFAULT_REQUEST_DEADLINE_SECS`].
+    pub request_deadline: Option<Duration>,
+    /// Maximum number of connections serviced concurrently by the bounded
+    /// worker pool. Defaults to [`DEFAULT_MAX_CONCURRENT_CONNECTIONS`].
+    pub max_concurrent_connections: Option<usize>,
 }
 
 struct ApiState<E> {
@@ -100,8 +121,8 @@ struct ApiState<E> {
     allowed_origins: Vec<String>,
     registry_root: PathBuf,
     executor: E,
-    workspaces: RefCell<HashMap<String, WorkspaceState<E>>>,
-    idempotency_records: RefCell<HashMap<String, IdempotencyRecord>>,
+    workspaces: Mutex<HashMap<String, WorkspaceState<E>>>,
+    idempotency_records: Mutex<HashMap<String, IdempotencyRecord>>,
     idempotency_retention_seconds: u64,
     jwt_verification_key: Option<ed25519_dalek::VerifyingKey>,
 }
@@ -296,12 +317,29 @@ enum WorkspaceOperation {
 /// # Errors
 ///
 /// Returns [`ServeError`] when the server cannot bind or the accept loop fails.
+#[allow(clippy::too_many_lines)]
 pub fn serve_http_api<E>(config: ApiServerConfig<E>) -> Result<(), ServeError>
 where
-    E: LocalExecutor + Clone,
+    E: LocalExecutor + Clone + Send + Sync + 'static,
 {
     let listener = TcpListener::bind(&config.bind_address)
         .map_err(|e| ServeError::BindFailed(format!("{}: {e}", config.bind_address)))?;
+
+    let connection_limits = ConnectionLimits {
+        read_timeout: config
+            .read_timeout
+            .unwrap_or(Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS)),
+        write_timeout: config
+            .write_timeout
+            .unwrap_or(Duration::from_secs(DEFAULT_WRITE_TIMEOUT_SECS)),
+        request_deadline: config
+            .request_deadline
+            .unwrap_or(Duration::from_secs(DEFAULT_REQUEST_DEADLINE_SECS)),
+    };
+    let worker_count = config
+        .max_concurrent_connections
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_CONNECTIONS)
+        .max(1);
 
     let local_addr = listener
         .local_addr()
@@ -382,32 +420,104 @@ where
         },
     );
 
-    let state = ApiState {
+    let state = Arc::new(ApiState {
         allow_unauthenticated: config.allow_unauthenticated,
         auth_mode: auth_mode.to_string(),
         allowed_origins: config.allowed_origins,
         registry_root: config.registry_root,
         executor: config.executor,
-        workspaces: RefCell::new(workspaces),
-        idempotency_records: RefCell::new(HashMap::new()),
+        workspaces: Mutex::new(workspaces),
+        idempotency_records: Mutex::new(HashMap::new()),
         idempotency_retention_seconds: configured_idempotency_retention(
             config.idempotency_retention_seconds,
         ),
         jwt_verification_key,
-    };
+    });
+
+    run_connection_pool(&listener, &state, connection_limits, worker_count)
+}
+
+/// Bounded socket timeouts and per-request time budget applied to every
+/// connection serviced by [`run_connection_pool`] (spec 033-http-json-api
+/// connection-handling model). Set before any read so a slow or idle client
+/// cannot hold a worker indefinitely (CWE-400 / slowloris).
+#[derive(Clone, Copy)]
+struct ConnectionLimits {
+    read_timeout: Duration,
+    write_timeout: Duration,
+    request_deadline: Duration,
+}
+
+/// Services accepted connections with a fixed-size worker pool so a single
+/// slow or idle client cannot block other callers. The bounded channel
+/// (`worker_count * 2` capacity) caps the number of connections that can be
+/// in flight or queued at once; once full, `sender.send` applies backpressure
+/// to the accept loop rather than growing threads or memory without bound.
+fn run_connection_pool<E>(
+    listener: &TcpListener,
+    state: &Arc<ApiState<E>>,
+    limits: ConnectionLimits,
+    worker_count: usize,
+) -> Result<(), ServeError>
+where
+    E: LocalExecutor + Clone + Send + Sync + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel::<TcpStream>(worker_count * 2);
+    let receiver = Arc::new(Mutex::new(receiver));
+
+    let workers: Vec<_> = (0..worker_count)
+        .map(|_| {
+            let receiver = Arc::clone(&receiver);
+            let state = Arc::clone(state);
+            thread::spawn(move || worker_loop(&receiver, &state, limits))
+        })
+        .collect();
 
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
-                if let Err(e) = handle_connection(stream, &state) {
-                    eprintln!("traverse-cli serve: connection error: {e}");
+                if sender.send(stream).is_err() {
+                    break;
                 }
             }
             Err(e) => return Err(ServeError::AcceptFailed(e.to_string())),
         }
     }
 
+    drop(sender);
+    for worker in workers {
+        let _ = worker.join();
+    }
+
     Ok(())
+}
+
+fn worker_loop<E>(
+    receiver: &Arc<Mutex<mpsc::Receiver<TcpStream>>>,
+    state: &Arc<ApiState<E>>,
+    limits: ConnectionLimits,
+) where
+    E: LocalExecutor + Clone,
+{
+    loop {
+        let next = {
+            let receiver = receiver.lock().unwrap_or_else(PoisonError::into_inner);
+            receiver.recv()
+        };
+        let Ok(stream) = next else {
+            break;
+        };
+        if let Err(e) = stream
+            .set_read_timeout(Some(limits.read_timeout))
+            .and_then(|()| stream.set_write_timeout(Some(limits.write_timeout)))
+        {
+            eprintln!("traverse-cli serve: failed to configure connection timeouts: {e}");
+            continue;
+        }
+        if let Err(e) = handle_connection(stream, state, limits.request_deadline) {
+            eprintln!("traverse-cli serve: connection error: {e}");
+        }
+    }
 }
 
 fn mint_local_dev_token(local_addr: &str) -> String {
@@ -587,8 +697,8 @@ where
                 allowed_origins: config.allowed_origins,
                 registry_root: config.registry_root,
                 executor: config.executor,
-                workspaces: RefCell::new(workspaces),
-                idempotency_records: RefCell::new(HashMap::new()),
+                workspaces: Mutex::new(workspaces),
+                idempotency_records: Mutex::new(HashMap::new()),
                 idempotency_retention_seconds: configured_idempotency_retention(
                     config.idempotency_retention_seconds,
                 ),
@@ -663,7 +773,10 @@ where
         workspace_id: &str,
         f: impl FnOnce(&mut WorkspaceState<E>) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut workspaces = self.workspaces.borrow_mut();
+        let mut workspaces = self
+            .workspaces
+            .lock()
+            .map_err(|_| "workspace registry lock poisoned".to_string())?;
         let entry = workspaces
             .entry(workspace_id.to_string())
             .or_insert_with(|| WorkspaceState {
@@ -2813,7 +2926,10 @@ fn apply_registration<E: LocalExecutor + Clone>(
     Result<traverse_registry::RegistrationOutcome, traverse_registry::RegistryFailure>,
     String,
 > {
-    let mut workspaces = state.workspaces.borrow_mut();
+    let mut workspaces = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace registry lock poisoned".to_string())?;
     let ws = workspaces
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
@@ -2872,7 +2988,10 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
     persisted_registration: PersistedEventRegistrationV1,
     registration: EventRegistration,
 ) -> Result<Result<EventRegistrationHttpOutcome, traverse_registry::EventRegistryFailure>, String> {
-    let mut workspaces = state.workspaces.borrow_mut();
+    let mut workspaces = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace registry lock poisoned".to_string())?;
     let ws = workspaces
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
@@ -3396,14 +3515,23 @@ fn static_permissions_json<E: LocalExecutor + Clone>(
 // Connection handler
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn handle_connection<E: LocalExecutor + Clone>(
     mut stream: TcpStream,
     state: &ApiState<E>,
+    request_deadline: Duration,
 ) -> Result<(), String> {
-    let request = match read_http_request(&mut stream) {
+    let deadline = Instant::now() + request_deadline;
+    let request = match read_http_request(&mut stream, deadline) {
         Ok(request) => request,
         Err(message) => {
-            let (status, reason, code) = if message.contains("too large") {
+            let (status, reason, code) = if message.contains("timed out") {
+                (408, "Request Timeout", "request_timeout")
+            } else if message.contains("too many headers") {
+                (431, "Request Header Fields Too Large", "too_many_headers")
+            } else if message.contains("headers too large") {
+                (431, "Request Header Fields Too Large", "header_too_large")
+            } else if message.contains("too large") {
                 (413, "Payload Too Large", "payload_too_large")
             } else {
                 (400, "Bad Request", "invalid_request")
@@ -6015,7 +6143,13 @@ fn idempotency_replay_or_conflict<E: LocalExecutor + Clone>(
     prune_idempotency_records(state);
     let cache_key = idempotency_cache_key(request, workspace_id, operation, key);
     let body_digest = idempotency_body_digest(request);
-    let Some(record) = state.idempotency_records.borrow().get(&cache_key).cloned() else {
+    let Some(record) = state
+        .idempotency_records
+        .lock()
+        .map_err(|_| "idempotency record lock poisoned".to_string())?
+        .get(&cache_key)
+        .cloned()
+    else {
         return Ok(None);
     };
 
@@ -6055,17 +6189,21 @@ fn record_idempotent_success<E: LocalExecutor + Clone>(
     let cache_key = idempotency_cache_key(request, workspace_id, operation, key);
     let bytes =
         serde_json::to_vec(body).map_err(|e| format!("failed to serialize response: {e}"))?;
-    state.idempotency_records.borrow_mut().insert(
-        cache_key,
-        IdempotencyRecord {
-            body_digest: idempotency_body_digest(request),
-            status,
-            reason: reason.to_string(),
-            content_type: "application/json".to_string(),
-            body: bytes,
-            stored_at: unix_timestamp(),
-        },
-    );
+    state
+        .idempotency_records
+        .lock()
+        .map_err(|_| "idempotency record lock poisoned".to_string())?
+        .insert(
+            cache_key,
+            IdempotencyRecord {
+                body_digest: idempotency_body_digest(request),
+                status,
+                reason: reason.to_string(),
+                content_type: "application/json".to_string(),
+                body: bytes,
+                stored_at: unix_timestamp(),
+            },
+        );
     Ok(())
 }
 
@@ -6119,7 +6257,8 @@ fn prune_idempotency_records<E: LocalExecutor + Clone>(state: &ApiState<E>) {
     let now = unix_timestamp();
     state
         .idempotency_records
-        .borrow_mut()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .retain(|_, record| now.saturating_sub(record.stored_at) <= retention);
 }
 
@@ -6655,25 +6794,43 @@ pub(crate) struct HttpRequest {
     pub(crate) body: Vec<u8>,
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
+/// Reads and parses one HTTP request from `stream`, enforcing a whole-request
+/// `deadline` across both the header and body read phases (spec
+/// 033-http-json-api connection-handling model). A per-call socket
+/// `read_timeout`/`write_timeout` is set by the caller before this runs and
+/// bounds any single blocking read; `deadline` additionally bounds the total
+/// time spent here so a slow trickle of bytes cannot extend a request
+/// indefinitely by staying just under the per-read timeout.
+fn read_http_request(stream: &mut TcpStream, deadline: Instant) -> Result<HttpRequest, String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
 
     loop {
+        if Instant::now() >= deadline {
+            return Err("HTTP request timed out reading headers".to_string());
+        }
         let mut chunk = [0_u8; 1024];
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|e| format!("failed to read HTTP request: {e}"))?;
+        let n = stream.read(&mut chunk).map_err(|e| {
+            if is_timeout_error(&e) {
+                "HTTP request timed out reading headers".to_string()
+            } else {
+                format!("failed to read HTTP request: {e}")
+            }
+        })?;
         if n == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..n]);
+        // Enforce the size cap before checking for the terminator: a header
+        // block that happens to complete in the same read that pushes it
+        // over the cap must still be rejected, not admitted because the
+        // terminator arrived in the same chunk.
+        if buffer.len() > MAX_REQUEST_HEADER_BYTES {
+            return Err("HTTP request headers too large".to_string());
+        }
         if let Some(idx) = find_header_end(&buffer) {
             header_end = Some(idx);
             break;
-        }
-        if buffer.len() > MAX_REQUEST_BODY {
-            return Err("HTTP request headers too large".to_string());
         }
     }
 
@@ -6703,6 +6860,11 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+            if headers.len() > MAX_REQUEST_HEADER_COUNT {
+                return Err(format!(
+                    "HTTP request has too many headers (max {MAX_REQUEST_HEADER_COUNT})"
+                ));
+            }
         }
     }
 
@@ -6719,10 +6881,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 
     let mut body = buffer[header_end + 4..].to_vec();
     while body.len() < content_length {
+        if Instant::now() >= deadline {
+            return Err("HTTP request timed out reading body".to_string());
+        }
         let mut chunk = vec![0_u8; content_length - body.len()];
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|e| format!("failed to read HTTP request body: {e}"))?;
+        let n = stream.read(&mut chunk).map_err(|e| {
+            if is_timeout_error(&e) {
+                "HTTP request timed out reading body".to_string()
+            } else {
+                format!("failed to read HTTP request body: {e}")
+            }
+        })?;
         if n == 0 {
             break;
         }
@@ -6737,6 +6906,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         headers,
         body,
     })
+}
+
+fn is_timeout_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn parse_path_and_query(raw_path: &str) -> (String, HashMap<String, String>) {
@@ -7402,8 +7578,8 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
             jwt_verification_key: None,
         }
@@ -7459,8 +7635,8 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
             jwt_verification_key: None,
         }
@@ -7503,8 +7679,8 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
             jwt_verification_key: None,
         }
@@ -8749,7 +8925,14 @@ mod tests {
         assert_eq!(response_status(&first), 200);
         assert_eq!(response_status(&second), 200);
         assert_eq!(parse_response_body(&first), parse_response_body(&second));
-        assert_eq!(state.idempotency_records.borrow().len(), 1);
+        assert_eq!(
+            state
+                .idempotency_records
+                .lock()
+                .expect("idempotency lock must not be poisoned")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -8789,22 +8972,33 @@ mod tests {
             DEFAULT_IDEMPOTENCY_RETENTION_SECONDS
         );
 
-        state.idempotency_records.borrow_mut().insert(
-            "old".to_string(),
-            IdempotencyRecord {
-                body_digest: "fnv1a64:old".to_string(),
-                status: 200,
-                reason: "OK".to_string(),
-                content_type: "application/json".to_string(),
-                body: b"{}".to_vec(),
-                stored_at: unix_timestamp().saturating_sub(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1),
-            },
-        );
+        state
+            .idempotency_records
+            .lock()
+            .expect("idempotency lock must not be poisoned")
+            .insert(
+                "old".to_string(),
+                IdempotencyRecord {
+                    body_digest: "fnv1a64:old".to_string(),
+                    status: 200,
+                    reason: "OK".to_string(),
+                    content_type: "application/json".to_string(),
+                    body: b"{}".to_vec(),
+                    stored_at: unix_timestamp()
+                        .saturating_sub(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1),
+                },
+            );
         let mut state = state;
         state.idempotency_retention_seconds = 1;
         prune_idempotency_records(&state);
 
-        assert!(state.idempotency_records.borrow().is_empty());
+        assert!(
+            state
+                .idempotency_records
+                .lock()
+                .expect("idempotency lock must not be poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -10515,6 +10709,213 @@ mod tests {
         assert_eq!(
             runtime_security_for_auth_mode("bearer-required"),
             RuntimeSecurityConfig::production()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Connection handling / DoS hardening (spec 033-http-json-api,
+    // issue #581 - bounded timeouts + bounded worker pool)
+    // ------------------------------------------------------------------
+
+    fn spawn_test_pool(limits: ConnectionLimits, worker_count: usize) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let state = Arc::new(test_state_with("test.api.do-something", "1.0.0"));
+        thread::spawn(move || {
+            let _ = run_connection_pool(&listener, &state, limits, worker_count);
+        });
+        addr
+    }
+
+    fn read_all_with_timeout(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(timeout))
+            .expect("client read timeout must be set");
+        let mut out = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&chunk[..n]),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn idle_connection_times_out_without_blocking_other_callers() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_millis(200),
+            write_timeout: Duration::from_millis(200),
+            request_deadline: Duration::from_millis(400),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut idle = TcpStream::connect(addr).expect("idle connection must connect");
+        idle.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n")
+            .expect("partial idle request must write");
+
+        // Give the lone worker a moment to pick up the idle connection first,
+        // so the healthy request below is proven to be queued behind it.
+        thread::sleep(Duration::from_millis(50));
+
+        let mut healthy = TcpStream::connect(addr).expect("healthy connection must connect");
+        healthy
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            .expect("healthy request must write");
+
+        let healthy_response = read_all_with_timeout(&mut healthy, Duration::from_secs(5));
+        assert_eq!(
+            response_status(&healthy_response),
+            200,
+            "a concurrent healthy request must not be blocked by an idle connection"
+        );
+
+        let idle_response = read_all_with_timeout(&mut idle, Duration::from_secs(5));
+        assert_eq!(response_status(&idle_response), 408);
+    }
+
+    #[test]
+    fn slow_trickle_connection_is_bounded_by_request_deadline() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_millis(300),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut trickle = TcpStream::connect(addr).expect("trickle connection must connect");
+        trickle
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("client read timeout must be set");
+        let mut writer = trickle
+            .try_clone()
+            .expect("trickle connection must be cloneable");
+
+        let started = Instant::now();
+        // Write on a separate handle to the same socket so a read of the
+        // server's response can happen concurrently: once the server closes
+        // the connection after the deadline, continuing to write on this
+        // thread can trigger a reset that would otherwise race with (and
+        // potentially discard) the still-unread response.
+        let writer_handle = thread::spawn(move || {
+            for byte in b"GET /healthz HTTP/1.1\r\nHost: x\r\n" {
+                if writer.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(60));
+            }
+        });
+
+        let response = read_all_with_timeout(&mut trickle, Duration::from_secs(5));
+        let elapsed = started.elapsed();
+        let _ = writer_handle.join();
+
+        assert_eq!(response_status(&response), 408);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the request deadline (300ms) must cut off a slow trickle long before \
+             the 5s per-read timeout would, but it took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn concurrent_healthy_clients_are_all_served() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_secs(5),
+        };
+        let addr = spawn_test_pool(limits, 4);
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                thread::spawn(move || {
+                    let mut stream =
+                        TcpStream::connect(addr).expect("client connection must connect");
+                    stream
+                        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+                        .expect("client request must write");
+                    let response = read_all_with_timeout(&mut stream, Duration::from_secs(5));
+                    response_status(&response)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("client thread must not panic"), 200);
+        }
+    }
+
+    #[test]
+    fn oversized_body_is_rejected_over_socket() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_secs(5),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut stream = TcpStream::connect(addr).expect("connection must connect");
+        let oversized_length = MAX_REQUEST_BODY + 1;
+        let request = format!(
+            "POST /v1/workspaces/ws-test/execute HTTP/1.1\r\nHost: x\r\nContent-Length: {oversized_length}\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .expect("request headers must write");
+
+        let response = read_all_with_timeout(&mut stream, Duration::from_secs(5));
+        assert_eq!(response_status(&response), 413);
+    }
+
+    #[test]
+    fn oversized_headers_are_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept must succeed");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            read_http_request(&mut stream, deadline).map(|_| ())
+        });
+
+        let mut client = TcpStream::connect(addr).expect("client connection must connect");
+        let oversized_header_value = "x".repeat(MAX_REQUEST_HEADER_BYTES + 1);
+        let request = format!(
+            "GET /healthz HTTP/1.1\r\nHost: x\r\nX-Filler: {oversized_header_value}\r\n\r\n"
+        );
+        client
+            .write_all(request.as_bytes())
+            .expect("oversized header request must write");
+
+        let result = server.join().expect("server thread must not panic");
+        assert_eq!(result, Err("HTTP request headers too large".to_string()));
+    }
+
+    #[test]
+    fn too_many_headers_are_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept must succeed");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            read_http_request(&mut stream, deadline).map(|_| ())
+        });
+
+        let mut client = TcpStream::connect(addr).expect("client connection must connect");
+        let mut request = String::from("GET /healthz HTTP/1.1\r\nHost: x\r\n");
+        for i in 0..(MAX_REQUEST_HEADER_COUNT + 5) {
+            let _ = write!(request, "X-Filler-{i}: 1\r\n");
+        }
+        request.push_str("\r\n");
+        client
+            .write_all(request.as_bytes())
+            .expect("many-header request must write");
+
+        let result = server.join().expect("server thread must not panic");
+        assert!(
+            matches!(&result, Err(message) if message.contains("too many headers")),
+            "expected too-many-headers rejection, got {result:?}"
         );
     }
 }
