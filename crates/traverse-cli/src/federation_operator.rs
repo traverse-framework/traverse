@@ -353,10 +353,20 @@ impl From<FederationSyncStatusManifest> for FederationSyncStatus {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{render_federation_peers, render_federation_status, render_federation_sync};
+    use super::{
+        FederationPeerManifest, FederationSyncStatusManifest, FederationTrustStateManifest,
+        RegistryScopeManifest, TrustRecordManifest, load_manifest, render_federation_failure,
+        render_federation_peers, render_federation_status, render_federation_sync,
+        resolve_relative_path,
+    };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use traverse_contracts::ErrorSeverity;
+    use traverse_registry::{
+        FederationError, FederationErrorCode, FederationFailure, FederationSyncStatus,
+        FederationTrustState, RegistryScope,
+    };
 
     #[test]
     fn federation_peers_and_status_renders_peer_listing_and_sync_summary() {
@@ -426,5 +436,155 @@ mod tests {
         path.push(format!("cogolo-federation-operator-{nonce}"));
         fs::create_dir_all(&path).expect("temp dir should create");
         path
+    }
+
+    fn peer_manifest(
+        trust_state: FederationTrustStateManifest,
+        last_sync_status: FederationSyncStatusManifest,
+    ) -> FederationPeerManifest {
+        FederationPeerManifest {
+            peer_id: "peer-a".to_string(),
+            display_name: "Peer A".to_string(),
+            trust_state,
+            identity_fingerprint: "fingerprint:peer-a".to_string(),
+            sync_enabled: true,
+            last_sync_at: None,
+            last_sync_status,
+            visible_registry_scopes: vec![RegistryScopeManifest::Public],
+        }
+    }
+
+    fn trust_manifest() -> TrustRecordManifest {
+        TrustRecordManifest {
+            peer_id: "peer-a".to_string(),
+            trust_model: "allowlist".to_string(),
+            allowed_scopes: vec![
+                RegistryScopeManifest::Public,
+                RegistryScopeManifest::Private,
+            ],
+            approved_spec_refs: vec!["026-federation-registry-routing".to_string()],
+            approved_at: "2026-04-10T00:00:00Z".to_string(),
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn trust_state_manifest_maps_to_every_federation_trust_state() {
+        let cases = [
+            (
+                FederationTrustStateManifest::Trusted,
+                FederationTrustState::Trusted,
+            ),
+            (
+                FederationTrustStateManifest::Pending,
+                FederationTrustState::Pending,
+            ),
+            (
+                FederationTrustStateManifest::Blocked,
+                FederationTrustState::Blocked,
+            ),
+            (
+                FederationTrustStateManifest::Revoked,
+                FederationTrustState::Revoked,
+            ),
+        ];
+        for (manifest_state, expected) in cases {
+            let peer =
+                peer_manifest(manifest_state, FederationSyncStatusManifest::Unknown).into_peer();
+            assert_eq!(peer.trust_state, expected);
+        }
+    }
+
+    #[test]
+    fn sync_status_manifest_maps_to_every_federation_sync_status() {
+        let cases = [
+            (
+                FederationSyncStatusManifest::Unknown,
+                FederationSyncStatus::Unknown,
+            ),
+            (
+                FederationSyncStatusManifest::Success,
+                FederationSyncStatus::Success,
+            ),
+            (
+                FederationSyncStatusManifest::Partial,
+                FederationSyncStatus::Partial,
+            ),
+            (
+                FederationSyncStatusManifest::Failed,
+                FederationSyncStatus::Failed,
+            ),
+        ];
+        for (manifest_status, expected) in cases {
+            let peer =
+                peer_manifest(FederationTrustStateManifest::Trusted, manifest_status).into_peer();
+            assert_eq!(peer.last_sync_status, expected);
+        }
+    }
+
+    #[test]
+    fn registry_scope_manifest_maps_to_every_registry_scope() {
+        assert_eq!(
+            RegistryScope::from(RegistryScopeManifest::Public),
+            RegistryScope::Public
+        );
+        assert_eq!(
+            RegistryScope::from(RegistryScopeManifest::Private),
+            RegistryScope::Private
+        );
+
+        let trust = trust_manifest().into_trust();
+        assert_eq!(
+            trust.allowed_scopes,
+            vec![RegistryScope::Public, RegistryScope::Private]
+        );
+    }
+
+    #[test]
+    fn load_manifest_reports_missing_file_and_invalid_json() {
+        let missing = load_manifest(Path::new("/definitely/missing/federation-operator.json"))
+            .expect_err("missing manifest must fail");
+        assert!(missing.contains("failed to read"));
+
+        let temp_dir = unique_temp_dir();
+        let manifest_path = temp_dir.join("federation-operator.json");
+        fs::write(&manifest_path, b"not json").expect("temp file should write");
+        let invalid = load_manifest(&manifest_path).expect_err("invalid JSON manifest must fail");
+        assert!(invalid.contains("failed to parse"));
+    }
+
+    #[test]
+    fn resolve_relative_path_joins_against_manifest_parent_directory() {
+        let base = Path::new("/some/dir/federation-operator.json");
+        let resolved = resolve_relative_path(base, Path::new("bundle/manifest.json"));
+        assert_eq!(resolved, Path::new("/some/dir/bundle/manifest.json"));
+
+        let absolute = Path::new("/already/absolute/manifest.json");
+        let resolved_absolute = resolve_relative_path(base, absolute);
+        assert_eq!(resolved_absolute, absolute);
+    }
+
+    #[test]
+    fn render_federation_failure_joins_every_error_line() {
+        let failure = FederationFailure {
+            errors: vec![
+                FederationError {
+                    code: FederationErrorCode::MissingRequiredField,
+                    target: "peer.peer_id".to_string(),
+                    message: "peer_id is required".to_string(),
+                    severity: ErrorSeverity::Error,
+                },
+                FederationError {
+                    code: FederationErrorCode::InvalidTrust,
+                    target: "trust.trust_model".to_string(),
+                    message: "trust_model is unsupported".to_string(),
+                    severity: ErrorSeverity::Error,
+                },
+            ],
+        };
+        let rendered = render_federation_failure(failure);
+        assert!(rendered.contains("peer.peer_id"));
+        assert!(rendered.contains("trust.trust_model"));
+        assert_eq!(rendered.lines().count(), 2);
     }
 }
