@@ -255,7 +255,7 @@ impl EventRegistry {
                 ));
             };
 
-            if existing == &record
+            if records_match_ignoring_registration_timestamp(existing, &record)
                 && existing_index == &index_record
                 && existing_contract == &contract
             {
@@ -524,6 +524,26 @@ fn build_index_record(scope: RegistryScope, contract: &EventContract) -> EventRe
         classification: contract.classification.clone(),
         tags: normalized_tags(contract),
     }
+}
+
+/// `registered_at` (and the `validated_at` it seeds on the validation evidence)
+/// is a server-generated wall-clock stamp, not part of the client's request.
+/// Comparing it verbatim made an identical resubmission flip from "already
+/// registered" to a spurious immutable-version conflict whenever the two
+/// calls landed in different seconds.
+fn records_match_ignoring_registration_timestamp(
+    existing: &EventRegistryRecord,
+    candidate: &EventRegistryRecord,
+) -> bool {
+    let mut normalized_existing = existing.clone();
+    normalized_existing
+        .registered_at
+        .clone_from(&candidate.registered_at);
+    normalized_existing
+        .validation_evidence
+        .validated_at
+        .clone_from(&candidate.validation_evidence.validated_at);
+    &normalized_existing == candidate
 }
 
 fn normalized_tags(contract: &EventContract) -> Vec<String> {
@@ -851,6 +871,17 @@ mod tests {
             failure.errors[0].message,
             "published event versions are immutable and cannot be republished with different metadata"
         );
+
+        let mut retried_registration_registry = EventRegistry::new();
+        retried_registration_registry
+            .register(request.clone())
+            .expect("seed registration should pass");
+        let mut retried_with_later_timestamp = request.clone();
+        retried_with_later_timestamp.registered_at = "2026-03-30T00:00:01Z".to_string();
+        let outcome = retried_registration_registry
+            .register(retried_with_later_timestamp)
+            .expect("resubmitting identical content with a newer registration timestamp must be idempotent");
+        assert_eq!(outcome.record.registered_at, request.registered_at);
 
         let mut digest_mismatch_registry = EventRegistry::new();
         digest_mismatch_registry
