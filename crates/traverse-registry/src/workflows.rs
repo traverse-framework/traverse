@@ -28,6 +28,11 @@ pub struct WorkflowDefinition {
     pub edges: Vec<WorkflowEdge>,
     pub start_node: String,
     pub terminal_nodes: Vec<String>,
+    /// Optional final-output projection (spec 058-workflow-pipeline-execution):
+    /// when non-empty, the workflow output contains exactly these state keys,
+    /// e.g. the namespaced per-step outputs of a pipeline.
+    #[serde(default)]
+    pub output_projection: Vec<String>,
     pub tags: Vec<String>,
     pub governing_spec: String,
 }
@@ -49,6 +54,11 @@ pub struct WorkflowNodeInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowNodeOutput {
     pub to_workflow_state: Vec<String>,
+    /// Optional namespaced publication (spec 058-workflow-pipeline-execution):
+    /// when set, the node's entire output object is stored in workflow state
+    /// under this key in addition to any `to_workflow_state` hoisting.
+    #[serde(default)]
+    pub publish_to_state_as: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,6 +496,31 @@ fn validate_workflow_fields(
                 WorkflowErrorCode::InvalidSemver,
                 &format!("{base}.capability_version"),
                 "capability_version must be valid semantic versioning",
+            ));
+        }
+        if node
+            .output
+            .publish_to_state_as
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            errors.push(workflow_error(
+                WorkflowErrorCode::MissingRequiredField,
+                &format!("{base}.output.publish_to_state_as"),
+                "publish_to_state_as must not be empty when present",
+            ));
+        }
+    }
+
+    let mut projection_keys = BTreeSet::new();
+    for (index, key) in definition.output_projection.iter().enumerate() {
+        let path = format!("$.output_projection[{index}]");
+        require_non_empty(key, &path, errors);
+        if !projection_keys.insert(key.clone()) {
+            errors.push(workflow_error(
+                WorkflowErrorCode::DuplicateItem,
+                &path,
+                "output_projection keys must be unique",
             ));
         }
     }
@@ -1314,6 +1349,100 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_publish_to_state_as_when_present() {
+        let capabilities = capability_registry();
+        let mut registry = WorkflowRegistry::new();
+        let mut definition = valid_workflow_definition();
+        definition.nodes[0].output.publish_to_state_as = Some("  ".to_string());
+
+        let failure = registry
+            .register(
+                &capabilities,
+                WorkflowRegistration {
+                    scope: RegistryScope::Public,
+                    definition,
+                    workflow_path: "workflows/bad.json".to_string(),
+                    registered_at: "2026-07-08T00:00:00Z".to_string(),
+                    validator_version: "workflow-validator/0.1.0".to_string(),
+                },
+            )
+            .expect_err("empty publish_to_state_as must fail");
+
+        assert!(
+            failure
+                .errors
+                .iter()
+                .any(|error| error.path == "$.nodes[0].output.publish_to_state_as")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_and_empty_output_projection_keys() {
+        let capabilities = capability_registry();
+        let mut registry = WorkflowRegistry::new();
+        let mut definition = valid_workflow_definition();
+        definition.output_projection =
+            vec!["result".to_string(), "result".to_string(), String::new()];
+
+        let failure = registry
+            .register(
+                &capabilities,
+                WorkflowRegistration {
+                    scope: RegistryScope::Public,
+                    definition,
+                    workflow_path: "workflows/bad.json".to_string(),
+                    registered_at: "2026-07-08T00:00:00Z".to_string(),
+                    validator_version: "workflow-validator/0.1.0".to_string(),
+                },
+            )
+            .expect_err("duplicate output_projection keys must fail");
+
+        assert!(
+            failure
+                .errors
+                .iter()
+                .any(|error| error.code == WorkflowErrorCode::DuplicateItem
+                    && error.path == "$.output_projection[1]")
+        );
+        assert!(
+            failure
+                .errors
+                .iter()
+                .any(|error| error.path == "$.output_projection[2]")
+        );
+    }
+
+    #[test]
+    fn workflow_definition_parses_with_pipeline_fields_defaulted_when_absent() {
+        let mut serialized =
+            serde_json::to_value(valid_workflow_definition()).expect("definition must serialize");
+        let object = serialized
+            .as_object_mut()
+            .expect("definition must be an object");
+        object.remove("output_projection");
+        for node in object
+            .get_mut("nodes")
+            .and_then(Value::as_array_mut)
+            .expect("nodes must be an array")
+        {
+            node.get_mut("output")
+                .and_then(Value::as_object_mut)
+                .expect("node output must be an object")
+                .remove("publish_to_state_as");
+        }
+
+        let parsed: WorkflowDefinition =
+            serde_json::from_value(serialized).expect("definition must parse without new fields");
+        assert!(parsed.output_projection.is_empty());
+        assert!(
+            parsed
+                .nodes
+                .iter()
+                .all(|node| node.output.publish_to_state_as.is_none())
+        );
+    }
+
+    #[test]
     fn rejects_invalid_workflow_fields_references_and_cycles() {
         let capabilities = capability_registry();
         let mut registry = WorkflowRegistry::new();
@@ -1610,6 +1739,7 @@ mod tests {
             },
             output: WorkflowNodeOutput {
                 to_workflow_state: vec![],
+                publish_to_state_as: None,
             },
         }];
         definition.terminal_nodes = Vec::new();
@@ -1746,6 +1876,7 @@ mod tests {
                         },
                         output: WorkflowNodeOutput {
                             to_workflow_state: vec![],
+                            publish_to_state_as: None,
                         },
                     }],
                     edges: vec![
@@ -2319,6 +2450,7 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["draft_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
                 WorkflowNode {
@@ -2330,6 +2462,7 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["draft_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
                 WorkflowNode {
@@ -2341,6 +2474,7 @@ mod tests {
                     },
                     output: WorkflowNodeOutput {
                         to_workflow_state: vec!["comment_id".to_string()],
+                        publish_to_state_as: None,
                     },
                 },
             ],
@@ -2370,6 +2504,7 @@ mod tests {
             ],
             start_node: "create_draft".to_string(),
             terminal_nodes: vec!["persist_comment".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["comments".to_string(), "foundation".to_string()],
             governing_spec: WORKFLOW_GOVERNING_SPEC.to_string(),
         }

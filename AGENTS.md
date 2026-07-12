@@ -27,22 +27,18 @@ If a `claude/issue-<NUMBER>-*` branch exists → **STOP**. Report:
 ### 3. Claim the ticket (only if pre-flight passes)
 
 ```bash
-# Add label
+# Add label (the ownership marker — the live org Project 1 has no Agent field)
 gh issue edit <NUMBER> --repo traverse-framework/traverse --add-label "agent:codex"
 
 # Get project item ID with bounded output
 gh project item-list 1 --owner traverse-framework --format json --limit 300 \
   --jq '.items[] | select(.content.number == <NUMBER>) | .id'
 
-# Set Agent → Codex
-gh project item-edit --project-id PVT_kwHOAEZXvs4BS6Ns \
-  --id <ITEM_ID> \
-  --field-id PVTSSF_lAHOAEZXvs4BS6NszhBK-Qk \
-  --single-select-option-id 34d6db7d
-
 # Set Status → In Progress
-gh project item-edit --project-id PVT_kwHOAEZXvs4BS6Ns \
+gh project item-edit --project-id PVT_kwDOEbiBt84Bbyp1 \
   --id <ITEM_ID> \
-  --field-id PVTSSF_lAHOAEZXvs4BS6NszhATmdM \
+  --field-id PVTSSF_lADOEbiBt84Bbyp1zhWglqM \
   --single-select-option-id 47fc9ee4
 ```
+
+Status option IDs for reference: Ready `f75ad846`, In Progress `47fc9ee4`, Done `98236657`, Blocked `294b89f5`.

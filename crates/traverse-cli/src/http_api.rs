@@ -1,26 +1,30 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_registry::{
-    ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-    CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-    CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind,
-    LookupScope, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-    WorkflowDefinition, WorkflowRegistration, WorkflowRegistry, WorkspaceAppStateErrorCode,
-    load_application_bundle_manifest,
+    ApplicationStateMachine, ArtifactDigests, BinaryFormat, BinaryReference,
+    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
+    CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry,
+    ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
+    SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
+    WorkspaceAppStateErrorCode, load_application_bundle_manifest,
 };
 use traverse_runtime::security::RuntimeSecurityConfig;
 use traverse_runtime::{
-    LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
+    LocalExecutor, PlacementTarget, Runtime, RuntimeContext, RuntimeExecutionOutcome,
+    RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest, RuntimeResultStatus,
     RuntimeTrace, parse_runtime_request,
 };
+use zeroize::Zeroizing;
 
 /// Map an HTTP auth mode to the runtime security posture: the dev auth modes
 /// run local unsigned example artifacts (development), while the network-facing
@@ -35,6 +39,12 @@ fn runtime_security_for_auth_mode(auth_mode: &str) -> RuntimeSecurityConfig {
 }
 
 const MAX_REQUEST_BODY: usize = 4 * 1024 * 1024; // 4 MiB
+const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024; // 16 KiB
+const MAX_REQUEST_HEADER_COUNT: usize = 100;
+const DEFAULT_READ_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_WRITE_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_REQUEST_DEADLINE_SECS: u64 = 30;
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 64;
 const SYSTEM_WORKSPACE_ID: &str = "system";
 const SYSTEM_ADMIN_SUBJECT: &str = "system_admin";
 const PERSISTED_REGISTRY_SCHEMA_VERSION: &str = "1.0.0";
@@ -85,6 +95,24 @@ pub struct ApiServerConfig<E> {
     pub executor: E,
     /// Optional Idempotency-Key retention in seconds. Values below 60 seconds are floored to 60.
     pub idempotency_retention_seconds: Option<u64>,
+    /// Optional hex-encoded `Ed25519` public key used to verify JWT bearer-token
+    /// signatures (`EdDSA`). Required for the `bearer-required` auth mode: without
+    /// it, every bearer token is rejected (fail closed). Ignored for the dev
+    /// auth modes when absent, where unverified tokens can never yield admin.
+    pub jwt_verification_key_hex: Option<String>,
+    /// Per-read/write socket timeout applied to every accepted connection before
+    /// any I/O; bounds a single blocking read/write call. Defaults to
+    /// [`DEFAULT_READ_TIMEOUT_SECS`] / [`DEFAULT_WRITE_TIMEOUT_SECS`].
+    pub read_timeout: Option<Duration>,
+    pub write_timeout: Option<Duration>,
+    /// Whole-request deadline spanning the header and body read phases, so a
+    /// slow trickle cannot extend a request past this bound even though each
+    /// individual read stays within `read_timeout`. Defaults to
+    /// [`DEFAULT_REQUEST_DEADLINE_SECS`].
+    pub request_deadline: Option<Duration>,
+    /// Maximum number of connections serviced concurrently by the bounded
+    /// worker pool. Defaults to [`DEFAULT_MAX_CONCURRENT_CONNECTIONS`].
+    pub max_concurrent_connections: Option<usize>,
 }
 
 struct ApiState<E> {
@@ -93,9 +121,10 @@ struct ApiState<E> {
     allowed_origins: Vec<String>,
     registry_root: PathBuf,
     executor: E,
-    workspaces: RefCell<HashMap<String, WorkspaceState<E>>>,
-    idempotency_records: RefCell<HashMap<String, IdempotencyRecord>>,
+    workspaces: Mutex<HashMap<String, WorkspaceState<E>>>,
+    idempotency_records: Mutex<HashMap<String, IdempotencyRecord>>,
     idempotency_retention_seconds: u64,
+    jwt_verification_key: Option<ed25519_dalek::VerifyingKey>,
 }
 
 struct WorkspaceState<E> {
@@ -107,6 +136,7 @@ struct WorkspaceState<E> {
     traces: HashMap<String, RuntimeTrace>,
     app_events: Vec<AppStateEventRecord>,
     app_list_context_fields: HashMap<String, Vec<String>>,
+    app_state_machines: HashMap<String, ApplicationStateMachine>,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -164,6 +194,19 @@ struct IdempotencyRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedWorkspaceRegistryV1 {
     schema_version: String,
+    registrations: Vec<PersistedCapabilityRegistrationV1>,
+    #[serde(default)]
+    events: Vec<PersistedEventRegistrationV1>,
+    #[serde(default)]
+    workflows: Vec<PersistedWorkflowRegistrationV1>,
+}
+
+/// A durable, append-only delta for a workspace registry snapshot. Keeping
+/// mutations separate from the legacy snapshot prevents a single registration
+/// from rewriting every previously registered artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedRegistryMutationV1 {
+    #[serde(default)]
     registrations: Vec<PersistedCapabilityRegistrationV1>,
     #[serde(default)]
     events: Vec<PersistedEventRegistrationV1>,
@@ -266,6 +309,7 @@ enum WorkspaceOperation {
     Trace(String, String),
     AppEvents(String, String),
     AppSessions(String, String),
+    AppCommands(String, String),
 }
 
 /// Start the HTTP/JSON API server, blocking until the listener fails.
@@ -273,12 +317,29 @@ enum WorkspaceOperation {
 /// # Errors
 ///
 /// Returns [`ServeError`] when the server cannot bind or the accept loop fails.
+#[allow(clippy::too_many_lines)]
 pub fn serve_http_api<E>(config: ApiServerConfig<E>) -> Result<(), ServeError>
 where
-    E: LocalExecutor + Clone,
+    E: LocalExecutor + Clone + Send + Sync + 'static,
 {
     let listener = TcpListener::bind(&config.bind_address)
         .map_err(|e| ServeError::BindFailed(format!("{}: {e}", config.bind_address)))?;
+
+    let connection_limits = ConnectionLimits {
+        read_timeout: config
+            .read_timeout
+            .unwrap_or(Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS)),
+        write_timeout: config
+            .write_timeout
+            .unwrap_or(Duration::from_secs(DEFAULT_WRITE_TIMEOUT_SECS)),
+        request_deadline: config
+            .request_deadline
+            .unwrap_or(Duration::from_secs(DEFAULT_REQUEST_DEADLINE_SECS)),
+    };
+    let worker_count = config
+        .max_concurrent_connections
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_CONNECTIONS)
+        .max(1);
 
     let local_addr = listener
         .local_addr()
@@ -319,6 +380,11 @@ where
             render_mobile_connect_qr(&mobile_connect_url).map_err(ServeError::BindFailed)?
         );
     }
+    let jwt_verification_key = resolve_jwt_verification_key(
+        config.jwt_verification_key_hex.as_deref(),
+        auth_mode,
+        config.allow_unauthenticated,
+    )?;
     let _ = std::io::stderr().flush();
 
     write_server_discovery(
@@ -349,35 +415,109 @@ where
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         },
     );
 
-    let state = ApiState {
+    let state = Arc::new(ApiState {
         allow_unauthenticated: config.allow_unauthenticated,
         auth_mode: auth_mode.to_string(),
         allowed_origins: config.allowed_origins,
         registry_root: config.registry_root,
         executor: config.executor,
-        workspaces: RefCell::new(workspaces),
-        idempotency_records: RefCell::new(HashMap::new()),
+        workspaces: Mutex::new(workspaces),
+        idempotency_records: Mutex::new(HashMap::new()),
         idempotency_retention_seconds: configured_idempotency_retention(
             config.idempotency_retention_seconds,
         ),
-    };
+        jwt_verification_key,
+    });
+
+    run_connection_pool(&listener, &state, connection_limits, worker_count)
+}
+
+/// Bounded socket timeouts and per-request time budget applied to every
+/// connection serviced by [`run_connection_pool`] (spec 033-http-json-api
+/// connection-handling model). Set before any read so a slow or idle client
+/// cannot hold a worker indefinitely (CWE-400 / slowloris).
+#[derive(Clone, Copy)]
+struct ConnectionLimits {
+    read_timeout: Duration,
+    write_timeout: Duration,
+    request_deadline: Duration,
+}
+
+/// Services accepted connections with a fixed-size worker pool so a single
+/// slow or idle client cannot block other callers. The bounded channel
+/// (`worker_count * 2` capacity) caps the number of connections that can be
+/// in flight or queued at once; once full, `sender.send` applies backpressure
+/// to the accept loop rather than growing threads or memory without bound.
+fn run_connection_pool<E>(
+    listener: &TcpListener,
+    state: &Arc<ApiState<E>>,
+    limits: ConnectionLimits,
+    worker_count: usize,
+) -> Result<(), ServeError>
+where
+    E: LocalExecutor + Clone + Send + Sync + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel::<TcpStream>(worker_count * 2);
+    let receiver = Arc::new(Mutex::new(receiver));
+
+    let workers: Vec<_> = (0..worker_count)
+        .map(|_| {
+            let receiver = Arc::clone(&receiver);
+            let state = Arc::clone(state);
+            thread::spawn(move || worker_loop(&receiver, &state, limits))
+        })
+        .collect();
 
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
-                if let Err(e) = handle_connection(stream, &state) {
-                    eprintln!("traverse-cli serve: connection error: {e}");
+                if sender.send(stream).is_err() {
+                    break;
                 }
             }
             Err(e) => return Err(ServeError::AcceptFailed(e.to_string())),
         }
     }
 
+    drop(sender);
+    for worker in workers {
+        let _ = worker.join();
+    }
+
     Ok(())
+}
+
+fn worker_loop<E>(
+    receiver: &Arc<Mutex<mpsc::Receiver<TcpStream>>>,
+    state: &Arc<ApiState<E>>,
+    limits: ConnectionLimits,
+) where
+    E: LocalExecutor + Clone,
+{
+    loop {
+        let next = {
+            let receiver = receiver.lock().unwrap_or_else(PoisonError::into_inner);
+            receiver.recv()
+        };
+        let Ok(stream) = next else {
+            break;
+        };
+        if let Err(e) = stream
+            .set_read_timeout(Some(limits.read_timeout))
+            .and_then(|()| stream.set_write_timeout(Some(limits.write_timeout)))
+        {
+            eprintln!("traverse-cli serve: failed to configure connection timeouts: {e}");
+            continue;
+        }
+        if let Err(e) = handle_connection(stream, state, limits.request_deadline) {
+            eprintln!("traverse-cli serve: connection error: {e}");
+        }
+    }
 }
 
 fn mint_local_dev_token(local_addr: &str) -> String {
@@ -545,6 +685,7 @@ where
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -556,11 +697,12 @@ where
                 allowed_origins: config.allowed_origins,
                 registry_root: config.registry_root,
                 executor: config.executor,
-                workspaces: RefCell::new(workspaces),
-                idempotency_records: RefCell::new(HashMap::new()),
+                workspaces: Mutex::new(workspaces),
+                idempotency_records: Mutex::new(HashMap::new()),
                 idempotency_retention_seconds: configured_idempotency_retention(
                     config.idempotency_retention_seconds,
                 ),
+                jwt_verification_key: None,
             },
         }
     }
@@ -631,7 +773,10 @@ where
         workspace_id: &str,
         f: impl FnOnce(&mut WorkspaceState<E>) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut workspaces = self.workspaces.borrow_mut();
+        let mut workspaces = self
+            .workspaces
+            .lock()
+            .map_err(|_| "workspace registry lock poisoned".to_string())?;
         let entry = workspaces
             .entry(workspace_id.to_string())
             .or_insert_with(|| WorkspaceState {
@@ -650,6 +795,7 @@ where
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             });
 
@@ -720,23 +866,24 @@ fn load_persisted_registry(
     workspace_id: &str,
 ) -> Result<PersistedWorkspaceRegistryV1, String> {
     let path = persisted_registry_path(registry_root, workspace_id);
-    if !path.exists() {
-        return Ok(PersistedWorkspaceRegistryV1 {
+    let mut persisted = if path.exists() {
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("failed to read persisted registry: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            format!(
+                "failed to parse persisted registry at {}: {e}",
+                path.display()
+            )
+        })?
+    } else {
+        PersistedWorkspaceRegistryV1 {
             schema_version: PERSISTED_REGISTRY_SCHEMA_VERSION.to_string(),
             registrations: Vec::new(),
             events: Vec::new(),
             workflows: Vec::new(),
-        });
-    }
-
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("failed to read persisted registry: {e}"))?;
-    let persisted: PersistedWorkspaceRegistryV1 = serde_json::from_slice(&bytes).map_err(|e| {
-        format!(
-            "failed to parse persisted registry at {}: {e}",
-            path.display()
-        )
-    })?;
+        }
+    };
+    load_registry_journal(registry_root, workspace_id, &mut persisted)?;
     Ok(persisted)
 }
 
@@ -745,6 +892,13 @@ fn persisted_registry_path(registry_root: &Path, workspace_id: &str) -> PathBuf 
         .join("workspaces")
         .join(workspace_id)
         .join("capabilities.json")
+}
+
+fn persisted_registry_journal_path(registry_root: &Path, workspace_id: &str) -> PathBuf {
+    registry_root
+        .join("workspaces")
+        .join(workspace_id)
+        .join("capabilities.jsonl")
 }
 
 fn workspace_metadata_path(registry_root: &Path, workspace_id: &str) -> PathBuf {
@@ -761,24 +915,61 @@ fn workspace_audit_log_path(registry_root: &Path, workspace_id: &str) -> PathBuf
         .join("audit.jsonl")
 }
 
-fn persist_registry(
+fn append_registry_mutation(
     registry_root: &Path,
     workspace_id: &str,
-    persisted: &PersistedWorkspaceRegistryV1,
+    mutation: &PersistedRegistryMutationV1,
 ) -> Result<(), String> {
-    let path = persisted_registry_path(registry_root, workspace_id);
+    let path = persisted_registry_journal_path(registry_root, workspace_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create persisted registry directory: {e}"))?;
     }
 
-    let bytes = serde_json::to_vec_pretty(persisted)
-        .map_err(|e| format!("failed to serialize persisted registry: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes)
-        .map_err(|e| format!("failed to write persisted registry temp file: {e}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("failed to atomically replace persisted registry: {e}"))?;
+    let mut bytes = serde_json::to_vec(mutation)
+        .map_err(|e| format!("failed to serialize persisted registry mutation: {e}"))?;
+    bytes.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("failed to open persisted registry journal: {e}"))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("failed to append persisted registry mutation: {e}"))?;
+    file.sync_data()
+        .map_err(|e| format!("failed to sync persisted registry mutation: {e}"))
+}
+
+fn load_registry_journal(
+    registry_root: &Path,
+    workspace_id: &str,
+    persisted: &mut PersistedWorkspaceRegistryV1,
+) -> Result<(), String> {
+    let path = persisted_registry_journal_path(registry_root, workspace_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("failed to read persisted registry journal: {e}"))?;
+    for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let mutation: PersistedRegistryMutationV1 = match serde_json::from_slice(line) {
+            Ok(mutation) => mutation,
+            Err(_error) if index + 1 == bytes.split(|byte| *byte == b'\n').count() => break,
+            Err(error) => {
+                return Err(format!(
+                    "failed to parse persisted registry journal at {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        persisted.registrations.extend(mutation.registrations);
+        persisted.events.extend(mutation.events);
+        persisted.workflows.extend(mutation.workflows);
+    }
     Ok(())
 }
 
@@ -934,10 +1125,51 @@ fn require_workspace_id_query(request: &HttpRequest) -> Result<String, ApiError>
         })
 }
 
+fn is_dev_auth_mode(auth_mode: &str) -> bool {
+    matches!(auth_mode, "dev-loopback" | "dev-any")
+}
+
+fn resolve_jwt_verification_key(
+    key_hex: Option<&str>,
+    auth_mode: &str,
+    allow_unauthenticated: bool,
+) -> Result<Option<ed25519_dalek::VerifyingKey>, ServeError> {
+    let key = if let Some(hex) = key_hex {
+        Some(parse_ed25519_verifying_key(hex).map_err(ServeError::BindFailed)?)
+    } else {
+        None
+    };
+    if auth_mode == "bearer-required" && key.is_none() && !allow_unauthenticated {
+        eprintln!(
+            "WARNING: bearer-required auth mode without a configured JWT verification key. \
+             All bearer tokens will be rejected (fail closed). Set the \
+             TRAVERSE_JWT_VERIFICATION_KEY environment variable to a hex-encoded \
+             Ed25519 public key."
+        );
+    }
+    Ok(key)
+}
+
+fn subject_from_state<E>(
+    headers: &HashMap<String, String>,
+    state: &ApiState<E>,
+    loopback: bool,
+) -> Result<DerivedIdentity, ApiError> {
+    subject_from_request(
+        headers,
+        &state.auth_mode,
+        state.allow_unauthenticated,
+        loopback,
+        state.jwt_verification_key.as_ref(),
+    )
+}
+
 fn subject_from_request(
     headers: &HashMap<String, String>,
+    auth_mode: &str,
     allow_unauthenticated: bool,
     loopback: bool,
+    jwt_key: Option<&ed25519_dalek::VerifyingKey>,
 ) -> Result<DerivedIdentity, ApiError> {
     let token = headers
         .get("authorization")
@@ -947,12 +1179,23 @@ fn subject_from_request(
         .map(ToString::to_string);
 
     if let Some(token) = token {
-        if let Some(identity) = derive_identity_from_jwt(&token)? {
-            return Ok(identity);
+        if is_jwt_shaped(&token) {
+            return derive_identity_from_jwt(&token, auth_mode, jwt_key);
         }
 
-        // Fallback: accept non-JWT bearer tokens as direct subject identifiers.
-        // This is intended for local/dev environments that don't provide JWTs yet.
+        // Non-JWT bearer tokens are accepted as direct subject identifiers only
+        // in the local/dev auth modes. A network-facing (`bearer-required`)
+        // listener requires a signature-verified JWT and never trusts an opaque
+        // token, so it can never yield an admin identity.
+        if !is_dev_auth_mode(auth_mode) {
+            return Err(ApiError {
+                status: 401,
+                reason: "Unauthorized",
+                code: "unauthorized",
+                message: "a signed JWT bearer token is required".to_string(),
+            });
+        }
+
         validate_subject_id(&token).map_err(|msg| ApiError {
             status: 401,
             reason: "Unauthorized",
@@ -983,6 +1226,16 @@ fn subject_from_request(
     })
 }
 
+fn is_jwt_shaped(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    !header.is_empty() && !payload.is_empty() && !signature.is_empty()
+}
+
 fn validate_subject_id(subject_id: &str) -> Result<(), String> {
     if subject_id.trim().is_empty() {
         return Err("subject_id must be non-empty".to_string());
@@ -996,25 +1249,59 @@ fn validate_subject_id(subject_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiError> {
-    let mut parts = token.split('.');
-    let header = parts.next();
-    let payload = parts.next();
-    let signature = parts.next();
-
-    if header.is_none() || payload.is_none() || signature.is_none() || parts.next().is_some() {
-        return Ok(None);
+fn unauthorized(code: &'static str, message: impl Into<String>) -> ApiError {
+    ApiError {
+        status: 401,
+        reason: "Unauthorized",
+        code,
+        message: message.into(),
     }
+}
 
-    let Some(payload_b64) = payload else {
-        return Ok(None);
+/// Derive a caller identity from a JWT bearer token.
+///
+/// The token signature is verified against the configured `Ed25519` key before
+/// any claim is trusted. A token is only allowed to yield an admin identity
+/// when its signature verified. In the dev auth modes, when no key is
+/// configured, claims are accepted as unverified but `is_admin` is forced to
+/// `false`. In `bearer-required` mode a missing key rejects every token
+/// (fail closed).
+fn derive_identity_from_jwt(
+    token: &str,
+    auth_mode: &str,
+    jwt_key: Option<&ed25519_dalek::VerifyingKey>,
+) -> Result<DerivedIdentity, ApiError> {
+    let mut parts = token.split('.');
+    let (Some(header_b64), Some(payload_b64), Some(signature_b64), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(unauthorized("unauthorized", "malformed JWT bearer token"));
     };
-    let payload_bytes = base64url_decode(payload_b64).map_err(|msg| ApiError {
+
+    verify_jwt_header_alg(header_b64)?;
+
+    let signature_verified = if let Some(key) = jwt_key {
+        verify_jwt_signature(header_b64, payload_b64, signature_b64, key)?;
+        true
+    } else if is_dev_auth_mode(auth_mode) {
+        false
+    } else {
+        // Fail closed: a network-facing listener with no verification key
+        // configured cannot trust any token.
+        return Err(unauthorized(
+            "jwt_verification_unavailable",
+            "server has no JWT verification key configured; bearer tokens are rejected",
+        ));
+    };
+
+    // Zeroize the decoded credential bytes on drop (success and error paths),
+    // so bearer-token material does not linger in memory (spec 030 NFR-001).
+    let payload_bytes = Zeroizing::new(base64url_decode(payload_b64).map_err(|msg| ApiError {
         status: 401,
         reason: "Unauthorized",
         code: "unauthorized",
         message: msg,
-    })?;
+    })?);
 
     let value: Value = serde_json::from_slice(&payload_bytes).map_err(|e| ApiError {
         status: 401,
@@ -1042,44 +1329,21 @@ fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiE
         message: msg,
     })?;
 
-    if let Some(exp) = value.get("exp").and_then(Value::as_i64) {
-        if exp <= 0 {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "token_expired",
-                message: "token is expired".to_string(),
-            });
-        }
+    validate_jwt_time_claims(&value)?;
 
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| ApiError {
-                status: 500,
-                reason: "Internal Server Error",
-                code: "internal_error",
-                message: format!("failed to read system time: {e}"),
-            })?
-            .as_secs();
+    // Privilege claims are only honored for a signature-verified token. An
+    // unverified (dev, no-key) token can name a subject but never escalates.
+    let is_admin = signature_verified && jwt_claims_admin(&value);
 
-        let now = i64::try_from(now_secs).map_err(|_| ApiError {
-            status: 500,
-            reason: "Internal Server Error",
-            code: "internal_error",
-            message: "system time overflow".to_string(),
-        })?;
+    Ok(DerivedIdentity {
+        subject_id,
+        is_admin,
+        scopes: parse_jwt_scopes(&value),
+    })
+}
 
-        if now > exp {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "token_expired",
-                message: "token is expired".to_string(),
-            });
-        }
-    }
-
-    let is_admin = value
+fn jwt_claims_admin(value: &Value) -> bool {
+    value
         .get("traverse_admin")
         .and_then(Value::as_bool)
         .unwrap_or(false)
@@ -1095,13 +1359,130 @@ fn derive_identity_from_jwt(token: &str) -> Result<Option<DerivedIdentity>, ApiE
         || value
             .get("role")
             .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "traverse_admin" || s == SYSTEM_ADMIN_SUBJECT);
+            .is_some_and(|s| s == "traverse_admin" || s == SYSTEM_ADMIN_SUBJECT)
+}
 
-    Ok(Some(DerivedIdentity {
-        subject_id,
-        is_admin,
-        scopes: parse_jwt_scopes(&value),
-    }))
+fn validate_jwt_time_claims(value: &Value) -> Result<(), ApiError> {
+    let exp = value.get("exp").and_then(Value::as_i64);
+    let nbf = value.get("nbf").and_then(Value::as_i64);
+    if exp.is_none() && nbf.is_none() {
+        return Ok(());
+    }
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ApiError {
+            status: 500,
+            reason: "Internal Server Error",
+            code: "internal_error",
+            message: format!("failed to read system time: {e}"),
+        })?
+        .as_secs();
+    let now = i64::try_from(now_secs).map_err(|_| ApiError {
+        status: 500,
+        reason: "Internal Server Error",
+        code: "internal_error",
+        message: "system time overflow".to_string(),
+    })?;
+
+    if let Some(exp) = exp
+        && (exp <= 0 || now > exp)
+    {
+        return Err(unauthorized("token_expired", "token is expired"));
+    }
+    if let Some(nbf) = nbf
+        && now < nbf
+    {
+        return Err(unauthorized(
+            "token_not_yet_valid",
+            "token is not yet valid",
+        ));
+    }
+    Ok(())
+}
+
+const JWT_ALLOWED_ALG: &str = "EdDSA";
+
+/// Enforce the JWT `alg` allow-list. Only `EdDSA` is accepted; `none` and every
+/// other algorithm are rejected so an attacker cannot strip the signature.
+fn verify_jwt_header_alg(header_b64: &str) -> Result<(), ApiError> {
+    let header_bytes = Zeroizing::new(
+        base64url_decode(header_b64)
+            .map_err(|msg| unauthorized("unauthorized", format!("invalid JWT header: {msg}")))?,
+    );
+    let header: Value = serde_json::from_slice(&header_bytes)
+        .map_err(|e| unauthorized("unauthorized", format!("invalid JWT header: {e}")))?;
+    let alg = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unauthorized("token_alg_not_allowed", "JWT header missing 'alg'"))?;
+    if alg != JWT_ALLOWED_ALG {
+        return Err(unauthorized(
+            "token_alg_not_allowed",
+            format!("JWT alg '{alg}' is not allowed; only {JWT_ALLOWED_ALG} is accepted"),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify the Ed25519 signature over the `header.payload` signing input.
+fn verify_jwt_signature(
+    header_b64: &str,
+    payload_b64: &str,
+    signature_b64: &str,
+    key: &ed25519_dalek::VerifyingKey,
+) -> Result<(), ApiError> {
+    use ed25519_dalek::Verifier;
+
+    let signature_bytes = Zeroizing::new(
+        base64url_decode(signature_b64)
+            .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?,
+    );
+    let signature_array = <[u8; 64]>::try_from(signature_bytes.as_slice())
+        .map_err(|_| unauthorized("signature_verification_failed", "invalid JWT signature"))?;
+    let signature = ed25519_dalek::Signature::from_bytes(&signature_array);
+
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    key.verify(signing_input.as_bytes(), &signature)
+        .map_err(|_| {
+            unauthorized(
+                "signature_verification_failed",
+                "JWT signature verification failed",
+            )
+        })
+}
+
+fn parse_ed25519_verifying_key(hex: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let bytes = hex_decode(hex).map_err(|msg| format!("invalid JWT verification key: {msg}"))?;
+    let array = <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| "JWT verification key must be 32 bytes (Ed25519 public key)".to_string())?;
+    ed25519_dalek::VerifyingKey::from_bytes(&array)
+        .map_err(|e| format!("invalid Ed25519 verification key: {e}"))
+}
+
+fn hex_decode(input: &str) -> Result<Vec<u8>, String> {
+    if !input.len().is_multiple_of(2) {
+        return Err("hex input must have an even number of digits".to_string());
+    }
+    let mut out = Vec::with_capacity(input.len() / 2);
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = hex_nibble(bytes[i])?;
+        let lo = hex_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err("hex input contains a non-hex character".to_string()),
+    }
 }
 
 fn parse_jwt_scopes(value: &Value) -> Vec<String> {
@@ -2477,8 +2858,12 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
         env!("CARGO_PKG_VERSION"),
     ) {
         Ok(runtime) => {
-            ws.app_list_context_fields =
-                load_workspace_app_list_context_fields(workspace_root, &runtime);
+            let machines = load_workspace_app_state_machines(workspace_root, &runtime);
+            ws.app_list_context_fields = machines
+                .iter()
+                .map(|(app_id, machine)| (app_id.clone(), machine.list_context_fields.clone()))
+                .collect();
+            ws.app_state_machines = machines;
             ws.runtime = runtime;
             Ok(())
         }
@@ -2497,11 +2882,11 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
     }
 }
 
-fn load_workspace_app_list_context_fields<E: LocalExecutor>(
+fn load_workspace_app_state_machines<E: LocalExecutor>(
     workspace_root: &Path,
     runtime: &Runtime<E>,
-) -> HashMap<String, Vec<String>> {
-    let mut fields = HashMap::new();
+) -> HashMap<String, ApplicationStateMachine> {
+    let mut machines = HashMap::new();
     for app in runtime.workspace_applications() {
         let manifest_path = PathBuf::from(&app.manifest_path);
         let manifest_path = if manifest_path.is_absolute() {
@@ -2515,9 +2900,9 @@ fn load_workspace_app_list_context_fields<E: LocalExecutor>(
         let Some(state_machine) = manifest.state_machine else {
             continue;
         };
-        fields.insert(app.app_id.clone(), state_machine.list_context_fields);
+        machines.insert(app.app_id.clone(), state_machine);
     }
-    fields
+    machines
 }
 
 fn render_workspace_app_state_failure(
@@ -2541,7 +2926,10 @@ fn apply_registration<E: LocalExecutor + Clone>(
     Result<traverse_registry::RegistrationOutcome, traverse_registry::RegistryFailure>,
     String,
 > {
-    let mut workspaces = state.workspaces.borrow_mut();
+    let mut workspaces = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace registry lock poisoned".to_string())?;
     let ws = workspaces
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
@@ -2560,6 +2948,7 @@ fn apply_registration<E: LocalExecutor + Clone>(
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -2568,8 +2957,15 @@ fn apply_registration<E: LocalExecutor + Clone>(
     match ws.runtime.register_capability(registration) {
         Ok(outcome) => {
             if scope == RegistrationScope::WorkspacePersisted && !outcome.already_registered {
+                append_registry_mutation(
+                    &state.registry_root,
+                    workspace_id,
+                    &PersistedRegistryMutationV1 {
+                        registrations: vec![persisted_registration.clone()],
+                        ..PersistedRegistryMutationV1::default()
+                    },
+                )?;
                 ws.persisted.registrations.push(persisted_registration);
-                persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
             }
             Ok(Ok(outcome))
         }
@@ -2592,7 +2988,10 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
     persisted_registration: PersistedEventRegistrationV1,
     registration: EventRegistration,
 ) -> Result<Result<EventRegistrationHttpOutcome, traverse_registry::EventRegistryFailure>, String> {
-    let mut workspaces = state.workspaces.borrow_mut();
+    let mut workspaces = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace registry lock poisoned".to_string())?;
     let ws = workspaces
         .entry(workspace_id.to_string())
         .or_insert_with(|| WorkspaceState {
@@ -2611,6 +3010,7 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
             traces: HashMap::new(),
             app_events: Vec::new(),
             app_list_context_fields: HashMap::new(),
+            app_state_machines: HashMap::new(),
             runtime_grants: Vec::new(),
         });
 
@@ -2632,8 +3032,15 @@ fn apply_event_registration<E: LocalExecutor + Clone>(
                 existing.record.contract_digest == outcome.record.contract_digest
             });
             if scope == RegistrationScope::WorkspacePersisted && !already_registered {
+                append_registry_mutation(
+                    &state.registry_root,
+                    workspace_id,
+                    &PersistedRegistryMutationV1 {
+                        events: vec![persisted_registration.clone()],
+                        ..PersistedRegistryMutationV1::default()
+                    },
+                )?;
                 ws.persisted.events.push(persisted_registration);
-                persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
             }
             Ok(Ok(EventRegistrationHttpOutcome {
                 already_registered,
@@ -2685,8 +3092,15 @@ fn apply_workflow_registration<E: LocalExecutor + Clone>(
         match ws.runtime.register_workflow(registration) {
             Ok(outcome) => {
                 if scope == RegistrationScope::WorkspacePersisted && !already {
+                    append_registry_mutation(
+                        &state.registry_root,
+                        workspace_id,
+                        &PersistedRegistryMutationV1 {
+                            workflows: vec![persisted.clone()],
+                            ..PersistedRegistryMutationV1::default()
+                        },
+                    )?;
                     ws.persisted.workflows.push(persisted);
-                    persist_registry(&state.registry_root, workspace_id, &ws.persisted)?;
                 }
 
                 Ok(Ok(WorkflowRegistrationHttpOutcome {
@@ -2709,6 +3123,11 @@ fn apply_bundle_registration<E: LocalExecutor + Clone>(
     bundle: ParsedBundleRegistrationV1,
 ) -> Result<Result<BundleRegistrationHttpOutcome, ApiError>, String> {
     state.with_workspace_mut(workspace_id, |ws| {
+        let persisted_lengths = (
+            ws.persisted.registrations.len(),
+            ws.persisted.events.len(),
+            ws.persisted.workflows.len(),
+        );
         let mut staged_runtime = ws.runtime.clone();
         let mut staged_event_registry = ws.event_registry.clone();
         let mut staged_persisted = ws.persisted.clone();
@@ -2761,7 +3180,15 @@ fn apply_bundle_registration<E: LocalExecutor + Clone>(
         }
 
         if bundle.scope == RegistrationScope::WorkspacePersisted {
-            persist_registry(&state.registry_root, workspace_id, &staged_persisted)?;
+            append_registry_mutation(
+                &state.registry_root,
+                workspace_id,
+                &PersistedRegistryMutationV1 {
+                    registrations: staged_persisted.registrations[persisted_lengths.0..].to_vec(),
+                    events: staged_persisted.events[persisted_lengths.1..].to_vec(),
+                    workflows: staged_persisted.workflows[persisted_lengths.2..].to_vec(),
+                },
+            )?;
         }
 
         ws.runtime = staged_runtime;
@@ -3088,14 +3515,23 @@ fn static_permissions_json<E: LocalExecutor + Clone>(
 // Connection handler
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn handle_connection<E: LocalExecutor + Clone>(
     mut stream: TcpStream,
     state: &ApiState<E>,
+    request_deadline: Duration,
 ) -> Result<(), String> {
-    let request = match read_http_request(&mut stream) {
+    let deadline = Instant::now() + request_deadline;
+    let request = match read_http_request(&mut stream, deadline) {
         Ok(request) => request,
         Err(message) => {
-            let (status, reason, code) = if message.contains("too large") {
+            let (status, reason, code) = if message.contains("timed out") {
+                (408, "Request Timeout", "request_timeout")
+            } else if message.contains("too many headers") {
+                (431, "Request Header Fields Too Large", "too_many_headers")
+            } else if message.contains("headers too large") {
+                (431, "Request Header Fields Too Large", "header_too_large")
+            } else if message.contains("too large") {
                 (413, "Payload Too Large", "payload_too_large")
             } else {
                 (400, "Bad Request", "invalid_request")
@@ -3262,6 +3698,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::AppSessions(workspace_id, app_id) => {
             handle_app_sessions(w, request, state, loopback, &workspace_id, &app_id)
+        }
+        WorkspaceOperation::AppCommands(workspace_id, app_id) => {
+            handle_app_commands(w, request, state, loopback, &workspace_id, &app_id)
         }
     }
 }
@@ -3481,27 +3920,26 @@ fn handle_list_capabilities<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    &workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("registry_read"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                &workspace_id,
+                "auth_failure",
+                None,
+                Some("registry_read"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -3560,18 +3998,17 @@ fn handle_register_capability<W: Write, E: LocalExecutor + Clone>(
     state: &ApiState<E>,
     loopback: bool,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (workspace_id, scope, persisted_registration) = match parse_register_body(&request.body) {
         Ok(parsed) => parsed,
@@ -3672,18 +4109,17 @@ fn handle_register_workspace_capability<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted_registration) =
         match parse_register_body_for_workspace(&request.body, workspace_id) {
@@ -3845,18 +4281,17 @@ fn handle_register_workspace_event_contract<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted_registration) =
         match parse_event_register_body_for_workspace(&request.body, workspace_id) {
@@ -3956,18 +4391,17 @@ fn handle_register_workspace_workflow<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (scope, persisted) =
         match parse_workflow_register_body_for_workspace(&request.body, workspace_id) {
@@ -4051,18 +4485,17 @@ fn handle_register_workspace_bundle<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let bundle = match parse_bundle_register_body_for_workspace(&request.body, workspace_id) {
         Ok(bundle) => bundle,
@@ -4125,27 +4558,26 @@ fn handle_approve_runtime_grant<W: Write, E: LocalExecutor + Clone>(
     loopback: bool,
     workspace_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("runtime_grants"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("runtime_grants"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4260,18 +4692,17 @@ fn handle_execute<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4322,27 +4753,26 @@ fn handle_execute_workspace<W: Write, E: LocalExecutor + Clone>(
         return Ok(());
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                audit_workspace_event(
-                    state,
-                    workspace_id,
-                    "auth_failure",
-                    None,
-                    Some("workspace_execute"),
-                    "failure",
-                    Some(err.code),
-                )?;
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("workspace_execute"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4488,18 +4918,91 @@ fn parse_execute_runtime_request<W: Write>(
     match parse_runtime_request(body_str) {
         Ok(value) => Ok(value),
         Err(e) => {
-            let _ = write_json(
-                w,
-                400,
-                "Bad Request",
-                &error_envelope(
-                    "invalid_request",
-                    &format!("failed to parse RuntimeRequest: {e}"),
-                ),
-            );
-            Err(())
+            if let Ok(value) = parse_simplified_workspace_execute_request(body_str) {
+                Ok(value)
+            } else {
+                let _ = write_json(
+                    w,
+                    400,
+                    "Bad Request",
+                    &error_envelope(
+                        "invalid_request",
+                        &format!("failed to parse RuntimeRequest: {e}"),
+                    ),
+                );
+                Err(())
+            }
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SimplifiedWorkspaceExecuteRequest {
+    capability_id: String,
+    #[serde(default)]
+    capability_version: Option<String>,
+    input: Value,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
+fn parse_simplified_workspace_execute_request(body: &str) -> Result<RuntimeRequest, ()> {
+    let request: SimplifiedWorkspaceExecuteRequest = serde_json::from_str(body).map_err(|_| ())?;
+    let capability_id = request.capability_id.trim();
+    if capability_id.is_empty() {
+        return Err(());
+    }
+    let capability_version = request
+        .capability_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("1.0.0")
+        .to_string();
+    let request_id = request
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map_or_else(
+            || {
+                format!(
+                    "http_{}",
+                    capability_id
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                        .collect::<String>()
+                )
+            },
+            ToString::to_string,
+        );
+
+    Ok(RuntimeRequest {
+        kind: "runtime_request".to_string(),
+        schema_version: "1.0.0".to_string(),
+        request_id,
+        intent: RuntimeIntent {
+            capability_id: Some(capability_id.to_string()),
+            capability_version: Some(capability_version),
+            version_range: None,
+            intent_key: None,
+        },
+        input: request.input,
+        lookup: RuntimeLookup {
+            scope: RuntimeLookupScope::PreferPrivate,
+            allow_ambiguity: false,
+        },
+        context: RuntimeContext {
+            requested_target: PlacementTarget::Local,
+            correlation_id: None,
+            caller: Some("workspace-execute".to_string()),
+            traceparent: None,
+            tracestate: None,
+            metadata: None,
+            identity: None,
+        },
+        governing_spec: "006-runtime-request-execution".to_string(),
+    })
 }
 
 fn workspace_execute_path(path: &str) -> Option<String> {
@@ -4570,6 +5073,11 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
             .or_else(|| workspace_bundles_path(path).map(WorkspaceOperation::RegisterBundle))
             .or_else(|| {
                 workspace_runtime_grants_path(path).map(WorkspaceOperation::ApproveRuntimeGrant)
+            })
+            .or_else(|| {
+                workspace_app_commands_path(path).map(|(workspace_id, app_id)| {
+                    WorkspaceOperation::AppCommands(workspace_id, app_id)
+                })
             }),
         "GET" => workspace_execution_status_path(path)
             .map(|(workspace_id, execution_id)| {
@@ -4616,6 +5124,20 @@ fn workspace_app_events_path(path: &str) -> Option<(String, String)> {
     let suffix = path.strip_prefix("/v1/workspaces/")?;
     let (workspace_id, tail) = suffix.split_once("/apps/")?;
     let app_id = tail.strip_suffix("/events")?;
+    if workspace_id.trim().is_empty()
+        || app_id.trim().is_empty()
+        || workspace_id.contains('/')
+        || app_id.contains('/')
+    {
+        return None;
+    }
+    Some((workspace_id.to_string(), app_id.to_string()))
+}
+
+fn workspace_app_commands_path(path: &str) -> Option<(String, String)> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let (workspace_id, tail) = suffix.split_once("/apps/")?;
+    let app_id = tail.strip_suffix("/commands")?;
     if workspace_id.trim().is_empty()
         || app_id.trim().is_empty()
         || workspace_id.contains('/')
@@ -4677,18 +5199,17 @@ fn handle_app_events<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     app_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4761,18 +5282,17 @@ fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     app_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -4831,6 +5351,457 @@ fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
     })?;
 
     write_json(w, 200, "OK", &response)
+}
+
+fn handle_app_commands<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+    app_id: &str,
+) -> Result<(), String> {
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                None,
+                Some("app_command_dispatch"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let _ = match ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_RUNTIME_EXECUTE,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            audit_workspace_event(
+                state,
+                workspace_id,
+                "auth_failure",
+                Some(&identity),
+                Some("app_command_dispatch"),
+                "failure",
+                Some(err.code),
+            )?;
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+
+    let parsed = match parse_app_command_request(&request.body) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            return write_json(
+                w,
+                400,
+                "Bad Request",
+                &error_envelope("invalid_request", &message),
+            );
+        }
+    };
+
+    let (status, reason, body) = state.with_workspace_mut(workspace_id, |ws| {
+        dispatch_app_command(ws, workspace_id, app_id, &parsed)
+    })?;
+    write_json(w, status, reason, &body)
+}
+
+struct AppCommandRequest {
+    command: String,
+    payload: Value,
+    session_id: Option<String>,
+}
+
+fn parse_app_command_request(body: &[u8]) -> Result<AppCommandRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("request body is not valid JSON: {e}"))?;
+    let Some(object) = value.as_object() else {
+        return Err("request body must be a JSON object".to_string());
+    };
+    let command = match object.get("command") {
+        Some(Value::String(command)) if !command.trim().is_empty() => command.clone(),
+        _ => return Err("'command' must be a non-empty string".to_string()),
+    };
+    let session_id = match object.get("session_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(session_id)) if !session_id.trim().is_empty() => {
+            Some(session_id.clone())
+        }
+        _ => return Err("'session_id' must be a non-empty string when present".to_string()),
+    };
+    let payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
+    Ok(AppCommandRequest {
+        command,
+        payload,
+        session_id,
+    })
+}
+
+fn dispatch_app_command<E: LocalExecutor + Clone>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    request: &AppCommandRequest,
+) -> Result<(u16, &'static str, Value), String> {
+    let Some(machine) = ws.app_state_machines.get(app_id).cloned() else {
+        return Ok((
+            404,
+            "Not Found",
+            error_envelope(
+                "app_not_registered",
+                &format!(
+                    "app '{app_id}' is not registered with a state machine \
+                     in workspace '{workspace_id}'"
+                ),
+            ),
+        ));
+    };
+
+    let (session_id, current_state) = match &request.session_id {
+        Some(session_id) => {
+            let last_state = ws
+                .app_events
+                .iter()
+                .rev()
+                .find(|event| event.app_id == app_id && &event.session_id == session_id)
+                .map(|event| event.state.clone());
+            (
+                session_id.clone(),
+                last_state.unwrap_or_else(|| machine.initial_state.clone()),
+            )
+        }
+        None => (
+            format!("sess-{:08}", ws.app_events.len() + 1),
+            machine.initial_state.clone(),
+        ),
+    };
+
+    let accepted_state =
+        match resolve_app_command_transition(&machine, &session_id, &current_state, request) {
+            Ok(accepted_state) => accepted_state,
+            Err(rejection) => return Ok(rejection),
+        };
+    let command_id = format!("cmd-{:08}", ws.app_events.len() + 1);
+    let timestamp = generated_registered_at().map_err(|e| e.message)?;
+    push_app_state_changed_event(
+        ws,
+        workspace_id,
+        app_id,
+        &session_id,
+        &command_id,
+        &accepted_state,
+        &current_state,
+        &timestamp,
+    );
+
+    let execution_id = run_app_command_invoke(
+        ws,
+        workspace_id,
+        app_id,
+        &session_id,
+        &machine,
+        &accepted_state,
+        &command_id,
+        &request.payload,
+        &timestamp,
+    );
+
+    let body = json!({
+        "api_version": "v1",
+        "status": "accepted",
+        "workspace_id": workspace_id,
+        "app_id": app_id,
+        "session_id": session_id,
+        "command": request.command,
+        "state": accepted_state,
+        "execution_id": execution_id,
+        "links": {
+            "events": format!("/v1/workspaces/{workspace_id}/apps/{app_id}/events"),
+            "sessions": format!("/v1/workspaces/{workspace_id}/apps/{app_id}/sessions"),
+        },
+    });
+    Ok((202, "Accepted", body))
+}
+
+fn resolve_app_command_transition(
+    machine: &ApplicationStateMachine,
+    session_id: &str,
+    current_state: &str,
+    request: &AppCommandRequest,
+) -> Result<String, (u16, &'static str, Value)> {
+    let Some(state_definition) = machine.states.iter().find(|s| s.id == current_state) else {
+        return Err((
+            409,
+            "Conflict",
+            error_envelope(
+                "invalid_transition",
+                &format!(
+                    "session '{session_id}' is in state '{current_state}', \
+                     which is not declared by the app state machine"
+                ),
+            ),
+        ));
+    };
+
+    let Some(transition) = state_definition
+        .transitions
+        .iter()
+        .find(|transition| transition.on == request.command)
+    else {
+        let known_command = machine.states.iter().any(|state| {
+            state
+                .transitions
+                .iter()
+                .any(|transition| transition.on == request.command)
+        });
+        if known_command {
+            return Err((
+                409,
+                "Conflict",
+                error_envelope(
+                    "invalid_transition",
+                    &format!(
+                        "command '{}' is not a valid transition from state '{current_state}'",
+                        request.command
+                    ),
+                ),
+            ));
+        }
+        return Err((
+            422,
+            "Unprocessable Entity",
+            error_envelope(
+                "unknown_command",
+                &format!(
+                    "command '{}' is not declared by the app state machine",
+                    request.command
+                ),
+            ),
+        ));
+    };
+
+    Ok(transition.to.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_app_command_invoke<E: LocalExecutor + Clone>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    machine: &ApplicationStateMachine,
+    accepted_state: &str,
+    command_id: &str,
+    payload: &Value,
+    timestamp: &str,
+) -> Option<String> {
+    let invoke = machine
+        .states
+        .iter()
+        .find(|state| state.id == accepted_state)
+        .and_then(|state| state.invoke.clone())?;
+    let runtime_request = RuntimeRequest {
+        kind: "runtime_request".to_string(),
+        schema_version: "1.0.0".to_string(),
+        request_id: command_id.to_string(),
+        intent: RuntimeIntent {
+            capability_id: Some(invoke.capability_id.clone()),
+            capability_version: None,
+            version_range: None,
+            intent_key: None,
+        },
+        input: payload.clone(),
+        lookup: RuntimeLookup {
+            scope: RuntimeLookupScope::PreferPrivate,
+            allow_ambiguity: false,
+        },
+        context: RuntimeContext {
+            requested_target: PlacementTarget::Local,
+            correlation_id: Some(session_id.to_string()),
+            caller: None,
+            traceparent: None,
+            tracestate: None,
+            metadata: None,
+            identity: None,
+        },
+        governing_spec: "006-runtime-request-execution".to_string(),
+    };
+    let outcome = ws.runtime.execute(runtime_request);
+    let execution_id = outcome.result.execution_id.clone();
+    let succeeded = outcome.result.status != RuntimeResultStatus::Error;
+    ws.executions.insert(
+        execution_id.clone(),
+        ExecutionStatusRecord {
+            execution_id: execution_id.clone(),
+            status: if succeeded { "succeeded" } else { "failed" }.to_string(),
+            created_at: timestamp.to_string(),
+            updated_at: timestamp.to_string(),
+        },
+    );
+    ws.traces
+        .insert(execution_id.clone(), outcome.trace.clone());
+    push_app_command_outcome_events(
+        ws,
+        workspace_id,
+        app_id,
+        session_id,
+        machine,
+        accepted_state,
+        &invoke.capability_id,
+        &outcome,
+        timestamp,
+    );
+    Some(execution_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_app_state_changed_event<E>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    execution_id: &str,
+    state: &str,
+    previous_state: &str,
+    timestamp: &str,
+) {
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:state_changed:{state}"),
+        event_type: "state_changed".to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.to_string(),
+        state: state.to_string(),
+        previous_state: Some(previous_state.to_string()),
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "state": state,
+            "previous_state": previous_state,
+            "timestamp": timestamp,
+        }),
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_app_command_outcome_events<E>(
+    ws: &mut WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+    session_id: &str,
+    machine: &ApplicationStateMachine,
+    invoking_state: &str,
+    capability_id: &str,
+    outcome: &RuntimeExecutionOutcome,
+    timestamp: &str,
+) {
+    let execution_id = outcome.result.execution_id.clone();
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:capability_invoked"),
+        event_type: "capability_invoked".to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.clone(),
+        state: invoking_state.to_string(),
+        previous_state: None,
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "capability_id": capability_id,
+            "state": invoking_state,
+            "timestamp": timestamp,
+        }),
+    });
+
+    let succeeded = outcome.result.status != RuntimeResultStatus::Error;
+    let lifecycle_event = if succeeded {
+        "capability_succeeded"
+    } else {
+        "capability_failed"
+    };
+    let final_state = machine
+        .states
+        .iter()
+        .find(|state| state.id == invoking_state)
+        .and_then(|state| {
+            state
+                .transitions
+                .iter()
+                .find(|transition| transition.on == lifecycle_event)
+        })
+        .map_or_else(|| invoking_state.to_string(), |t| t.to.clone());
+    if final_state != invoking_state {
+        push_app_state_changed_event(
+            ws,
+            workspace_id,
+            app_id,
+            session_id,
+            &execution_id,
+            &final_state,
+            invoking_state,
+            timestamp,
+        );
+    }
+
+    let result_event_type = if succeeded {
+        "capability_result"
+    } else {
+        "error"
+    };
+    ws.app_events.push(AppStateEventRecord {
+        event_id: format!("{execution_id}:{result_event_type}"),
+        event_type: result_event_type.to_string(),
+        workspace_id: workspace_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        execution_id: execution_id.clone(),
+        state: final_state.clone(),
+        previous_state: Some(invoking_state.to_string()),
+        timestamp: timestamp.to_string(),
+        data: json!({
+            "workspace_id": workspace_id,
+            "app_id": app_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "state": final_state,
+            "previous_state": invoking_state,
+            "timestamp": timestamp,
+            "output": outcome.result.output,
+            "error": outcome.result.error.as_ref().map(|e| json!({
+                "code": format!("{:?}", e.code).to_lowercase(),
+                "message": e.message,
+            })),
+        }),
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5172,7 +6143,13 @@ fn idempotency_replay_or_conflict<E: LocalExecutor + Clone>(
     prune_idempotency_records(state);
     let cache_key = idempotency_cache_key(request, workspace_id, operation, key);
     let body_digest = idempotency_body_digest(request);
-    let Some(record) = state.idempotency_records.borrow().get(&cache_key).cloned() else {
+    let Some(record) = state
+        .idempotency_records
+        .lock()
+        .map_err(|_| "idempotency record lock poisoned".to_string())?
+        .get(&cache_key)
+        .cloned()
+    else {
         return Ok(None);
     };
 
@@ -5212,17 +6189,21 @@ fn record_idempotent_success<E: LocalExecutor + Clone>(
     let cache_key = idempotency_cache_key(request, workspace_id, operation, key);
     let bytes =
         serde_json::to_vec(body).map_err(|e| format!("failed to serialize response: {e}"))?;
-    state.idempotency_records.borrow_mut().insert(
-        cache_key,
-        IdempotencyRecord {
-            body_digest: idempotency_body_digest(request),
-            status,
-            reason: reason.to_string(),
-            content_type: "application/json".to_string(),
-            body: bytes,
-            stored_at: unix_timestamp(),
-        },
-    );
+    state
+        .idempotency_records
+        .lock()
+        .map_err(|_| "idempotency record lock poisoned".to_string())?
+        .insert(
+            cache_key,
+            IdempotencyRecord {
+                body_digest: idempotency_body_digest(request),
+                status,
+                reason: reason.to_string(),
+                content_type: "application/json".to_string(),
+                body: bytes,
+                stored_at: unix_timestamp(),
+            },
+        );
     Ok(())
 }
 
@@ -5276,7 +6257,8 @@ fn prune_idempotency_records<E: LocalExecutor + Clone>(state: &ApiState<E>) {
     let now = unix_timestamp();
     state
         .idempotency_records
-        .borrow_mut()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .retain(|_, record| now.saturating_sub(record.stored_at) <= retention);
 }
 
@@ -5300,18 +6282,17 @@ fn handle_execution_status<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     execution_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5366,18 +6347,17 @@ fn handle_trace_fetch<W: Write, E: LocalExecutor + Clone>(
     workspace_id: &str,
     execution_id: &str,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5482,18 +6462,17 @@ fn handle_register_workflow<W: Write, E: LocalExecutor + Clone>(
     state: &ApiState<E>,
     loopback: bool,
 ) -> Result<(), String> {
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let (workspace_id, scope, persisted) = match parse_workflow_register_body(&request.body) {
         Ok(parsed) => parsed,
@@ -5581,18 +6560,17 @@ fn handle_list_workflows<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5680,18 +6658,17 @@ fn handle_get_workflow<W: Write, E: LocalExecutor + Clone>(
         }
     };
 
-    let identity =
-        match subject_from_request(&request.headers, state.allow_unauthenticated, loopback) {
-            Ok(identity) => identity,
-            Err(err) => {
-                return write_json(
-                    w,
-                    err.status,
-                    err.reason,
-                    &error_envelope(err.code, &err.message),
-                );
-            }
-        };
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
 
     let _ = match ensure_workspace_authorized(
         &state.registry_root,
@@ -5817,25 +6794,43 @@ pub(crate) struct HttpRequest {
     pub(crate) body: Vec<u8>,
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
+/// Reads and parses one HTTP request from `stream`, enforcing a whole-request
+/// `deadline` across both the header and body read phases (spec
+/// 033-http-json-api connection-handling model). A per-call socket
+/// `read_timeout`/`write_timeout` is set by the caller before this runs and
+/// bounds any single blocking read; `deadline` additionally bounds the total
+/// time spent here so a slow trickle of bytes cannot extend a request
+/// indefinitely by staying just under the per-read timeout.
+fn read_http_request(stream: &mut TcpStream, deadline: Instant) -> Result<HttpRequest, String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
 
     loop {
+        if Instant::now() >= deadline {
+            return Err("HTTP request timed out reading headers".to_string());
+        }
         let mut chunk = [0_u8; 1024];
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|e| format!("failed to read HTTP request: {e}"))?;
+        let n = stream.read(&mut chunk).map_err(|e| {
+            if is_timeout_error(&e) {
+                "HTTP request timed out reading headers".to_string()
+            } else {
+                format!("failed to read HTTP request: {e}")
+            }
+        })?;
         if n == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..n]);
+        // Enforce the size cap before checking for the terminator: a header
+        // block that happens to complete in the same read that pushes it
+        // over the cap must still be rejected, not admitted because the
+        // terminator arrived in the same chunk.
+        if buffer.len() > MAX_REQUEST_HEADER_BYTES {
+            return Err("HTTP request headers too large".to_string());
+        }
         if let Some(idx) = find_header_end(&buffer) {
             header_end = Some(idx);
             break;
-        }
-        if buffer.len() > MAX_REQUEST_BODY {
-            return Err("HTTP request headers too large".to_string());
         }
     }
 
@@ -5865,6 +6860,11 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+            if headers.len() > MAX_REQUEST_HEADER_COUNT {
+                return Err(format!(
+                    "HTTP request has too many headers (max {MAX_REQUEST_HEADER_COUNT})"
+                ));
+            }
         }
     }
 
@@ -5881,10 +6881,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 
     let mut body = buffer[header_end + 4..].to_vec();
     while body.len() < content_length {
+        if Instant::now() >= deadline {
+            return Err("HTTP request timed out reading body".to_string());
+        }
         let mut chunk = vec![0_u8; content_length - body.len()];
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|e| format!("failed to read HTTP request body: {e}"))?;
+        let n = stream.read(&mut chunk).map_err(|e| {
+            if is_timeout_error(&e) {
+                "HTTP request timed out reading body".to_string()
+            } else {
+                format!("failed to read HTTP request body: {e}")
+            }
+        })?;
         if n == 0 {
             break;
         }
@@ -5899,6 +6906,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         headers,
         body,
     })
+}
+
+fn is_timeout_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn parse_path_and_query(raw_path: &str) -> (String, HashMap<String, String>) {
@@ -6008,10 +7022,11 @@ mod tests {
     };
     use traverse_registry::ResolvedCapability;
     use traverse_registry::{
-        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
-        CapabilityRegistration, ComposabilityMetadata, CompositionKind, CompositionPattern,
-        ImplementationKind, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
-        WorkflowEdge, WorkflowNode, WorkflowNodeInput, WorkflowNodeOutput,
+        ApplicationState, ApplicationStateInvoke, ApplicationStateTransition, ArtifactDigests,
+        BinaryFormat, BinaryReference, CapabilityArtifactRecord, CapabilityRegistration,
+        ComposabilityMetadata, CompositionKind, CompositionPattern, ImplementationKind,
+        RegistryProvenance, RegistryScope, SourceKind, SourceReference, WorkflowEdge, WorkflowNode,
+        WorkflowNodeInput, WorkflowNodeOutput,
     };
     use traverse_runtime::{LocalExecutionFailure, LocalExecutionFailureCode};
 
@@ -6297,14 +7312,156 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: Vec::new(),
+                    publish_to_state_as: None,
                 },
             }],
             edges: Vec::<WorkflowEdge>::new(),
             start_node: "run_capability".to_string(),
             terminal_nodes: vec!["run_capability".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["test".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }
+    }
+
+    fn pipeline_workflow_definition_body(steps: &[(&str, &str, &str)]) -> Vec<u8> {
+        let nodes = steps
+            .iter()
+            .map(|(node_id, capability_id, namespace)| {
+                json!({
+                    "node_id": node_id,
+                    "capability_id": capability_id,
+                    "capability_version": "1.0.0",
+                    "input": {"from_workflow_input": []},
+                    "output": {
+                        "to_workflow_state": [],
+                        "publish_to_state_as": namespace
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let edges = steps
+            .windows(2)
+            .map(|pair| {
+                json!({
+                    "edge_id": format!("{}_to_{}", pair[0].0, pair[1].0),
+                    "from": pair[0].0,
+                    "to": pair[1].0,
+                    "trigger": "direct",
+                    "event": null
+                })
+            })
+            .collect::<Vec<_>>();
+        let projection = steps
+            .iter()
+            .map(|(_, _, namespace)| (*namespace).to_string())
+            .collect::<Vec<_>>();
+        json!({
+            "scope": "workspace_persisted",
+            "registry_scope": "private",
+            "workflow": {
+                "kind": "workflow_definition",
+                "schema_version": "1.0.0",
+                "id": "test.pipeline.run",
+                "name": "run",
+                "version": "1.0.0",
+                "lifecycle": "active",
+                "owner": {"team": "test-team", "contact": "test@example.com"},
+                "summary": "test pipeline workflow",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {
+                    "type": "object",
+                    "required": projection,
+                    "additionalProperties": false
+                }},
+                "nodes": nodes,
+                "edges": edges,
+                "start_node": steps[0].0,
+                "terminal_nodes": [steps[steps.len() - 1].0],
+                "output_projection": projection,
+                "tags": ["test"],
+                "governing_spec": "007-workflow-registry-traversal"
+            }
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn execute_endpoint_runs_pipeline_workflow_capability_with_merged_output() {
+        let state = empty_state();
+        for capability_id in [
+            "test.pipeline.validate",
+            "test.pipeline.process",
+            "test.pipeline.summarize",
+        ] {
+            state
+                .with_workspace_mut("ws-test", |ws| {
+                    ws.runtime
+                        .register_capability(test_registration(capability_id, "1.0.0"))
+                        .map_err(|failure| format!("{failure:?}"))?;
+                    Ok(())
+                })
+                .expect("step capability must register");
+        }
+
+        let workflow_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/workflows",
+            pipeline_workflow_definition_body(&[
+                ("validate_step", "test.pipeline.validate", "validate"),
+                ("process_step", "test.pipeline.process", "process"),
+                ("summarize_step", "test.pipeline.summarize", "summarize"),
+            ]),
+        );
+        let mut workflow_out = Vec::new();
+        handle_workspace_operation(&mut workflow_out, &workflow_req, &state, true)
+            .expect("workflow registration must write a response");
+        assert_eq!(response_status(&workflow_out), 201);
+
+        let mut pipeline_registration = test_registration("test.pipeline.pipeline", "1.0.0");
+        pipeline_registration.artifact.implementation_kind = ImplementationKind::Workflow;
+        pipeline_registration.artifact.binary = None;
+        pipeline_registration.artifact.digests.binary_digest = None;
+        pipeline_registration.artifact.workflow_ref = Some(traverse_registry::WorkflowReference {
+            workflow_id: "test.pipeline.run".to_string(),
+            workflow_version: "1.0.0".to_string(),
+        });
+        pipeline_registration.composability = ComposabilityMetadata {
+            kind: CompositionKind::Composite,
+            patterns: vec![CompositionPattern::Sequential],
+            provides: vec!["test.pipeline.pipeline".to_string()],
+            requires: Vec::new(),
+        };
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.runtime
+                    .register_capability(pipeline_registration)
+                    .map_err(|failure| format!("{failure:?}"))?;
+                Ok(())
+            })
+            .expect("pipeline capability must register");
+
+        let execute_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/execute",
+            make_runtime_request_body("test.pipeline.pipeline"),
+        );
+        let mut execute_out = Vec::new();
+        handle_workspace_operation(&mut execute_out, &execute_req, &state, true)
+            .expect("workspace execute must write a response");
+
+        assert_eq!(response_status(&execute_out), 200);
+        let executed = parse_response_body(&execute_out);
+        assert_eq!(executed["status"], "succeeded");
+        assert_eq!(
+            executed["output"],
+            json!({
+                "validate": {},
+                "process": {},
+                "summarize": {}
+            })
+        );
     }
 
     fn valid_workflow_registration_body(id: &str, version: &str, capability_id: &str) -> Vec<u8> {
@@ -6410,6 +7567,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6420,9 +7578,10 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6465,6 +7624,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6475,9 +7635,10 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6507,6 +7668,7 @@ mod tests {
                 traces: HashMap::new(),
                 app_events: Vec::new(),
                 app_list_context_fields: HashMap::new(),
+                app_state_machines: HashMap::new(),
                 runtime_grants: Vec::new(),
             },
         );
@@ -6517,9 +7679,10 @@ mod tests {
             allowed_origins: Vec::new(),
             registry_root,
             executor,
-            workspaces: RefCell::new(workspaces),
-            idempotency_records: RefCell::new(HashMap::new()),
+            workspaces: Mutex::new(workspaces),
+            idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
         }
     }
 
@@ -6589,23 +7752,54 @@ mod tests {
         out
     }
 
+    fn test_jwt_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32])
+    }
+
+    fn test_jwt_verifying_key_hex() -> String {
+        use std::fmt::Write as _;
+        let mut hex = String::new();
+        for byte in test_jwt_signing_key().verifying_key().to_bytes() {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        hex
+    }
+
+    fn sign_jwt_eddsa(payload: &Value, key: &ed25519_dalek::SigningKey) -> String {
+        use ed25519_dalek::Signer;
+        let header = base64url_encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
+        let payload_b64 = base64url_encode(payload.to_string().as_bytes());
+        let signing_input = format!("{header}.{payload_b64}");
+        let signature = key.sign(signing_input.as_bytes());
+        let signature_b64 = base64url_encode(&signature.to_bytes());
+        format!("{header}.{payload_b64}.{signature_b64}")
+    }
+
     fn make_jwt(sub: &str, exp: i64, admin: bool) -> String {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
         let mut payload = json!({ "sub": sub, "exp": exp });
         if admin {
             payload["traverse_admin"] = json!(true);
         }
-        let payload_b64 = base64url_encode(payload.to_string().as_bytes());
-        format!("{header}.{payload_b64}.sig")
+        sign_jwt_eddsa(&payload, &test_jwt_signing_key())
     }
 
     fn make_scoped_jwt(sub: &str, exp: i64, scopes: &[&str]) -> String {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
         let payload = json!({
             "sub": sub,
             "exp": exp,
             "scope": scopes.join(" ")
         });
+        sign_jwt_eddsa(&payload, &test_jwt_signing_key())
+    }
+
+    /// Forge a token with `alg:none` and no real signature — the shape an
+    /// attacker uses to strip verification.
+    fn forge_unsigned_jwt(sub: &str, exp: i64, admin: bool) -> String {
+        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let mut payload = json!({ "sub": sub, "exp": exp });
+        if admin {
+            payload["traverse_admin"] = json!(true);
+        }
         let payload_b64 = base64url_encode(payload.to_string().as_bytes());
         format!("{header}.{payload_b64}.sig")
     }
@@ -7430,14 +8624,13 @@ mod tests {
     }
 
     #[test]
-    fn system_workspace_allows_admin_jwt() {
-        let state = empty_state();
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time must be valid")
-            .as_secs();
-        let now = i64::try_from(now_secs).expect("time must fit i64");
-        let token = make_jwt("admin-user", now + 3600, true);
+    fn system_workspace_allows_verified_admin_jwt() {
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("admin-user", future_exp(), true);
         let req = with_bearer(
             with_workspace_query(
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
@@ -7448,6 +8641,135 @@ mod tests {
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
         assert_eq!(response_status(&out), 200);
+    }
+
+    #[test]
+    fn forged_unsigned_admin_token_is_denied_system_workspace() {
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = forge_unsigned_jwt("attacker", future_exp(), true);
+        let req = with_bearer(
+            with_workspace_query(
+                make_http_request("GET", "/v1/capabilities", Vec::new()),
+                SYSTEM_WORKSPACE_ID,
+            ),
+            &token,
+        );
+        let mut out = Vec::new();
+        handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
+        assert_eq!(response_status(&out), 401);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "token_alg_not_allowed"
+        );
+    }
+
+    #[test]
+    fn tampered_payload_of_signed_token_is_rejected() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("alice", future_exp(), false);
+        let mut parts = token.split('.');
+        let header = parts.next().expect("header");
+        let signature = parts.nth(1).expect("signature");
+        let forged_payload = base64url_encode(
+            json!({ "sub": "alice", "exp": future_exp(), "traverse_admin": true })
+                .to_string()
+                .as_bytes(),
+        );
+        let tampered = format!("{header}.{forged_payload}.{signature}");
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {tampered}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+            .expect_err("tampered token must be rejected");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "signature_verification_failed");
+    }
+
+    #[test]
+    fn bearer_required_without_key_rejects_all_tokens() {
+        let token = make_jwt("alice", future_exp(), false);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, None)
+            .expect_err("fail closed without a verification key");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "jwt_verification_unavailable");
+    }
+
+    #[test]
+    fn bearer_required_rejects_opaque_non_jwt_token() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "Bearer system_admin".to_string(),
+        );
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, None)
+            .expect_err("opaque tokens are not accepted on a network listener");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "unauthorized");
+    }
+
+    #[test]
+    fn dev_mode_unverified_jwt_cannot_be_admin() {
+        // dev-loopback, no key configured: a signed-shaped token still parses a
+        // subject but can never yield admin because it was not verified.
+        let token = make_jwt("admin-user", future_exp(), true);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let identity = subject_from_request(&headers, "dev-loopback", false, true, None)
+            .expect("dev token must resolve to a subject");
+        assert_eq!(identity.subject_id, "admin-user");
+        assert!(!identity.is_admin);
+    }
+
+    #[test]
+    fn verified_jwt_yields_admin_when_signed() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let token = make_jwt("admin-user", future_exp(), true);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let identity =
+            subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+                .expect("verified token must resolve");
+        assert_eq!(identity.subject_id, "admin-user");
+        assert!(identity.is_admin);
+    }
+
+    #[test]
+    fn nbf_in_future_rejects_token() {
+        let key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+        let payload = json!({ "sub": "alice", "exp": future_exp(), "nbf": future_exp() });
+        let token = sign_jwt_eddsa(&payload, &test_jwt_signing_key());
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {token}"));
+
+        let err = subject_from_request(&headers, "bearer-required", false, false, key.as_ref())
+            .expect_err("not-yet-valid token must be rejected");
+        assert_eq!(err.code, "token_not_yet_valid");
+    }
+
+    #[test]
+    fn parse_ed25519_verifying_key_rejects_wrong_length() {
+        assert!(parse_ed25519_verifying_key("00ff").is_err());
+        assert!(parse_ed25519_verifying_key("zz").is_err());
+        assert!(parse_ed25519_verifying_key(&test_jwt_verifying_key_hex()).is_ok());
     }
 
     // ------------------------------------------------------------------
@@ -7501,6 +8823,32 @@ mod tests {
             resp["links"]["trace"],
             "/v1/workspaces/ws-test/traces/exec_test-req-001"
         );
+    }
+
+    #[test]
+    fn workspace_execute_endpoint_accepts_simplified_capability_request() {
+        let body = json!({
+            "capability_id": "test.api.do-something",
+            "input": {
+                "value": "demo"
+            }
+        })
+        .to_string()
+        .into_bytes();
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+
+        let mut out = Vec::new();
+        handle_execute_workspace(&mut out, &req, &state, true, "ws-test")
+            .expect("execute must write a response");
+
+        let status = response_status(&out);
+        let resp = parse_response_body(&out);
+
+        assert_eq!(status, 200);
+        assert_eq!(resp["status"], "succeeded");
+        assert_eq!(resp["output"]["result"], "ok");
+        assert_eq!(resp["execution_id"], "exec_http_test_api_do_something");
     }
 
     #[test]
@@ -7577,7 +8925,14 @@ mod tests {
         assert_eq!(response_status(&first), 200);
         assert_eq!(response_status(&second), 200);
         assert_eq!(parse_response_body(&first), parse_response_body(&second));
-        assert_eq!(state.idempotency_records.borrow().len(), 1);
+        assert_eq!(
+            state
+                .idempotency_records
+                .lock()
+                .expect("idempotency lock must not be poisoned")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -7617,22 +8972,33 @@ mod tests {
             DEFAULT_IDEMPOTENCY_RETENTION_SECONDS
         );
 
-        state.idempotency_records.borrow_mut().insert(
-            "old".to_string(),
-            IdempotencyRecord {
-                body_digest: "fnv1a64:old".to_string(),
-                status: 200,
-                reason: "OK".to_string(),
-                content_type: "application/json".to_string(),
-                body: b"{}".to_vec(),
-                stored_at: unix_timestamp().saturating_sub(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1),
-            },
-        );
+        state
+            .idempotency_records
+            .lock()
+            .expect("idempotency lock must not be poisoned")
+            .insert(
+                "old".to_string(),
+                IdempotencyRecord {
+                    body_digest: "fnv1a64:old".to_string(),
+                    status: 200,
+                    reason: "OK".to_string(),
+                    content_type: "application/json".to_string(),
+                    body: b"{}".to_vec(),
+                    stored_at: unix_timestamp()
+                        .saturating_sub(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1),
+                },
+            );
         let mut state = state;
         state.idempotency_retention_seconds = 1;
         prune_idempotency_records(&state);
 
-        assert!(state.idempotency_records.borrow().is_empty());
+        assert!(
+            state
+                .idempotency_records
+                .lock()
+                .expect("idempotency lock must not be poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -7763,6 +9129,248 @@ mod tests {
             workspace_app_events_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
                 .is_none()
         );
+    }
+
+    fn seed_app_state_machine(state: &ApiState<TestExecutor>, app_id: &str, capability_id: &str) {
+        let machine = ApplicationStateMachine {
+            initial_state: "idle".to_string(),
+            list_context_fields: Vec::new(),
+            states: vec![
+                ApplicationState {
+                    id: "idle".to_string(),
+                    invoke: None,
+                    transitions: vec![ApplicationStateTransition {
+                        on: "submit".to_string(),
+                        to: "processing".to_string(),
+                        condition: None,
+                        with_last_payload: false,
+                    }],
+                },
+                ApplicationState {
+                    id: "processing".to_string(),
+                    invoke: Some(ApplicationStateInvoke {
+                        capability_id: capability_id.to_string(),
+                        input_from: "command.payload".to_string(),
+                    }),
+                    transitions: vec![
+                        ApplicationStateTransition {
+                            on: "capability_succeeded".to_string(),
+                            to: "results".to_string(),
+                            condition: None,
+                            with_last_payload: false,
+                        },
+                        ApplicationStateTransition {
+                            on: "capability_failed".to_string(),
+                            to: "error".to_string(),
+                            condition: None,
+                            with_last_payload: false,
+                        },
+                    ],
+                },
+                ApplicationState {
+                    id: "results".to_string(),
+                    invoke: None,
+                    transitions: Vec::new(),
+                },
+                ApplicationState {
+                    id: "error".to_string(),
+                    invoke: None,
+                    transitions: Vec::new(),
+                },
+            ],
+        };
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                ws.app_state_machines.insert(app_id.to_string(), machine);
+                Ok(())
+            })
+            .expect("state machine must be seeded");
+    }
+
+    fn make_app_command_body(command: &str, payload: &Value, session_id: Option<&str>) -> Vec<u8> {
+        let mut body = json!({
+            "command": command,
+            "payload": payload,
+        });
+        if let (Some(session_id), Value::Object(root)) = (session_id, &mut body) {
+            root.insert(
+                "session_id".to_string(),
+                Value::String(session_id.to_string()),
+            );
+        }
+        body.to_string().into_bytes()
+    }
+
+    #[test]
+    fn app_commands_path_parses_workspace_and_app_id() {
+        assert_eq!(
+            workspace_app_commands_path("/v1/workspaces/ws-test/apps/traverse-starter/commands"),
+            Some(("ws-test".to_string(), "traverse-starter".to_string()))
+        );
+        assert!(workspace_app_commands_path("/v1/workspaces/ws-test/apps//commands").is_none());
+        assert!(
+            workspace_app_commands_path("/v1/workspaces/ws-test/apps/traverse-starter/other")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn app_command_returns_404_for_app_without_state_machine() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 404);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "app_not_registered");
+    }
+
+    #[test]
+    fn app_command_returns_422_for_unknown_command() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("does-not-exist", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 422);
+        assert_eq!(response_content_type(&out), "application/problem+json");
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "unknown_command");
+        assert_eq!(resp["status"], 422);
+    }
+
+    #[test]
+    fn app_command_returns_409_for_invalid_transition_from_current_state() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "first"}), Some("sess-repeat")),
+        );
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("command dispatch must write a response");
+        assert_eq!(response_status(&first_out), 202);
+
+        let second_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "second"}), Some("sess-repeat")),
+        );
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&second_out), 409);
+        assert_eq!(
+            response_content_type(&second_out),
+            "application/problem+json"
+        );
+        let resp = parse_response_body(&second_out);
+        assert_eq!(resp["traverse_code"], "invalid_transition");
+        assert_eq!(resp["status"], 409);
+    }
+
+    #[test]
+    fn app_command_returns_400_for_malformed_body() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            b"{\"payload\": {}}".to_vec(),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 400);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "invalid_request");
+    }
+
+    #[test]
+    fn app_command_dispatch_emits_state_changed_and_capability_result_on_sse() {
+        let state = test_state_with("traverse-starter.process", "1.0.0");
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+
+        let command_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({"note": "Meeting with design team"}), None),
+        );
+        let mut command_out = Vec::new();
+        handle_workspace_operation(&mut command_out, &command_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&command_out), 202);
+        let accepted = parse_response_body(&command_out);
+        assert_eq!(accepted["api_version"], "v1");
+        assert_eq!(accepted["status"], "accepted");
+        assert_eq!(accepted["command"], "submit");
+        assert_eq!(accepted["state"], "processing");
+        let session_id = accepted["session_id"]
+            .as_str()
+            .expect("session_id must be a string")
+            .to_string();
+        assert!(!session_id.is_empty());
+        assert!(
+            accepted["execution_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+        assert_eq!(
+            accepted["links"]["events"],
+            "/v1/workspaces/ws-test/apps/traverse-starter/events"
+        );
+
+        let events_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        let mut events_out = Vec::new();
+        handle_app_events(
+            &mut events_out,
+            &events_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("events endpoint must write a response");
+
+        assert_eq!(response_status(&events_out), 200);
+        assert_eq!(response_content_type(&events_out), "text/event-stream");
+        let body = response_body_text(&events_out);
+        assert!(body.contains("event: state_changed"));
+        assert!(body.contains("\"state\":\"processing\""));
+        assert!(body.contains("\"previous_state\":\"idle\""));
+        assert!(body.contains("event: capability_invoked"));
+        assert!(body.contains("\"capability_id\":\"traverse-starter.process\""));
+        assert!(body.contains("event: capability_result"));
+        assert!(body.contains("\"state\":\"results\""));
+        assert!(body.contains("\"previous_state\":\"processing\""));
+        assert!(body.contains("\"result\":\"ok\""));
+        assert!(body.contains(&format!("\"session_id\":\"{session_id}\"")));
     }
 
     #[test]
@@ -8240,6 +9848,11 @@ mod tests {
             .expect("workspace execute must write a response");
         let executed = parse_response_body(&execute_out);
         assert_eq!(executed["status"], "succeeded");
+
+        assert!(!persisted_registry_path(&state.registry_root, "ws-test").exists());
+        let reloaded = load_persisted_registry(&state.registry_root, "ws-test")
+            .expect("journaled capability registration must reload");
+        assert_eq!(reloaded.registrations.len(), 1);
     }
 
     #[test]
@@ -8684,6 +10297,19 @@ mod tests {
             })
             .expect("workspace lookup must succeed");
         assert_eq!(registered, (true, true, true));
+
+        let journal = std::fs::read_to_string(persisted_registry_journal_path(
+            &state.registry_root,
+            "ws-test",
+        ))
+        .expect("bundle registration must append a journal entry");
+        assert_eq!(journal.lines().count(), 1);
+
+        let reloaded = load_persisted_registry(&state.registry_root, "ws-test")
+            .expect("persisted bundle must reload");
+        assert_eq!(reloaded.registrations.len(), 1);
+        assert_eq!(reloaded.events.len(), 1);
+        assert_eq!(reloaded.workflows.len(), 1);
     }
 
     #[test]
@@ -9083,6 +10709,213 @@ mod tests {
         assert_eq!(
             runtime_security_for_auth_mode("bearer-required"),
             RuntimeSecurityConfig::production()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Connection handling / DoS hardening (spec 033-http-json-api,
+    // issue #581 - bounded timeouts + bounded worker pool)
+    // ------------------------------------------------------------------
+
+    fn spawn_test_pool(limits: ConnectionLimits, worker_count: usize) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let state = Arc::new(test_state_with("test.api.do-something", "1.0.0"));
+        thread::spawn(move || {
+            let _ = run_connection_pool(&listener, &state, limits, worker_count);
+        });
+        addr
+    }
+
+    fn read_all_with_timeout(stream: &mut TcpStream, timeout: Duration) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(timeout))
+            .expect("client read timeout must be set");
+        let mut out = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&chunk[..n]),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn idle_connection_times_out_without_blocking_other_callers() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_millis(200),
+            write_timeout: Duration::from_millis(200),
+            request_deadline: Duration::from_millis(400),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut idle = TcpStream::connect(addr).expect("idle connection must connect");
+        idle.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n")
+            .expect("partial idle request must write");
+
+        // Give the lone worker a moment to pick up the idle connection first,
+        // so the healthy request below is proven to be queued behind it.
+        thread::sleep(Duration::from_millis(50));
+
+        let mut healthy = TcpStream::connect(addr).expect("healthy connection must connect");
+        healthy
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            .expect("healthy request must write");
+
+        let healthy_response = read_all_with_timeout(&mut healthy, Duration::from_secs(5));
+        assert_eq!(
+            response_status(&healthy_response),
+            200,
+            "a concurrent healthy request must not be blocked by an idle connection"
+        );
+
+        let idle_response = read_all_with_timeout(&mut idle, Duration::from_secs(5));
+        assert_eq!(response_status(&idle_response), 408);
+    }
+
+    #[test]
+    fn slow_trickle_connection_is_bounded_by_request_deadline() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_millis(300),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut trickle = TcpStream::connect(addr).expect("trickle connection must connect");
+        trickle
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("client read timeout must be set");
+        let mut writer = trickle
+            .try_clone()
+            .expect("trickle connection must be cloneable");
+
+        let started = Instant::now();
+        // Write on a separate handle to the same socket so a read of the
+        // server's response can happen concurrently: once the server closes
+        // the connection after the deadline, continuing to write on this
+        // thread can trigger a reset that would otherwise race with (and
+        // potentially discard) the still-unread response.
+        let writer_handle = thread::spawn(move || {
+            for byte in b"GET /healthz HTTP/1.1\r\nHost: x\r\n" {
+                if writer.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(60));
+            }
+        });
+
+        let response = read_all_with_timeout(&mut trickle, Duration::from_secs(5));
+        let elapsed = started.elapsed();
+        let _ = writer_handle.join();
+
+        assert_eq!(response_status(&response), 408);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the request deadline (300ms) must cut off a slow trickle long before \
+             the 5s per-read timeout would, but it took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn concurrent_healthy_clients_are_all_served() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_secs(5),
+        };
+        let addr = spawn_test_pool(limits, 4);
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                thread::spawn(move || {
+                    let mut stream =
+                        TcpStream::connect(addr).expect("client connection must connect");
+                    stream
+                        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+                        .expect("client request must write");
+                    let response = read_all_with_timeout(&mut stream, Duration::from_secs(5));
+                    response_status(&response)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("client thread must not panic"), 200);
+        }
+    }
+
+    #[test]
+    fn oversized_body_is_rejected_over_socket() {
+        let limits = ConnectionLimits {
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+            request_deadline: Duration::from_secs(5),
+        };
+        let addr = spawn_test_pool(limits, 1);
+
+        let mut stream = TcpStream::connect(addr).expect("connection must connect");
+        let oversized_length = MAX_REQUEST_BODY + 1;
+        let request = format!(
+            "POST /v1/workspaces/ws-test/execute HTTP/1.1\r\nHost: x\r\nContent-Length: {oversized_length}\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .expect("request headers must write");
+
+        let response = read_all_with_timeout(&mut stream, Duration::from_secs(5));
+        assert_eq!(response_status(&response), 413);
+    }
+
+    #[test]
+    fn oversized_headers_are_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept must succeed");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            read_http_request(&mut stream, deadline).map(|_| ())
+        });
+
+        let mut client = TcpStream::connect(addr).expect("client connection must connect");
+        let oversized_header_value = "x".repeat(MAX_REQUEST_HEADER_BYTES + 1);
+        let request = format!(
+            "GET /healthz HTTP/1.1\r\nHost: x\r\nX-Filler: {oversized_header_value}\r\n\r\n"
+        );
+        client
+            .write_all(request.as_bytes())
+            .expect("oversized header request must write");
+
+        let result = server.join().expect("server thread must not panic");
+        assert_eq!(result, Err("HTTP request headers too large".to_string()));
+    }
+
+    #[test]
+    fn too_many_headers_are_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let addr = listener.local_addr().expect("local addr must resolve");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept must succeed");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            read_http_request(&mut stream, deadline).map(|_| ())
+        });
+
+        let mut client = TcpStream::connect(addr).expect("client connection must connect");
+        let mut request = String::from("GET /healthz HTTP/1.1\r\nHost: x\r\n");
+        for i in 0..(MAX_REQUEST_HEADER_COUNT + 5) {
+            let _ = write!(request, "X-Filler-{i}: 1\r\n");
+        }
+        request.push_str("\r\n");
+        client
+            .write_all(request.as_bytes())
+            .expect("many-header request must write");
+
+        let result = server.join().expect("server thread must not panic");
+        assert!(
+            matches!(&result, Err(message) if message.contains("too many headers")),
+            "expected too-many-headers rejection, got {result:?}"
         );
     }
 }

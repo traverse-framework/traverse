@@ -1,0 +1,117 @@
+{
+  "app_id": "meeting-notes",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "workspace_defaults": {
+    "workspace_id": "local-default",
+    "registry_scope": "private"
+  },
+  "components": [
+    {
+      "component_id": "meeting-notes.process-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/process/component.manifest.json"
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "meeting-notes.process",
+      "workflow_version": "1.0.0",
+      "path": "../../workflows/examples/meeting-notes/process/workflow.json"
+    }
+  ],
+  "model_dependencies": [],
+  "config_schema": {
+    "type": "object",
+    "required": [
+      "workspace_id"
+    ],
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "processing_mode": {
+        "type": "string",
+        "enum": [
+          "deterministic"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "default_config": {
+    "workspace_id": "local-default",
+    "processing_mode": "deterministic"
+  },
+  "placement_policy": {
+    "preferred_targets": [
+      "local"
+    ],
+    "allow_fallback": false
+  },
+  "public_surfaces": [
+    "cli",
+    "http_json"
+  ],
+  "state_machine": {
+    "initial_state": "idle",
+    "list_context_fields": [
+      "output.action_items",
+      "output.decisions",
+      "output.follow_ups",
+      "output.summary"
+    ],
+    "states": [
+      {
+        "id": "idle",
+        "transitions": [
+          {
+            "on": "submit",
+            "to": "processing"
+          }
+        ]
+      },
+      {
+        "id": "processing",
+        "invoke": {
+          "capability_id": "meeting-notes.process",
+          "input_from": "command.payload"
+        },
+        "transitions": [
+          {
+            "on": "capability_succeeded",
+            "to": "results"
+          },
+          {
+            "on": "capability_failed",
+            "to": "error"
+          }
+        ]
+      },
+      {
+        "id": "results",
+        "transitions": [
+          {
+            "on": "reset",
+            "to": "idle"
+          }
+        ]
+      },
+      {
+        "id": "error",
+        "transitions": [
+          {
+            "on": "retry",
+            "to": "processing",
+            "with_last_payload": true
+          },
+          {
+            "on": "reset",
+            "to": "idle"
+          }
+        ]
+      }
+    ]
+  }
+}

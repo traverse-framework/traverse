@@ -4,18 +4,24 @@
 //!
 //! Two concrete implementations:
 //! - [`NativeExecutor`] — executes capabilities implemented as native Rust closures.
-//! - [`WasmExecutor`] — executes capabilities compiled to `wasm32-wasi` binaries via Wasmtime.
-//! - [`ThreadPoolExecutor`] — dispatches native capability execution onto a bounded worker pool.
-
+//! - `WasmExecutor` — executes capabilities compiled to `wasm32-wasi` binaries
+//!   via Wasmtime when the `wasmtime-executor` feature is enabled.
+//! - `ThreadPoolExecutor` — dispatches native capability execution onto a bounded
+//!   worker pool when the `native-executors` feature is enabled.
 pub mod native;
+#[cfg(feature = "native-executors")]
 pub mod thread_pool;
+#[cfg(feature = "wasmtime-executor")]
 pub mod wasm;
 
 pub use native::NativeExecutor;
+#[cfg(feature = "native-executors")]
 pub use thread_pool::{ConfigError, ThreadPoolExecutor, ThreadPoolExecutorConfig};
+#[cfg(feature = "wasmtime-executor")]
 pub use wasm::{
-    HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutor,
-    supported_host_abi_versions, verify_wasm_host_abi_bytes,
+    HostAbiImport, HostAbiValidation, SUPPORTED_HOST_ABI_VERSION, WasmExecutionLimits,
+    WasmExecutor, WasmModuleCacheConfig, WasmModuleCacheStats, supported_host_abi_versions,
+    verify_wasm_host_abi_bytes,
 };
 
 use serde_json::Value;
@@ -70,6 +76,10 @@ pub enum ExecutorError {
     },
     /// The WASM module trapped or returned a non-zero exit code.
     ExecutionFailed(String),
+    /// WASM execution exhausted its configured CPU budget.
+    Timeout(String),
+    /// WASM execution exceeded its configured memory, table, or instance budget.
+    ResourceExhausted(String),
     /// The executor produced output that could not be parsed as JSON.
     OutputDeserializationFailed(String),
     /// The executor type does not support the requested capability.
@@ -105,6 +115,8 @@ impl std::fmt::Display for ExecutorError {
                 "{error_code}: ABI {abi_version} does not allow import {module}::{name}"
             ),
             Self::ExecutionFailed(msg) => write!(f, "execution failed: {msg}"),
+            Self::Timeout(msg) => write!(f, "execution timed out: {msg}"),
+            Self::ResourceExhausted(msg) => write!(f, "resource exhausted: {msg}"),
             Self::OutputDeserializationFailed(msg) => {
                 write!(f, "output deserialization failed: {msg}")
             }

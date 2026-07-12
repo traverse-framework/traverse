@@ -17,18 +17,32 @@ use traverse_registry::{
 const OLLAMA_PROVIDER: &str = "ollama";
 const GENERATE_INTERFACE: &str = "traverse.inference.generate";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+/// Default cap on the buffered HTTP response from the (operator-configurable,
+/// possibly untrusted) inference endpoint, guarding against unbounded memory
+/// growth (spec 045-governed-model-dependency-resolution).
+const DEFAULT_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OllamaProviderConfig {
     pub base_url: String,
     #[serde(default)]
     pub request_timeout_ms: Option<u64>,
+    /// Maximum number of response bytes read from the endpoint before the
+    /// request is rejected. Defaults to [`DEFAULT_MAX_RESPONSE_BYTES`].
+    #[serde(default)]
+    pub max_response_bytes: Option<u64>,
 }
 
 impl OllamaProviderConfig {
     #[must_use]
     pub fn timeout(&self) -> Duration {
         Duration::from_millis(self.request_timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS))
+    }
+
+    #[must_use]
+    pub fn max_response_bytes(&self) -> u64 {
+        self.max_response_bytes
+            .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES)
     }
 }
 
@@ -234,6 +248,7 @@ impl OllamaInferenceProvider {
             method,
             &body_text,
             self.config.timeout(),
+            self.config.max_response_bytes(),
         )?;
         parse_http_json_response(&response_text)
     }
@@ -565,6 +580,7 @@ fn send_http_json(
     method: &str,
     body: &str,
     timeout: Duration,
+    max_response_bytes: u64,
 ) -> Result<String, OllamaInferenceError> {
     let address = format!("{host}:{port}");
     let socket_address = address
@@ -572,15 +588,42 @@ fn send_http_json(
         .next()
         .ok_or_else(|| provider_unavailable("Ollama endpoint did not resolve"))?;
     let mut stream = TcpStream::connect_timeout(&socket_address, timeout)?;
+    // Bound the whole exchange, not just connect: a peer that accepts and then
+    // stalls (or never sends EOF) would otherwise hang the thread forever
+    // despite request_timeout_ms (spec 045-governed-model-dependency-resolution).
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes())?;
 
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
-    Ok(response)
+    read_capped_response(&mut stream, max_response_bytes)
+}
+
+/// Read the response with an upper size bound so an endpoint that streams
+/// unbounded data cannot drive the host out of memory. The read is one byte
+/// over the cap to distinguish "exactly at cap" from "over cap".
+fn read_capped_response(
+    stream: &mut TcpStream,
+    max_response_bytes: u64,
+) -> Result<String, OllamaInferenceError> {
+    let mut buffer = Vec::new();
+    let limit = max_response_bytes.saturating_add(1);
+    stream.take(limit).read_to_end(&mut buffer)?;
+    if buffer.len() as u64 > max_response_bytes {
+        return Err(OllamaInferenceError::new(
+            OllamaInferenceErrorCode::InvalidResponse,
+            format!("Ollama response exceeded the {max_response_bytes}-byte limit"),
+        ));
+    }
+    String::from_utf8(buffer).map_err(|error| {
+        OllamaInferenceError::new(
+            OllamaInferenceErrorCode::InvalidResponse,
+            format!("Ollama response was not valid UTF-8: {error}"),
+        )
+    })
 }
 
 fn parse_http_json_response(response: &str) -> Result<Value, OllamaInferenceError> {

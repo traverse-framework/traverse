@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use traverse_registry::{
     ArtifactSignature, ArtifactSignatureScheme, ResolvedCapability, SourceKind,
 };
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeIdentity {
@@ -94,6 +95,8 @@ pub struct RuntimeWarning {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactVerificationFailure {
+    MissingChecksum(ArtifactVerificationRecord),
+    ChecksumMismatch(ArtifactVerificationRecord),
     MissingSignature(ArtifactVerificationRecord),
     SignatureVerificationFailed(ArtifactVerificationRecord),
     SigstoreUnreachable(ArtifactVerificationRecord),
@@ -103,6 +106,8 @@ impl ArtifactVerificationFailure {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::MissingChecksum(_) => "missing_checksum",
+            Self::ChecksumMismatch(_) => "checksum_mismatch",
             Self::MissingSignature(_) => "missing_signature",
             Self::SignatureVerificationFailed(_) => "signature_verification_failed",
             Self::SigstoreUnreachable(_) => "sigstore_unreachable",
@@ -112,13 +117,25 @@ impl ArtifactVerificationFailure {
     #[must_use]
     pub fn record(&self) -> &ArtifactVerificationRecord {
         match self {
-            Self::MissingSignature(record)
+            Self::MissingChecksum(record)
+            | Self::ChecksumMismatch(record)
+            | Self::MissingSignature(record)
             | Self::SignatureVerificationFailed(record)
             | Self::SigstoreUnreachable(record) => record,
         }
     }
 }
 
+/// Attribute a caller identity from a JWT bearer token for **tracing and audit
+/// only**.
+///
+/// This decodes the token payload without verifying its signature and returns a
+/// [`RuntimeIdentity`] (subject, optional actor, token hash) used purely to
+/// label execution traces. It carries **no privilege claim** and MUST NOT be
+/// used for any authorization decision. Access control lives at the HTTP
+/// boundary (`traverse-cli` `http_api`), which verifies the JWT signature and
+/// an `alg` allow-list before honoring any privileged claim (see spec
+/// 033-http-json-api and issue #580).
 #[must_use]
 pub fn derive_identity_from_jwt(token: &str) -> Option<RuntimeIdentity> {
     let mut parts = token.split('.');
@@ -129,7 +146,9 @@ pub fn derive_identity_from_jwt(token: &str) -> Option<RuntimeIdentity> {
         return None;
     }
     let payload = payload?;
-    let payload_bytes = base64url_decode(payload).ok()?;
+    // Zeroize the decoded credential bytes when this scope ends, on both the
+    // success and the early-return paths (spec 030 NFR-001).
+    let payload_bytes = Zeroizing::new(base64url_decode(payload).ok()?);
     let value = serde_json::from_slice::<Value>(&payload_bytes).ok()?;
     let subject_id = value
         .get("sub")
@@ -181,25 +200,53 @@ pub fn verify_artifact(
         return Err(ArtifactVerificationFailure::MissingSignature(record));
     };
 
-    match signature.scheme {
+    let verification = match signature.scheme {
         ArtifactSignatureScheme::Ed25519 => verify_ed25519(signature, artifact_bytes, trust_level),
         ArtifactSignatureScheme::Sigstore => verify_sigstore(signature, trust_level),
+    }?;
+    verify_checksum(capability, artifact_bytes, trust_level)?;
+    Ok(verification)
+}
+
+fn verify_checksum(
+    capability: &ResolvedCapability,
+    artifact_bytes: &[u8],
+    trust_level: ArtifactTrustLevel,
+) -> Result<(), ArtifactVerificationFailure> {
+    if trust_level != ArtifactTrustLevel::PublishedGoverned {
+        return Ok(());
+    }
+    let Some(expected) = capability.artifact.digests.binary_digest.as_deref() else {
+        return Err(ArtifactVerificationFailure::MissingChecksum(
+            rejected_record(trust_level, None, "missing_checksum"),
+        ));
+    };
+    let expected = expected.strip_prefix("sha256:").unwrap_or(expected);
+    let actual = sha256_hex(artifact_bytes);
+    if expected.eq_ignore_ascii_case(&actual) {
+        Ok(())
+    } else {
+        Err(ArtifactVerificationFailure::ChecksumMismatch(
+            rejected_record(trust_level, None, "checksum_mismatch"),
+        ))
     }
 }
 
+/// Classifies an artifact's trust level per spec 030-security-identity-model
+/// FR-007/FR-008.
+///
+/// `SourceKind::Local` is a structured provenance field set at registration
+/// time (for example, the canonical bundled example capabilities), not a
+/// path heuristic; it always yields `LocalDev`. Everything else is resolved
+/// against the governed-path registry (`contracts/` and every path declared
+/// in `specs/governance/approved-specs.json`'s `governs` lists) rather than
+/// pattern-matching the contract path or source URL for substrings, which a
+/// registrant fully controls and could spoof in either direction.
 fn artifact_trust_level(capability: &ResolvedCapability) -> ArtifactTrustLevel {
     if capability.artifact.source.kind == SourceKind::Local {
         return ArtifactTrustLevel::LocalDev;
     }
-    let governed_path = capability.record.contract_path.replace('\\', "/");
-    if governed_path.starts_with("contracts/")
-        || governed_path.starts_with("specs/")
-        || governed_path.contains("/contracts/")
-        || governed_path.contains("/specs/")
-        || capability.artifact.source.kind == SourceKind::Git
-            && capability.artifact.source.location.starts_with("https://")
-            && governed_path.contains("approved")
-    {
+    if traverse_registry::is_governed_artifact_path(&capability.record.contract_path) {
         ArtifactTrustLevel::PublishedGoverned
     } else {
         ArtifactTrustLevel::LocalDev
@@ -415,4 +462,335 @@ fn base64url_decode(input: &str) -> Result<Vec<u8>, ()> {
         out.push(((n >> 8) & 0xff) as u8);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use serde_json::json;
+    use traverse_contracts::{
+        CapabilityContract, Entrypoint, EntrypointKind, Execution, ExecutionConstraints,
+        ExecutionTarget, FilesystemAccess, HostApiAccess, Lifecycle, NetworkAccess, Owner,
+        Provenance, ProvenanceSource, SchemaContainer, ServiceType,
+    };
+    use traverse_registry::{
+        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
+        CapabilityRegistryRecord, ComposabilityMetadata, CompositionKind, CompositionPattern,
+        DiscoveryIndexEntry, ImplementationKind, RegistrationEvidence, RegistrationResult,
+        RegistryProvenance, RegistryScope, SourceReference,
+    };
+
+    #[allow(clippy::too_many_lines)]
+    fn test_capability(
+        contract_path: &str,
+        source_kind: SourceKind,
+        binary: Option<BinaryReference>,
+    ) -> ResolvedCapability {
+        let owner = Owner {
+            team: "comments".to_string(),
+            contact: "comments@example.com".to_string(),
+        };
+        let contract = CapabilityContract {
+            kind: "capability_contract".to_string(),
+            schema_version: "1.0.0".to_string(),
+            id: "content.comments.create-comment-draft".to_string(),
+            namespace: "content.comments".to_string(),
+            name: "create-comment-draft".to_string(),
+            version: "1.0.0".to_string(),
+            lifecycle: Lifecycle::Active,
+            owner: owner.clone(),
+            summary: "Create a comment draft for a resource".to_string(),
+            description: "Creates a draft comment and returns the generated draft identifier."
+                .to_string(),
+            inputs: SchemaContainer {
+                schema: json!({"type": "object"}),
+            },
+            outputs: SchemaContainer {
+                schema: json!({"type": "object"}),
+            },
+            preconditions: Vec::new(),
+            postconditions: Vec::new(),
+            side_effects: vec![traverse_contracts::SideEffect {
+                kind: traverse_contracts::SideEffectKind::MemoryOnly,
+                description: "Produces a draft representation in memory.".to_string(),
+            }],
+            emits: Vec::new(),
+            consumes: Vec::new(),
+            permissions: Vec::new(),
+            execution: Execution {
+                binary_format: traverse_contracts::BinaryFormat::Wasm,
+                entrypoint: Entrypoint {
+                    kind: EntrypointKind::WasiCommand,
+                    command: "run".to_string(),
+                },
+                preferred_targets: vec![ExecutionTarget::Local],
+                constraints: ExecutionConstraints {
+                    host_api_access: HostApiAccess::None,
+                    network_access: NetworkAccess::Forbidden,
+                    filesystem_access: FilesystemAccess::None,
+                },
+            },
+            policies: Vec::new(),
+            dependencies: Vec::new(),
+            provenance: Provenance {
+                source: ProvenanceSource::Greenfield,
+                author: "Enrico Piovesan".to_string(),
+                created_at: "2026-03-27T00:00:00Z".to_string(),
+                spec_ref: Some("030-security-identity-model".to_string()),
+                adr_refs: Vec::new(),
+                exception_refs: Vec::new(),
+            },
+            evidence: Vec::new(),
+            service_type: ServiceType::Stateless,
+            permitted_targets: vec![ExecutionTarget::Local],
+            event_trigger: None,
+            connector_requirements: Vec::new(),
+            state_schema: None,
+        };
+        let record = CapabilityRegistryRecord {
+            scope: RegistryScope::Private,
+            id: contract.id.clone(),
+            version: contract.version.clone(),
+            lifecycle: Lifecycle::Active,
+            owner: owner.clone(),
+            contract_path: contract_path.to_string(),
+            contract_digest: "digest".to_string(),
+            implementation_kind: ImplementationKind::Executable,
+            artifact_ref: "artifact:content.comments.create-comment-draft:1.0.0".to_string(),
+            registered_at: "2026-03-27T00:00:00Z".to_string(),
+            provenance: RegistryProvenance {
+                source: "test".to_string(),
+                author: "Enrico Piovesan".to_string(),
+                created_at: "2026-03-27T00:00:00Z".to_string(),
+            },
+            evidence: RegistrationEvidence {
+                evidence_id: "evidence".to_string(),
+                artifact_ref: "artifact:content.comments.create-comment-draft:1.0.0".to_string(),
+                capability_id: contract.id.clone(),
+                capability_version: contract.version.clone(),
+                scope: RegistryScope::Private,
+                governing_spec: "030-security-identity-model".to_string(),
+                validator_version: "0.1.0".to_string(),
+                produced_at: "2026-03-27T00:00:00Z".to_string(),
+                result: RegistrationResult::Passed,
+            },
+        };
+        let artifact = CapabilityArtifactRecord {
+            artifact_ref: "artifact:content.comments.create-comment-draft:1.0.0".to_string(),
+            implementation_kind: ImplementationKind::Executable,
+            source: SourceReference {
+                kind: source_kind,
+                location: "https://github.com/traverse-framework/traverse".to_string(),
+            },
+            binary,
+            workflow_ref: None,
+            digests: ArtifactDigests {
+                source_digest: "src-digest".to_string(),
+                binary_digest: None,
+            },
+            provenance: RegistryProvenance {
+                source: "test".to_string(),
+                author: "Enrico Piovesan".to_string(),
+                created_at: "2026-03-27T00:00:00Z".to_string(),
+            },
+        };
+        let index_entry = DiscoveryIndexEntry {
+            scope: RegistryScope::Private,
+            id: contract.id.clone(),
+            version: contract.version.clone(),
+            lifecycle: Lifecycle::Active,
+            owner,
+            summary: "Create a comment draft for a resource".to_string(),
+            tags: Vec::new(),
+            permissions: Vec::new(),
+            emits: Vec::new(),
+            consumes: Vec::new(),
+            implementation_kind: ImplementationKind::Executable,
+            composability: ComposabilityMetadata {
+                kind: CompositionKind::Atomic,
+                patterns: vec![CompositionPattern::Sequential],
+                provides: Vec::new(),
+                requires: Vec::new(),
+            },
+            artifact_ref: "artifact:content.comments.create-comment-draft:1.0.0".to_string(),
+            registered_at: "2026-03-27T00:00:00Z".to_string(),
+        };
+        ResolvedCapability {
+            contract,
+            record,
+            artifact,
+            index_entry,
+        }
+    }
+
+    fn signed_binary(bytes: &[u8]) -> BinaryReference {
+        let signing_key = SigningKey::from_bytes(&[9_u8; 32]);
+        let signature = signing_key.sign(bytes);
+        BinaryReference {
+            format: BinaryFormat::Wasm,
+            location: "unused.wasm".to_string(),
+            signature: Some(ArtifactSignature {
+                scheme: ArtifactSignatureScheme::Ed25519,
+                public_key_hex: Some(hex_encode(signing_key.verifying_key().as_bytes())),
+                signature_hex: Some(hex_encode(&signature.to_bytes())),
+                sigstore_bundle_ref: None,
+            }),
+        }
+    }
+
+    fn unsigned_binary() -> BinaryReference {
+        BinaryReference {
+            format: BinaryFormat::Wasm,
+            location: "unused.wasm".to_string(),
+            signature: None,
+        }
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push(char::from(HEX_TABLE[(byte >> 4) as usize]));
+            out.push(char::from(HEX_TABLE[(byte & 0x0f) as usize]));
+        }
+        out
+    }
+
+    // ------------------------------------------------------------------
+    // artifact_trust_level classification (spec 030 FR-007/FR-008)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn local_source_is_always_local_dev_regardless_of_contract_path() {
+        let capability = test_capability(
+            "contracts/approved/comment-draft.json",
+            SourceKind::Local,
+            None,
+        );
+        assert_eq!(
+            artifact_trust_level(&capability),
+            ArtifactTrustLevel::LocalDev
+        );
+    }
+
+    #[test]
+    fn contract_under_contracts_directory_is_published_governed() {
+        let capability = test_capability(
+            "contracts/approved/comment-draft.json",
+            SourceKind::Git,
+            None,
+        );
+        assert_eq!(
+            artifact_trust_level(&capability),
+            ArtifactTrustLevel::PublishedGoverned
+        );
+    }
+
+    #[test]
+    fn contract_outside_any_governed_path_is_local_dev() {
+        let capability = test_capability(
+            "workspaces/ws-test/registry/private/comment-draft@1.0.0/contract.json",
+            SourceKind::Git,
+            None,
+        );
+        assert_eq!(
+            artifact_trust_level(&capability),
+            ArtifactTrustLevel::LocalDev
+        );
+    }
+
+    #[test]
+    fn path_containing_specs_substring_outside_a_governed_prefix_is_not_governed() {
+        // Regression guard: the old heuristic treated any path containing
+        // "/specs/" anywhere as governed. A workspace-local path that merely
+        // has a "specs" segment must not spoof governed trust.
+        let capability = test_capability("my-app/specs/comment-draft.json", SourceKind::Git, None);
+        assert_eq!(
+            artifact_trust_level(&capability),
+            ArtifactTrustLevel::LocalDev
+        );
+    }
+
+    #[test]
+    fn approved_keyword_in_url_and_path_no_longer_spoofs_governed_trust() {
+        // Regression guard: the old heuristic granted governed trust to any
+        // Git+https source whose contract path merely contained the word
+        // "approved", regardless of whether it was actually registry-governed.
+        let mut capability = test_capability(
+            "workspaces/ws-test/approved/comment-draft.json",
+            SourceKind::Git,
+            None,
+        );
+        capability.artifact.source.location = "https://example.com/not-governed".to_string();
+        assert_eq!(
+            artifact_trust_level(&capability),
+            ArtifactTrustLevel::LocalDev
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // verify_artifact end-to-end trust enforcement
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn published_governed_unsigned_artifact_is_rejected_even_in_development_mode() {
+        let capability = test_capability(
+            "contracts/approved/comment-draft.json",
+            SourceKind::Git,
+            Some(unsigned_binary()),
+        );
+        let result = verify_artifact(&capability, b"bytes", &RuntimeSecurityConfig::development());
+        assert!(matches!(
+            result,
+            Err(ArtifactVerificationFailure::MissingSignature(_))
+        ));
+    }
+
+    #[test]
+    fn published_governed_signed_artifact_with_matching_checksum_verifies() {
+        let bytes = b"wasm-bytes";
+        let mut capability = test_capability(
+            "contracts/approved/comment-draft.json",
+            SourceKind::Git,
+            Some(signed_binary(bytes)),
+        );
+        capability.artifact.digests.binary_digest = Some(format!("sha256:{}", sha256_hex(bytes)));
+        let result = verify_artifact(&capability, bytes, &RuntimeSecurityConfig::production());
+        let record = result.expect("signed governed artifact with matching checksum must verify");
+        assert_eq!(record.status, ArtifactVerificationStatus::Verified);
+        assert_eq!(record.trust_level, ArtifactTrustLevel::PublishedGoverned);
+    }
+
+    #[test]
+    fn local_dev_unsigned_artifact_warns_in_development_mode() {
+        let capability = test_capability(
+            "workspaces/ws-test/registry/private/comment-draft@1.0.0/contract.json",
+            SourceKind::Local,
+            Some(unsigned_binary()),
+        );
+        let result = verify_artifact(&capability, b"bytes", &RuntimeSecurityConfig::development());
+        let record =
+            result.expect("unsigned local artifact must be allowed-but-warned in dev mode");
+        assert_eq!(record.status, ArtifactVerificationStatus::Warning);
+        assert_eq!(record.trust_level, ArtifactTrustLevel::LocalDev);
+        assert_eq!(
+            record.warning_code.as_deref(),
+            Some("unsigned_local_dev_artifact")
+        );
+    }
+
+    #[test]
+    fn local_dev_unsigned_artifact_is_rejected_in_production_mode() {
+        let capability = test_capability(
+            "workspaces/ws-test/registry/private/comment-draft@1.0.0/contract.json",
+            SourceKind::Local,
+            Some(unsigned_binary()),
+        );
+        let result = verify_artifact(&capability, b"bytes", &RuntimeSecurityConfig::production());
+        assert!(matches!(
+            result,
+            Err(ArtifactVerificationFailure::MissingSignature(_))
+        ));
+    }
 }

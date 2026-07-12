@@ -17,6 +17,22 @@ Coverage gate implementation, specific to this repo's crates:
 - protected crate list: `ci/coverage-targets.txt`
 
 The coverage gate is merge-safe even before core logic exists. It passes when no protected crates are configured, and becomes enforcing as soon as core crates are added to `ci/coverage-targets.txt`.
+The gate runs crate tests with `--test-threads=1` so coverage instrumentation is
+measured against deterministic package-local state.
+
+### Phased Coverage Floors
+
+The constitution target for core logic remains 100% line coverage. When a crate
+is added to the gate below 100%, the configured value is a ratchet floor: future
+changes must not reduce coverage, and follow-up work must raise the crate toward
+the full target.
+
+Current phased floors:
+
+| Crate | Gate floor | Measured baseline | Follow-up |
+|---|---:|---:|---|
+| `traverse-cli` | 78% | 78.77% | [#618](https://github.com/traverse-framework/traverse/issues/618) |
+| `traverse-mcp` | 86% | 86.07% | [#617](https://github.com/traverse-framework/traverse/issues/617) |
 
 ## Nightly CI Gate
 

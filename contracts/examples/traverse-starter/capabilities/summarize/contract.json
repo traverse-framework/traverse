@@ -1,0 +1,130 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "traverse-starter.summarize",
+  "namespace": "traverse-starter",
+  "name": "summarize",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Summarize processed starter note metadata into a deterministic one-line summary.",
+  "description": "Reference app capability for the traverse-starter multi-capability pipeline showcase (spec 058-workflow-pipeline-execution). Consumes the traverse-starter.process output fields and produces a deterministic summary string plus its word count without model inference.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "tags",
+        "noteType",
+        "suggestedNextAction"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "noteType": {
+          "type": "string"
+        },
+        "suggestedNextAction": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "summary",
+        "wordCount"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "wordCount": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "process-output-provided",
+      "description": "The caller provides the traverse-starter.process output fields for one note."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "summary-produced",
+      "description": "The capability returns a deterministic summary string and wordCount equal to the summary's whitespace-separated word count."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Produces a deterministic summary from the provided input."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "traverse-starter.summarize"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-08T00:00:00Z",
+    "spec_ref": "058-workflow-pipeline-execution@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}

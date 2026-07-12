@@ -3,6 +3,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::time::{Duration, Instant};
 use traverse_runtime::{
     BrowserRuntimeSubscriptionErrorCode, BrowserRuntimeSubscriptionMessage,
     BrowserRuntimeSubscriptionRequest, RuntimeExecutionOutcome, browser_subscription_messages,
@@ -14,6 +15,16 @@ const ADAPTER_GOVERNING_SPEC: &str = "019-local-browser-adapter-transport";
 const SETUP_ERROR_KIND: &str = "local_browser_subscription_setup_error";
 const STREAM_ERROR_KIND: &str = "local_browser_subscription_stream_error";
 const LISTENING_PREFIX: &str = "local browser adapter listening on ";
+const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
+// This adapter serves one connection at a time by design (spec
+// 019-local-browser-adapter-transport, local dev tool). Bounded socket
+// timeouts still apply so a slow or idle caller cannot hang the process
+// indefinitely (spec 033-http-json-api connection-handling model, issue
+// #581); a bounded worker pool was not added here since this transport is
+// not intended to serve concurrent production traffic.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 struct CreateSubscriptionRequest {
@@ -48,6 +59,12 @@ pub fn serve_local_browser_adapter(bind_address: &str) -> Result<(), String> {
     for connection in listener.incoming() {
         match connection {
             Ok(mut stream) => {
+                if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err()
+                    || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
+                {
+                    eprintln!("local browser adapter: failed to configure connection timeouts");
+                    continue;
+                }
                 if let Err(error) = adapter.handle_connection(&mut stream) {
                     let _ = write_plain_response(
                         &mut stream,
@@ -76,7 +93,8 @@ impl LocalBrowserAdapter {
     }
 
     fn handle_connection(&mut self, stream: &mut TcpStream) -> Result<(), String> {
-        let request = read_http_request(stream)?;
+        let deadline = Instant::now() + REQUEST_DEADLINE;
+        let request = read_http_request(stream, deadline)?;
         match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/local/browser-subscriptions") => {
                 self.handle_create_subscription(stream, &request)
@@ -246,24 +264,34 @@ impl LocalBrowserAdapter {
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
+fn read_http_request(stream: &mut TcpStream, deadline: Instant) -> Result<HttpRequest, String> {
     let mut buffer = Vec::new();
     let mut header_end = None;
     loop {
+        if Instant::now() >= deadline {
+            return Err("browser adapter request timed out reading headers".to_string());
+        }
         let mut chunk = [0_u8; 1024];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("failed to read browser adapter request: {error}"))?;
+        let read = stream.read(&mut chunk).map_err(|error| {
+            if is_timeout_error(&error) {
+                "browser adapter request timed out reading headers".to_string()
+            } else {
+                format!("failed to read browser adapter request: {error}")
+            }
+        })?;
         if read == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
+        // Enforce the size cap before checking for the terminator so a
+        // header block that completes in the same read that pushes it over
+        // the cap is still rejected.
+        if buffer.len() > MAX_REQUEST_HEADER_BYTES {
+            return Err("browser adapter request too large".to_string());
+        }
         if let Some(index) = find_header_end(&buffer) {
             header_end = Some(index);
             break;
-        }
-        if buffer.len() > 64 * 1024 {
-            return Err("browser adapter request too large".to_string());
         }
     }
 
@@ -301,10 +329,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         .unwrap_or(0);
     let mut body = buffer[header_end + 4..].to_vec();
     while body.len() < content_length {
+        if Instant::now() >= deadline {
+            return Err("browser adapter request timed out reading body".to_string());
+        }
         let mut chunk = vec![0_u8; content_length - body.len()];
-        let read = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("failed to read browser adapter request body: {error}"))?;
+        let read = stream.read(&mut chunk).map_err(|error| {
+            if is_timeout_error(&error) {
+                "browser adapter request timed out reading body".to_string()
+            } else {
+                format!("failed to read browser adapter request body: {error}")
+            }
+        })?;
         if read == 0 {
             break;
         }
@@ -318,6 +353,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         headers,
         body,
     })
+}
+
+fn is_timeout_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -476,6 +518,356 @@ mod tests {
 
     fn canonical_outcome() -> RuntimeExecutionOutcome {
         crate::canonical_expedition_runtime_outcome().expect("canonical outcome should build")
+    }
+
+    #[test]
+    fn create_subscription_reports_not_found_for_mismatched_request_id() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let request = HttpRequest {
+            method: "POST".to_string(),
+            path: "/local/browser-subscriptions".to_string(),
+            headers: HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+            body: json!({
+                "subscription_request": {
+                    "kind": "browser_runtime_subscription_request",
+                    "schema_version": "1.0.0",
+                    "governing_spec": "013-browser-runtime-subscription",
+                    "request_id": "does-not-exist"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        let mut stream = TestStream::default();
+
+        adapter
+            .handle_create_subscription(&mut stream, &request)
+            .expect("mismatched target should still write a response");
+
+        assert!(stream.response.contains("not_found"));
+    }
+
+    #[test]
+    fn create_subscription_reports_invalid_request_for_missing_target_selector() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let request = HttpRequest {
+            method: "POST".to_string(),
+            path: "/local/browser-subscriptions".to_string(),
+            headers: HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+            body: json!({
+                "subscription_request": {
+                    "kind": "browser_runtime_subscription_request",
+                    "schema_version": "1.0.0",
+                    "governing_spec": "013-browser-runtime-subscription"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        let mut stream = TestStream::default();
+
+        adapter
+            .handle_create_subscription(&mut stream, &request)
+            .expect("missing target selector should still write a response");
+
+        assert!(stream.response.contains("invalid_request"));
+    }
+
+    #[test]
+    fn create_subscription_requires_json_content_type() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let request = HttpRequest {
+            method: "POST".to_string(),
+            path: "/local/browser-subscriptions".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        let mut stream = TestStream::default();
+
+        adapter
+            .handle_create_subscription(&mut stream, &request)
+            .expect("missing content-type should still write a response");
+
+        assert!(stream.response.contains("invalid_request"));
+        assert!(stream.response.contains("content-type"));
+    }
+
+    #[test]
+    fn stream_request_requires_event_stream_accept_header() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let mut stream = TestStream::default();
+
+        adapter
+            .handle_stream_request(
+                &mut stream,
+                "/local/browser-subscriptions/lbs_0001/stream",
+                &HashMap::new(),
+            )
+            .expect("missing accept header should still write a response");
+
+        assert!(stream.response.contains("invalid_request"));
+    }
+
+    #[test]
+    fn stream_request_rejects_path_without_stream_suffix() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let mut stream = TestStream::default();
+        let headers = HashMap::from([("accept".to_string(), "text/event-stream".to_string())]);
+
+        adapter
+            .handle_stream_request(
+                &mut stream,
+                "/local/browser-subscriptions/lbs_0001",
+                &headers,
+            )
+            .expect("malformed stream path should still write a response");
+
+        assert!(stream.response.contains("not_found"));
+    }
+
+    #[test]
+    fn stream_request_returns_created_subscription_messages() {
+        let mut adapter = LocalBrowserAdapter::new(canonical_outcome());
+        let create_request = HttpRequest {
+            method: "POST".to_string(),
+            path: "/local/browser-subscriptions".to_string(),
+            headers: HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+            body: json!({
+                "subscription_request": {
+                    "kind": "browser_runtime_subscription_request",
+                    "schema_version": "1.0.0",
+                    "governing_spec": "013-browser-runtime-subscription",
+                    "request_id": "expedition-plan-request-001"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        let mut create_stream = TestStream::default();
+        adapter
+            .handle_create_subscription(&mut create_stream, &create_request)
+            .expect("create should succeed");
+
+        let mut stream_stream = TestStream::default();
+        let headers = HashMap::from([("accept".to_string(), "text/event-stream".to_string())]);
+        adapter
+            .handle_stream_request(
+                &mut stream_stream,
+                "/local/browser-subscriptions/lbs_0001/stream",
+                &headers,
+            )
+            .expect("stream should succeed");
+
+        assert!(stream_stream.response.contains("text/event-stream"));
+        assert!(stream_stream.response.contains("event: traverse_message"));
+    }
+
+    fn spawn_test_adapter() -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind must succeed");
+        let address = listener.local_addr().expect("local addr must resolve");
+        let outcome = canonical_outcome();
+        let mut adapter = LocalBrowserAdapter::new(outcome);
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut stream) = connection else {
+                    break;
+                };
+                if let Err(error) = adapter.handle_connection(&mut stream) {
+                    let _ = write_plain_response(
+                        &mut stream,
+                        500,
+                        "internal server error",
+                        &json_error(SETUP_ERROR_KIND, "internal_server_error", &error),
+                    );
+                }
+            }
+        });
+        address
+    }
+
+    fn read_all(stream: &mut TcpStream) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("client read timeout must be set");
+        let mut out = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&chunk[..n]),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn create_subscription_over_a_real_socket_returns_created_response() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        let body = json!({
+            "subscription_request": {
+                "kind": "browser_runtime_subscription_request",
+                "schema_version": "1.0.0",
+                "governing_spec": "013-browser-runtime-subscription",
+                "request_id": "expedition-plan-request-001"
+            }
+        })
+        .to_string();
+        let request = format!(
+            "POST /local/browser-subscriptions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        client
+            .write_all(request.as_bytes())
+            .expect("request must write");
+        let response = read_all(&mut client);
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.contains("201 created"));
+        assert!(text.contains("local_browser_subscription_created"));
+    }
+
+    #[test]
+    fn unmatched_route_over_a_real_socket_returns_404() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        client
+            .write_all(b"GET /nonexistent HTTP/1.1\r\nHost: x\r\n\r\n")
+            .expect("request must write");
+        let response = read_all(&mut client);
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.contains("404 not found"));
+    }
+
+    #[test]
+    fn stream_request_over_a_real_socket_returns_event_stream() {
+        let address = spawn_test_adapter();
+
+        let mut create_client =
+            TcpStream::connect(address).expect("create connection must connect");
+        let body = json!({
+            "subscription_request": {
+                "kind": "browser_runtime_subscription_request",
+                "schema_version": "1.0.0",
+                "governing_spec": "013-browser-runtime-subscription",
+                "request_id": "expedition-plan-request-001"
+            }
+        })
+        .to_string();
+        let create_request = format!(
+            "POST /local/browser-subscriptions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        create_client
+            .write_all(create_request.as_bytes())
+            .expect("create request must write");
+        let create_response = read_all(&mut create_client);
+        assert!(String::from_utf8_lossy(&create_response).contains("201 created"));
+
+        let mut stream_client =
+            TcpStream::connect(address).expect("stream connection must connect");
+        stream_client
+            .write_all(
+                b"GET /local/browser-subscriptions/lbs_0001/stream HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n",
+            )
+            .expect("stream request must write");
+        let stream_response = read_all(&mut stream_client);
+        let text = String::from_utf8_lossy(&stream_response);
+        assert!(text.contains("text/event-stream"));
+    }
+
+    #[test]
+    fn oversized_headers_are_rejected_over_a_real_socket() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        // Large enough that the 64 KiB size cap is crossed many read chunks
+        // (1 KiB each) before the terminator-bearing chunk is ever read, so
+        // this doesn't depend on exactly where within a chunk the cap and
+        // the terminator happen to land.
+        let oversized_header_value = "x".repeat(4 * 64 * 1024);
+        let request =
+            format!("GET /x HTTP/1.1\r\nHost: x\r\nX-Filler: {oversized_header_value}\r\n\r\n");
+        client
+            .write_all(request.as_bytes())
+            .expect("oversized header request must write");
+        let response = read_all(&mut client);
+        // read_http_request errors out of handle_connection before writing
+        // anything; serve_local_browser_adapter's loop then writes a 500 for
+        // any such error (it doesn't distinguish error kinds like http_api.rs
+        // does).
+        assert!(String::from_utf8_lossy(&response).contains("500"));
+    }
+
+    #[test]
+    fn missing_header_terminator_is_rejected_over_a_real_socket() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        client
+            .write_all(b"GET /x HTTP/1.1\r\nHost: x\r\n")
+            .expect("partial request must write");
+        drop(client.shutdown(std::net::Shutdown::Write));
+        let response = read_all(&mut client);
+        assert!(String::from_utf8_lossy(&response).contains("500"));
+    }
+
+    #[test]
+    fn invalid_utf8_headers_are_rejected_over_a_real_socket() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        let mut request = b"GET /x HTTP/1.1\r\nHost: ".to_vec();
+        request.extend_from_slice(&[0xFF, 0xFE]);
+        request.extend_from_slice(b"\r\n\r\n");
+        client
+            .write_all(&request)
+            .expect("invalid utf8 request must write");
+        let response = read_all(&mut client);
+        assert!(String::from_utf8_lossy(&response).contains("500"));
+    }
+
+    #[test]
+    fn body_shorter_than_content_length_stops_at_eof_over_a_real_socket() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        client
+            .write_all(
+                b"POST /local/browser-subscriptions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\nshort",
+            )
+            .expect("request must write");
+        drop(client.shutdown(std::net::Shutdown::Write));
+        let response = read_all(&mut client);
+        // The body never reaches content_length before EOF; read_http_request
+        // truncates to what arrived and the (invalid) JSON is then rejected
+        // as a bad request, not a 500.
+        assert!(String::from_utf8_lossy(&response).contains("400"));
+    }
+
+    #[test]
+    fn request_with_body_beyond_header_terminator_is_read_over_a_real_socket() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        let body = json!({
+            "subscription_request": {
+                "kind": "browser_runtime_subscription_request",
+                "schema_version": "1.0.0",
+                "governing_spec": "013-browser-runtime-subscription",
+                "request_id": "expedition-plan-request-001"
+            }
+        })
+        .to_string();
+        // Send headers and body in two separate writes so read_http_request
+        // must loop to read the remaining content-length bytes.
+        let headers = format!(
+            "POST /local/browser-subscriptions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        client
+            .write_all(headers.as_bytes())
+            .expect("headers must write");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        client.write_all(body.as_bytes()).expect("body must write");
+        let response = read_all(&mut client);
+        assert!(String::from_utf8_lossy(&response).contains("201 created"));
     }
 
     #[derive(Default)]

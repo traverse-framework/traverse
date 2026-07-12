@@ -1,0 +1,132 @@
+{
+  "kind": "workflow_definition",
+  "schema_version": "1.0.0",
+  "id": "traverse-starter.pipeline",
+  "name": "pipeline",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Validate, process, and summarize one starter note as a deterministic multi-capability pipeline.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "note"
+      ],
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "validate",
+        "process",
+        "summarize"
+      ],
+      "properties": {
+        "validate": {
+          "type": "object"
+        },
+        "process": {
+          "type": "object"
+        },
+        "summarize": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "validate_note",
+      "capability_id": "traverse-starter.validate",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "note"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [],
+        "publish_to_state_as": "validate"
+      }
+    },
+    {
+      "node_id": "process_note",
+      "capability_id": "traverse-starter.process",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "note"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [
+          "title",
+          "tags",
+          "noteType",
+          "suggestedNextAction",
+          "status"
+        ],
+        "publish_to_state_as": "process"
+      }
+    },
+    {
+      "node_id": "summarize_note",
+      "capability_id": "traverse-starter.summarize",
+      "capability_version": "1.0.0",
+      "input": {
+        "from_workflow_input": [
+          "title",
+          "tags",
+          "noteType",
+          "suggestedNextAction",
+          "status"
+        ]
+      },
+      "output": {
+        "to_workflow_state": [],
+        "publish_to_state_as": "summarize"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "validate_to_process",
+      "from": "validate_note",
+      "to": "process_note",
+      "trigger": "direct"
+    },
+    {
+      "edge_id": "process_to_summarize",
+      "from": "process_note",
+      "to": "summarize_note",
+      "trigger": "direct"
+    }
+  ],
+  "start_node": "validate_note",
+  "terminal_nodes": [
+    "summarize_note"
+  ],
+  "output_projection": [
+    "validate",
+    "process",
+    "summarize"
+  ],
+  "tags": [
+    "traverse-starter",
+    "pipeline",
+    "reference-app"
+  ],
+  "governing_spec": "007-workflow-registry-traversal"
+}
