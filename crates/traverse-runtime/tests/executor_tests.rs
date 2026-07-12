@@ -1,5 +1,6 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use traverse_runtime::executor::{
     ArtifactType, CapabilityExecutor, ExecutorCapability, ExecutorError, NativeExecutor,
@@ -700,7 +701,13 @@ fn wasm_executor_execute_with_matching_checksum_succeeds() -> Result<(), String>
     // Compute the correct SHA-256 checksum so the checksum-match branch is taken.
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
-    let checksum = format!("{:x}", hasher.finalize());
+    let checksum: String = hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut acc, byte| {
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        });
 
     let tmp = tempfile_path();
     std::fs::write(&tmp, &wasm_bytes).map_err(|e| format!("write: {e}"))?;
@@ -729,7 +736,13 @@ fn wasm_executor_cached_module_does_not_bypass_checksum_mismatch() -> Result<(),
 
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
-    let checksum = format!("{:x}", hasher.finalize());
+    let checksum: String = hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut acc, byte| {
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        });
 
     let tmp = tempfile_path();
     std::fs::write(&tmp, &wasm_bytes).map_err(|e| format!("write: {e}"))?;
