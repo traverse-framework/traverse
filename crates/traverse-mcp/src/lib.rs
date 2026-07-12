@@ -1122,11 +1122,13 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: vec!["draft_id".to_string()],
+                    publish_to_state_as: None,
                 },
             }],
             edges: Vec::new(),
             start_node: "create-draft".to_string(),
             terminal_nodes: vec!["create-draft".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["comments".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }

@@ -1,0 +1,124 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "traverse-starter.pipeline",
+  "namespace": "traverse-starter",
+  "name": "pipeline",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Run the traverse-starter validate, process, and summarize pipeline as one governed capability.",
+  "description": "Workflow-backed capability for the traverse-starter multi-capability pipeline showcase (spec 058-workflow-pipeline-execution). A single execute call runs validate, process, and summarize sequentially and returns their outputs merged under namespaced keys.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "note"
+      ],
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "validate",
+        "process",
+        "summarize"
+      ],
+      "properties": {
+        "validate": {
+          "type": "object"
+        },
+        "process": {
+          "type": "object"
+        },
+        "summarize": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "note-provided",
+      "description": "The caller provides one starter note string for the pipeline."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "merged-pipeline-output-produced",
+      "description": "The pipeline returns the validate, process, and summarize step outputs merged under namespaced keys."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "state_change",
+      "description": "Executes the approved traverse-starter pipeline workflow across the three atomic capabilities."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "traverse-starter.pipeline"
+    }
+  ],
+  "composability": {
+    "kind": "composite",
+    "implementation_kind": "workflow",
+    "workflow_ref": {
+      "workflow_id": "traverse-starter.pipeline",
+      "workflow_version": "1.0.0"
+    }
+  },
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-08T00:00:00Z",
+    "spec_ref": "058-workflow-pipeline-execution@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}
