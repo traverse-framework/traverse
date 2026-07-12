@@ -303,3 +303,58 @@ Follow semantic versioning, keep public surfaces explicitly versioned, and requi
 ### Outcome
 
 Release readiness is auditable, and downstream users can reason about compatibility from specs, package artifacts, and release evidence.
+
+## Decision 13: Materialize Public Registrations from Verified Contract Artifacts
+
+- **Date**: 2026-07-12
+- **Status**: Proposed
+- **Governing spec**: draft `063-registry-contract-materialization`
+- **Related issues**: `#551`, `#552`
+
+### Decision
+
+Public records will publish immutable contract URL/digest metadata alongside
+artifact metadata. Consumers will verify both, cache by digest, register
+atomically, reject local `public` scope, and permit private shadows with
+machine-readable evidence.
+
+## Decision 14: Use a Runtime-Owned Production Artifact Router
+
+- **Date**: 2026-07-12
+- **Status**: Proposed
+- **Governing spec**: draft `064-production-artifact-execution`
+- **Related issue**: `#583`
+
+### Decision
+
+The runtime will route resolved WASM and explicitly host-registered native
+artifacts through one production executor boundary. The production server uses
+that router by default; the example executor is explicit-only.
+
+## Decision 15: Verify Sigstore Bundles Offline Against Pinned Trust Policy
+
+- **Date**: 2026-07-12
+- **Status**: Proposed
+- **Governing spec**: draft `065-sigstore-bundle-verification`
+- **Related issue**: `#589`
+
+### Decision
+
+Traverse will use a narrow Rust Sigstore verifier interface. Production
+verification consumes self-contained bundles offline, validates pinned trust
+roots and publisher identity, and never accepts a string-prefix placeholder as
+verification evidence.
+
+## Decision 16: Emit Identity-Aware Events into a Durable Journal
+
+- **Date**: 2026-07-12
+- **Status**: Proposed
+- **Governing spec**: draft `066-durable-identity-event-delivery`
+- **Related issues**: `#591`, `#593`
+
+### Decision
+
+The runtime will emit identity-bearing events through a canonical sink. The
+first durable store uses fsynced append-only journals, opaque persisted cursors,
+and bounded retention; future tickets will evaluate its measured limits and
+evolution path.
