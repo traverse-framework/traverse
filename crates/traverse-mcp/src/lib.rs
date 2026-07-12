@@ -544,7 +544,6 @@ fn lifecycle_name(lifecycle: &traverse_contracts::Lifecycle) -> &'static str {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    #![allow(clippy::panic)]
 
     use super::*;
     use serde_json::{Value, json};
@@ -610,34 +609,150 @@ mod tests {
             &runtime,
         );
 
-        let capability = match mcp.get_capability(
-            McpLookupScope::PreferPrivate,
-            "content.comments.create-comment-draft",
-            "1.0.0",
-        ) {
-            Ok(capability) => capability,
-            Err(error) => panic!("capability should resolve: {error:?}"),
-        };
-        let event = match mcp.get_event(
-            McpLookupScope::PreferPrivate,
-            "content.comments.draft-created",
-            "1.0.0",
-        ) {
-            Ok(event) => event,
-            Err(error) => panic!("event should resolve: {error:?}"),
-        };
-        let workflow = match mcp.get_workflow(
-            McpLookupScope::PreferPrivate,
-            "content.comments.publish-comment",
-            "1.0.0",
-        ) {
-            Ok(workflow) => workflow,
-            Err(error) => panic!("workflow should resolve: {error:?}"),
-        };
+        let capability = mcp
+            .get_capability(
+                McpLookupScope::PreferPrivate,
+                "content.comments.create-comment-draft",
+                "1.0.0",
+            )
+            .expect("capability should resolve");
+        let event = mcp
+            .get_event(
+                McpLookupScope::PreferPrivate,
+                "content.comments.draft-created",
+                "1.0.0",
+            )
+            .expect("event should resolve");
+        let workflow = mcp
+            .get_workflow(
+                McpLookupScope::PreferPrivate,
+                "content.comments.publish-comment",
+                "1.0.0",
+            )
+            .expect("workflow should resolve");
 
         assert!(matches!(capability, McpArtifactDetail::Capability(_)));
         assert!(matches!(event, McpArtifactDetail::Event(_)));
         assert!(matches!(workflow, McpArtifactDetail::Workflow(_)));
+    }
+
+    #[test]
+    fn get_capability_event_workflow_report_not_found_for_missing_ids() {
+        let capability_registry = capability_registry_fixture();
+        let event_registry = event_registry_fixture();
+        let workflow_registry = workflow_registry_fixture(&capability_registry);
+        let runtime = runtime_fixture(&capability_registry, &workflow_registry);
+        let mcp = TraverseMcp::new(
+            &capability_registry,
+            &event_registry,
+            &workflow_registry,
+            &runtime,
+        );
+
+        let capability_error = mcp
+            .get_capability(McpLookupScope::PreferPrivate, "unknown.capability", "1.0.0")
+            .expect_err("unknown capability must not resolve");
+        assert_eq!(capability_error.code, McpErrorCode::NotFound);
+        assert!(capability_error.message.contains("capability"));
+
+        let event_error = mcp
+            .get_event(McpLookupScope::PreferPrivate, "unknown.event", "1.0.0")
+            .expect_err("unknown event must not resolve");
+        assert_eq!(event_error.code, McpErrorCode::NotFound);
+        assert!(event_error.message.contains("event"));
+
+        let workflow_error = mcp
+            .get_workflow(McpLookupScope::PreferPrivate, "unknown.workflow", "1.0.0")
+            .expect_err("unknown workflow must not resolve");
+        assert_eq!(workflow_error.code, McpErrorCode::NotFound);
+        assert!(workflow_error.message.contains("workflow"));
+    }
+
+    #[test]
+    fn lifecycle_name_covers_every_variant() {
+        assert_eq!(lifecycle_name(&Lifecycle::Draft), "draft");
+        assert_eq!(lifecycle_name(&Lifecycle::Active), "active");
+        assert_eq!(lifecycle_name(&Lifecycle::Deprecated), "deprecated");
+        assert_eq!(lifecycle_name(&Lifecycle::Retired), "retired");
+        assert_eq!(lifecycle_name(&Lifecycle::Archived), "archived");
+    }
+
+    #[test]
+    fn map_runtime_error_covers_every_runtime_error_code() {
+        use traverse_runtime::RuntimeErrorCode;
+
+        let cases = [
+            (
+                RuntimeErrorCode::RequestInvalid,
+                McpErrorCode::InvalidRequest,
+            ),
+            (RuntimeErrorCode::CapabilityNotFound, McpErrorCode::NotFound),
+            (RuntimeErrorCode::ArtifactMissing, McpErrorCode::NotFound),
+            (
+                RuntimeErrorCode::CapabilityAmbiguous,
+                McpErrorCode::AmbiguousMatch,
+            ),
+            (
+                RuntimeErrorCode::CapabilityNotRunnable,
+                McpErrorCode::ValidationFailed,
+            ),
+            (
+                RuntimeErrorCode::PlacementUnsupported,
+                McpErrorCode::ValidationFailed,
+            ),
+            (
+                RuntimeErrorCode::OutputValidationFailed,
+                McpErrorCode::ValidationFailed,
+            ),
+            (
+                RuntimeErrorCode::ContractViolation,
+                McpErrorCode::ValidationFailed,
+            ),
+            (
+                RuntimeErrorCode::ExecutionFailed,
+                McpErrorCode::ExecutionFailed,
+            ),
+        ];
+
+        for (runtime_code, expected_mcp_code) in cases {
+            let error = map_runtime_error(runtime_code, "boom");
+            assert_eq!(error.code, expected_mcp_code);
+            assert_eq!(error.message, "boom");
+        }
+    }
+
+    #[test]
+    fn not_found_formats_kind_id_and_version() {
+        let error = not_found("widget", "widget.example", "2.0.0");
+        assert_eq!(error.code, McpErrorCode::NotFound);
+        assert_eq!(error.message, "widget widget.example@2.0.0 was not found");
+    }
+
+    #[test]
+    fn mcp_tool_registry_default_and_debug() {
+        let registry = McpToolRegistry::default();
+        assert_eq!(registry.dispatch("missing", json!({})), None);
+        let rendered = format!("{registry:?}");
+        assert!(rendered.contains("McpToolRegistry"));
+        assert!(rendered.contains("tool_count"));
+    }
+
+    #[test]
+    fn observe_execution_matches_execute_observation_messages() {
+        let capability_registry = capability_registry_fixture();
+        let event_registry = event_registry_fixture();
+        let workflow_registry = workflow_registry_fixture(&capability_registry);
+        let runtime = runtime_fixture(&capability_registry, &workflow_registry);
+        let mcp = TraverseMcp::new(
+            &capability_registry,
+            &event_registry,
+            &workflow_registry,
+            &runtime,
+        );
+
+        let outcome = runtime.execute(runtime_request());
+        let messages = mcp.observe_execution(&outcome);
+        assert!(!messages.is_empty());
     }
 
     #[test]
@@ -653,10 +768,9 @@ mod tests {
             &runtime,
         );
 
-        let response = match mcp.execute(runtime_request()) {
-            Ok(response) => response,
-            Err(error) => panic!("execution should pass: {error:?}"),
-        };
+        let response = mcp
+            .execute(runtime_request())
+            .expect("execution should pass");
 
         assert_eq!(response.result.status, RuntimeResultStatus::Completed);
         assert_eq!(
@@ -703,9 +817,9 @@ mod tests {
             allow_ambiguity: true,
         };
 
-        let Err(error) = mcp.execute(request) else {
-            panic!("invalid request should fail");
-        };
+        let error = mcp
+            .execute(request)
+            .expect_err("invalid request should fail");
 
         assert_eq!(error.code, McpErrorCode::InvalidRequest);
     }
@@ -749,20 +863,18 @@ mod tests {
         assert_eq!(discovered[0].scope, McpRegistryScope::Public);
         assert_eq!(discovered[0].id, "content.comments.create-comment-draft");
 
-        let capability = match mcp.get_capability(
-            McpLookupScope::PublicOnly,
-            "content.comments.create-comment-draft",
-            "1.0.0",
-        ) {
-            Ok(capability) => capability,
-            Err(error) => panic!("public capability should resolve: {error:?}"),
-        };
+        let capability = mcp
+            .get_capability(
+                McpLookupScope::PublicOnly,
+                "content.comments.create-comment-draft",
+                "1.0.0",
+            )
+            .expect("public capability should resolve");
         assert!(matches!(capability, McpArtifactDetail::Capability(_)));
 
-        let response = match mcp.execute(runtime_request()) {
-            Ok(response) => response,
-            Err(error) => panic!("execution should pass: {error:?}"),
-        };
+        let response = mcp
+            .execute(runtime_request())
+            .expect("execution should pass");
         assert_eq!(response.result.status, RuntimeResultStatus::Completed);
         assert_eq!(
             response.observation_messages.first(),
@@ -1122,11 +1234,13 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: vec!["draft_id".to_string()],
+                    publish_to_state_as: None,
                 },
             }],
             edges: Vec::new(),
             start_node: "create-draft".to_string(),
             terminal_nodes: vec!["create-draft".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["comments".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }

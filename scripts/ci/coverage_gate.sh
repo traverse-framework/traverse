@@ -37,7 +37,7 @@ for entry in "${targets[@]}"; do
   fi
 
   echo "Measuring line coverage for ${crate_name} with threshold ${minimum_percent}%"
-  coverage_output="$(cargo llvm-cov --package "${crate_name}" --lcov)"
+  coverage_output="$(cargo llvm-cov --package "${crate_name}" --lcov -- --test-threads=1)"
   line_counts="$(
     awk -F '[:,]' '
       /^SF:/ { current_file = substr($0, 4); next }

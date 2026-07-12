@@ -26,6 +26,7 @@ const APPROVED_SPECS_REGISTRY_PATH: &str = concat!(
 );
 
 static APPROVED_SPEC_IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
+static GOVERNED_PATH_PREFIXES: OnceLock<Vec<String>> = OnceLock::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FederationRegistryKind {
     Capability,
@@ -1301,6 +1302,59 @@ fn load_approved_spec_ids_from_path(path: &str) -> BTreeSet<String> {
     parse_approved_spec_ids(&contents)
 }
 
+/// Returns true when `path` is governed per spec 030-security-identity-model
+/// FR-008: "Published/Governed" is any artifact referenced by an entry in
+/// `contracts/` or `specs/governance/approved-specs.json`. Checked against
+/// every path each approved spec declares in its `governs` list (which
+/// already includes `contracts/` itself), not by pattern-matching the path
+/// string for substrings like `"specs"` or `"approved"`.
+#[must_use]
+pub fn is_governed_artifact_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    GOVERNED_PATH_PREFIXES
+        .get_or_init(load_governed_path_prefixes)
+        .iter()
+        .any(|governed| governs_path(governed, &normalized))
+}
+
+/// A `governs` entry is either a directory prefix (trailing `/`) or an exact
+/// file path; match accordingly instead of a blanket substring check.
+fn governs_path(governed: &str, path: &str) -> bool {
+    match governed.strip_suffix('/') {
+        Some(dir) => path == dir || path.starts_with(governed),
+        None => path == governed,
+    }
+}
+
+fn load_governed_path_prefixes() -> Vec<String> {
+    load_governed_path_prefixes_from_path(APPROVED_SPECS_REGISTRY_PATH)
+}
+
+fn load_governed_path_prefixes_from_path(path: &str) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    parse_governed_path_prefixes(&contents)
+}
+
+fn parse_governed_path_prefixes(contents: &str) -> Vec<String> {
+    let Ok(payload) = serde_json::from_str::<Value>(contents) else {
+        return Vec::new();
+    };
+
+    payload
+        .get("specs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("governs").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
 fn snapshot_acceptance_decision(snapshot: &PeerRegistrySnapshot) -> GovernanceDecisionRecord {
     GovernanceDecisionRecord {
         decision_id: format!(
@@ -2043,6 +2097,55 @@ mod tests {
     }
 
     #[test]
+    fn governed_path_loader_returns_empty_for_missing_or_invalid_inputs() {
+        assert!(
+            load_governed_path_prefixes_from_path("/definitely-missing/approved-specs.json")
+                .is_empty()
+        );
+        assert!(parse_governed_path_prefixes("{not-json").is_empty());
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_directory_and_normalizes_windows_separators() {
+        // "contracts/" is a real governed prefix declared in
+        // specs/governance/approved-specs.json, so this reads the actual
+        // registry file (same pattern as approved_spec_registry_contains).
+        assert!(is_governed_artifact_path(
+            "contracts/approved/comment-draft.json"
+        ));
+        assert!(is_governed_artifact_path(
+            "contracts\\approved\\comment-draft.json"
+        ));
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_bare_directory_name() {
+        assert!(is_governed_artifact_path("contracts"));
+    }
+
+    #[test]
+    fn governed_path_prefix_matches_exact_governed_file() {
+        assert!(is_governed_artifact_path("Cargo.toml"));
+    }
+
+    #[test]
+    fn ungoverned_path_is_not_governed() {
+        assert!(!is_governed_artifact_path(
+            "workspaces/ws-test/registry/private/comment-draft@1.0.0/contract.json"
+        ));
+        assert!(!is_governed_artifact_path("Cargo.tomlx"));
+    }
+
+    #[test]
+    fn governs_path_matches_directory_prefix_and_exact_file() {
+        assert!(governs_path("contracts/", "contracts/nested/file.json"));
+        assert!(governs_path("contracts/", "contracts"));
+        assert!(!governs_path("contracts/", "not-contracts/file.json"));
+        assert!(governs_path("Cargo.toml", "Cargo.toml"));
+        assert!(!governs_path("Cargo.toml", "Cargo.toml.bak"));
+    }
+
+    #[test]
     fn route_capability_invocation_returns_error_without_matching_snapshot() {
         let mut federation = FederationRegistry::new();
         let origin_peer = peer("peer-route-empty", "Peer Route Empty");
@@ -2768,11 +2871,13 @@ mod tests {
                 },
                 output: WorkflowNodeOutput {
                     to_workflow_state: vec!["response".to_string()],
+                    publish_to_state_as: None,
                 },
             }],
             edges: vec![],
             start_node: "route-node".to_string(),
             terminal_nodes: vec!["route-node".to_string()],
+            output_projection: Vec::new(),
             tags: vec!["federation".to_string()],
             governing_spec: "007-workflow-registry-traversal".to_string(),
         }

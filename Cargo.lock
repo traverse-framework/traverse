@@ -1807,6 +1807,7 @@ dependencies = [
  "traverse-contracts",
  "traverse-registry",
  "traverse-runtime",
+ "zeroize",
 ]
 
 [[package]]
@@ -1865,6 +1866,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+ "zeroize",
 ]
 
 [[package]]
