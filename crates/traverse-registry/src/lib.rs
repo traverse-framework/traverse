@@ -7,6 +7,7 @@ mod events;
 mod federation;
 mod graph;
 mod model_resolution;
+mod public_registry_cache;
 mod public_registry_state;
 pub mod semver_resolver;
 mod workflows;
@@ -21,6 +22,7 @@ pub use events::*;
 pub use federation::*;
 pub use graph::*;
 pub use model_resolution::*;
+pub use public_registry_cache::*;
 pub use public_registry_state::*;
 pub use semver_resolver::{
     AmbiguousCandidate, RangeResolutionError, ResolvedRangeCapability, resolve_version_range,
