@@ -1,7 +1,7 @@
 # Feature Specification: Durable Identity-Aware Event Delivery
 
 **Spec ID**: 066
-**Status**: Draft
+**Status**: Approved
 **Created**: 2026-07-12
 **Input**: User-approved blocker-resolution decisions for issues #591 and #593.
 

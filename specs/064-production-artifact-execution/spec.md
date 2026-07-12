@@ -1,7 +1,7 @@
 # Feature Specification: Production Artifact Execution Routing
 
 **Spec ID**: 064
-**Status**: Draft
+**Status**: Approved
 **Created**: 2026-07-12
 **Input**: User-approved blocker-resolution decisions for issue #583.
 

@@ -1,6 +1,6 @@
 # ADR-0002: Materialize Public Registrations from Verified Contract Artifacts
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-12
 
 ## Context

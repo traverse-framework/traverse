@@ -1,6 +1,6 @@
 # ADR-0005: Emit Identity-Aware Events into a Durable Journal
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-12
 
 ## Context

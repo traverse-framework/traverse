@@ -307,8 +307,8 @@ Release readiness is auditable, and downstream users can reason about compatibil
 ## Decision 13: Materialize Public Registrations from Verified Contract Artifacts
 
 - **Date**: 2026-07-12
-- **Status**: Proposed
-- **Governing spec**: draft `063-registry-contract-materialization`
+- **Status**: Accepted
+- **Governing spec**: `063-registry-contract-materialization`
 - **Related issues**: `#551`, `#552`
 
 ### Decision
@@ -321,8 +321,8 @@ machine-readable evidence.
 ## Decision 14: Use a Runtime-Owned Production Artifact Router
 
 - **Date**: 2026-07-12
-- **Status**: Proposed
-- **Governing spec**: draft `064-production-artifact-execution`
+- **Status**: Accepted
+- **Governing spec**: `064-production-artifact-execution`
 - **Related issue**: `#583`
 
 ### Decision
@@ -334,8 +334,8 @@ that router by default; the example executor is explicit-only.
 ## Decision 15: Verify Sigstore Bundles Offline Against Pinned Trust Policy
 
 - **Date**: 2026-07-12
-- **Status**: Proposed
-- **Governing spec**: draft `065-sigstore-bundle-verification`
+- **Status**: Accepted
+- **Governing spec**: `065-sigstore-bundle-verification`
 - **Related issue**: `#589`
 
 ### Decision
@@ -348,8 +348,8 @@ verification evidence.
 ## Decision 16: Emit Identity-Aware Events into a Durable Journal
 
 - **Date**: 2026-07-12
-- **Status**: Proposed
-- **Governing spec**: draft `066-durable-identity-event-delivery`
+- **Status**: Accepted
+- **Governing spec**: `066-durable-identity-event-delivery`
 - **Related issues**: `#591`, `#593`
 
 ### Decision

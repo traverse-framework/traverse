@@ -1,6 +1,6 @@
 # ADR-0003: Route Production Artifacts Through a Runtime-Owned Router
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-12
 
 ## Context

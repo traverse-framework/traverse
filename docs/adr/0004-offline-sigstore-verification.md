@@ -1,6 +1,6 @@
 # ADR-0004: Verify Sigstore Bundles Offline with Pinned Trust Policy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-12
 
 ## Context

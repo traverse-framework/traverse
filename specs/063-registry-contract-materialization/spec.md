@@ -1,7 +1,7 @@
 # Feature Specification: Registry Contract Materialization
 
 **Spec ID**: 063
-**Status**: Draft
+**Status**: Approved
 **Created**: 2026-07-12
 **Input**: User-approved blocker-resolution decisions for issues #551 and #552.
 
