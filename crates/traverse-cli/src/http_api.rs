@@ -11,7 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_registry::{
-    ApplicationStateMachine, ArtifactDigests, BinaryFormat, BinaryReference,
+    ApplicationStateMachine, ApplicationStateTransition, ApplicationStateTransitionCondition,
+    ApplicationStateTransitionConditionOp, ArtifactDigests, BinaryFormat, BinaryReference,
     CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
     CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry,
     ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
@@ -2136,7 +2137,10 @@ fn parse_event_register_body_for_workspace(
         .and_then(|v| v.as_str())
         .unwrap_or("private")
         .to_string();
-    let registered_at = generated_registered_at().unwrap_or_else(|_| "unix:0".to_string());
+    // Derived from the contract's own provenance rather than wall-clock time so
+    // that re-registering an identical contract produces an identical record for
+    // the duplicate-detection equality check in `EventRegistry::register`.
+    let registered_at = contract.provenance.created_at.clone();
 
     Ok((
         scope,
@@ -5748,17 +5752,31 @@ fn push_app_command_outcome_events<E>(
     } else {
         "capability_failed"
     };
-    let final_state = machine
-        .states
-        .iter()
-        .find(|state| state.id == invoking_state)
-        .and_then(|state| {
-            state
-                .transitions
-                .iter()
-                .find(|transition| transition.on == lifecycle_event)
-        })
-        .map_or_else(|| invoking_state.to_string(), |t| t.to.clone());
+    let empty_output = Value::Null;
+    let transition_result = resolve_lifecycle_transition(
+        machine,
+        invoking_state,
+        lifecycle_event,
+        outcome.result.output.as_ref().unwrap_or(&empty_output),
+    );
+    let (final_state, transition_error) = match transition_result {
+        Ok(Some(transition)) => (transition.to.clone(), None),
+        Ok(None) if succeeded => (
+            invoking_state.to_string(),
+            Some((
+                "no_matching_transition",
+                "no capability_succeeded transition matched the capability output",
+            )),
+        ),
+        Ok(None) => (invoking_state.to_string(), None),
+        Err(ConditionEvaluationError::Type) => (
+            invoking_state.to_string(),
+            Some((
+                "condition_type_error",
+                "a transition condition could not be evaluated against the capability output",
+            )),
+        ),
+    };
     if final_state != invoking_state {
         push_app_state_changed_event(
             ws,
@@ -5772,10 +5790,10 @@ fn push_app_command_outcome_events<E>(
         );
     }
 
-    let result_event_type = if succeeded {
-        "capability_result"
-    } else {
+    let result_event_type = if transition_error.is_some() || !succeeded {
         "error"
+    } else {
+        "capability_result"
     };
     ws.app_events.push(AppStateEventRecord {
         event_id: format!("{execution_id}:{result_event_type}"),
@@ -5796,12 +5814,128 @@ fn push_app_command_outcome_events<E>(
             "previous_state": invoking_state,
             "timestamp": timestamp,
             "output": outcome.result.output,
+            "error_code": transition_error.map(|(code, _)| code),
             "error": outcome.result.error.as_ref().map(|e| json!({
                 "code": format!("{:?}", e.code).to_lowercase(),
                 "message": e.message,
-            })),
+            })).or_else(|| transition_error.map(|(code, message)| json!({
+                "code": code,
+                "message": message,
+            }))),
         }),
     });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConditionEvaluationError {
+    Type,
+}
+
+fn resolve_lifecycle_transition<'a>(
+    machine: &'a ApplicationStateMachine,
+    invoking_state: &str,
+    lifecycle_event: &str,
+    output: &Value,
+) -> Result<Option<&'a ApplicationStateTransition>, ConditionEvaluationError> {
+    let Some(state) = machine
+        .states
+        .iter()
+        .find(|state| state.id == invoking_state)
+    else {
+        return Ok(None);
+    };
+    let matching = state
+        .transitions
+        .iter()
+        .filter(|transition| transition.on == lifecycle_event);
+
+    if lifecycle_event != "capability_succeeded" {
+        return Ok(matching.into_iter().next());
+    }
+
+    let transitions = matching.collect::<Vec<_>>();
+    for transition in transitions.iter().copied() {
+        if let Some(condition) = transition.condition.as_ref()
+            && evaluate_transition_condition(condition, output)?
+        {
+            return Ok(Some(transition));
+        }
+    }
+    Ok(transitions
+        .into_iter()
+        .find(|transition| transition.condition.is_none()))
+}
+
+fn evaluate_transition_condition(
+    condition: &ApplicationStateTransitionCondition,
+    output: &Value,
+) -> Result<bool, ConditionEvaluationError> {
+    let value = condition.field.strip_prefix("output.").and_then(|path| {
+        path.split('.')
+            .try_fold(output, |current, segment| current.get(segment))
+    });
+    match condition.op {
+        ApplicationStateTransitionConditionOp::Exists => {
+            Ok(value.is_some_and(|value| !value.is_null()))
+        }
+        ApplicationStateTransitionConditionOp::In => {
+            let Some(actual) = value else {
+                return Ok(false);
+            };
+            let Some(expected) = condition.value.as_ref().and_then(Value::as_array) else {
+                return Err(ConditionEvaluationError::Type);
+            };
+            Ok(expected.iter().any(|candidate| candidate == actual))
+        }
+        ApplicationStateTransitionConditionOp::Eq | ApplicationStateTransitionConditionOp::Neq => {
+            let Some(actual) = value else {
+                return Ok(false);
+            };
+            let Some(expected) = condition.value.as_ref() else {
+                return Err(ConditionEvaluationError::Type);
+            };
+            if json_value_kind(actual) != json_value_kind(expected) {
+                return Err(ConditionEvaluationError::Type);
+            }
+            let equal = actual == expected;
+            Ok(
+                if condition.op == ApplicationStateTransitionConditionOp::Eq {
+                    equal
+                } else {
+                    !equal
+                },
+            )
+        }
+        ApplicationStateTransitionConditionOp::Gt
+        | ApplicationStateTransitionConditionOp::Gte
+        | ApplicationStateTransitionConditionOp::Lt
+        | ApplicationStateTransitionConditionOp::Lte => {
+            let Some(actual) = value.and_then(Value::as_f64) else {
+                return Err(ConditionEvaluationError::Type);
+            };
+            let Some(expected) = condition.value.as_ref().and_then(Value::as_f64) else {
+                return Err(ConditionEvaluationError::Type);
+            };
+            Ok(match condition.op {
+                ApplicationStateTransitionConditionOp::Gt => actual > expected,
+                ApplicationStateTransitionConditionOp::Gte => actual >= expected,
+                ApplicationStateTransitionConditionOp::Lt => actual < expected,
+                ApplicationStateTransitionConditionOp::Lte => actual <= expected,
+                _ => false,
+            })
+        }
+    }
+}
+
+fn json_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7537,12 +7671,16 @@ mod tests {
     }
 
     fn test_state_with(id: &str, version: &str) -> ApiState<TestExecutor> {
+        test_state_with_output(id, version, json!({"result": "ok"}))
+    }
+
+    fn test_state_with_output(id: &str, version: &str, output: Value) -> ApiState<TestExecutor> {
         let mut registry = CapabilityRegistry::new();
         registry
             .register(test_registration(id, version))
             .expect("test registration must succeed");
 
-        let executor = TestExecutor::ok(json!({"result": "ok"}));
+        let executor = TestExecutor::ok(output);
         let registry_root = test_registry_root();
         std::fs::create_dir_all(&registry_root).expect("registry root must be created");
 
@@ -9187,6 +9325,47 @@ mod tests {
             .expect("state machine must be seeded");
     }
 
+    fn conditional_transition(
+        op: ApplicationStateTransitionConditionOp,
+        value: Value,
+        to: &str,
+    ) -> ApplicationStateTransition {
+        ApplicationStateTransition {
+            on: "capability_succeeded".to_string(),
+            to: to.to_string(),
+            condition: Some(ApplicationStateTransitionCondition {
+                field: "output.confidence_score".to_string(),
+                op,
+                value: Some(value),
+            }),
+            with_last_payload: false,
+        }
+    }
+
+    fn replace_succeeded_transitions(
+        state: &ApiState<TestExecutor>,
+        transitions: Vec<ApplicationStateTransition>,
+    ) {
+        state
+            .with_workspace_mut("ws-test", |ws| {
+                let machine = ws
+                    .app_state_machines
+                    .get_mut("traverse-starter")
+                    .expect("state machine must be present");
+                let processing = machine
+                    .states
+                    .iter_mut()
+                    .find(|state| state.id == "processing")
+                    .expect("processing state must be present");
+                processing
+                    .transitions
+                    .retain(|transition| transition.on != "capability_succeeded");
+                processing.transitions.splice(0..0, transitions);
+                Ok(())
+            })
+            .expect("state machine transitions must be replaced");
+    }
+
     fn make_app_command_body(command: &str, payload: &Value, session_id: Option<&str>) -> Vec<u8> {
         let mut body = json!({
             "command": command,
@@ -9371,6 +9550,229 @@ mod tests {
         assert!(body.contains("\"previous_state\":\"processing\""));
         assert!(body.contains("\"result\":\"ok\""));
         assert!(body.contains(&format!("\"session_id\":\"{session_id}\"")));
+    }
+
+    #[test]
+    fn app_command_routes_capability_output_with_ordered_conditions_and_fallback() {
+        for (confidence, expected_state) in [(0.90, "auto_approved"), (0.70, "pending_review")] {
+            let state = test_state_with_output(
+                "traverse-starter.process",
+                "1.0.0",
+                json!({"confidence_score": confidence}),
+            );
+            seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+            replace_succeeded_transitions(
+                &state,
+                vec![
+                    conditional_transition(
+                        ApplicationStateTransitionConditionOp::Gte,
+                        json!(0.85),
+                        "auto_approved",
+                    ),
+                    ApplicationStateTransition {
+                        on: "capability_succeeded".to_string(),
+                        to: "pending_review".to_string(),
+                        condition: None,
+                        with_last_payload: false,
+                    },
+                ],
+            );
+
+            let command_req = make_http_request(
+                "POST",
+                "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+                make_app_command_body("submit", &json!({}), None),
+            );
+            let mut command_out = Vec::new();
+            handle_workspace_operation(&mut command_out, &command_req, &state, true)
+                .expect("command dispatch must write a response");
+
+            let events_req = make_http_request(
+                "GET",
+                "/v1/workspaces/ws-test/apps/traverse-starter/events",
+                Vec::new(),
+            );
+            let mut events_out = Vec::new();
+            handle_app_events(
+                &mut events_out,
+                &events_req,
+                &state,
+                true,
+                "ws-test",
+                "traverse-starter",
+            )
+            .expect("events endpoint must write a response");
+            let body = response_body_text(&events_out);
+            assert!(body.contains(&format!("\"state\":\"{expected_state}\"")));
+            assert!(body.contains("event: capability_result"));
+        }
+    }
+
+    #[test]
+    fn app_command_emits_condition_errors_without_changing_the_invoking_state() {
+        let state = test_state_with_output(
+            "traverse-starter.process",
+            "1.0.0",
+            json!({"confidence_score": "unknown"}),
+        );
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        replace_succeeded_transitions(
+            &state,
+            vec![conditional_transition(
+                ApplicationStateTransitionConditionOp::Gte,
+                json!(0.85),
+                "auto_approved",
+            )],
+        );
+
+        let command_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+        let mut command_out = Vec::new();
+        handle_workspace_operation(&mut command_out, &command_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        let events_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        let mut events_out = Vec::new();
+        handle_app_events(
+            &mut events_out,
+            &events_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("events endpoint must write a response");
+        let body = response_body_text(&events_out);
+        assert!(body.contains("event: error"));
+        assert!(body.contains("\"code\":\"condition_type_error\""));
+        assert!(body.contains("\"state\":\"processing\""));
+        assert!(!body.contains("auto_approved"));
+    }
+
+    #[test]
+    fn app_command_emits_no_matching_transition_without_changing_the_invoking_state() {
+        let state = test_state_with_output(
+            "traverse-starter.process",
+            "1.0.0",
+            json!({"confidence_score": 0.70}),
+        );
+        seed_app_state_machine(&state, "traverse-starter", "traverse-starter.process");
+        replace_succeeded_transitions(
+            &state,
+            vec![conditional_transition(
+                ApplicationStateTransitionConditionOp::Gte,
+                json!(0.85),
+                "auto_approved",
+            )],
+        );
+
+        let command_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/traverse-starter/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+        let mut command_out = Vec::new();
+        handle_workspace_operation(&mut command_out, &command_req, &state, true)
+            .expect("command dispatch must write a response");
+
+        let events_req = make_http_request(
+            "GET",
+            "/v1/workspaces/ws-test/apps/traverse-starter/events",
+            Vec::new(),
+        );
+        let mut events_out = Vec::new();
+        handle_app_events(
+            &mut events_out,
+            &events_req,
+            &state,
+            true,
+            "ws-test",
+            "traverse-starter",
+        )
+        .expect("events endpoint must write a response");
+        let body = response_body_text(&events_out);
+        assert!(body.contains("event: error"));
+        assert!(body.contains("\"code\":\"no_matching_transition\""));
+        assert!(body.contains("\"state\":\"processing\""));
+        assert!(!body.contains("auto_approved"));
+    }
+
+    #[test]
+    fn transition_condition_evaluator_supports_all_approved_operators() {
+        let output = json!({"score": 2, "label": "ready", "present": true, "empty": null});
+        let cases = [
+            (
+                ApplicationStateTransitionConditionOp::Eq,
+                "output.label",
+                json!("ready"),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Neq,
+                "output.label",
+                json!("waiting"),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Gt,
+                "output.score",
+                json!(1),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Gte,
+                "output.score",
+                json!(2),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Lt,
+                "output.score",
+                json!(3),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Lte,
+                "output.score",
+                json!(2),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::In,
+                "output.label",
+                json!(["ready", "done"]),
+            ),
+            (
+                ApplicationStateTransitionConditionOp::Exists,
+                "output.present",
+                Value::Null,
+            ),
+        ];
+        for (op, field, value) in cases {
+            let condition = ApplicationStateTransitionCondition {
+                field: field.to_string(),
+                op,
+                value: if op == ApplicationStateTransitionConditionOp::Exists {
+                    None
+                } else {
+                    Some(value)
+                },
+            };
+            assert!(
+                evaluate_transition_condition(&condition, &output)
+                    .expect("approved condition must evaluate")
+            );
+        }
+
+        let missing = ApplicationStateTransitionCondition {
+            field: "output.missing".to_string(),
+            op: ApplicationStateTransitionConditionOp::Exists,
+            value: None,
+        };
+        assert!(
+            !evaluate_transition_condition(&missing, &output).expect("missing field must evaluate")
+        );
     }
 
     #[test]
@@ -10099,6 +10501,38 @@ mod tests {
             parse_response_body(&conflict_out)["traverse_code"],
             "registration_conflict"
         );
+    }
+
+    #[test]
+    fn workspace_event_contract_registration_duplicate_is_stable_across_a_clock_tick() {
+        // Regression test for a CI flake (issue link in PR description): the
+        // duplicate-vs-conflict decision must not depend on wall-clock time, or
+        // two back-to-back identical registrations straddling a second boundary
+        // spuriously return 409 instead of 200. Sleeping past a full second here
+        // reproduces that race deterministically.
+        let state = empty_state();
+        let body = valid_event_registration_body("test.api.event-clock-tick", "1.0.0");
+        let first_req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/event-contracts",
+            body.clone(),
+        );
+        let mut first_out = Vec::new();
+        handle_workspace_operation(&mut first_out, &first_req, &state, true)
+            .expect("first event registration must write a response");
+        assert_eq!(response_status(&first_out), 201);
+
+        thread::sleep(Duration::from_millis(1100));
+
+        let second_req = make_http_request("POST", "/v1/workspaces/ws-test/event-contracts", body);
+        let mut second_out = Vec::new();
+        handle_workspace_operation(&mut second_out, &second_req, &state, true)
+            .expect("second event registration must write a response");
+
+        assert_eq!(response_status(&second_out), 200);
+        let duplicate = parse_response_body(&second_out);
+        assert_eq!(duplicate["registered"], false);
+        assert_eq!(duplicate["already_registered"], true);
     }
 
     #[test]
