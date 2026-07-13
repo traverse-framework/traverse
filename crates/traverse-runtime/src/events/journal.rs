@@ -3,8 +3,8 @@
 //! Governed by spec 066-durable-identity-event-delivery (FR-005..FR-009) and
 //! spec 067-durable-journal-retention-and-write-limits (FR-001, FR-002).
 //!
-//! Storage engine only: broker/sink wiring and the bounded publish write
-//! timeout (067 FR-003..FR-005) build on this in a follow-up slice of #659.
+//! The bounded publish write path that drives this journal lives in
+//! [`super::durable`].
 
 use std::fs;
 use std::io::Write;
@@ -85,12 +85,17 @@ impl std::fmt::Display for JournalError {
 
 impl std::error::Error for JournalError {}
 
-/// One durable record: an acknowledged event with its journal sequence.
+/// One durable record: an acknowledged event with its journal sequence, or a
+/// revocation suppressing a previously written sequence from replay
+/// (067 FR-004: a rejected event must not be delivered through any path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JournalRecordV1 {
     seq: u64,
     written_at_secs: u64,
-    event: TraverseEvent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<TraverseEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revokes: Option<u64>,
 }
 
 /// Metadata for one on-disk segment, derived entirely from its contents so
@@ -202,6 +207,30 @@ impl DurableEventJournal {
     /// Returns [`JournalError::Io`] when the durable write fails; the event
     /// is not acknowledged in that case.
     pub fn append(&mut self, event: &TraverseEvent) -> Result<String, JournalError> {
+        self.append_line(Some(event), None)
+    }
+
+    /// Durably record that the event at `revoked_cursor` was rejected and
+    /// must never be delivered through replay (067 FR-004). Used when a
+    /// caller abandoned a write that later completed, or when a durably
+    /// written event could not be delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JournalError::InvalidCursor`] for unparseable cursors and
+    /// [`JournalError::Io`] when the durable write fails.
+    pub fn append_revocation(&mut self, revoked_cursor: &str) -> Result<String, JournalError> {
+        let revoked = revoked_cursor.parse::<u64>().map_err(|e| {
+            JournalError::InvalidCursor(format!("revoked cursor `{revoked_cursor}`: {e}"))
+        })?;
+        self.append_line(None, Some(revoked))
+    }
+
+    fn append_line(
+        &mut self,
+        event: Option<&TraverseEvent>,
+        revokes: Option<u64>,
+    ) -> Result<String, JournalError> {
         let now_secs = self.now_secs()?;
 
         let needs_rollover = self.active.as_ref().is_some_and(|(meta, _)| {
@@ -217,7 +246,7 @@ impl DurableEventJournal {
             Some(active) => active,
             None => self.open_segment(now_secs)?,
         };
-        let result = append_record(&mut active, self.next_seq, now_secs, event);
+        let result = append_record(&mut active, self.next_seq, now_secs, event, revokes);
         self.active = Some(active);
         let cursor = result?;
         self.next_seq += 1;
@@ -277,7 +306,10 @@ impl DurableEventJournal {
             });
         }
 
-        let mut out = Vec::new();
+        // Revocations always carry a later sequence than the record they
+        // suppress, so the full scan must finish before results are final.
+        let mut revoked = std::collections::HashSet::new();
+        let mut collected: Vec<(u64, TraverseEvent)> = Vec::new();
         let last_index = self.segment_count().saturating_sub(1);
         for (index, meta) in self.segments().enumerate() {
             if meta.last_seq <= after {
@@ -285,15 +317,21 @@ impl DurableEventJournal {
             }
             let allow_torn_tail = index == last_index;
             for record in read_segment_records(&meta.path, allow_torn_tail)? {
-                if record.seq > after {
-                    out.push((record.seq.to_string(), record.event));
-                    if out.len() == max_events {
-                        return Ok(out);
-                    }
+                if let Some(revoked_seq) = record.revokes {
+                    let _ = revoked.insert(revoked_seq);
+                } else if record.seq > after
+                    && let Some(event) = record.event
+                {
+                    collected.push((record.seq, event));
                 }
             }
         }
-        Ok(out)
+        collected.retain(|(seq, _)| !revoked.contains(seq));
+        collected.truncate(max_events);
+        Ok(collected
+            .into_iter()
+            .map(|(seq, event)| (seq.to_string(), event))
+            .collect())
     }
 
     /// The cursor from which the oldest retained event replays; callers that
@@ -399,12 +437,14 @@ fn append_record(
     active: &mut (SegmentMeta, fs::File),
     seq: u64,
     now_secs: u64,
-    event: &TraverseEvent,
+    event: Option<&TraverseEvent>,
+    revokes: Option<u64>,
 ) -> Result<String, JournalError> {
     let record = JournalRecordV1 {
         seq,
         written_at_secs: now_secs,
-        event: event.clone(),
+        event: event.cloned(),
+        revokes,
     };
     let mut line = serde_json::to_vec(&record)
         .map_err(|e| JournalError::Io(format!("serialize journal record: {e}")))?;
@@ -795,7 +835,8 @@ mod tests {
             let mut line = serde_json::to_vec(&JournalRecordV1 {
                 seq,
                 written_at_secs: 1_000,
-                event: test_event("x"),
+                event: Some(test_event("x")),
+                revokes: None,
             })
             .expect("record must serialize");
             line.push(b'\n');
@@ -1053,6 +1094,58 @@ mod tests {
             .prune()
             .expect_err("size pruning an already-missing segment must surface an io error");
         assert!(matches!(err, JournalError::Io(_)), "{err}");
+    }
+
+    #[test]
+    fn revocations_suppress_events_from_replay() {
+        let root = test_root("revocation");
+        let clock = TestClock::at_secs(1_000);
+        let mut journal = open_journal(&root, JournalConfig::default(), clock.clone());
+        journal
+            .append(&test_event("a"))
+            .expect("append must succeed");
+        let second = journal
+            .append(&test_event("b"))
+            .expect("append must succeed");
+        journal
+            .append(&test_event("c"))
+            .expect("append must succeed");
+
+        journal
+            .append_revocation(&second)
+            .expect("revocation must be durable");
+
+        let replayed = journal.replay_from("0", 10).expect("replay must succeed");
+        let markers: Vec<_> = replayed
+            .iter()
+            .map(|(_, event)| event.data["marker"].clone())
+            .collect();
+        assert_eq!(
+            markers,
+            vec![serde_json::json!("a"), serde_json::json!("c")],
+            "the revoked event must not be delivered and the revocation record itself must not appear"
+        );
+
+        let capped = journal.replay_from("0", 2).expect("replay must succeed");
+        assert_eq!(
+            capped.len(),
+            2,
+            "max_events must apply after revocation filtering"
+        );
+
+        let reopened = open_journal(&root, JournalConfig::default(), clock);
+        let recovered = reopened.replay_from("0", 10).expect("replay must succeed");
+        assert_eq!(
+            recovered.len(),
+            2,
+            "revocations must keep suppressing events across restart"
+        );
+
+        let mut invalid = reopened;
+        let err = invalid
+            .append_revocation("not-a-cursor")
+            .expect_err("unparseable revoked cursor must be rejected");
+        assert!(matches!(err, JournalError::InvalidCursor(_)), "{err}");
     }
 
     #[test]
