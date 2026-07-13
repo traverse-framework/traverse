@@ -33,7 +33,7 @@ use traverse_registry::{
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
-    LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutor, Runtime,
+    ArtifactRouter, LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutor, Runtime,
     RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus, RuntimeTrace,
     parse_runtime_request,
 };
@@ -1202,7 +1202,7 @@ fn run_serve(
         registry_root: std::env::current_dir()
             .map_err(|e| format!("failed to resolve current directory: {e}"))?
             .join(".traverse/registry"),
-        executor: ExpeditionExampleExecutor,
+        executor: ArtifactRouter::new().map_err(|error| error.message)?,
         idempotency_retention_seconds: None,
         jwt_verification_key_hex: std::env::var("TRAVERSE_JWT_VERIFICATION_KEY")
             .ok()
