@@ -4,11 +4,15 @@
 
 pub mod broker;
 pub mod catalog;
+pub mod durable;
 pub mod journal;
 pub mod types;
 
 pub use broker::{BrokerClock, BrokerConfig, InProcessBroker, SystemClock};
 pub use catalog::{EventCatalog, EventCatalogEntry};
+pub use durable::{
+    DurableBroker, DurableBrokerConfig, JournalSink, JournalWriteAuditRecord, JournalWriteAuditSink,
+};
 pub use journal::{DurableEventJournal, JournalConfig, JournalError};
 pub use types::{
     BrokerEvent, EventBroker, EventCursor, EventError, LifecycleStatus, Subscription,
