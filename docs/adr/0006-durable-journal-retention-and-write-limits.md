@@ -14,11 +14,12 @@ call when the durable write stalls. Both were required to close issue #593.
 
 Retention reclaims space by deleting whole segments once every event in a
 segment is outside the retention window; segments roll over on a configured
-max size or max duration, whichever comes first, to bound how long a single
-old event can pin a segment. `publish()` waits for the durable write up to a
-configured timeout; on timeout it returns a distinct `journal_write_timeout`
-error and rejects the event outright rather than silently degrading to
-in-memory-only delivery. The timeout produces a structured audit event.
+max size or max duration (default 64 MB or 10 minutes, whichever comes first)
+to bound how long a single old event can pin a segment. `publish()` waits for
+the durable write up to a configured timeout (default 2 seconds); on timeout
+it returns a distinct `journal_write_timeout` error and rejects the event
+outright rather than silently degrading to in-memory-only delivery. The
+timeout produces a structured audit event.
 
 ## Consequences
 

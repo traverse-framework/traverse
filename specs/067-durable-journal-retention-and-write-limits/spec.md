@@ -17,13 +17,14 @@ rather than by amending the immutable 066.
 ## Requirements
 
 - **FR-001**: The journal MUST roll over to a new segment once it reaches a
-  configured maximum size or maximum duration, whichever occurs first.
+  configured maximum size or maximum duration, whichever occurs first; the
+  default is 64 MB or 10 minutes.
 - **FR-002**: Expired data MUST be reclaimed by deleting an entire segment file
   once every event within it falls outside the retention window; the journal
   MUST NOT rewrite or partially truncate a segment in place.
 - **FR-003**: `publish()` MUST wait for the durable write to complete only up
-  to a configured timeout; on timeout it MUST return a distinct
-  `journal_write_timeout` error and MUST NOT block indefinitely.
+  to a configured timeout, defaulting to 2 seconds; on timeout it MUST return a
+  distinct `journal_write_timeout` error and MUST NOT block indefinitely.
 - **FR-004**: An event that hits `journal_write_timeout` MUST be rejected, not
   delivered, and MUST NOT be silently downgraded to in-memory-only delivery;
   the caller is responsible for handling the failure.

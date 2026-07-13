@@ -370,8 +370,9 @@ evolution path.
 
 Retention reclaims space by deleting whole segments once every event in a
 segment ages out, with segments rolling over on a configured max size or max
-duration to bound how long one old event can pin a segment. A durable write
-that stalls past a configured timeout rejects the event with a distinct
-`journal_write_timeout` error and audit event, rather than blocking
-indefinitely or silently degrading to in-memory-only delivery. This closes the
-remaining gap in issue #593's Definition of Done left open by Decision 16.
+duration (default 64 MB or 10 minutes) to bound how long one old event can pin
+a segment. A durable write that stalls past a configured timeout (default 2
+seconds) rejects the event with a distinct `journal_write_timeout` error and
+audit event, rather than blocking indefinitely or silently degrading to
+in-memory-only delivery. This closes the remaining gap in issue #593's
+Definition of Done left open by Decision 16.
