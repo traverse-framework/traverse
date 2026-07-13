@@ -57,6 +57,7 @@ struct BufferedEvent {
 struct SubscriptionState {
     subscription_id: SubscriptionId,
     event_type: String,
+    subject_id: Option<String>,
     cursor: u64,
     queue: VecDeque<BufferedEvent>,
 }
@@ -238,9 +239,26 @@ impl EventBroker for InProcessBroker {
         &self,
         event_type: &str,
         from_cursor: &str,
-        _subject_id: Option<&str>,
+        subject_id: Option<&str>,
     ) -> Result<Subscription, EventError> {
-        self.subscribe(event_type, from_cursor)
+        let subscription = self.subscribe(event_type, from_cursor)?;
+        if let Some(subject_id) = subject_id {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| EventError::LifecycleViolation("broker lock poisoned".to_owned()))?;
+            let state_subscription = state
+                .subscriptions
+                .get_mut(&subscription.subscription_id)
+                .ok_or_else(|| {
+                    EventError::SubscriptionNotFound(subscription.subscription_id.clone())
+                })?;
+            state_subscription.subject_id = Some(subject_id.to_string());
+            state_subscription
+                .queue
+                .retain(|item| item.event.subject_id.as_deref() == Some(subject_id));
+        }
+        Ok(subscription)
     }
 
     /// Publish `event` to all registered subscribers.
@@ -318,6 +336,13 @@ impl EventBroker for InProcessBroker {
             if sub.event_type != event.event_type {
                 continue;
             }
+            if sub
+                .subject_id
+                .as_deref()
+                .is_some_and(|subject_id| event.subject_id.as_deref() != Some(subject_id))
+            {
+                continue;
+            }
             enqueue_with_drop_oldest(&mut sub.queue, self.config.max_queue_len, buffered.clone());
         }
 
@@ -370,6 +395,7 @@ impl EventBroker for InProcessBroker {
             SubscriptionState {
                 subscription_id: subscription_id.clone(),
                 event_type: event_type.to_string(),
+                subject_id: None,
                 cursor: from_cursor,
                 queue,
             },
