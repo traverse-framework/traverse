@@ -120,8 +120,17 @@ fn connector_registration_is_idempotent_and_rejects_conflicts() {
         .expect("identical connector registration should be idempotent");
     assert_eq!(first, second);
 
+    let mut retry_with_later_timestamp =
+        connector_registration(RegistryScope::Public, connector.clone());
+    retry_with_later_timestamp.registered_at = "2026-04-20T00:00:00Z".to_string();
+    let retry = registry
+        .register_connector(retry_with_later_timestamp)
+        .expect("retry with a later server timestamp should be idempotent");
+    assert_eq!(first, retry);
+
     let mut conflicting_request = connector_registration(RegistryScope::Public, connector);
-    conflicting_request.registered_at = "2026-04-20T00:00:00Z".to_string();
+    conflicting_request.contract_path =
+        "registry/public/connectors/traverse.env/changed.json".to_string();
     let failure = registry
         .register_connector(conflicting_request)
         .expect_err("different connector metadata should conflict");
