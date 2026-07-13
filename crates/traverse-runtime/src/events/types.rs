@@ -56,6 +56,11 @@ pub enum EventError {
     SubscriptionNotFound(String),
     /// Broker was configured with an invalid retention window.
     InvalidRetentionWindow(String),
+    /// Durable journal write failed; the event was not acknowledged (066 FR-006).
+    JournalWrite(String),
+    /// Durable journal write exceeded the configured timeout; the event was
+    /// rejected, not delivered (067 FR-003/FR-004).
+    JournalWriteTimeout(String),
 }
 
 impl std::fmt::Display for EventError {
@@ -73,6 +78,8 @@ impl std::fmt::Display for EventError {
             ),
             Self::SubscriptionNotFound(id) => write!(f, "subscription not found: {id}"),
             Self::InvalidRetentionWindow(msg) => write!(f, "invalid retention window: {msg}"),
+            Self::JournalWrite(msg) => write!(f, "journal write failed: {msg}"),
+            Self::JournalWriteTimeout(msg) => write!(f, "journal_write_timeout: {msg}"),
         }
     }
 }
@@ -166,6 +173,8 @@ mod tests {
             },
             EventError::SubscriptionNotFound("sub-1".to_string()),
             EventError::InvalidRetentionWindow("bad".to_string()),
+            EventError::JournalWrite("disk gone".to_string()),
+            EventError::JournalWriteTimeout("exceeded 2000ms".to_string()),
         ];
 
         for err in cases {
