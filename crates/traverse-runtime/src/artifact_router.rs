@@ -14,8 +14,9 @@ type NativeHandler = dyn Fn(&Value) -> Result<Value, LocalExecutionFailure> + Se
 /// WASM executes only from the resolved registered artifact. Native execution
 /// is limited to explicitly registered host handlers and never loads a binary
 /// or command from artifact metadata.
+#[derive(Clone)]
 pub struct ArtifactRouter {
-    wasm: WasmExecutor,
+    wasm: Arc<WasmExecutor>,
     native_handlers: BTreeMap<String, Arc<NativeHandler>>,
 }
 
@@ -28,7 +29,7 @@ impl ArtifactRouter {
     pub fn new() -> Result<Self, LocalExecutionFailure> {
         WasmExecutor::new()
             .map(|wasm| Self {
-                wasm,
+                wasm: Arc::new(wasm),
                 native_handlers: BTreeMap::new(),
             })
             .map_err(map_executor_error)
