@@ -2,11 +2,12 @@
 
 **Feature Branch**: `068-public-platform-embedder-packages`
 **Created**: 2026-07-12
-**Status**: Draft — external review required before approval
-**Version**: 1.0.0-draft
-**Input**: Traverse #645; the App Reference Phase 3 blocker audit. Spec 057
-defines an embedder IDL and conformance shape, but its implementation ticket
-#553 did not produce a package consumable by application clients.
+**Status**: Approved
+**Version**: 1.0.0
+**Input**: Decision 18 in `docs/decision-log.md`, Traverse #645, and the App
+Reference Phase 3 blocker audit. Spec 057 defines an embedder IDL and
+conformance shape, but its implementation ticket #553 did not produce a
+package consumable by application clients.
 
 ## Purpose
 
@@ -33,8 +34,9 @@ Rust/GTK/CLI.
 ## Functional Requirements
 
 - **FR-001**: Each supported platform MUST provide a public, versioned package
-  or crate that implements `embedder-api/1.0.0` operations: `init`,
-  `shutdown`, `submit`, and `subscribe`.
+  or crate that implements every `embedder-api/1.0.0` operation: `init`,
+  `shutdown`, `submit`, `subscribe`, and compatible-capability `start`,
+  `stop`, and `kill`.
 - **FR-002**: A package MUST load an application-owned bundle containing the
   runtime WASM, app manifest, component manifests, and capability artifacts;
   production execution MUST NOT require `traverse-cli serve` or
