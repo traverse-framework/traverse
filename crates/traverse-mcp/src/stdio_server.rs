@@ -180,7 +180,7 @@ impl McpDiscoveryCatalog {
     }
 
     fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
-        let bundle = load_registry_bundle(&manifest_path).map_err(|failure| {
+        let bundle = load_registry_bundle(manifest_path).map_err(|failure| {
             StdioServerFailure::new(
                 "catalog_load_failed",
                 format!(
@@ -216,7 +216,7 @@ impl CanonicalExecutionContext {
     }
 
     fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
-        let bundle = load_registry_bundle(&manifest_path).map_err(|failure| {
+        let bundle = load_registry_bundle(manifest_path).map_err(|failure| {
             StdioServerFailure::new(
                 "catalog_load_failed",
                 format!(
