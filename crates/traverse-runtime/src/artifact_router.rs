@@ -1,6 +1,6 @@
-use crate::executor::{
-    ArtifactType, CapabilityExecutor, ExecutorCapability, ExecutorError, WasmExecutor,
-};
+use crate::executor::ExecutorError;
+#[cfg(feature = "wasmtime-executor")]
+use crate::executor::{ArtifactType, CapabilityExecutor, ExecutorCapability, WasmExecutor};
 use crate::{LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutor};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -16,6 +16,7 @@ type NativeHandler = dyn Fn(&Value) -> Result<Value, LocalExecutionFailure> + Se
 /// or command from artifact metadata.
 #[derive(Clone)]
 pub struct ArtifactRouter {
+    #[cfg(feature = "wasmtime-executor")]
     wasm: Arc<WasmExecutor>,
     native_handlers: BTreeMap<String, Arc<NativeHandler>>,
 }
@@ -27,12 +28,21 @@ impl ArtifactRouter {
     ///
     /// Returns an execution failure when the Wasmtime runtime cannot initialize.
     pub fn new() -> Result<Self, LocalExecutionFailure> {
-        WasmExecutor::new()
-            .map(|wasm| Self {
-                wasm: Arc::new(wasm),
+        #[cfg(feature = "wasmtime-executor")]
+        {
+            WasmExecutor::new()
+                .map(|wasm| Self {
+                    wasm: Arc::new(wasm),
+                    native_handlers: BTreeMap::new(),
+                })
+                .map_err(|error| map_executor_error(&error))
+        }
+        #[cfg(not(feature = "wasmtime-executor"))]
+        {
+            Ok(Self {
                 native_handlers: BTreeMap::new(),
             })
-            .map_err(|error| map_executor_error(&error))
+        }
     }
 
     /// Registers one host-provided native handler for an exact capability id.
@@ -52,28 +62,38 @@ impl LocalExecutor for ArtifactRouter {
         input: &Value,
     ) -> Result<Value, LocalExecutionFailure> {
         if let Some(binary) = &capability.artifact.binary {
-            if binary.format != BinaryFormat::Wasm {
+            #[cfg(feature = "wasmtime-executor")]
+            {
+                if binary.format != BinaryFormat::Wasm {
+                    return Err(constraint_failure(
+                        "registered artifact format is not supported",
+                    ));
+                }
+                let executor_capability = ExecutorCapability {
+                    capability_id: capability.contract.id.clone(),
+                    artifact_type: ArtifactType::Wasm,
+                    wasm_binary_path: Some(binary.location.clone()),
+                    wasm_checksum: capability
+                        .artifact
+                        .digests
+                        .binary_digest
+                        .as_deref()
+                        .and_then(|digest| digest.strip_prefix("sha256:"))
+                        .map(str::to_string),
+                    host_abi_version: None,
+                };
+                return self
+                    .wasm
+                    .execute(&executor_capability, input)
+                    .map_err(|error| map_executor_error(&error));
+            }
+            #[cfg(not(feature = "wasmtime-executor"))]
+            {
+                let _ = binary;
                 return Err(constraint_failure(
-                    "registered artifact format is not supported",
+                    "WASM execution is unavailable in this runtime build",
                 ));
             }
-            let executor_capability = ExecutorCapability {
-                capability_id: capability.contract.id.clone(),
-                artifact_type: ArtifactType::Wasm,
-                wasm_binary_path: Some(binary.location.clone()),
-                wasm_checksum: capability
-                    .artifact
-                    .digests
-                    .binary_digest
-                    .as_deref()
-                    .and_then(|digest| digest.strip_prefix("sha256:"))
-                    .map(str::to_string),
-                host_abi_version: None,
-            };
-            return self
-                .wasm
-                .execute(&executor_capability, input)
-                .map_err(|error| map_executor_error(&error));
         }
         self.native_handlers
             .get(&capability.contract.id)
