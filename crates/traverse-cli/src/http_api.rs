@@ -10258,6 +10258,32 @@ mod tests {
     }
 
     #[test]
+    fn workspace_capability_registration_rejects_mismatched_body_workspace() {
+        let state = empty_state();
+        let artifact_path = state.registry_root.join("mismatch.wasm");
+        std::fs::write(&artifact_path, b"wasm bytes").expect("artifact must be writable");
+        let mut body: Value = serde_json::from_slice(&valid_registration_body(
+            "test.api.mismatch",
+            "1.0.0",
+            &artifact_path,
+        ))
+        .expect("fixture must be JSON");
+        body["workspace_id"] = json!("other-workspace");
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/capabilities",
+            body.to_string().into_bytes(),
+        );
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true).expect("handler must respond");
+        assert_eq!(response_status(&out), 400);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "invalid_workspace_id"
+        );
+    }
+
+    #[test]
     fn workspace_capability_registration_writes_audit_jsonl() {
         let state = empty_state();
         let artifact_path = state.registry_root.join("audit-module.wasm");
