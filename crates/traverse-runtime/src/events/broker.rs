@@ -234,6 +234,15 @@ fn validate_from_cursor(
 }
 
 impl EventBroker for InProcessBroker {
+    fn subscribe_for_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        _subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError> {
+        self.subscribe(event_type, from_cursor)
+    }
+
     /// Publish `event` to all registered subscribers.
     ///
     /// # Errors

@@ -114,6 +114,14 @@ pub trait EventBroker: Send + Sync {
     /// [`EventError::CursorExpired`] if the cursor is outside the retention window.
     fn subscribe(&self, event_type: &str, from_cursor: &str) -> Result<Subscription, EventError>;
 
+    /// Create a subscription optionally limited to one event subject.
+    fn subscribe_for_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError>;
+
     /// Poll a subscription for up to `max_events`.
     ///
     /// # Errors
