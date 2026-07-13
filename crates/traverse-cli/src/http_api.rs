@@ -11621,4 +11621,118 @@ mod tests {
             .expect_err("unknown scope must be rejected");
         assert!(unknown.contains("workspace_persisted or session_ephemeral"));
     }
+
+    // ------------------------------------------------------------------
+    // Persisted-registry / journal / audit helper coverage (#637, pass 2)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn parse_http_json_response_covers_malformed_responses() {
+        let (status, body) = parse_http_json_response(
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true}",
+        )
+        .expect("well-formed response must parse");
+        assert_eq!(status, 200);
+        assert_eq!(body["ok"], json!(true));
+
+        let not_utf8 = parse_http_json_response(&[0xff, 0xfe])
+            .expect_err("non-UTF-8 response must be rejected");
+        assert!(not_utf8.contains("not UTF-8"));
+
+        let empty = parse_http_json_response(b"").expect_err("empty response must be rejected");
+        assert!(empty.contains("missing status line"));
+
+        let no_proto = parse_http_json_response(b"\r\n\r\n{}")
+            .expect_err("blank status line must be rejected");
+        assert!(no_proto.contains("missing protocol"));
+
+        let no_status = parse_http_json_response(b"HTTP/1.1\r\n\r\n{}")
+            .expect_err("status line without code must be rejected");
+        assert!(no_status.contains("missing status code"));
+
+        let bad_status = parse_http_json_response(b"HTTP/1.1 abc\r\n\r\n{}")
+            .expect_err("non-numeric status must be rejected");
+        assert!(bad_status.contains("not a u16"));
+
+        let no_terminator = parse_http_json_response(b"HTTP/1.1 200 OK")
+            .expect_err("response without header terminator must be rejected");
+        assert!(no_terminator.contains("missing header terminator"));
+
+        let bad_body = parse_http_json_response(b"HTTP/1.1 200 OK\r\n\r\nnot-json")
+            .expect_err("non-JSON body must be rejected");
+        assert!(bad_body.contains("invalid JSON response body"));
+    }
+
+    #[test]
+    fn load_persisted_registry_surfaces_read_and_parse_failures() {
+        let dir_root = test_registry_root();
+        std::fs::create_dir_all(persisted_registry_path(&dir_root, "ws"))
+            .expect("directory squatting on the registry path must be creatable");
+        let read_err = load_persisted_registry(&dir_root, "ws")
+            .expect_err("reading a directory as a persisted registry must fail");
+        assert!(read_err.contains("failed to read persisted registry"));
+
+        let parse_root = test_registry_root();
+        let parse_path = persisted_registry_path(&parse_root, "ws");
+        std::fs::create_dir_all(
+            parse_path
+                .parent()
+                .expect("registry path must have a parent"),
+        )
+        .expect("workspace directory must be creatable");
+        std::fs::write(&parse_path, b"not-json").expect("corrupt registry must be writable");
+        let parse_err = load_persisted_registry(&parse_root, "ws")
+            .expect_err("corrupt persisted registry must fail to parse");
+        assert!(parse_err.contains("failed to parse persisted registry"));
+    }
+
+    #[test]
+    fn registry_journal_replay_handles_partial_and_corrupt_lines() {
+        let root = test_registry_root();
+        let journal = persisted_registry_journal_path(&root, "ws");
+        std::fs::create_dir_all(journal.parent().expect("journal path must have a parent"))
+            .expect("workspace directory must be creatable");
+
+        std::fs::write(&journal, b"{}\nnot-json")
+            .expect("journal with truncated final line must be writable");
+        let tolerated = load_persisted_registry(&root, "ws")
+            .expect("a corrupt final journal line must be tolerated as a torn write");
+        assert!(tolerated.registrations.is_empty());
+
+        std::fs::write(&journal, b"not-json\n{}\n")
+            .expect("journal with corrupt interior line must be writable");
+        let corrupt = load_persisted_registry(&root, "ws")
+            .expect_err("a corrupt interior journal line must fail loudly");
+        assert!(corrupt.contains("failed to parse persisted registry journal"));
+
+        let dir_journal_root = test_registry_root();
+        std::fs::create_dir_all(persisted_registry_journal_path(&dir_journal_root, "ws"))
+            .expect("directory squatting on the journal path must be creatable");
+        let read_err = load_persisted_registry(&dir_journal_root, "ws")
+            .expect_err("reading a directory as the journal must fail");
+        assert!(read_err.contains("failed to read persisted registry journal"));
+    }
+
+    #[test]
+    fn append_registry_mutation_and_audit_surface_directory_failures() {
+        let mutation = PersistedRegistryMutationV1 {
+            registrations: Vec::new(),
+            events: Vec::new(),
+            workflows: Vec::new(),
+        };
+
+        let blocked_root = test_registry_root();
+        std::fs::create_dir_all(&blocked_root).expect("registry root must be creatable");
+        std::fs::write(blocked_root.join("workspaces"), b"file")
+            .expect("file squatting on the workspaces directory must be writable");
+        let mutation_err = append_registry_mutation(&blocked_root, "ws", &mutation)
+            .expect_err("journal directory creation over a file must fail");
+        assert!(mutation_err.contains("failed to create persisted registry directory"));
+
+        let mut state = test_state_with("content.comments.create-comment-draft", "1.0.0");
+        state.registry_root = blocked_root;
+        let audit_err = audit_workspace_event(&state, "ws", "test.event", None, None, "ok", None)
+            .expect_err("audit directory creation over a file must fail");
+        assert!(audit_err.contains("failed to create audit log directory"));
+    }
 }
