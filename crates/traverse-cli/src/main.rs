@@ -4999,6 +4999,7 @@ mod tests {
     use std::cell::RefCell;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     use traverse_contracts::parse_contract;
     use traverse_registry::{
@@ -6869,11 +6870,13 @@ mod tests {
     }
 
     fn unique_temp_dir() -> PathBuf {
+        static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}"));
+        let sequence = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("traverse-cli-test-{nanos}-{sequence}"));
         fs::create_dir_all(&path).expect("temporary directory should create");
         path
     }
