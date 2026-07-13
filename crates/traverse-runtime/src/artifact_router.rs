@@ -32,7 +32,7 @@ impl ArtifactRouter {
                 wasm: Arc::new(wasm),
                 native_handlers: BTreeMap::new(),
             })
-            .map_err(map_executor_error)
+            .map_err(|error| map_executor_error(&error))
     }
 
     /// Registers one host-provided native handler for an exact capability id.
@@ -73,7 +73,7 @@ impl LocalExecutor for ArtifactRouter {
             return self
                 .wasm
                 .execute(&executor_capability, input)
-                .map_err(map_executor_error);
+                .map_err(|error| map_executor_error(&error));
         }
         self.native_handlers
             .get(&capability.contract.id)
@@ -83,7 +83,7 @@ impl LocalExecutor for ArtifactRouter {
     }
 }
 
-fn map_executor_error(error: ExecutorError) -> LocalExecutionFailure {
+fn map_executor_error(error: &ExecutorError) -> LocalExecutionFailure {
     let code = match error {
         ExecutorError::Timeout(_) => LocalExecutionFailureCode::Timeout,
         ExecutorError::ResourceExhausted(_) => LocalExecutionFailureCode::ResourceExhausted,
