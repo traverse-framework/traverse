@@ -5,7 +5,7 @@ use crate::{LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutor};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use traverse_registry::{BinaryFormat, ResolvedCapability};
+use traverse_registry::ResolvedCapability;
 
 type NativeHandler = dyn Fn(&Value) -> Result<Value, LocalExecutionFailure> + Send + Sync;
 
@@ -64,11 +64,6 @@ impl LocalExecutor for ArtifactRouter {
         if let Some(binary) = &capability.artifact.binary {
             #[cfg(feature = "wasmtime-executor")]
             {
-                if binary.format != BinaryFormat::Wasm {
-                    return Err(constraint_failure(
-                        "registered artifact format is not supported",
-                    ));
-                }
                 let executor_capability = ExecutorCapability {
                     capability_id: capability.contract.id.clone(),
                     artifact_type: ArtifactType::Wasm,
@@ -133,12 +128,14 @@ fn constraint_failure(message: &str) -> LocalExecutionFailure {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
     use traverse_registry::{
-        ArtifactDigests, BinaryReference, CapabilityArtifactRecord, CapabilityRegistration,
-        CapabilityRegistry, ComposabilityMetadata, CompositionKind, CompositionPattern,
-        ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
-        SourceReference,
+        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
+        CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
+        CompositionPattern, ImplementationKind, LookupScope, RegistryProvenance, RegistryScope,
+        SourceKind, SourceReference,
     };
 
     fn resolved_capability(binary: Option<BinaryReference>) -> ResolvedCapability {
