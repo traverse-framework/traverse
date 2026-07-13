@@ -36,6 +36,12 @@ pub struct TraverseEvent {
     pub version: String,
     /// Lifecycle status at the time the event was created.
     pub lifecycle_status: LifecycleStatus,
+    /// Authenticated subject that caused this event, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<String>,
+    /// Delegated actor distinct from the subject, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
 }
 
 /// Errors that can occur during event broker operations.
