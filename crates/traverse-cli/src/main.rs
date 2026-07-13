@@ -4986,13 +4986,17 @@ mod tests {
 
     use super::{
         CapabilityPublishRequest, CliError, Command, ExpeditionExampleExecutor,
-        FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RegistryIndexFetcher,
-        RegistrySyncError, app_new_at, app_register_at, app_registration_state_path, app_validate,
-        capability_publish_at, component_new_at, execute_agent, execute_expedition,
-        execute_traverse_starter_process, execute_traverse_starter_summarize,
-        execute_traverse_starter_validate, inspect_agent, inspect_bundle, inspect_event,
-        inspect_trace, inspect_workflow, latest_index_release_asset, load_registered_bundle,
-        load_runtime_request, parse_command, register_bundle, registry_sync_at, run_command,
+        FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RealPublishProcessRunner,
+        RegistryIndexFetcher, RegistrySyncError, app_new_at, app_register_at,
+        app_registration_state_path, app_validate, canonical_expedition_bundle_path,
+        capability_publish_at, component_new_at, curl_text, ensure_clean_registry_checkout,
+        execute_agent, execute_expedition, execute_traverse_starter_process,
+        execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
+        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, latest_index_release_asset,
+        load_registered_bundle, load_runtime_request, parse_command, publish_file_sha256_digest,
+        register_bundle, register_generated_app_bundle, registry_sync_at,
+        registry_sync_failure_json, reject_private_contract_scope, run_command,
+        validate_registry_path_segment,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -7545,5 +7549,184 @@ mod tests {
             bind_address: "127.0.0.1:0".to_string(),
         };
         assert!(matches!(run_command(adapter), Err(CliError::UsageError(_))));
+    }
+
+    // ------------------------------------------------------------------
+    // Command internals and publish/sync helper coverage (#638, pass 2)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn bundle_inspect_and_register_render_json_summaries() {
+        let manifest = canonical_expedition_bundle_path();
+        let inspected =
+            inspect_bundle(&manifest, true).expect("canonical bundle must inspect as JSON");
+        let summary: Value =
+            serde_json::from_str(&inspected).expect("inspect summary must be valid JSON");
+        assert!(
+            summary["capabilities"]
+                .as_u64()
+                .expect("capability count must be numeric")
+                >= 1
+        );
+        assert!(summary["capability_ids"].is_array());
+
+        let registered =
+            register_bundle(&manifest, true).expect("canonical bundle must register as JSON");
+        let summary: Value =
+            serde_json::from_str(&registered).expect("register summary must be valid JSON");
+        assert!(
+            summary["registered_capabilities"]
+                .as_u64()
+                .expect("registered count must be numeric")
+                >= 1
+        );
+    }
+
+    #[test]
+    fn capability_publish_guards_reject_unsafe_inputs() {
+        let parse = reject_private_contract_scope("not-json")
+            .expect_err("non-JSON contract text must be rejected");
+        assert_eq!(parse.0, "capability_publish_contract_parse_failed");
+        let private = reject_private_contract_scope(r#"{"scope":"private"}"#)
+            .expect_err("private scope must be rejected");
+        assert_eq!(private.0, "capability_publish_private_scope");
+        reject_private_contract_scope(r#"{"scope":"public"}"#)
+            .expect("public scope must be accepted");
+
+        for unsafe_segment in ["", " ", ".", "..", "a/b", "a\\b"] {
+            let err = validate_registry_path_segment(unsafe_segment, "capability id")
+                .expect_err("unsafe registry path segment must be rejected");
+            assert_eq!(err.0, "capability_publish_invalid_registry_path");
+        }
+        validate_registry_path_segment("content.comments", "capability id")
+            .expect("safe registry path segment must be accepted");
+
+        let missing = publish_file_sha256_digest(&unique_temp_dir().join("missing.wasm"))
+            .expect_err("missing artifact must fail digest computation");
+        assert_eq!(missing.0, "capability_publish_artifact_read_failed");
+
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        let artifact = dir.join("artifact.wasm");
+        fs::write(&artifact, b"wasm-bytes").expect("artifact must write");
+        let digest = publish_file_sha256_digest(&artifact).expect("digest must compute");
+        assert!(digest.starts_with("sha256:"), "{digest}");
+    }
+
+    #[test]
+    fn registry_sync_failure_json_renders_stable_shape() {
+        let rendered = registry_sync_failure_json("ws-test", "sync_failed", "boom")
+            .expect("failure JSON must render");
+        let value: Value =
+            serde_json::from_str(&rendered).expect("failure JSON must be valid JSON");
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["workspace"], "ws-test");
+        assert_eq!(value["errors"][0]["code"], "sync_failed");
+        assert_eq!(value["errors"][0]["severity"], "error");
+    }
+
+    #[test]
+    fn browser_adapter_serve_parses_bind_forms() {
+        let bare = vec![
+            "traverse-cli".to_string(),
+            "browser-adapter".to_string(),
+            "serve".to_string(),
+        ];
+        assert!(matches!(
+            parse_command(&bare),
+            Ok(Command::BrowserAdapterServe { bind_address }) if bind_address == "127.0.0.1:0"
+        ));
+
+        let mut bound = bare.clone();
+        bound.push("--bind".to_string());
+        bound.push("127.0.0.1:9000".to_string());
+        assert!(matches!(
+            parse_command(&bound),
+            Ok(Command::BrowserAdapterServe { bind_address }) if bind_address == "127.0.0.1:9000"
+        ));
+
+        let mut malformed = bare;
+        malformed.push("--unexpected".to_string());
+        assert!(parse_command(&malformed).is_err());
+    }
+
+    #[test]
+    fn generated_app_bundle_registration_guards_incomplete_bundles() {
+        let missing = register_generated_app_bundle(
+            "app-x",
+            "ws",
+            &unique_temp_dir().join("missing-manifest.json"),
+        )
+        .expect_err("missing manifest must fail");
+        assert!(matches!(missing, CliError::IoError(_)), "{missing:?}");
+
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        let manifest = dir.join("manifest.json");
+        fs::write(&manifest, br#"{"components": [], "workflows": ["w"]}"#)
+            .expect("manifest must write");
+        let incomplete = register_generated_app_bundle("app-x", "ws", &manifest)
+            .expect_err("empty components must fail registration");
+        assert!(
+            incomplete.message().contains("incomplete"),
+            "{incomplete:?}"
+        );
+    }
+
+    #[test]
+    fn curl_text_reports_fetch_failures() {
+        let err = curl_text("http://127.0.0.1:1/unreachable")
+            .expect_err("unreachable url must fail to fetch");
+        assert_eq!(err.code, "registry_fetch_failed");
+        assert!(err.message.contains("failed to fetch"), "{}", err.message);
+    }
+
+    #[test]
+    fn real_publish_process_runner_captures_output_and_failures() {
+        let cwd = unique_temp_dir();
+        fs::create_dir_all(&cwd).expect("cwd must be creatable");
+        let runner = RealPublishProcessRunner;
+
+        let ok = runner
+            .run(&cwd, "echo", &["publish-ok".to_string()])
+            .expect("echo must succeed");
+        assert_eq!(ok.stdout, "publish-ok");
+
+        let status_failure = runner
+            .run(&cwd, "false", &[])
+            .expect_err("a failing command must surface its status");
+        assert!(
+            status_failure.contains("exited with status"),
+            "{status_failure}"
+        );
+
+        let spawn_failure = runner
+            .run(&cwd, "definitely-not-a-real-program-406", &[])
+            .expect_err("a missing program must surface a spawn error");
+        assert!(
+            spawn_failure.contains("failed to execute"),
+            "{spawn_failure}"
+        );
+    }
+
+    #[test]
+    fn dirty_registry_checkout_blocks_publishing() {
+        struct DirtyStatusRunner;
+        impl PublishProcessRunner for DirtyStatusRunner {
+            fn run(
+                &self,
+                _cwd: &Path,
+                _program: &str,
+                _args: &[String],
+            ) -> Result<PublishCommandOutput, String> {
+                Ok(PublishCommandOutput {
+                    stdout: " M contracts/contract.json".to_string(),
+                })
+            }
+        }
+
+        let err = ensure_clean_registry_checkout(Path::new("registry"), &DirtyStatusRunner)
+            .expect_err("a dirty registry checkout must block publishing");
+        assert!(err.contains("uncommitted changes"), "{err}");
     }
 }
