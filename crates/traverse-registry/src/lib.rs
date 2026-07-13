@@ -662,9 +662,9 @@ impl CapabilityRegistry {
             ));
         };
 
-        if existing == candidate_record
+        if records_match_ignoring_registration_timestamp(existing, candidate_record)
             && existing_artifact == candidate_artifact
-            && existing_index == candidate_index
+            && index_entries_match_ignoring_registration_timestamp(existing_index, candidate_index)
         {
             return Ok(RegistrationOutcome {
                 evidence: existing.evidence.clone(),
@@ -854,6 +854,44 @@ fn build_registry_record(input: &RegistryRecordInput<'_>) -> CapabilityRegistryR
         provenance: input.artifact.provenance.clone(),
         evidence,
     }
+}
+
+/// `registered_at` is a server-generated wall-clock stamp, not part of the
+/// client's request, and it seeds `evidence.produced_at` and the timestamp
+/// segment of `evidence.evidence_id`. Comparing those verbatim would make an
+/// identical resubmission flip from "already registered" to a spurious
+/// immutable-version conflict whenever the two calls landed in different
+/// seconds — the same class of flake fixed for event registration in #633.
+fn records_match_ignoring_registration_timestamp(
+    existing: &CapabilityRegistryRecord,
+    candidate: &CapabilityRegistryRecord,
+) -> bool {
+    let mut normalized_existing = existing.clone();
+    normalized_existing
+        .registered_at
+        .clone_from(&candidate.registered_at);
+    normalized_existing
+        .evidence
+        .evidence_id
+        .clone_from(&candidate.evidence.evidence_id);
+    normalized_existing
+        .evidence
+        .produced_at
+        .clone_from(&candidate.evidence.produced_at);
+    &normalized_existing == candidate
+}
+
+/// See [`records_match_ignoring_registration_timestamp`]: the discovery index
+/// entry carries the same server-generated `registered_at` stamp.
+fn index_entries_match_ignoring_registration_timestamp(
+    existing: &DiscoveryIndexEntry,
+    candidate: &DiscoveryIndexEntry,
+) -> bool {
+    let mut normalized_existing = existing.clone();
+    normalized_existing
+        .registered_at
+        .clone_from(&candidate.registered_at);
+    &normalized_existing == candidate
 }
 
 fn build_index_entry(
@@ -1508,7 +1546,8 @@ mod tests {
         );
 
         let mut changed_metadata = record.clone();
-        changed_metadata.registered_at = "2026-03-28T00:00:00Z".to_string();
+        changed_metadata.contract_path =
+            "registry/public/content.comments.create-comment-draft/1.0.0/moved.json".to_string();
         assert_eq!(
             registry
                 .reconcile_existing(&key, &record, &changed_metadata, &artifact, &index)
@@ -1517,6 +1556,29 @@ mod tests {
                 .code,
             RegistryErrorCode::ImmutableVersionConflict
         );
+    }
+
+    #[test]
+    fn duplicate_registration_ignores_registration_timestamp() {
+        let mut registry = CapabilityRegistry::new();
+        let contract = base_contract("content.comments.create-comment-draft", "1.0.0");
+        let request = registration(RegistryScope::Public, contract);
+        let first = registry
+            .register(request.clone())
+            .expect("seed registration should pass");
+
+        let mut retried = request;
+        retried.registered_at = "2026-03-27T00:00:01Z".to_string();
+        let outcome = registry.register(retried).expect(
+            "resubmitting identical content with a newer registration timestamp must be idempotent",
+        );
+        assert!(outcome.already_registered);
+        assert_eq!(outcome.record.registered_at, first.record.registered_at);
+        assert_eq!(
+            outcome.index_entry.registered_at,
+            first.index_entry.registered_at
+        );
+        assert_eq!(outcome.evidence.evidence_id, first.evidence.evidence_id);
     }
 
     #[test]
