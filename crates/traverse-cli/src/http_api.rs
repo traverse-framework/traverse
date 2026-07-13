@@ -11352,4 +11352,273 @@ mod tests {
             "expected too-many-headers rejection, got {result:?}"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Auth / JWT / workspace-access helper coverage (#637, pass 1)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn validate_workspace_id_rejects_invalid_inputs() {
+        validate_workspace_id("ok-id_1.2").expect("conservative id must be accepted");
+        let empty = validate_workspace_id(" ").expect_err("blank id must be rejected");
+        assert!(empty.contains("non-empty"));
+        let long = validate_workspace_id(&"a".repeat(129)).expect_err("long id must be rejected");
+        assert!(long.contains("128"));
+        let nul = validate_workspace_id("a\0b").expect_err("null byte must be rejected");
+        assert!(nul.contains("null"));
+        let bad = validate_workspace_id("bad/ws").expect_err("path separator must be rejected");
+        assert!(bad.contains("ASCII"));
+    }
+
+    #[test]
+    fn validate_subject_id_rejects_invalid_inputs() {
+        validate_subject_id("subject").expect("plain subject must be accepted");
+        let empty = validate_subject_id("  ").expect_err("blank subject must be rejected");
+        assert!(empty.contains("non-empty"));
+        let long =
+            validate_subject_id(&"s".repeat(257)).expect_err("long subject must be rejected");
+        assert!(long.contains("256"));
+        let nul = validate_subject_id("a\0b").expect_err("null byte must be rejected");
+        assert!(nul.contains("null"));
+    }
+
+    #[test]
+    fn resolve_jwt_verification_key_covers_all_modes() {
+        let configured = resolve_jwt_verification_key(
+            Some(&test_jwt_verifying_key_hex()),
+            "bearer-required",
+            false,
+        )
+        .expect("valid key hex must resolve");
+        assert!(configured.is_some());
+
+        let invalid = resolve_jwt_verification_key(Some("zz"), "bearer-required", false);
+        assert!(matches!(invalid, Err(ServeError::BindFailed(_))));
+
+        let fail_closed = resolve_jwt_verification_key(None, "bearer-required", false)
+            .expect("missing key must resolve to None (fail closed at request time)");
+        assert!(fail_closed.is_none());
+
+        let dev = resolve_jwt_verification_key(None, "dev-loopback", true)
+            .expect("dev mode without key must resolve to None");
+        assert!(dev.is_none());
+    }
+
+    #[test]
+    fn subject_from_request_rejects_oversized_opaque_subject() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            format!("Bearer {}", "s".repeat(300)),
+        );
+        let err = subject_from_request(&headers, "dev-loopback", false, true, None)
+            .expect_err("oversized opaque subject must be rejected");
+        assert_eq!(err.status, 401);
+        assert!(err.message.contains("256"));
+    }
+
+    #[test]
+    fn derive_identity_from_jwt_rejects_malformed_tokens() {
+        let malformed = derive_identity_from_jwt("a.b", "dev-loopback", None)
+            .expect_err("two-part token must be rejected");
+        assert!(malformed.message.contains("malformed"));
+
+        let header = base64url_encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
+
+        let bad_b64 = derive_identity_from_jwt(&format!("{header}.!!!.sig"), "dev-loopback", None)
+            .expect_err("non-base64url payload must be rejected");
+        assert!(bad_b64.message.contains("invalid characters"));
+
+        let not_json = base64url_encode(b"not-json");
+        let bad_json =
+            derive_identity_from_jwt(&format!("{header}.{not_json}.sig"), "dev-loopback", None)
+                .expect_err("non-JSON payload must be rejected");
+        assert!(bad_json.message.contains("invalid JWT payload"));
+
+        let no_sub = base64url_encode(b"{}");
+        let missing_sub =
+            derive_identity_from_jwt(&format!("{header}.{no_sub}.sig"), "dev-loopback", None)
+                .expect_err("payload without sub must be rejected");
+        assert!(missing_sub.message.contains("'sub'"));
+
+        let oversized = base64url_encode(json!({ "sub": "s".repeat(257) }).to_string().as_bytes());
+        let bad_sub =
+            derive_identity_from_jwt(&format!("{header}.{oversized}.sig"), "dev-loopback", None)
+                .expect_err("oversized sub claim must be rejected");
+        assert!(bad_sub.message.contains("256"));
+    }
+
+    #[test]
+    fn jwt_claims_admin_recognizes_admin_claims() {
+        assert!(jwt_claims_admin(&json!({ "traverse_admin": true })));
+        assert!(jwt_claims_admin(
+            &json!({ "roles": ["viewer", "traverse_admin"] })
+        ));
+        assert!(jwt_claims_admin(
+            &json!({ "roles": [SYSTEM_ADMIN_SUBJECT] })
+        ));
+        assert!(jwt_claims_admin(&json!({ "role": "traverse_admin" })));
+        assert!(jwt_claims_admin(&json!({ "role": SYSTEM_ADMIN_SUBJECT })));
+        assert!(!jwt_claims_admin(
+            &json!({ "roles": ["viewer"], "role": "viewer" })
+        ));
+        assert!(!jwt_claims_admin(&json!({})));
+    }
+
+    #[test]
+    fn validate_jwt_time_claims_allows_absent_claims() {
+        validate_jwt_time_claims(&json!({})).expect("token without time claims must be valid");
+    }
+
+    #[test]
+    fn parse_jwt_scopes_merges_all_scope_claims() {
+        let scopes = parse_jwt_scopes(&json!({
+            "scope": "read write",
+            "scp": ["admin", "  ", "read"],
+            "scopes": ["write", "extra"]
+        }));
+        assert_eq!(scopes, vec!["admin", "extra", "read", "write"]);
+    }
+
+    #[test]
+    fn hex_decode_rejects_odd_length_input() {
+        let err = hex_decode("abc").expect_err("odd-length hex must be rejected");
+        assert!(err.contains("even number"));
+    }
+
+    #[test]
+    fn base64url_decode_handles_edge_cases() {
+        assert!(
+            base64url_decode("")
+                .expect("empty input must decode to empty output")
+                .is_empty()
+        );
+        let padded = base64url_decode("aa==").expect_err("padding must be rejected");
+        assert!(padded.contains("padding"));
+        let invalid = base64url_decode("a!").expect_err("invalid character must be rejected");
+        assert!(invalid.contains("invalid characters"));
+        let length = base64url_decode("aaaaa").expect_err("length % 4 == 1 must be rejected");
+        assert!(length.contains("invalid length"));
+    }
+
+    #[test]
+    fn workspace_metadata_io_failures_surface_errors() {
+        let metadata = WorkspaceMetadataV1 {
+            schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
+            workspace_id: "ws".to_string(),
+            owner_subject: "owner".to_string(),
+            shared: false,
+            members: Vec::new(),
+        };
+
+        let read_root = test_registry_root();
+        std::fs::create_dir_all(workspace_metadata_path(&read_root, "ws"))
+            .expect("directory squatting on the metadata path must be creatable");
+        let read_err = load_workspace_metadata(&read_root, "ws")
+            .expect_err("reading a directory as metadata must fail");
+        assert_eq!(read_err.code, "workspace_metadata_read_failed");
+
+        let parse_root = test_registry_root();
+        let parse_path = workspace_metadata_path(&parse_root, "ws");
+        std::fs::create_dir_all(
+            parse_path
+                .parent()
+                .expect("metadata path must have a parent"),
+        )
+        .expect("workspace directory must be creatable");
+        std::fs::write(&parse_path, b"not-json").expect("corrupt metadata must be writable");
+        let parse_err = load_workspace_metadata(&parse_root, "ws")
+            .expect_err("corrupt metadata must fail to parse");
+        assert_eq!(parse_err.code, "workspace_metadata_parse_failed");
+
+        let blocked_root = test_registry_root();
+        std::fs::create_dir_all(&blocked_root).expect("registry root must be creatable");
+        std::fs::write(blocked_root.join("workspaces"), b"file")
+            .expect("file squatting on the workspaces directory must be writable");
+        let dir_err = persist_workspace_metadata(&blocked_root, "ws", &metadata)
+            .expect_err("directory creation over a file must fail");
+        assert_eq!(dir_err.code, "workspace_metadata_write_failed");
+        assert!(dir_err.message.contains("create workspace directory"));
+
+        let tmp_root = test_registry_root();
+        std::fs::create_dir_all(
+            workspace_metadata_path(&tmp_root, "ws").with_extension("json.tmp"),
+        )
+        .expect("directory squatting on the temp path must be creatable");
+        let tmp_err = persist_workspace_metadata(&tmp_root, "ws", &metadata)
+            .expect_err("writing the temp file over a directory must fail");
+        assert_eq!(tmp_err.code, "workspace_metadata_write_failed");
+        assert!(tmp_err.message.contains("temp file"));
+
+        let rename_root = test_registry_root();
+        std::fs::create_dir_all(workspace_metadata_path(&rename_root, "ws"))
+            .expect("directory squatting on the final path must be creatable");
+        let rename_err = persist_workspace_metadata(&rename_root, "ws", &metadata)
+            .expect_err("renaming over a directory must fail");
+        assert_eq!(rename_err.code, "workspace_metadata_write_failed");
+        assert!(rename_err.message.contains("atomically replace"));
+    }
+
+    #[test]
+    fn ensure_workspace_access_enforces_membership_rules() {
+        let root = test_registry_root();
+        let owner = DerivedIdentity {
+            subject_id: "owner".to_string(),
+            is_admin: false,
+            scopes: Vec::new(),
+        };
+
+        let invalid = ensure_workspace_access(&root, "bad/ws", &owner)
+            .expect_err("invalid workspace id must be rejected");
+        assert_eq!(invalid.code, "workspace_id_invalid");
+
+        let shared = WorkspaceMetadataV1 {
+            schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
+            workspace_id: "shared-ws".to_string(),
+            owner_subject: "owner".to_string(),
+            shared: true,
+            members: vec!["member".to_string()],
+        };
+        persist_workspace_metadata(&root, "shared-ws", &shared)
+            .expect("shared workspace metadata must persist");
+
+        let member = DerivedIdentity {
+            subject_id: "member".to_string(),
+            is_admin: false,
+            scopes: Vec::new(),
+        };
+        ensure_workspace_access(&root, "shared-ws", &member)
+            .expect("shared workspace member must be authorized");
+
+        let stranger = DerivedIdentity {
+            subject_id: "stranger".to_string(),
+            is_admin: false,
+            scopes: Vec::new(),
+        };
+        let denied = ensure_workspace_access(&root, "shared-ws", &stranger)
+            .expect_err("non-member must be rejected from shared workspace");
+        assert_eq!(denied.code, "unauthorized_workspace");
+    }
+
+    #[test]
+    fn parse_registration_scope_parses_all_variants() {
+        assert!(matches!(
+            parse_registration_scope(None),
+            Ok(RegistrationScope::WorkspacePersisted)
+        ));
+        assert!(matches!(
+            parse_registration_scope(Some(&json!("workspace_persisted"))),
+            Ok(RegistrationScope::WorkspacePersisted)
+        ));
+        assert!(matches!(
+            parse_registration_scope(Some(&json!("session_ephemeral"))),
+            Ok(RegistrationScope::SessionEphemeral)
+        ));
+        let non_string = parse_registration_scope(Some(&json!(42)))
+            .expect_err("non-string scope must be rejected");
+        assert!(non_string.contains("must be a string"));
+        let unknown = parse_registration_scope(Some(&json!("other")))
+            .expect_err("unknown scope must be rejected");
+        assert!(unknown.contains("workspace_persisted or session_ephemeral"));
+    }
 }
