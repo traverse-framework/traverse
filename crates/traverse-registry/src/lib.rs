@@ -386,7 +386,7 @@ impl CapabilityRegistry {
         };
 
         if let Some(existing) = self.connectors.get(&key) {
-            if existing == &record {
+            if connector_records_match_ignoring_registration_timestamp(existing, &record) {
                 return Ok(existing.clone());
             }
             return Err(single_error(
@@ -802,6 +802,20 @@ impl CapabilityRegistry {
             evidence_ref: evidence_ref.to_string(),
         })
     }
+}
+
+/// `registered_at` is assigned by the registry and is not connector metadata.
+/// A retry that reaches the registry at a later instant must preserve
+/// idempotency instead of appearing to mutate an immutable connector version.
+fn connector_records_match_ignoring_registration_timestamp(
+    existing: &ConnectorRegistryRecord,
+    candidate: &ConnectorRegistryRecord,
+) -> bool {
+    let mut normalized_existing = existing.clone();
+    normalized_existing.registered_at.clear();
+    let mut normalized_candidate = candidate.clone();
+    normalized_candidate.registered_at.clear();
+    normalized_existing == normalized_candidate
 }
 
 struct RegistryRecordInput<'a> {
