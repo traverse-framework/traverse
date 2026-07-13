@@ -4985,14 +4985,14 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        CapabilityPublishRequest, Command, ExpeditionExampleExecutor, FetchedRegistryIndex,
-        PublishCommandOutput, PublishProcessRunner, RegistryIndexFetcher, RegistrySyncError,
-        app_new_at, app_register_at, app_registration_state_path, app_validate,
+        CapabilityPublishRequest, CliError, Command, ExpeditionExampleExecutor,
+        FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RegistryIndexFetcher,
+        RegistrySyncError, app_new_at, app_register_at, app_registration_state_path, app_validate,
         capability_publish_at, component_new_at, execute_agent, execute_expedition,
         execute_traverse_starter_process, execute_traverse_starter_summarize,
         execute_traverse_starter_validate, inspect_agent, inspect_bundle, inspect_event,
         inspect_trace, inspect_workflow, latest_index_release_asset, load_registered_bundle,
-        load_runtime_request, parse_command, register_bundle, registry_sync_at,
+        load_runtime_request, parse_command, register_bundle, registry_sync_at, run_command,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -7349,5 +7349,201 @@ mod tests {
                 u8::from_str_radix(pair, 16).expect("hex pair should parse")
             })
             .collect()
+    }
+
+    // ------------------------------------------------------------------
+    // Help-text and dispatch coverage (#638, pass 1)
+    // ------------------------------------------------------------------
+
+    fn parse_help(args: &[&str]) -> String {
+        let mut full = vec!["traverse-cli".to_string()];
+        full.extend(args.iter().map(ToString::to_string));
+        parse_command(&full).expect_err("--help must never parse into a command")
+    }
+
+    #[test]
+    fn global_help_prints_usage() {
+        assert!(parse_help(&["--help"]).contains("usage: traverse-cli"));
+        assert!(parse_help(&["help"]).contains("usage: traverse-cli"));
+        assert!(parse_help(&["unknown-family", "--help"]).contains("usage: traverse-cli"));
+    }
+
+    #[test]
+    fn subcommand_help_covers_every_family_and_subcommand() {
+        let pairs: &[(&str, Option<&str>)] = &[
+            ("bundle", Some("inspect")),
+            ("bundle", Some("register")),
+            ("bundle", None),
+            ("app", Some("new")),
+            ("app", Some("validate")),
+            ("app", Some("register")),
+            ("app", None),
+            ("registry", Some("sync")),
+            ("registry", None),
+            ("component", Some("new")),
+            ("component", None),
+            ("agent", Some("inspect")),
+            ("agent", Some("execute")),
+            ("agent", None),
+            ("artifact", Some("verify")),
+            ("artifact", None),
+            ("wasm", Some("abi")),
+            ("wasm", None),
+            ("workflow", Some("register")),
+            ("workflow", Some("list")),
+            ("workflow", Some("inspect")),
+            ("workflow", None),
+            ("expedition", Some("execute")),
+            ("expedition", None),
+            ("capability", Some("inspect")),
+            ("capability", Some("discover")),
+            ("capability", Some("publish")),
+            ("capability", None),
+            ("event", Some("inspect")),
+            ("event", None),
+            ("trace", Some("inspect")),
+            ("trace", None),
+            ("browser-adapter", Some("serve")),
+            ("browser-adapter", None),
+            ("serve", None),
+        ];
+        for (family, sub) in pairs {
+            let help = match sub {
+                Some(sub) => parse_help(&[family, sub, "--help"]),
+                None => parse_help(&[family, "--help"]),
+            };
+            assert!(
+                help.contains(family),
+                "help for {family} {sub:?} must mention {family}: {help}"
+            );
+            if let Some(sub) = sub {
+                assert!(
+                    help.contains(sub),
+                    "help for {family} {sub:?} must mention {sub}: {help}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_command_covers_federation_and_discovery_forms() {
+        let argv = |parts: &[&str]| -> Vec<String> {
+            let mut full = vec!["traverse-cli".to_string()];
+            full.extend(parts.iter().map(ToString::to_string));
+            full
+        };
+
+        assert!(matches!(
+            parse_command(&argv(&["federation", "peers", "manifest.json"])),
+            Ok(Command::FederationPeers { .. })
+        ));
+        assert!(matches!(
+            parse_command(&argv(&["federation", "sync", "manifest.json"])),
+            Ok(Command::FederationSync { .. })
+        ));
+        assert!(matches!(
+            parse_command(&argv(&["federation", "status", "manifest.json"])),
+            Ok(Command::FederationStatus { .. })
+        ));
+        assert!(parse_command(&argv(&["federation", "unknown", "manifest.json"])).is_err());
+
+        assert!(matches!(
+            parse_command(&argv(&[
+                "capability",
+                "discover",
+                "manifest.json",
+                "--json"
+            ])),
+            Ok(Command::CapabilityDiscover {
+                json_output: true,
+                ..
+            })
+        ));
+        assert!(parse_command(&argv(&["capability", "discover"])).is_err());
+    }
+
+    #[test]
+    fn run_command_fails_cleanly_on_missing_inputs() {
+        let missing = unique_temp_dir().join("missing");
+        let commands = vec![
+            Command::BundleInspect {
+                manifest_path: missing.clone(),
+                json_output: false,
+            },
+            Command::BundleRegister {
+                manifest_path: missing.clone(),
+                json_output: false,
+            },
+            Command::AppValidate {
+                manifest_path: missing.clone(),
+                json_output: false,
+            },
+            Command::AppRegister {
+                manifest_path: missing.clone(),
+                workspace_id: "ws".to_string(),
+                json_output: true,
+            },
+            Command::AgentInspect {
+                manifest_path: missing.clone(),
+            },
+            Command::AgentExecute {
+                manifest_path: missing.clone(),
+                request_path: missing.clone(),
+            },
+            Command::WasmAbiVerify {
+                wasm_paths: vec![missing.clone()],
+            },
+            Command::ArtifactVerify {
+                artifact_path: missing.clone(),
+            },
+            Command::FederationPeers {
+                manifest_path: missing.clone(),
+            },
+            Command::FederationSync {
+                manifest_path: missing.clone(),
+            },
+            Command::FederationStatus {
+                manifest_path: missing.clone(),
+            },
+            Command::ExpeditionExecute {
+                request_path: missing.clone(),
+                trace_output_path: None,
+                json_output: false,
+                validate_only: false,
+            },
+            Command::CapabilityDiscover {
+                manifest_path: missing.clone(),
+                json_output: false,
+            },
+            Command::Event {
+                contract_path: missing.clone(),
+            },
+            Command::TraceInspect {
+                trace_path: missing.clone(),
+            },
+            Command::WorkflowRegister {
+                workflow_path: missing.clone(),
+                workspace_id: "ws".to_string(),
+            },
+        ];
+        for command in commands {
+            assert!(
+                run_command(command).is_err(),
+                "command with missing input must fail cleanly"
+            );
+        }
+
+        let serve = Command::Serve {
+            bind_address: "127.0.0.1:0".to_string(),
+            auth_mode: None,
+            allow_unauthenticated: false,
+            allowed_origins: Vec::new(),
+            render_mobile_qr: false,
+        };
+        assert!(matches!(run_command(serve), Err(CliError::UsageError(_))));
+        let adapter = Command::BrowserAdapterServe {
+            bind_address: "127.0.0.1:0".to_string(),
+        };
+        assert!(matches!(run_command(adapter), Err(CliError::UsageError(_))));
     }
 }
