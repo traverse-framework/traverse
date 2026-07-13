@@ -176,8 +176,11 @@ impl McpDiscoveryCatalog {
     ///
     /// Returns `catalog_load_failed` when the expedition registry bundle cannot be loaded.
     pub fn load_canonical() -> Result<Self, StdioServerFailure> {
-        let manifest_path = canonical_expedition_bundle_path();
-        let bundle = load_registry_bundle(&manifest_path).map_err(|failure| {
+        Self::load_from_manifest_path(&canonical_expedition_bundle_path())
+    }
+
+    fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
+        let bundle = load_registry_bundle(manifest_path).map_err(|failure| {
             StdioServerFailure::new(
                 "catalog_load_failed",
                 format!(
@@ -209,8 +212,11 @@ impl McpDiscoveryCatalog {
 
 impl CanonicalExecutionContext {
     fn load_canonical() -> Result<Self, StdioServerFailure> {
-        let manifest_path = canonical_expedition_bundle_path();
-        let bundle = load_registry_bundle(&manifest_path).map_err(|failure| {
+        Self::load_from_manifest_path(&canonical_expedition_bundle_path())
+    }
+
+    fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
+        let bundle = load_registry_bundle(manifest_path).map_err(|failure| {
             StdioServerFailure::new(
                 "catalog_load_failed",
                 format!(
@@ -1732,6 +1738,28 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn canonical_bundle_load_failures_are_stable_for_catalog_and_execution() {
+        let missing_manifest = std::env::temp_dir().join(format!(
+            "traverse-mcp-missing-bundle-{}-manifest.json",
+            std::process::id()
+        ));
+
+        for failure in [
+            McpDiscoveryCatalog::load_from_manifest_path(&missing_manifest)
+                .expect_err("missing catalog manifest should fail"),
+            CanonicalExecutionContext::load_from_manifest_path(&missing_manifest)
+                .expect_err("missing execution manifest should fail"),
+        ] {
+            assert_eq!(failure.code, "catalog_load_failed");
+            assert!(
+                failure
+                    .message
+                    .contains("Failed to load expedition registry bundle")
+            );
+        }
+    }
 
     #[test]
     fn emits_deterministic_startup_list_validate_execute_and_shutdown_envelopes() {

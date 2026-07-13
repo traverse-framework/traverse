@@ -376,3 +376,32 @@ seconds) rejects the event with a distinct `journal_write_timeout` error and
 audit event, rather than blocking indefinitely or silently degrading to
 in-memory-only delivery. This closes the remaining gap in issue #593's
 Definition of Done left open by Decision 16.
+
+## Decision 18: Deliver Traverse as Consumable Platform Embedder Packages
+
+- **Date**: 2026-07-13
+- **Status**: Accepted
+- **Governing spec**: `068-public-platform-embedder-packages`
+- **Related issues**: `#645`, `#646`, `#647`, `#648`, `#649`, `#650`; App
+  References `#113`–`#117`
+
+### Context
+
+The approved embedder model and #553's implementation establish manifest
+validation, an IDL, and CLI conformance, but do not give a Web, Swift, Android,
+WinUI, or Linux app an SDK it can import to host a bundled Traverse runtime.
+
+### Decision
+
+Traverse will publish versioned, public platform packages that implement the
+complete `embedder-api/1.0.0` lifecycle. They load application-owned runtime
+and capability bundles, preserve runtime-owned workflow/output semantics, pass
+the shared conformance corpus, and emit digest-backed release evidence. The
+five platform slices are tracked separately so each downstream reference app
+can become Ready only when its usable SDK exists.
+
+### Outcome
+
+The decision log is the authoritative design record. Spec 068 and its tickets
+are derived traceability artifacts; they must not reopen this accepted
+direction for a second design review.

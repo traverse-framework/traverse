@@ -116,33 +116,36 @@ The board audit logic lives in [scripts/ci/project_board_audit.sh](../scripts/ci
 
 ---
 
-## External Review Gate for Governing Specs
+## Decision-Log Traceability Gate for Governing Specs
 
-Every new governing spec must go through a time-boxed external review before being marked `approved` in `specs/governance/approved-specs.json`.
+Governing specs are precise, testable artifacts derived from accepted product
+and architecture decisions. They are not a second forum for reconsidering
+decisions already made in the decision log.
 
 ### Policy
 
-- **Reviewers requested**: 3 external reviewers per spec
-- **Review window**: 72 hours from the first review request
-- **Quorum**: if fewer than 3 reviews arrive within the window, the host maintainer reviews the feedback received and makes the call — work proceeds
-- **Format**: asynchronous; no meetings required
-- **Template**: use [`docs/spec-reviewer-guide.md`](spec-reviewer-guide.md) to structure the review request
+- Every new approved spec MUST cite one or more accepted decision-log entries.
+- The decision log records *why* and the approved direction; the spec records
+  the exact requirements, boundaries, acceptance scenarios, and verification.
+- A spec MUST NOT introduce a material new product or architecture decision.
+  Record that decision first, then derive the spec and tickets from it.
+- The author performs a traceability check before approval: each decision is
+  represented in the spec, and each spec requirement is justified by the cited
+  decision or an already-approved governing spec.
 
 ### Process
 
-1. Author completes the spec draft and opens a PR.
-2. Author fills in the reviewer guide template and posts it as a PR comment.
-3. Author tags 3 reviewers and sets a 72-hour deadline in the comment.
-4. Reviewers respond with Yes / Approve with changes / Reject using the checklist in the template.
-5. After the window closes, the host maintainer resolves feedback and merges or revises.
+1. Record or identify the accepted decision in `docs/decision-log.md`.
+2. Create the issue, Project 1 item, and derived spec.
+3. Link the decision, spec, implementation tickets, and downstream blockers.
+4. Run the traceability and repository validation checks.
+5. Mark the spec approved in `specs/governance/approved-specs.json` and merge
+   the codification PR.
 
-### Spec Tickets That Require This Gate
-
-Add a checklist item to each new spec issue:
+### Spec Ticket Checklist
 
 ```
-- [ ] External review requested (3 reviewers, 72h window started YYYY-MM-DD HH:MM UTC)
-- [ ] Review window closed / host maintainer decision recorded
+- [ ] Accepted decision-log entry cited
+- [ ] Spec requirements traced to the decision and existing governing specs
+- [ ] Implementation tickets and downstream blockers linked
 ```
-
-This applies to: #329, #330, #331, #332, #335, #337, #338, #339, and any future spec tickets.

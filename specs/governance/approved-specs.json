@@ -789,6 +789,21 @@
         "specs/067-durable-journal-retention-and-write-limits/",
         "specs/governance/"
       ]
+    },
+    {
+      "id": "068-public-platform-embedder-packages",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/068-public-platform-embedder-packages/spec.md",
+      "governs": [
+        "crates/traverse-embedder/",
+        "packages/",
+        "bindings/",
+        "scripts/ci/embedder_conformance/",
+        "docs/embedder-sdk/",
+        "specs/068-public-platform-embedder-packages/"
+      ]
     }
   ]
 }
