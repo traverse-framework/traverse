@@ -57,6 +57,7 @@ struct BufferedEvent {
 struct SubscriptionState {
     subscription_id: SubscriptionId,
     event_type: String,
+    subject_id: Option<String>,
     cursor: u64,
     queue: VecDeque<BufferedEvent>,
 }
@@ -124,6 +125,61 @@ impl InProcessBroker {
             config,
             clock,
             state: Mutex::new(BrokerState::default()),
+        })
+    }
+
+    fn subscribe_with_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError> {
+        if self.catalog.get(event_type).is_none() {
+            return Err(EventError::UnregisteredEventType(event_type.to_owned()));
+        }
+
+        let from_cursor = parse_cursor(from_cursor)?;
+        let now = self.clock.now();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EventError::LifecycleViolation("broker lock poisoned".to_owned()))?;
+        prune_expired(&mut state, event_type, self.config.retention_window, now);
+        validate_from_cursor(&state, event_type, from_cursor)?;
+        self.catalog.increment_consumer_count(event_type);
+
+        state.next_subscription = state.next_subscription.saturating_add(1);
+        let subscription_id = format!("sub-{}", state.next_subscription);
+        let mut queue = VecDeque::new();
+        for item in state
+            .buffers
+            .get(event_type)
+            .into_iter()
+            .flat_map(|buffer| buffer.iter())
+        {
+            if (from_cursor == 0 || item.cursor > from_cursor)
+                && subject_id
+                    .is_none_or(|subject| item.event.subject_id.as_deref() == Some(subject))
+            {
+                enqueue_with_drop_oldest(&mut queue, self.config.max_queue_len, item.clone());
+            }
+        }
+
+        state.subscriptions.insert(
+            subscription_id.clone(),
+            SubscriptionState {
+                subscription_id: subscription_id.clone(),
+                event_type: event_type.to_string(),
+                subject_id: subject_id.map(str::to_owned),
+                cursor: from_cursor,
+                queue,
+            },
+        );
+
+        Ok(Subscription {
+            subscription_id,
+            event_type: event_type.to_string(),
+            cursor: cursor_to_string(from_cursor),
         })
     }
 }
@@ -234,6 +290,15 @@ fn validate_from_cursor(
 }
 
 impl EventBroker for InProcessBroker {
+    fn subscribe_for_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError> {
+        self.subscribe_with_subject(event_type, from_cursor, subject_id)
+    }
+
     /// Publish `event` to all registered subscribers.
     ///
     /// # Errors
@@ -309,6 +374,13 @@ impl EventBroker for InProcessBroker {
             if sub.event_type != event.event_type {
                 continue;
             }
+            if sub
+                .subject_id
+                .as_deref()
+                .is_some_and(|subject_id| event.subject_id.as_deref() != Some(subject_id))
+            {
+                continue;
+            }
             enqueue_with_drop_oldest(&mut sub.queue, self.config.max_queue_len, buffered.clone());
         }
 
@@ -323,54 +395,7 @@ impl EventBroker for InProcessBroker {
     ///
     /// Returns [`EventError::UnregisteredEventType`] if the event type is not catalogued.
     fn subscribe(&self, event_type: &str, from_cursor: &str) -> Result<Subscription, EventError> {
-        if self.catalog.get(event_type).is_none() {
-            return Err(EventError::UnregisteredEventType(event_type.to_owned()));
-        }
-
-        let from_cursor = parse_cursor(from_cursor)?;
-
-        let now = self.clock.now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EventError::LifecycleViolation("broker lock poisoned".to_owned()))?;
-
-        prune_expired(&mut state, event_type, self.config.retention_window, now);
-
-        validate_from_cursor(&state, event_type, from_cursor)?;
-
-        self.catalog.increment_consumer_count(event_type);
-
-        state.next_subscription = state.next_subscription.saturating_add(1);
-        let subscription_id = format!("sub-{}", state.next_subscription);
-
-        let mut queue = VecDeque::new();
-        for item in state
-            .buffers
-            .get(event_type)
-            .into_iter()
-            .flat_map(|buffer| buffer.iter())
-        {
-            if from_cursor == 0 || item.cursor > from_cursor {
-                enqueue_with_drop_oldest(&mut queue, self.config.max_queue_len, item.clone());
-            }
-        }
-
-        state.subscriptions.insert(
-            subscription_id.clone(),
-            SubscriptionState {
-                subscription_id: subscription_id.clone(),
-                event_type: event_type.to_string(),
-                cursor: from_cursor,
-                queue,
-            },
-        );
-
-        Ok(Subscription {
-            subscription_id,
-            event_type: event_type.to_string(),
-            cursor: cursor_to_string(from_cursor),
-        })
+        self.subscribe_with_subject(event_type, from_cursor, None)
     }
 
     /// Poll a subscription for up to `max_events`.
@@ -518,6 +543,8 @@ mod tests {
             owner: "cap.test".to_string(),
             version: "1.0.0".to_string(),
             lifecycle_status: LifecycleStatus::Active,
+            subject_id: None,
+            actor_id: None,
         }
     }
 
@@ -552,6 +579,47 @@ mod tests {
             .subscribe("dev.traverse.cursor", "not-a-cursor")
             .expect_err("invalid cursor must fail");
         assert!(matches!(err, EventError::InvalidCursor(_)));
+    }
+
+    #[test]
+    fn subject_subscription_filters_backlog_and_live_delivery() {
+        let event_type = "dev.traverse.subject-filter";
+        let broker = InProcessBroker::new(make_catalog(event_type, LifecycleStatus::Active))
+            .expect("broker must be created");
+        let mut other = sample_event(event_type, "evt-other");
+        other.subject_id = Some("subject-other".to_string());
+        let mut expected = sample_event(event_type, "evt-match");
+        expected.subject_id = Some("subject-match".to_string());
+        broker.publish(other).expect("backlog publish must succeed");
+        broker
+            .publish(expected.clone())
+            .expect("backlog publish must succeed");
+
+        let subscription = broker
+            .subscribe_for_subject(event_type, "0", Some("subject-match"))
+            .expect("subject subscription must succeed");
+        let backlog = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("backlog poll must succeed");
+        assert_eq!(backlog.events.len(), 1);
+        assert_eq!(backlog.events[0].event.id, expected.id);
+
+        let mut live_other = sample_event(event_type, "evt-live-other");
+        live_other.subject_id = Some("subject-other".to_string());
+        let mut live_expected = sample_event(event_type, "evt-live-match");
+        live_expected.subject_id = Some("subject-match".to_string());
+        broker
+            .publish(live_other)
+            .expect("non-matching live publish must succeed");
+        broker
+            .publish(live_expected.clone())
+            .expect("matching live publish must succeed");
+
+        let live = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("live poll must succeed");
+        assert_eq!(live.events.len(), 1);
+        assert_eq!(live.events[0].event.id, live_expected.id);
     }
 
     #[test]

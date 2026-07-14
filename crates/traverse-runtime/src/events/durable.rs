@@ -194,6 +194,16 @@ impl<B: EventBroker> EventBroker for DurableBroker<B> {
         self.inner.subscribe(event_type, from_cursor)
     }
 
+    fn subscribe_for_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError> {
+        self.inner
+            .subscribe_for_subject(event_type, from_cursor, subject_id)
+    }
+
     fn poll(
         &self,
         subscription_id: &str,
@@ -345,6 +355,8 @@ mod tests {
             owner: "test.capability".to_string(),
             version: "1.0.0".to_string(),
             lifecycle_status: LifecycleStatus::Active,
+            subject_id: None,
+            actor_id: None,
         }
     }
 
@@ -430,6 +442,38 @@ mod tests {
         let replayed = reader.replay_from("0", 10).expect("replay must succeed");
         assert_eq!(replayed.len(), 1, "the event must be durable");
         assert!(audit.kinds().is_empty(), "no audit records on success");
+    }
+
+    #[test]
+    fn durable_subject_subscription_delegates_to_inner_broker() {
+        let root = test_root("subject-subscription");
+        let journal = DurableEventJournal::open(
+            &root,
+            JournalConfig::default(),
+            Arc::new(crate::events::broker::SystemClock),
+        )
+        .expect("journal must open");
+        let broker = DurableBroker::new(
+            inner_broker(),
+            journal,
+            DurableBrokerConfig::default(),
+            Arc::new(RecordingAudit::default()),
+        );
+        let mut event = test_event();
+        event.subject_id = Some("subject-match".to_string());
+        broker.publish(event).expect("publish must succeed");
+
+        let subscription = broker
+            .subscribe_for_subject(EVENT_TYPE, "0", Some("subject-match"))
+            .expect("subject subscription must succeed");
+        let poll = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("poll must succeed");
+        assert_eq!(poll.events.len(), 1);
+        assert_eq!(
+            poll.events[0].event.subject_id.as_deref(),
+            Some("subject-match")
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub use durable::{
 };
 pub use journal::{DurableEventJournal, JournalConfig, JournalError};
 pub use types::{
-    BrokerEvent, EventBroker, EventCursor, EventError, LifecycleStatus, Subscription,
-    SubscriptionId, SubscriptionPoll, TraverseEvent,
+    BrokerEvent, BrokerEventSink, EventBroker, EventCursor, EventError, LifecycleStatus,
+    NoopRuntimeEventSink, RuntimeEventSink, Subscription, SubscriptionId, SubscriptionPoll,
+    TraverseEvent,
 };

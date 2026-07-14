@@ -1767,6 +1767,105 @@ fn registers_application_bundle_atomically_with_created_status() {
 }
 
 #[test]
+fn registers_bundle_with_compatible_component_without_capability_registration() {
+    let fixture = AppFixture::new("register-compatible");
+    let wasm_digest = fixture.write_hello_component("hello world executable bytes");
+    let workflow_path = fixture.write_workflow("hello.world.say-hello", "hello.world.say-hello");
+
+    let compatible_dir = fixture.root.join("components/compatible-render");
+    fs::create_dir_all(compatible_dir.join("wrapper")).expect("compatible dirs should write");
+    let compatible_contract_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../contracts/examples/traverse-starter/capabilities/process/contract.json");
+    fs::write(
+        compatible_dir.join("component.manifest.json"),
+        json!({
+            "component_id": "hello.world.render-component",
+            "version": "1.0.0",
+            "schema_version": "1.0.0",
+            "execution_mode": "compatible",
+            "capability_id": "traverse-starter.process",
+            "capability_version": "1.0.0",
+            "contract_path": compatible_contract_path,
+            "wrapper_path": "wrapper",
+            "platforms": ["linux"],
+            "runtime_constraints": {},
+            "permitted_targets": ["local"],
+            "dependencies": [],
+            "connector_requirements": [],
+            "validation_evidence": []
+        })
+        .to_string(),
+    )
+    .expect("compatible component manifest should write");
+
+    fixture.write_app_manifest_with_workflows(
+        &json!([
+            component_ref(
+                "hello.world.say-hello-component",
+                "1.0.0",
+                &format!("sha256:{wasm_digest}"),
+                "components/validate-team-readiness/component.manifest.json",
+            ),
+            component_ref(
+                "hello.world.render-component",
+                "1.0.0",
+                &format!("sha256:{}", sha256_hex(b"compatible render reference")),
+                "components/compatible-render/component.manifest.json",
+            )
+        ]),
+        &json!([{
+            "workflow_id": "hello.world.say-hello",
+            "workflow_version": "1.0.0",
+            "path": workflow_path
+        }]),
+    );
+
+    let mut app_registry = ApplicationRegistry::new();
+    let mut capability_registry = CapabilityRegistry::new();
+    let event_registry = EventRegistry::new();
+    let mut workflow_registry = WorkflowRegistry::new();
+
+    let outcome = app_registry
+        .register_bundle(
+            &mut capability_registry,
+            &event_registry,
+            &mut workflow_registry,
+            &fixture.registration_request(),
+        )
+        .expect("bundle with a compatible component should register");
+
+    assert_eq!(outcome.record.components.len(), 2);
+    let compatible = outcome
+        .record
+        .components
+        .iter()
+        .find(|component| component.component_id == "hello.world.render-component")
+        .expect("compatible component should be recorded for traceability");
+    assert_eq!(compatible.wasm_digest, None);
+    assert_eq!(compatible.capability_id, "traverse-starter.process");
+    assert_eq!(
+        compatible.artifact_ref,
+        "app:hello.world.app:1.0.0:component:hello.world.render-component:1.0.0"
+    );
+    assert!(
+        capability_registry
+            .find_exact(LookupScope::PreferPrivate, "hello.world.say-hello", "1.0.0")
+            .is_some(),
+        "wasm component must register as a runtime capability"
+    );
+    assert!(
+        capability_registry
+            .find_exact(
+                LookupScope::PreferPrivate,
+                "traverse-starter.process",
+                "1.0.0"
+            )
+            .is_none(),
+        "compatible component must stay embedder lifecycle-owned"
+    );
+}
+
+#[test]
 fn application_registration_records_model_readiness_evidence() {
     let fixture = AppFixture::new("register-model-readiness");
     fixture.write_hello_world_bundle();

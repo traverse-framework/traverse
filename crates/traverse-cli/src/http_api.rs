@@ -7164,6 +7164,18 @@ mod tests {
     };
     use traverse_runtime::{LocalExecutionFailure, LocalExecutionFailureCode};
 
+    #[test]
+    fn serve_error_display_keeps_bind_and_accept_context() {
+        assert_eq!(
+            ServeError::BindFailed("address in use".to_string()).to_string(),
+            "failed to bind HTTP/JSON API server: address in use"
+        );
+        assert_eq!(
+            ServeError::AcceptFailed("socket closed".to_string()).to_string(),
+            "HTTP/JSON API server accept loop failed: socket closed"
+        );
+    }
+
     // ------------------------------------------------------------------
     // Minimal test executor
     // ------------------------------------------------------------------
@@ -8221,6 +8233,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn server_discovery_file_omits_local_token_when_none_was_minted() {
+        let repo_root = test_registry_root();
+        let discovery_path = write_server_discovery(
+            &repo_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787",
+            None,
+        )
+        .expect("discovery file must be written");
+
+        let body = std::fs::read_to_string(&discovery_path).expect("discovery file must be read");
+        let json: Value = serde_json::from_str(&body).expect("discovery must be valid json");
+        assert!(json.get("local_dev_token").is_none());
+        assert_eq!(json["auth_mode"], "bearer-required");
+    }
+
+    #[test]
+    fn server_discovery_reports_a_filesystem_error_when_repo_root_is_a_file() {
+        let repo_root = test_registry_root();
+        std::fs::create_dir_all(&repo_root).expect("fixture root must be created");
+        let file_root = repo_root.join("not-a-directory");
+        std::fs::write(&file_root, "fixture").expect("fixture file must be written");
+
+        let error = write_server_discovery(
+            &file_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect",
+            None,
+        )
+        .expect_err("a file cannot contain the .traverse directory");
+
+        assert!(error.contains("failed to create .traverse directory"));
+    }
+
+    #[test]
+    fn server_discovery_reports_a_filesystem_error_when_server_file_is_a_directory() {
+        let repo_root = test_registry_root();
+        let server_path = repo_root.join(".traverse/server.json");
+        std::fs::create_dir_all(&server_path).expect("server path directory must be created");
+
+        let error = write_server_discovery(
+            &repo_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect",
+            None,
+        )
+        .expect_err("a directory cannot receive server discovery JSON");
+
+        assert!(error.contains("failed to write"));
+        assert!(error.contains("server.json"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn token_bearing_discovery_file_is_owner_read_write_only() {
@@ -8251,6 +8319,19 @@ mod tests {
         assert_eq!(
             url,
             "traverse://connect?base_url=http%3A%2F%2F192.168.1.42%3A8787&workspace_default=local%20default&auth_mode=dev-loopback"
+        );
+    }
+
+    #[test]
+    fn local_dev_token_has_a_scoped_nonempty_suffix() {
+        let token = mint_local_dev_token("127.0.0.1:8787");
+        let prefix = format!("trv_local_{}_", std::process::id());
+
+        assert!(token.starts_with(&prefix));
+        assert!(
+            token
+                .strip_prefix(&prefix)
+                .is_some_and(|suffix| !suffix.is_empty())
         );
     }
 
@@ -9176,6 +9257,87 @@ mod tests {
                 .expect("idempotency lock must not be poisoned")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn idempotency_retention_normalizes_default_floor_and_explicit_values() {
+        assert_eq!(
+            configured_idempotency_retention(None),
+            DEFAULT_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert_eq!(
+            configured_idempotency_retention(Some(1)),
+            MIN_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert_eq!(
+            configured_idempotency_retention(Some(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1)),
+            MIN_IDEMPOTENCY_RETENTION_SECONDS + 1
+        );
+    }
+
+    #[test]
+    fn in_process_api_initializes_system_workspace_and_configured_state() {
+        let registry_root = test_registry_root();
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: vec!["http://127.0.0.1:3000".to_string()],
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root: registry_root.clone(),
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: Some(1),
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+
+        assert!(api.state.allow_unauthenticated);
+        assert_eq!(api.state.allowed_origins, ["http://127.0.0.1:3000"]);
+        assert_eq!(api.state.registry_root, registry_root);
+        assert_eq!(
+            api.state.idempotency_retention_seconds,
+            MIN_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert!(
+            api.state
+                .workspaces
+                .lock()
+                .expect("workspace lock must not be poisoned")
+                .contains_key(SYSTEM_WORKSPACE_ID)
+        );
+    }
+
+    #[test]
+    fn in_process_api_rejects_system_workspace_listing_without_membership_metadata() {
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root: test_registry_root(),
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: None,
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+
+        let (status, body) = api
+            .list_workflows(SYSTEM_WORKSPACE_ID, true)
+            .expect("listing must render a JSON response");
+
+        assert_eq!(status, 403);
+        assert_eq!(body["status"], 403);
     }
 
     #[test]
@@ -11180,6 +11342,14 @@ mod tests {
         assert!(!is_trusted_dev_caller(
             IpAddr::from([192, 168, 1, 42]),
             "dev-loopback"
+        ));
+    }
+
+    #[test]
+    fn unknown_auth_mode_is_never_a_trusted_development_caller() {
+        assert!(!is_trusted_dev_caller(
+            IpAddr::from([127, 0, 0, 1]),
+            "production"
         ));
     }
 

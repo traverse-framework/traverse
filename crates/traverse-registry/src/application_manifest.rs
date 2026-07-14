@@ -250,6 +250,21 @@ impl ApplicationRegistry {
         let mut registered_workflows = Vec::new();
 
         for component in &manifest.components {
+            // Compatible-mode components are not runtime-executable
+            // artifacts: the platform embedder owns their start/stop/kill
+            // lifecycle (spec 057-embeddable-runtime-host). Record them for
+            // traceability without capability registration.
+            if component.manifest.execution_mode == ComponentExecutionMode::Compatible {
+                registered_components.push(ApplicationRegisteredComponent {
+                    component_id: component.manifest.component_id.clone(),
+                    component_version: component.manifest.version.clone(),
+                    capability_id: component.manifest.capability_id.clone(),
+                    capability_version: component.manifest.capability_version.clone(),
+                    wasm_digest: None,
+                    artifact_ref: application_component_artifact_ref(&manifest, component),
+                });
+                continue;
+            }
             let registration =
                 build_application_capability_registration(&manifest, component, request);
             let outcome = staged_capabilities
@@ -802,18 +817,25 @@ fn validate_component_event_references(
     Ok(())
 }
 
-fn build_application_capability_registration(
+fn application_component_artifact_ref(
     manifest: &ApplicationBundleManifest,
     component: &ApplicationComponent,
-    request: &ApplicationRegistrationRequest,
-) -> CapabilityRegistration {
-    let artifact_ref = format!(
+) -> String {
+    format!(
         "app:{}:{}:component:{}:{}",
         manifest.app_id,
         manifest.version,
         component.manifest.component_id,
         component.manifest.version
-    );
+    )
+}
+
+fn build_application_capability_registration(
+    manifest: &ApplicationBundleManifest,
+    component: &ApplicationComponent,
+    request: &ApplicationRegistrationRequest,
+) -> CapabilityRegistration {
+    let artifact_ref = application_component_artifact_ref(manifest, component);
     let artifact = CapabilityArtifactRecord {
         artifact_ref,
         implementation_kind: ImplementationKind::Executable,

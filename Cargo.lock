@@ -1934,6 +1934,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-embedder"
+version = "0.7.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.11.0",
+ "traverse-registry",
+ "traverse-runtime",
+ "wat",
+]
+
+[[package]]
 name = "traverse-expedition-wasm"
 version = "0.7.0"
 dependencies = [

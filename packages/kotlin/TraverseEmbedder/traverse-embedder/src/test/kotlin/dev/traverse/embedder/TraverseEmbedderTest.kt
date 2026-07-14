@@ -12,5 +12,20 @@ class TraverseEmbedderTest {
             TraverseSubmissionResult("kotlin-session-1", "accepted"),
             harness.submit(TraverseSubmission("demo.workflow", "{}")),
         )
+        assertEquals(
+            TraverseSubmissionResult("kotlin-session-2", "accepted"),
+            harness.submit(TraverseSubmission("demo.capability", "{}")),
+        )
+        assertEquals(
+            listOf(
+                TraverseRuntimeEvent(1, "demo.workflow", "accepted"),
+                TraverseRuntimeEvent(2, "demo.capability", "accepted"),
+            ),
+            harness.subscribe(),
+        )
+        assertEquals(
+            listOf(TraverseRuntimeEvent(2, "demo.capability", "accepted")),
+            harness.subscribe(afterSequence = 1),
+        )
     }
 }

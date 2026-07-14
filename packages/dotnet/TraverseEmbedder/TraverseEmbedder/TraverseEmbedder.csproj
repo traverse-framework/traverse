@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>TraverseEmbedder</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Traverse embedder-api/1.0.0 public .NET boundary.</Description>
+  </PropertyGroup>
+</Project>
