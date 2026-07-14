@@ -29,6 +29,8 @@ fn sample_event(event_type: &str, id: &str, time: &str) -> TraverseEvent {
         owner: "cap.test".to_string(),
         version: "1.0.0".to_string(),
         lifecycle_status: LifecycleStatus::Active,
+        subject_id: None,
+        actor_id: None,
     }
 }
 

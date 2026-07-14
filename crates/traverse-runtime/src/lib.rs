@@ -13,6 +13,8 @@ pub mod router;
 pub mod security;
 pub mod trace;
 
+use chrono::Utc;
+use events::{NoopRuntimeEventSink, RuntimeEventSink, TraverseEvent};
 use security::{
     ArtifactVerificationFailure, ArtifactVerificationRecord, RuntimeIdentity,
     RuntimeSecurityConfig, RuntimeWarning, derive_identity_from_jwt, verify_artifact,
@@ -23,6 +25,7 @@ use serde_json::{Map, Value, json};
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use traverse_contracts::{
     ExecutionTarget, HostApiAccess, Lifecycle, NetworkAccess, ViolationRecord,
 };
@@ -33,6 +36,7 @@ use traverse_registry::{
     WorkflowRegistry, WorkspaceAppStateFailure, WorkspaceApplicationRegistration,
     load_workspace_application_registries, resolve_dependencies, resolve_version_range,
 };
+use uuid::Uuid;
 
 const RUNTIME_REQUEST_KIND: &str = "runtime_request";
 const RUNTIME_RESULT_KIND: &str = "runtime_result";
@@ -51,6 +55,7 @@ const STATE_MACHINE_GOVERNING_SPEC: &str = "010-runtime-state-machine";
 const BROWSER_SUBSCRIPTION_GOVERNING_SPEC: &str = "013-browser-runtime-subscription";
 const EXECUTION_PREFIX: &str = "exec_";
 const TRACE_PREFIX: &str = "trace_";
+const RUNTIME_EXECUTION_EVENT_TYPE: &str = "dev.traverse.runtime.execution.completed";
 
 #[derive(Debug, Clone)]
 pub struct Runtime<E> {
@@ -60,6 +65,7 @@ pub struct Runtime<E> {
     executor: E,
     observability: RuntimeObservabilityConfig,
     security: RuntimeSecurityConfig,
+    event_sink: Arc<dyn RuntimeEventSink>,
 }
 
 impl<E> Runtime<E> {
@@ -72,6 +78,7 @@ impl<E> Runtime<E> {
             executor,
             observability: RuntimeObservabilityConfig::default(),
             security: RuntimeSecurityConfig::default(),
+            event_sink: Arc::new(NoopRuntimeEventSink),
         }
     }
 
@@ -124,6 +131,13 @@ impl<E> Runtime<E> {
     #[must_use]
     pub fn with_security_config(mut self, security: RuntimeSecurityConfig) -> Self {
         self.security = security;
+        self
+    }
+
+    /// Configures delivery for runtime-owned lifecycle envelopes.
+    #[must_use]
+    pub fn with_event_sink(mut self, event_sink: Arc<dyn RuntimeEventSink>) -> Self {
+        self.event_sink = event_sink;
         self
     }
 
@@ -772,6 +786,8 @@ pub struct TraceResultRecord {
     pub output: Option<serde_json::Value>,
     #[serde(default)]
     pub error: Option<RuntimeError>,
+    #[serde(default)]
+    pub warnings: Vec<RuntimeWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1101,6 +1117,7 @@ where
     /// Executes one runtime request against the current registry state.
     #[must_use]
     pub fn execute(&self, request: RuntimeRequest) -> RuntimeExecutionOutcome {
+        let identity = request.context.identity.clone();
         let (attempt, mut emitter) = begin_attempt(request, self.observability.clone());
         emitter.push(
             RuntimeState::Discovering,
@@ -1111,37 +1128,72 @@ where
             }),
         );
 
-        if let Some(error) = validate_request(&attempt.request) {
-            return invalid_request_outcome(attempt, emitter, error);
-        }
+        let mut outcome = if let Some(error) = validate_request(&attempt.request) {
+            invalid_request_outcome(attempt, emitter, error)
+        } else {
+            let resolution = self.resolve_candidates(&attempt.request, &mut emitter);
 
-        let resolution = self.resolve_candidates(&attempt.request, &mut emitter);
+            if resolution.eligible.is_empty() {
+                no_eligible_outcome(attempt, emitter, resolution.collection)
+            } else if resolution.eligible.len() > 1 {
+                ambiguous_outcome(attempt, emitter, resolution)
+            } else {
+                let mut eligible = resolution.eligible;
+                let selected = eligible.remove(0);
+                let selection = SelectionRecord {
+                    status: SelectionStatus::Selected,
+                    selected_capability_id: Some(selected.record.id.clone()),
+                    selected_capability_version: Some(selected.record.version.clone()),
+                    failure_reason: None,
+                    remaining_candidates: Vec::new(),
+                };
 
-        if resolution.eligible.is_empty() {
-            return no_eligible_outcome(attempt, emitter, resolution.collection);
-        }
-
-        if resolution.eligible.len() > 1 {
-            return ambiguous_outcome(attempt, emitter, resolution);
-        }
-
-        let mut eligible = resolution.eligible;
-        let selected = eligible.remove(0);
-        let selection = SelectionRecord {
-            status: SelectionStatus::Selected,
-            selected_capability_id: Some(selected.record.id.clone()),
-            selected_capability_version: Some(selected.record.version.clone()),
-            failure_reason: None,
-            remaining_candidates: Vec::new(),
+                self.execute_selected(
+                    attempt,
+                    emitter,
+                    resolution.collection,
+                    selection,
+                    &selected,
+                )
+            }
         };
 
-        self.execute_selected(
-            attempt,
-            emitter,
-            resolution.collection,
-            selection,
-            &selected,
-        )
+        self.emit_execution_lifecycle_event(&mut outcome, identity.as_ref());
+        outcome
+    }
+
+    fn emit_execution_lifecycle_event(
+        &self,
+        outcome: &mut RuntimeExecutionOutcome,
+        identity: Option<&RuntimeIdentity>,
+    ) {
+        let event = TraverseEvent {
+            id: Uuid::new_v4().to_string(),
+            source: "traverse-runtime".to_string(),
+            event_type: RUNTIME_EXECUTION_EVENT_TYPE.to_string(),
+            datacontenttype: "application/json".to_string(),
+            time: Utc::now().to_rfc3339(),
+            data: json!({
+                "execution_id": outcome.result.execution_id,
+                "request_id": outcome.result.request_id,
+                "status": outcome.result.status,
+                "trace_ref": outcome.result.trace_ref,
+            }),
+            owner: "traverse-runtime".to_string(),
+            version: SUPPORTED_SCHEMA_VERSION.to_string(),
+            lifecycle_status: events::LifecycleStatus::Active,
+            subject_id: identity.map(|identity| identity.subject_id.clone()),
+            actor_id: identity.and_then(|identity| identity.actor_id.clone()),
+        };
+
+        if let Err(error) = self.event_sink.emit(event) {
+            let warning = RuntimeWarning {
+                code: "runtime_event_sink_delivery_failed".to_string(),
+                message: error.to_string(),
+            };
+            outcome.result.warnings.push(warning.clone());
+            outcome.trace.result.warnings.push(warning);
+        }
     }
 
     fn collect_candidates(
@@ -1517,6 +1569,7 @@ fn terminal_failure(context: FailureContext) -> RuntimeExecutionOutcome {
         status: RuntimeResultStatus::Error,
         output: None,
         error: Some(context.error.clone()),
+        warnings: context.attempt.warnings.clone(),
     };
     let otel_trace = otel_trace_record(
         &context.attempt,
@@ -2086,6 +2139,7 @@ fn successful_execution_outcome(
         status: RuntimeResultStatus::Completed,
         output: Some(execution_output.clone()),
         error: None,
+        warnings: attempt.warnings.clone(),
     };
     let otel_trace = otel_trace_record(
         &attempt,
@@ -3056,6 +3110,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
     use traverse_contracts::{
         BinaryFormat as ContractBinaryFormat, Entrypoint, EntrypointKind, Execution,
         ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess, Lifecycle,
@@ -3073,6 +3128,38 @@ mod tests {
 
     const HEX_TABLE: &[u8; 16] = b"0123456789abcdef";
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Debug, Default)]
+    struct RecordingEventSink {
+        events: Mutex<Vec<super::events::TraverseEvent>>,
+    }
+
+    impl super::events::RuntimeEventSink for RecordingEventSink {
+        fn emit(
+            &self,
+            event: super::events::TraverseEvent,
+        ) -> Result<(), super::events::EventError> {
+            self.events
+                .lock()
+                .expect("recording sink lock must not be poisoned")
+                .push(event);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingEventSink;
+
+    impl super::events::RuntimeEventSink for FailingEventSink {
+        fn emit(
+            &self,
+            _event: super::events::TraverseEvent,
+        ) -> Result<(), super::events::EventError> {
+            Err(super::events::EventError::JournalWrite(
+                "sink unavailable".to_string(),
+            ))
+        }
+    }
 
     #[test]
     fn missing_binary_metadata_is_rejected_as_artifact_missing() {
@@ -3642,6 +3729,49 @@ mod tests {
             outcome.trace.state_machine_validation.status,
             super::RuntimeStateMachineValidationStatus::Passed
         );
+    }
+
+    #[test]
+    fn runtime_emits_a_token_free_terminal_event_for_invalid_requests() {
+        let sink = Arc::new(RecordingEventSink::default());
+        let mut request = valid_request();
+        request.kind = "unsupported_runtime_request".to_string();
+        request.context.identity = Some(super::security::RuntimeIdentity {
+            subject_id: "subject_123".to_string(),
+            actor_id: Some("actor_456".to_string()),
+            token_reference_hash: "must-not-leak".to_string(),
+        });
+
+        let outcome = Runtime::new(CapabilityRegistry::new(), NoopExecutor)
+            .with_event_sink(sink.clone())
+            .execute(request);
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        let events = sink
+            .events
+            .lock()
+            .expect("recording sink lock must not be poisoned");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, super::RUNTIME_EXECUTION_EVENT_TYPE);
+        assert_eq!(events[0].subject_id.as_deref(), Some("subject_123"));
+        assert_eq!(events[0].actor_id.as_deref(), Some("actor_456"));
+        let serialized = serde_json::to_string(&events[0]).expect("event must serialize");
+        assert!(!serialized.contains("must-not-leak"));
+    }
+
+    #[test]
+    fn runtime_records_sink_delivery_failures_without_changing_execution_status() {
+        let outcome = Runtime::new(CapabilityRegistry::new(), NoopExecutor)
+            .with_event_sink(Arc::new(FailingEventSink))
+            .execute(valid_request());
+
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        assert_eq!(outcome.result.warnings.len(), 1);
+        assert_eq!(
+            outcome.result.warnings[0].code,
+            "runtime_event_sink_delivery_failed"
+        );
+        assert_eq!(outcome.trace.result.warnings, outcome.result.warnings);
     }
 
     #[test]
