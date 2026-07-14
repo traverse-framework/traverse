@@ -9431,6 +9431,42 @@ mod tests {
     }
 
     #[test]
+    fn in_process_api_reports_unresolved_workflow_capability_reference() {
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root: test_registry_root(),
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: None,
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+        let mut body: Value = serde_json::from_slice(&valid_workflow_registration_body(
+            "test.api.unowned-workflow",
+            "1.0.0",
+            "test.api.unowned-capability",
+        ))
+        .expect("test workflow body must be valid JSON");
+        body["workspace_id"] = json!("ws-unowned");
+
+        let (status, response) = api
+            .register_workflow(body.to_string().into_bytes(), true)
+            .expect("registration must render a JSON response");
+
+        assert_eq!(status, 422, "unexpected response: {response}");
+        assert_eq!(response["status"], 422);
+        assert_eq!(response["traverse_code"], "unresolved_capability_reference");
+    }
+
+    #[test]
     fn execution_status_endpoint_returns_running_status() {
         let state = empty_state();
         state
