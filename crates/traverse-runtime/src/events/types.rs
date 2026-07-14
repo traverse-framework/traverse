@@ -230,6 +230,8 @@ pub struct SubscriptionPoll {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
 
     fn sample_event(event_type: &str) -> TraverseEvent {
