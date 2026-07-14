@@ -23,7 +23,13 @@ public sealed record TraverseSubmission(string TargetId, string InputJson)
 public sealed record TraverseSubmissionResult(string SessionId, string Status);
 
 /// <summary>Ordered runtime-shaped event exposed by the conformance harness.</summary>
-public sealed record TraverseRuntimeEvent(int Sequence, string TargetId, string Status);
+public sealed record TraverseRuntimeEvent(
+    int Sequence,
+    string TargetId,
+    string Status,
+    string? InstanceId = null);
+
+public sealed record TraverseCompatibleResult(string? InstanceId, string Status);
 
 /// <summary>
 /// Deterministic conformance test double. It never evaluates application
@@ -33,7 +39,9 @@ public sealed class InMemoryTraverseEmbedder
 {
     private TraverseBundle? bundle;
     private int submissionSequence;
+    private int compatibleSequence;
     private readonly List<TraverseRuntimeEvent> events = [];
+    private readonly Dictionary<string, string> compatibleInstances = [];
 
     public void Initialize(TraverseBundle value)
     {
@@ -46,7 +54,9 @@ public sealed class InMemoryTraverseEmbedder
     {
         bundle = null;
         submissionSequence = 0;
+        compatibleSequence = 0;
         events.Clear();
+        compatibleInstances.Clear();
     }
 
     public TraverseSubmissionResult Submit(TraverseSubmission submission)
@@ -66,12 +76,49 @@ public sealed class InMemoryTraverseEmbedder
         return events.Where(@event => @event.Sequence > afterSequence).ToArray();
     }
 
-    public TraverseSubmissionResult CompatibleStart(string capabilityId, string inputJson) =>
-        Submit(new TraverseSubmission(capabilityId, inputJson));
+    public TraverseCompatibleResult CompatibleStart(string capabilityId, string inputJson)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(capabilityId);
+        compatibleSequence++;
+        var instanceId = $"dotnet-compatible-{compatibleSequence}";
+        compatibleInstances[capabilityId] = instanceId;
+        AppendCompatibleEvent(capabilityId, instanceId, "started");
+        return new TraverseCompatibleResult(instanceId, "started");
+    }
 
-    public void CompatibleStop(string capabilityId, string? instanceId) => EnsureInitialized();
+    public TraverseCompatibleResult CompatibleStop(string capabilityId, string? instanceId)
+    {
+        var resolvedInstanceId = CompatibleInstance(capabilityId, instanceId);
+        compatibleInstances.Remove(capabilityId);
+        AppendCompatibleEvent(capabilityId, resolvedInstanceId, "stopped");
+        return new TraverseCompatibleResult(resolvedInstanceId, "stopped");
+    }
 
-    public void CompatibleKill(string capabilityId, string? instanceId) => EnsureInitialized();
+    public TraverseCompatibleResult CompatibleKill(string capabilityId, string? instanceId)
+    {
+        var resolvedInstanceId = CompatibleInstance(capabilityId, instanceId);
+        compatibleInstances.Remove(capabilityId);
+        AppendCompatibleEvent(capabilityId, resolvedInstanceId, "killed");
+        return new TraverseCompatibleResult(resolvedInstanceId, "killed");
+    }
+
+    private string CompatibleInstance(string capabilityId, string? instanceId)
+    {
+        EnsureInitialized();
+        if (!compatibleInstances.TryGetValue(capabilityId, out var activeInstanceId) ||
+            (instanceId is not null && instanceId != activeInstanceId))
+        {
+            throw new InvalidOperationException("compatible instance is not active");
+        }
+        return activeInstanceId;
+    }
+
+    private void AppendCompatibleEvent(string capabilityId, string instanceId, string status)
+    {
+        submissionSequence++;
+        events.Add(new TraverseRuntimeEvent(submissionSequence, capabilityId, status, instanceId));
+    }
 
     private void EnsureInitialized()
     {
