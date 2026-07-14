@@ -22,6 +22,9 @@ public sealed record TraverseSubmission(string TargetId, string InputJson)
 
 public sealed record TraverseSubmissionResult(string SessionId, string Status);
 
+/// <summary>Ordered runtime-shaped event exposed by the conformance harness.</summary>
+public sealed record TraverseRuntimeEvent(int Sequence, string TargetId, string Status);
+
 /// <summary>
 /// Deterministic conformance test double. It never evaluates application
 /// business logic and never starts a Traverse sidecar process.
@@ -30,6 +33,7 @@ public sealed class InMemoryTraverseEmbedder
 {
     private TraverseBundle? bundle;
     private int submissionSequence;
+    private readonly List<TraverseRuntimeEvent> events = [];
 
     public void Initialize(TraverseBundle value)
     {
@@ -42,6 +46,7 @@ public sealed class InMemoryTraverseEmbedder
     {
         bundle = null;
         submissionSequence = 0;
+        events.Clear();
     }
 
     public TraverseSubmissionResult Submit(TraverseSubmission submission)
@@ -49,7 +54,16 @@ public sealed class InMemoryTraverseEmbedder
         if (bundle is null) throw new InvalidOperationException("embedder is not initialized");
         submission.Validate();
         submissionSequence++;
-        return new TraverseSubmissionResult($"dotnet-session-{submissionSequence}", "accepted");
+        var result = new TraverseSubmissionResult($"dotnet-session-{submissionSequence}", "accepted");
+        events.Add(new TraverseRuntimeEvent(submissionSequence, submission.TargetId, result.Status));
+        return result;
+    }
+
+    /// <summary>Returns ordered runtime-shaped events emitted after a sequence cursor.</summary>
+    public IReadOnlyList<TraverseRuntimeEvent> Subscribe(int afterSequence = 0)
+    {
+        EnsureInitialized();
+        return events.Where(@event => @event.Sequence > afterSequence).ToArray();
     }
 
     public TraverseSubmissionResult CompatibleStart(string capabilityId, string inputJson) =>
