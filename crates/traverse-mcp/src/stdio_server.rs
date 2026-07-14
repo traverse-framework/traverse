@@ -1031,9 +1031,17 @@ pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServe
     let event_registry = Box::leak(Box::new(canonical_execution.events));
     let workflow_registry = Box::leak(Box::new(WorkflowRegistry::new()));
 
+    // The stdio server only executes the canonical bundled expedition example,
+    // whose artifacts are unsigned local-dev bundles (SourceKind::Local); the
+    // development security mode allows them with a warning, matching every
+    // other example-executing runtime in this crate and the CLI (spec 030
+    // FR-013 keeps production the default for embedders).
     let runtime = Box::leak(Box::new(
         Runtime::new(canonical_execution.capabilities, ExpeditionExampleExecutor)
-            .with_workflow_registry(canonical_execution.workflows),
+            .with_workflow_registry(canonical_execution.workflows)
+            .with_security_config(
+                traverse_runtime::security::RuntimeSecurityConfig::development(),
+            ),
     ));
     let mcp = Box::leak(Box::new(TraverseMcp::new(
         capability_registry,
@@ -1869,7 +1877,10 @@ mod tests {
         let workflow_registry = Box::leak(Box::new(WorkflowRegistry::new()));
         let runtime = Box::leak(Box::new(
             Runtime::new(execution.capabilities, ExpeditionExampleExecutor)
-                .with_workflow_registry(execution.workflows),
+                .with_workflow_registry(execution.workflows)
+                .with_security_config(
+                    traverse_runtime::security::RuntimeSecurityConfig::development(),
+                ),
         ));
         let mcp = Box::leak(Box::new(TraverseMcp::new(
             capability_registry,

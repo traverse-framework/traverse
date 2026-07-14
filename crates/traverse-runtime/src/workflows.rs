@@ -1,3 +1,4 @@
+use crate::security::{RuntimeWarning, verify_artifact};
 use crate::{
     ExecutionFailureReason, ExecutionFailureState, LocalExecutor, Runtime, RuntimeError,
     RuntimeErrorCode, RuntimeExecutionOutcome, execution_failure_outcome, runtime_error,
@@ -196,6 +197,8 @@ pub struct WorkflowExecutionResult {
     pub output: Option<Value>,
     #[serde(default)]
     pub error: Option<RuntimeError>,
+    #[serde(default)]
+    pub warnings: Vec<RuntimeWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +244,7 @@ where
                 Vec::new(),
                 Vec::new(),
                 WorkflowEventEvidenceBundle::default(),
+                Vec::new(),
             );
         }
 
@@ -262,6 +266,7 @@ where
                 Vec::new(),
                 Vec::new(),
                 WorkflowEventEvidenceBundle::default(),
+                Vec::new(),
             );
         };
 
@@ -279,6 +284,7 @@ where
                 Vec::new(),
                 Vec::new(),
                 WorkflowEventEvidenceBundle::default(),
+                Vec::new(),
             );
         }
 
@@ -290,7 +296,7 @@ where
 
     pub(crate) fn execute_workflow_capability(
         &self,
-        context: crate::ExecutionContext,
+        mut context: crate::ExecutionContext,
         selected: &ResolvedCapability,
         started_execution: crate::StartedExecution,
     ) -> RuntimeExecutionOutcome {
@@ -328,6 +334,10 @@ where
             input: context.attempt.request.input.clone(),
             governing_spec: WORKFLOW_GOVERNING_SPEC.to_string(),
         });
+        context
+            .attempt
+            .warnings
+            .extend(workflow.result.warnings.iter().cloned());
 
         match workflow.result.status {
             WorkflowTraversalStatus::Completed => {
@@ -380,6 +390,7 @@ where
         let mut emitted = Vec::new();
         let mut event_evidence = WorkflowEventEvidenceBundle::default();
         let mut consumed_event_edges = BTreeSet::new();
+        let mut warnings: Vec<RuntimeWarning> = Vec::new();
         let workflow_execution_id = format!("workflow_exec_{}", request.request_id);
 
         loop {
@@ -401,6 +412,7 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             };
 
@@ -430,8 +442,69 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             };
+
+            // Artifact security gate (spec 030-security-identity-model FR-013):
+            // workflow steps apply the same verification as direct capability
+            // execution, so an artifact rejected by `Runtime::execute` cannot
+            // run by being wrapped in a workflow pipeline step (spec 058).
+            let artifact_bytes = match crate::load_artifact_bytes_for_verification(&capability) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let mut failed = visited;
+                    if let Some(last) = failed.last_mut() {
+                        last.status = WorkflowTraversalStepStatus::Failed;
+                    }
+                    return Err(workflow_failure(
+                        request,
+                        WorkflowTraversalFailureReason::StepExecutionFailed,
+                        error,
+                        failed,
+                        traversed,
+                        emitted,
+                        event_evidence,
+                        warnings,
+                    ));
+                }
+            };
+            match verify_artifact(&capability, &artifact_bytes, &self.security) {
+                Ok(record) => {
+                    if let Some(code) = record.warning_code {
+                        warnings.push(RuntimeWarning {
+                            code,
+                            message:
+                                "unsigned local/dev artifact allowed by development security mode"
+                                    .to_string(),
+                        });
+                    }
+                }
+                Err(failure) => {
+                    let mut failed = visited;
+                    if let Some(last) = failed.last_mut() {
+                        last.status = WorkflowTraversalStepStatus::Failed;
+                    }
+                    return Err(workflow_failure(
+                        request,
+                        WorkflowTraversalFailureReason::StepExecutionFailed,
+                        runtime_error(
+                            RuntimeErrorCode::ContractViolation,
+                            "artifact signature verification failed before workflow step execution",
+                            json!({
+                                "code": failure.code(),
+                                "artifact_verification": failure.record(),
+                                "node_id": node.node_id,
+                            }),
+                        ),
+                        failed,
+                        traversed,
+                        emitted,
+                        event_evidence,
+                        warnings,
+                    ));
+                }
+            }
 
             let node_input = node_input(&state, node);
             if let Err(error) = validate_payload_against_contract(
@@ -452,6 +525,7 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             }
 
@@ -474,6 +548,7 @@ where
                         traversed,
                         emitted,
                         event_evidence,
+                        warnings,
                     ));
                 }
             };
@@ -496,6 +571,7 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             }
 
@@ -531,6 +607,7 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             }
             if let Some(edge) = direct.into_iter().next() {
@@ -590,6 +667,7 @@ where
                     traversed,
                     emitted,
                     event_evidence,
+                    warnings,
                 ));
             }
             if let Some(edge) = matched_event_edges.into_iter().next() {
@@ -616,6 +694,7 @@ where
                         traversed,
                         emitted,
                         event_evidence,
+                        warnings,
                     ));
                 }
 
@@ -650,6 +729,7 @@ where
                         status: WorkflowTraversalStatus::Completed,
                         output: Some(final_output),
                         error: None,
+                        warnings,
                     },
                     evidence,
                 });
@@ -676,6 +756,7 @@ where
                 traversed,
                 emitted,
                 event_evidence,
+                warnings,
             ));
         }
     }
@@ -982,6 +1063,7 @@ fn edge_record(edge: &WorkflowEdge) -> WorkflowTraversalEdgeRecord {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn workflow_failure(
     request: &WorkflowExecutionRequest,
     failure_reason: WorkflowTraversalFailureReason,
@@ -990,6 +1072,7 @@ fn workflow_failure(
     traversed_edges: Vec<WorkflowTraversalEdgeRecord>,
     emitted_events: Vec<EventReference>,
     event_evidence: WorkflowEventEvidenceBundle,
+    warnings: Vec<RuntimeWarning>,
 ) -> WorkflowExecutionOutcome {
     let evidence = WorkflowTraversalEvidence {
         kind: WORKFLOW_EVIDENCE_KIND.to_string(),
@@ -1022,6 +1105,7 @@ fn workflow_failure(
             status: WorkflowTraversalStatus::Error,
             output: None,
             error: Some(error),
+            warnings,
         },
         evidence,
     }
@@ -1030,6 +1114,7 @@ fn workflow_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::RuntimeSecurityConfig;
     use crate::{
         CandidateCollectionRecord, LocalExecutionFailure, LocalExecutionFailureCode,
         RuntimeContext, RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest,
@@ -1044,7 +1129,8 @@ mod tests {
         ServiceType, SideEffect, SideEffectKind, ValidationEvidence,
     };
     use traverse_registry::{
-        ArtifactDigests, BinaryFormat, BinaryReference, CapabilityArtifactRecord,
+        ArtifactDigests, ArtifactSignature, ArtifactSignatureScheme, BinaryFormat, BinaryReference,
+        CapabilityArtifactRecord,
         CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
         CompositionPattern, ImplementationKind, RegistryProvenance, RegistryScope, SourceKind,
         SourceReference, WorkflowDefinition, WorkflowEdge, WorkflowEdgeTrigger, WorkflowNode,
@@ -1160,10 +1246,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn executes_workflow_deterministically_and_supports_workflow_backed_capabilities() {
         let workflow_registry = workflow_registry_fixture();
         let runtime = Runtime::new(capability_registry_fixture(), WorkflowExecutor)
-            .with_workflow_registry(workflow_registry);
+            .with_workflow_registry(workflow_registry)
+            .with_security_config(RuntimeSecurityConfig::development());
 
         let workflow = runtime.execute_workflow(valid_workflow_request());
         assert_eq!(workflow.result.status, WorkflowTraversalStatus::Completed);
@@ -1230,7 +1318,8 @@ mod tests {
         );
 
         let runtime = Runtime::new(composed_registry, WorkflowExecutor)
-            .with_workflow_registry(workflow_registry_fixture());
+            .with_workflow_registry(workflow_registry_fixture())
+            .with_security_config(RuntimeSecurityConfig::development());
         let result = runtime.execute(RuntimeRequest {
             kind: "runtime_request".to_string(),
             schema_version: "1.0.0".to_string(),
@@ -1264,6 +1353,13 @@ mod tests {
                 json!({"comment_text": "hello", "draft_id": "draft-1", "comment_id": "comment-1"})
             )
         );
+        assert!(
+            result
+                .result
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "unsigned_local_dev_artifact")
+        );
     }
 
     #[test]
@@ -1282,7 +1378,8 @@ mod tests {
 
         let workflow_registry = workflow_registry_fixture();
         let runtime = Runtime::new(capability_registry_fixture(), MissingEventWorkflowExecutor)
-            .with_workflow_registry(workflow_registry);
+            .with_workflow_registry(workflow_registry)
+            .with_security_config(RuntimeSecurityConfig::development());
         let missing_event = runtime.execute_workflow(valid_workflow_request());
         assert_eq!(
             missing_event.evidence.result.failure_reason,
@@ -1290,7 +1387,8 @@ mod tests {
         );
 
         let runtime = Runtime::new(capability_registry_fixture(), FailingWorkflowExecutor)
-            .with_workflow_registry(workflow_registry_fixture());
+            .with_workflow_registry(workflow_registry_fixture())
+            .with_security_config(RuntimeSecurityConfig::development());
         let failed = runtime.execute_workflow(valid_workflow_request());
         assert_eq!(
             failed.evidence.result.failure_reason,
@@ -1448,7 +1546,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn workflow_runtime_covers_additional_failure_and_helper_branches() {
         let runtime = Runtime::new(capability_registry_fixture(), WorkflowExecutor)
-            .with_workflow_registry(workflow_registry_fixture());
+            .with_workflow_registry(workflow_registry_fixture())
+            .with_security_config(RuntimeSecurityConfig::development());
 
         let invalid_input = runtime.execute_workflow(WorkflowExecutionRequest {
             input: json!({}),
@@ -1494,7 +1593,8 @@ mod tests {
 
         let strict_runtime =
             Runtime::new(strict_input_capability_registry_fixture(), WorkflowExecutor)
-                .with_workflow_registry(workflow_registry_fixture());
+                .with_workflow_registry(workflow_registry_fixture())
+                .with_security_config(RuntimeSecurityConfig::development());
         let input_mismatch = strict_runtime.traverse_workflow(
             &valid_workflow_request(),
             &resolved_workflow(WorkflowDefinition {
@@ -1528,7 +1628,8 @@ mod tests {
 
         let bad_output_runtime =
             Runtime::new(capability_registry_fixture(), BadOutputWorkflowExecutor)
-                .with_workflow_registry(workflow_registry_fixture());
+                .with_workflow_registry(workflow_registry_fixture())
+                .with_security_config(RuntimeSecurityConfig::development());
         let bad_output = bad_output_runtime.execute_workflow(valid_workflow_request());
         assert_eq!(
             bad_output.evidence.result.failure_reason,
@@ -1789,7 +1890,8 @@ mod tests {
             None,
         );
         let failing_runtime = Runtime::new(capability_registry_fixture(), FailingWorkflowExecutor)
-            .with_workflow_registry(workflow_registry_fixture());
+            .with_workflow_registry(workflow_registry_fixture())
+            .with_security_config(RuntimeSecurityConfig::development());
         let outcome = failing_runtime.execute_workflow_capability(
             crate::ExecutionContext {
                 attempt,
@@ -1833,7 +1935,9 @@ mod tests {
         let registry = pipeline_capability_registry();
         let mut workflows = WorkflowRegistry::new();
         register_workflow_ok(&mut workflows, &registry, pipeline_workflow_registration());
-        let runtime = Runtime::new(registry, PipelineExecutor).with_workflow_registry(workflows);
+        let runtime = Runtime::new(registry, PipelineExecutor)
+            .with_workflow_registry(workflows)
+            .with_security_config(RuntimeSecurityConfig::development());
 
         let first = runtime.execute_workflow(pipeline_workflow_request());
         let second = runtime.execute_workflow(pipeline_workflow_request());
@@ -1879,8 +1983,9 @@ mod tests {
         let registry = pipeline_capability_registry();
         let mut workflows = WorkflowRegistry::new();
         register_workflow_ok(&mut workflows, &registry, pipeline_workflow_registration());
-        let runtime =
-            Runtime::new(registry, FailingPipelineExecutor).with_workflow_registry(workflows);
+        let runtime = Runtime::new(registry, FailingPipelineExecutor)
+            .with_workflow_registry(workflows)
+            .with_security_config(RuntimeSecurityConfig::development());
 
         let outcome = runtime.execute_workflow(pipeline_workflow_request());
 
@@ -1894,6 +1999,98 @@ mod tests {
         assert_eq!(steps[0].status, WorkflowTraversalStepStatus::Completed);
         assert_eq!(steps[1].node_id, "process_note");
         assert_eq!(steps[1].status, WorkflowTraversalStepStatus::Failed);
+    }
+
+    #[test]
+    fn workflow_step_rejects_unsigned_artifact_under_default_security_config() {
+        // No explicit security config: the default (Production) posture must
+        // reject the unsigned artifact before the workflow step executes,
+        // exactly like direct capability execution (spec 030 FR-013).
+        let runtime = Runtime::new(capability_registry_fixture(), WorkflowExecutor)
+            .with_workflow_registry(workflow_registry_fixture());
+
+        let outcome = runtime.execute_workflow(valid_workflow_request());
+
+        assert_eq!(outcome.result.status, WorkflowTraversalStatus::Error);
+        assert_eq!(
+            outcome.evidence.result.failure_reason,
+            Some(WorkflowTraversalFailureReason::StepExecutionFailed)
+        );
+        let error = outcome.result.error;
+        assert_eq!(
+            error.as_ref().map(|error| error.code),
+            Some(RuntimeErrorCode::ContractViolation)
+        );
+        assert_eq!(
+            error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(Value::as_str),
+            Some("missing_signature")
+        );
+        assert_eq!(
+            error
+                .as_ref()
+                .and_then(|error| error.details.get("node_id"))
+                .and_then(Value::as_str),
+            Some("create_draft")
+        );
+        let steps = &outcome.evidence.visited_nodes;
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].node_id, "create_draft");
+        assert_eq!(steps[0].status, WorkflowTraversalStepStatus::Failed);
+        assert!(outcome.result.warnings.is_empty());
+    }
+
+    #[test]
+    fn workflow_step_unsigned_artifact_warns_and_executes_in_development_mode() {
+        let runtime = Runtime::new(capability_registry_fixture(), WorkflowExecutor)
+            .with_workflow_registry(workflow_registry_fixture())
+            .with_security_config(RuntimeSecurityConfig::development());
+
+        let outcome = runtime.execute_workflow(valid_workflow_request());
+
+        assert_eq!(outcome.result.status, WorkflowTraversalStatus::Completed);
+        assert_eq!(outcome.result.warnings.len(), 3);
+        assert!(
+            outcome
+                .result
+                .warnings
+                .iter()
+                .all(|warning| warning.code == "unsigned_local_dev_artifact")
+        );
+    }
+
+    #[test]
+    fn workflow_step_fails_when_signed_artifact_bytes_cannot_be_loaded() {
+        let runtime = Runtime::new(
+            signed_missing_binary_capability_registry_fixture(),
+            WorkflowExecutor,
+        )
+        .with_workflow_registry(workflow_registry_fixture());
+
+        let outcome = runtime.execute_workflow(valid_workflow_request());
+
+        assert_eq!(outcome.result.status, WorkflowTraversalStatus::Error);
+        assert_eq!(
+            outcome.evidence.result.failure_reason,
+            Some(WorkflowTraversalFailureReason::StepExecutionFailed)
+        );
+        let error = outcome.result.error;
+        assert_eq!(
+            error.as_ref().map(|error| error.code),
+            Some(RuntimeErrorCode::ArtifactMissing)
+        );
+        assert_eq!(
+            error
+                .as_ref()
+                .and_then(|error| error.details.get("code"))
+                .and_then(Value::as_str),
+            Some("artifact_load_failed")
+        );
+        let steps = &outcome.evidence.visited_nodes;
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status, WorkflowTraversalStepStatus::Failed);
     }
 
     fn pipeline_capability_registry() -> CapabilityRegistry {
@@ -1913,7 +2110,7 @@ mod tests {
                         json!({"type": "object", "additionalProperties": true}),
                         json!({"type": "object", "additionalProperties": true}),
                     ),
-                    contract_path: format!("contracts/{id}.json"),
+                    contract_path: format!("registry/{id}.json"),
                     artifact: CapabilityArtifactRecord {
                         artifact_ref: format!("artifact-{id}"),
                         implementation_kind: ImplementationKind::Executable,
@@ -2128,11 +2325,26 @@ mod tests {
     }
 
     fn capability_registry_fixture() -> CapabilityRegistry {
-        build_capability_registry(false)
+        build_capability_registry(false, None)
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn build_capability_registry(strict_inputs: bool) -> CapabilityRegistry {
+    fn signed_missing_binary_capability_registry_fixture() -> CapabilityRegistry {
+        build_capability_registry(
+            false,
+            Some(ArtifactSignature {
+                scheme: ArtifactSignatureScheme::Ed25519,
+                public_key_hex: Some("00".repeat(32)),
+                signature_hex: Some("00".repeat(64)),
+                sigstore_bundle_ref: None,
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+    fn build_capability_registry(
+        strict_inputs: bool,
+        signature: Option<ArtifactSignature>,
+    ) -> CapabilityRegistry {
         let mut registry = CapabilityRegistry::new();
         for (id, emits, output, required_key) in [
             (
@@ -2203,7 +2415,7 @@ mod tests {
                         }),
                         output,
                     ),
-                    contract_path: format!("contracts/{id}.json"),
+                    contract_path: format!("registry/{id}.json"),
                     artifact: CapabilityArtifactRecord {
                         artifact_ref: format!("artifact-{id}"),
                         implementation_kind: ImplementationKind::Executable,
@@ -2214,7 +2426,7 @@ mod tests {
                         binary: Some(BinaryReference {
                             format: BinaryFormat::Wasm,
                             location: format!("{id}.wasm"),
-                            signature: None,
+                            signature: signature.clone(),
                         }),
                         workflow_ref: None,
                         digests: ArtifactDigests {
@@ -2244,7 +2456,7 @@ mod tests {
     }
 
     fn strict_input_capability_registry_fixture() -> CapabilityRegistry {
-        build_capability_registry(true)
+        build_capability_registry(true, None)
     }
 
     fn workflow_registry_fixture() -> WorkflowRegistry {
