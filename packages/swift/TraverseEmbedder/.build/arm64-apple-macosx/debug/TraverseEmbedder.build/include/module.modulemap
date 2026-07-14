@@ -1,3 +1,0 @@
-module TraverseEmbedder {
-    header "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/include/TraverseEmbedder-Swift.h"
-}
