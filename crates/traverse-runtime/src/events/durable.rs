@@ -194,6 +194,16 @@ impl<B: EventBroker> EventBroker for DurableBroker<B> {
         self.inner.subscribe(event_type, from_cursor)
     }
 
+    fn subscribe_for_subject(
+        &self,
+        event_type: &str,
+        from_cursor: &str,
+        subject_id: Option<&str>,
+    ) -> Result<Subscription, EventError> {
+        self.inner
+            .subscribe_for_subject(event_type, from_cursor, subject_id)
+    }
+
     fn poll(
         &self,
         subscription_id: &str,
@@ -345,6 +355,8 @@ mod tests {
             owner: "test.capability".to_string(),
             version: "1.0.0".to_string(),
             lifecycle_status: LifecycleStatus::Active,
+            subject_id: None,
+            actor_id: None,
         }
     }
 
