@@ -9,3 +9,16 @@ the ordered runtime-shaped events recorded by the harness. It never starts
 
 The production runtime-WASM bridge, event subscription stream, package release
 evidence, and app-reference integration are tracked by Traverse #647.
+
+## Bundle compatibility
+
+Applications provide a bundle root URL, the runtime-WASM SHA-256 digest used
+for release traceability, and the bundle's embedder API version. The API version
+defaults to the package's `TraverseEmbedder.apiVersion`. Initialization rejects
+a bundle declaring a different version with `incompatibleBundle`; it does not
+start a sidecar or attempt a network fallback.
+
+The package follows semantic versioning. Additive, backward-compatible API
+changes use minor releases; breaking public API or error-semantic changes use a
+new major version. Call `shutdown()` to clear the active bundle, submission
+sequence, and recorded events before cancellation or replacement.

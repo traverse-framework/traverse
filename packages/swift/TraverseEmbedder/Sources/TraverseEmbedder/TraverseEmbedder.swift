@@ -8,13 +8,19 @@ public enum TraverseEmbedder {
 public struct TraverseBundle: Sendable, Equatable {
     public let rootURL: URL
     public let runtimeWasmDigest: String
+    public let embedderAPIVersion: String
 
-    public init(rootURL: URL, runtimeWasmDigest: String) throws {
+    public init(
+        rootURL: URL,
+        runtimeWasmDigest: String,
+        embedderAPIVersion: String = TraverseEmbedder.apiVersion
+    ) throws {
         guard !runtimeWasmDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw TraverseEmbedderError.incompatibleBundle("runtime WASM digest is required")
         }
         self.rootURL = rootURL
         self.runtimeWasmDigest = runtimeWasmDigest
+        self.embedderAPIVersion = embedderAPIVersion
     }
 }
 
@@ -72,6 +78,11 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
 
     public func initialize(bundle: TraverseBundle) throws {
         guard self.bundle == nil else { throw TraverseEmbedderError.alreadyInitialized }
+        guard bundle.embedderAPIVersion == TraverseEmbedder.apiVersion else {
+            throw TraverseEmbedderError.incompatibleBundle(
+                "embedder API \(bundle.embedderAPIVersion) is incompatible with \(TraverseEmbedder.apiVersion)"
+            )
+        }
         self.bundle = bundle
     }
 
