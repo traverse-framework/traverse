@@ -8,6 +8,6 @@
 traverse-contracts 100
 traverse-registry 100
 traverse-runtime 100
-traverse-cli 86
+traverse-cli 87
 traverse-embedder 100
 traverse-mcp 98
