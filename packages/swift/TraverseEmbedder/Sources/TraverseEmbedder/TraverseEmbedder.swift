@@ -48,11 +48,25 @@ public struct TraverseSubmissionResult: Sendable, Equatable {
     }
 }
 
+/// Ordered runtime-shaped event exposed by the deterministic conformance harness.
+public struct TraverseRuntimeEvent: Sendable, Equatable {
+    public let sequence: Int
+    public let targetID: String
+    public let status: String
+
+    public init(sequence: Int, targetID: String, status: String) {
+        self.sequence = sequence
+        self.targetID = targetID
+        self.status = status
+    }
+}
+
 /// Deterministic conformance harness for applications and package tests.
 /// It deliberately does not execute application business logic.
 public final class InMemoryTraverseEmbedder: @unchecked Sendable {
     private var bundle: TraverseBundle?
     private var submissionSequence = 0
+    private var events: [TraverseRuntimeEvent] = []
 
     public init() {}
 
@@ -64,15 +78,30 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
     public func shutdown() {
         bundle = nil
         submissionSequence = 0
+        events = []
     }
 
     public func submit(_ submission: TraverseSubmission) throws -> TraverseSubmissionResult {
         guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
         submissionSequence += 1
-        return TraverseSubmissionResult(
+        let result = TraverseSubmissionResult(
             sessionID: "swift-session-\(submissionSequence)",
             status: "accepted"
         )
+        events.append(
+            TraverseRuntimeEvent(
+                sequence: submissionSequence,
+                targetID: submission.targetID,
+                status: result.status
+            )
+        )
+        return result
+    }
+
+    /// Returns the ordered runtime-shaped events emitted after a sequence cursor.
+    public func subscribe(after sequence: Int = 0) throws -> [TraverseRuntimeEvent] {
+        guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
+        return events.filter { $0.sequence > sequence }
     }
 
     public func compatibleStart(capabilityID: String, inputJSON: Data) throws -> TraverseSubmissionResult {
