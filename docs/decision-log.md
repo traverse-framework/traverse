@@ -405,3 +405,31 @@ can become Ready only when its usable SDK exists.
 The decision log is the authoritative design record. Spec 068 and its tickets
 are derived traceability artifacts; they must not reopen this accepted
 direction for a second design review.
+
+## Decision 19: Keep Doc Approval on the Existing Analyze Contract
+
+- **Date**: 2026-07-14
+- **Status**: Accepted
+- **Governing spec**: `069-doc-approval-pipeline-canonicalization`
+- **Related issues**: `#538`, `#555`; App References `#111`, `#112`
+
+### Context
+
+Traverse already ships the deterministic `doc-approval.analyze@1.0.0` contract,
+agent, manifest, and runtime request path. #538 proposed a distinct
+`doc-approval.extract` capability with an incompatible nested output schema,
+which would duplicate the public surface and require a migration without a
+separate product need.
+
+### Decision
+
+Use `doc-approval.analyze` as the canonical first step of the doc-approval
+pipeline. Implement only `doc-approval.recommend` as the second step and make
+the pipeline `analyze -> recommend`. Do not introduce `doc-approval.extract`
+or a migration from the established analysis contract.
+
+### Outcome
+
+#538 is superseded. #555 can implement the deterministic recommendation step;
+the App Reference pipeline and manifests then follow that canonical two-step
+contract.
