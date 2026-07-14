@@ -8251,6 +8251,25 @@ mod tests {
         assert_eq!(json["auth_mode"], "bearer-required");
     }
 
+    #[test]
+    fn server_discovery_reports_a_filesystem_error_when_repo_root_is_a_file() {
+        let repo_root = test_registry_root();
+        std::fs::create_dir_all(&repo_root).expect("fixture root must be created");
+        let file_root = repo_root.join("not-a-directory");
+        std::fs::write(&file_root, "fixture").expect("fixture file must be written");
+
+        let error = write_server_discovery(
+            &file_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect",
+            None,
+        )
+        .expect_err("a file cannot contain the .traverse directory");
+
+        assert!(error.contains("failed to create .traverse directory"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn token_bearing_discovery_file_is_owner_read_write_only() {
