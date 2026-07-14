@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Lifecycle status of an event type in the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +140,57 @@ pub trait EventBroker: Send + Sync {
     ///
     /// Returns [`EventError::SubscriptionNotFound`] if the subscription id is unknown.
     fn cancel(&self, subscription_id: &str) -> Result<(), EventError>;
+}
+
+/// Narrow runtime boundary for publishing lifecycle envelopes.
+///
+/// The runtime depends on this seam rather than a concrete broker so embedders
+/// can choose an in-memory broker, durable broker, or a no-op delivery policy.
+pub trait RuntimeEventSink: Send + Sync + std::fmt::Debug {
+    /// Deliver one already-materialized runtime lifecycle envelope.
+    ///
+    /// # Errors
+    ///
+    /// Implementations return an error when the configured delivery mechanism
+    /// cannot accept the envelope. Runtime execution remains authoritative and
+    /// reports delivery failures as warnings.
+    fn emit(&self, event: TraverseEvent) -> Result<(), EventError>;
+}
+
+/// Default sink used by existing runtime constructors.
+#[derive(Debug, Default)]
+pub struct NoopRuntimeEventSink;
+
+impl RuntimeEventSink for NoopRuntimeEventSink {
+    fn emit(&self, _event: TraverseEvent) -> Result<(), EventError> {
+        Ok(())
+    }
+}
+
+/// Adapter that routes runtime lifecycle envelopes through an event broker.
+pub struct BrokerEventSink {
+    broker: Arc<dyn EventBroker>,
+}
+
+impl BrokerEventSink {
+    #[must_use]
+    pub fn new(broker: Arc<dyn EventBroker>) -> Self {
+        Self { broker }
+    }
+}
+
+impl std::fmt::Debug for BrokerEventSink {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrokerEventSink")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RuntimeEventSink for BrokerEventSink {
+    fn emit(&self, event: TraverseEvent) -> Result<(), EventError> {
+        self.broker.publish(event)
+    }
 }
 
 /// A broker-issued event cursor string.
