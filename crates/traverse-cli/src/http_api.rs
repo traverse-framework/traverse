@@ -11224,6 +11224,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn unknown_auth_mode_is_never_a_trusted_development_caller() {
+        assert!(!is_trusted_dev_caller(
+            IpAddr::from([127, 0, 0, 1]),
+            "production"
+        ));
+    }
+
     // ------------------------------------------------------------------
     // error envelope shape
     // ------------------------------------------------------------------
