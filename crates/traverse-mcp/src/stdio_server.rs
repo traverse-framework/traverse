@@ -1039,9 +1039,7 @@ pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServe
     let runtime = Box::leak(Box::new(
         Runtime::new(canonical_execution.capabilities, ExpeditionExampleExecutor)
             .with_workflow_registry(canonical_execution.workflows)
-            .with_security_config(
-                traverse_runtime::security::RuntimeSecurityConfig::development(),
-            ),
+            .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development()),
     ));
     let mcp = Box::leak(Box::new(TraverseMcp::new(
         capability_registry,

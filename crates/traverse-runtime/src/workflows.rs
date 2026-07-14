@@ -1130,12 +1130,11 @@ mod tests {
     };
     use traverse_registry::{
         ArtifactDigests, ArtifactSignature, ArtifactSignatureScheme, BinaryFormat, BinaryReference,
-        CapabilityArtifactRecord,
-        CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata, CompositionKind,
-        CompositionPattern, ImplementationKind, RegistryProvenance, RegistryScope, SourceKind,
-        SourceReference, WorkflowDefinition, WorkflowEdge, WorkflowEdgeTrigger, WorkflowNode,
-        WorkflowNodeInput, WorkflowNodeOutput, WorkflowRegistration, WorkflowRegistry,
-        WorkflowRegistryRecord, workflow_artifact_record,
+        CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
+        ComposabilityMetadata, CompositionKind, CompositionPattern, ImplementationKind,
+        RegistryProvenance, RegistryScope, SourceKind, SourceReference, WorkflowDefinition,
+        WorkflowEdge, WorkflowEdgeTrigger, WorkflowNode, WorkflowNodeInput, WorkflowNodeOutput,
+        WorkflowRegistration, WorkflowRegistry, WorkflowRegistryRecord, workflow_artifact_record,
     };
 
     #[test]
