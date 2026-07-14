@@ -18,10 +18,14 @@ data class TraverseSubmission(val targetId: String, val inputJson: String) {
 
 data class TraverseSubmissionResult(val sessionId: String, val status: String)
 
+/** Ordered runtime-shaped event exposed by the deterministic conformance harness. */
+data class TraverseRuntimeEvent(val sequence: Int, val targetId: String, val status: String)
+
 /** Deterministic test double; it never evaluates application business logic. */
 class InMemoryTraverseEmbedder {
     private var bundle: TraverseBundle? = null
     private var submissionSequence = 0
+    private val events = mutableListOf<TraverseRuntimeEvent>()
 
     fun initialize(bundle: TraverseBundle) {
         check(this.bundle == null) { "embedder is already initialized" }
@@ -31,12 +35,21 @@ class InMemoryTraverseEmbedder {
     fun shutdown() {
         bundle = null
         submissionSequence = 0
+        events.clear()
     }
 
     fun submit(submission: TraverseSubmission): TraverseSubmissionResult {
         check(bundle != null) { "embedder is not initialized" }
         submissionSequence += 1
-        return TraverseSubmissionResult("kotlin-session-$submissionSequence", "accepted")
+        val result = TraverseSubmissionResult("kotlin-session-$submissionSequence", "accepted")
+        events += TraverseRuntimeEvent(submissionSequence, submission.targetId, result.status)
+        return result
+    }
+
+    /** Returns ordered runtime-shaped events emitted after the supplied cursor. */
+    fun subscribe(afterSequence: Int = 0): List<TraverseRuntimeEvent> {
+        check(bundle != null) { "embedder is not initialized" }
+        return events.filter { it.sequence > afterSequence }
     }
 
     fun compatibleStart(capabilityId: String, inputJson: String) =
