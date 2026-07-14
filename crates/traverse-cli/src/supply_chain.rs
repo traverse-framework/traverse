@@ -273,16 +273,10 @@ fn verify_signature(manifest: Option<&ArtifactManifest>) -> CheckEvidence {
             }
         }
         "sigstore" | "Sigstore" => match manifest.sigstore_bundle_ref.as_deref() {
-            Some(bundle_ref) if bundle_ref.starts_with("verified://") => CheckEvidence {
-                status: CheckStatus::Verified,
-                message: "sigstore bundle reference is pre-verified".to_string(),
-                expected: Some("verified:// bundle reference".to_string()),
-                actual: Some(bundle_ref.to_string()),
-            },
             Some(bundle_ref) => CheckEvidence {
                 status: CheckStatus::Invalid,
-                message: "sigstore bundle reference is not verified".to_string(),
-                expected: Some("verified:// bundle reference".to_string()),
+                message: "sigstore bundle references require Rekor/Fulcio verification".to_string(),
+                expected: Some("verified Sigstore bundle evidence".to_string()),
                 actual: Some(bundle_ref.to_string()),
             },
             None => CheckEvidence {
@@ -512,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn verifies_manifest_json_input_with_relative_artifact_and_sigstore() {
+    fn rejects_placeholder_sigstore_bundle_in_manifest_json_input() {
         let dir = temp_dir("supply-chain-manifest-json");
         let artifact = dir.join("artifact.bin");
         let manifest = dir.join("manifest.json");
@@ -548,9 +542,9 @@ mod tests {
 
         let report = verify_artifact(&manifest);
 
-        assert_eq!(report.overall_status, OverallStatus::Passed);
+        assert_eq!(report.overall_status, OverallStatus::Failed);
         assert_eq!(report.checksum_status, CheckStatus::Matched);
-        assert_eq!(report.signature_status, CheckStatus::Verified);
+        assert_eq!(report.signature_status, CheckStatus::Invalid);
         assert_eq!(report.provenance_status, CheckStatus::Verified);
     }
 
