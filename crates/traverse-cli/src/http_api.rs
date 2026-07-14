@@ -9191,6 +9191,22 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_retention_normalizes_default_floor_and_explicit_values() {
+        assert_eq!(
+            configured_idempotency_retention(None),
+            DEFAULT_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert_eq!(
+            configured_idempotency_retention(Some(1)),
+            MIN_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert_eq!(
+            configured_idempotency_retention(Some(MIN_IDEMPOTENCY_RETENTION_SECONDS + 1)),
+            MIN_IDEMPOTENCY_RETENTION_SECONDS + 1
+        );
+    }
+
+    #[test]
     fn execution_status_endpoint_returns_running_status() {
         let state = empty_state();
         state
