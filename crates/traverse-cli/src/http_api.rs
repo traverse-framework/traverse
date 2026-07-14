@@ -9276,6 +9276,43 @@ mod tests {
     }
 
     #[test]
+    fn in_process_api_initializes_system_workspace_and_configured_state() {
+        let registry_root = test_registry_root();
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: vec!["http://127.0.0.1:3000".to_string()],
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root: registry_root.clone(),
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: Some(1),
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+
+        assert!(api.state.allow_unauthenticated);
+        assert_eq!(api.state.allowed_origins, ["http://127.0.0.1:3000"]);
+        assert_eq!(api.state.registry_root, registry_root);
+        assert_eq!(
+            api.state.idempotency_retention_seconds,
+            MIN_IDEMPOTENCY_RETENTION_SECONDS
+        );
+        assert!(
+            api.state
+                .workspaces
+                .lock()
+                .expect("workspace lock must not be poisoned")
+                .contains_key(SYSTEM_WORKSPACE_ID)
+        );
+    }
+
+    #[test]
     fn execution_status_endpoint_returns_running_status() {
         let state = empty_state();
         state
