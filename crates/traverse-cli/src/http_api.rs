@@ -8270,6 +8270,25 @@ mod tests {
         assert!(error.contains("failed to create .traverse directory"));
     }
 
+    #[test]
+    fn server_discovery_reports_a_filesystem_error_when_server_file_is_a_directory() {
+        let repo_root = test_registry_root();
+        let server_path = repo_root.join(".traverse/server.json");
+        std::fs::create_dir_all(&server_path).expect("server path directory must be created");
+
+        let error = write_server_discovery(
+            &repo_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect",
+            None,
+        )
+        .expect_err("a directory cannot receive server discovery JSON");
+
+        assert!(error.contains("failed to write"));
+        assert!(error.contains("server.json"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn token_bearing_discovery_file_is_owner_read_write_only() {
