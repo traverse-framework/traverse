@@ -8233,6 +8233,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn server_discovery_file_omits_local_token_when_none_was_minted() {
+        let repo_root = test_registry_root();
+        let discovery_path = write_server_discovery(
+            &repo_root,
+            "http://127.0.0.1:8787",
+            "bearer-required",
+            "traverse://connect?base_url=http%3A%2F%2F127.0.0.1%3A8787",
+            None,
+        )
+        .expect("discovery file must be written");
+
+        let body = std::fs::read_to_string(&discovery_path).expect("discovery file must be read");
+        let json: Value = serde_json::from_str(&body).expect("discovery must be valid json");
+        assert!(json.get("local_dev_token").is_none());
+        assert_eq!(json["auth_mode"], "bearer-required");
+    }
+
     #[cfg(unix)]
     #[test]
     fn token_bearing_discovery_file_is_owner_read_write_only() {
