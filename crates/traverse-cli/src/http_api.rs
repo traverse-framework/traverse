@@ -7164,6 +7164,18 @@ mod tests {
     };
     use traverse_runtime::{LocalExecutionFailure, LocalExecutionFailureCode};
 
+    #[test]
+    fn serve_error_display_keeps_bind_and_accept_context() {
+        assert_eq!(
+            ServeError::BindFailed("address in use".to_string()).to_string(),
+            "failed to bind HTTP/JSON API server: address in use"
+        );
+        assert_eq!(
+            ServeError::AcceptFailed("socket closed".to_string()).to_string(),
+            "HTTP/JSON API server accept loop failed: socket closed"
+        );
+    }
+
     // ------------------------------------------------------------------
     // Minimal test executor
     // ------------------------------------------------------------------
