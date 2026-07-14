@@ -804,6 +804,20 @@
         "docs/embedder-sdk/",
         "specs/068-public-platform-embedder-packages/"
       ]
+    },
+    {
+      "id": "069-doc-approval-pipeline-canonicalization",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/069-doc-approval-pipeline-canonicalization/spec.md",
+      "governs": [
+        "contracts/examples/doc-approval/",
+        "examples/doc-approval/",
+        "apps/doc-approval/",
+        "workflows/examples/",
+        "specs/069-doc-approval-pipeline-canonicalization/"
+      ]
     }
   ]
 }
