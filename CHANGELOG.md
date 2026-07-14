@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added the deterministic `doc-approval.recommend` capability and canonical
+  `doc-approval.pipeline` workflow (`analyze` then `recommend`, no extract
+  step), completing the spec 069 pipeline with contract, agent package,
+  component manifest, bundle wiring, and runtime integration tests; removed
+  the superseded extract-based pipeline drafts.
+
 - Added the public `traverse-embedder` crate: the Rust embedder SDK for Linux
   GTK and CLI clients implementing every `embedder-api/1.0.0` operation
   (init/shutdown/submit/subscribe and compatible start/stop/kill) against an
