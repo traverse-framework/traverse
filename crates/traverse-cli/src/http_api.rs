@@ -8990,6 +8990,45 @@ mod tests {
     }
 
     #[test]
+    fn workspace_execute_endpoint_rejects_simplified_request_without_capability_id() {
+        let body = json!({"input": {"value": "demo"}}).to_string().into_bytes();
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+
+        let mut out = Vec::new();
+        handle_execute_workspace(&mut out, &req, &state, true, "ws-test")
+            .expect("invalid request must write a response");
+
+        assert_eq!(response_status(&out), 400);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "invalid_request"
+        );
+    }
+
+    #[test]
+    fn workspace_execute_endpoint_rejects_blank_simplified_capability_id() {
+        let body = json!({
+            "capability_id": "  ",
+            "input": {"value": "demo"}
+        })
+        .to_string()
+        .into_bytes();
+        let state = test_state_with("test.api.do-something", "1.0.0");
+        let req = make_http_request("POST", "/v1/workspaces/ws-test/execute", body);
+
+        let mut out = Vec::new();
+        handle_execute_workspace(&mut out, &req, &state, true, "ws-test")
+            .expect("invalid request must write a response");
+
+        assert_eq!(response_status(&out), 400);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "invalid_request"
+        );
+    }
+
+    #[test]
     fn workspace_execute_endpoint_returns_async_accepted_envelope_for_prefer_header() {
         let body = make_runtime_request_body("test.api.do-something");
         let state = test_state_with("test.api.do-something", "1.0.0");

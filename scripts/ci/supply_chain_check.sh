@@ -113,8 +113,9 @@ cat > "${artifact_one}.manifest.json" <<JSON
   "artifact_path": "${artifact_one}",
   "checksum_algorithm": "sha256",
   "checksum_sha256": "${hash_one}",
-  "signing_scheme": "sigstore",
-  "sigstore_bundle_ref": "verified://local-ci-placeholder",
+  "signing_scheme": "ed25519",
+  "public_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
   "provenance_path": "${provenance_path}"
 }
 JSON

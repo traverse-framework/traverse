@@ -335,23 +335,9 @@ fn signature_verification_failed(trust_level: ArtifactTrustLevel) -> ArtifactVer
 }
 
 fn verify_sigstore(
-    signature: &ArtifactSignature,
+    _signature: &ArtifactSignature,
     trust_level: ArtifactTrustLevel,
 ) -> Result<ArtifactVerificationRecord, ArtifactVerificationFailure> {
-    if signature
-        .sigstore_bundle_ref
-        .as_deref()
-        .is_some_and(|bundle| bundle.starts_with("verified://"))
-    {
-        return Ok(ArtifactVerificationRecord {
-            status: ArtifactVerificationStatus::Verified,
-            trust_level,
-            scheme: Some(ArtifactVerificationScheme::Sigstore),
-            warning_code: None,
-            error_code: None,
-        });
-    }
-
     let record = rejected_record(
         trust_level,
         Some(ArtifactVerificationScheme::Sigstore),

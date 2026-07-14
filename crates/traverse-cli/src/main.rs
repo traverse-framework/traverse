@@ -5828,6 +5828,26 @@ mod tests {
     }
 
     #[test]
+    fn app_new_rejects_invalid_and_existing_scaffold_ids_without_overwriting_files() {
+        let temp_dir = unique_temp_dir();
+
+        let invalid = app_new_at(&temp_dir, "not a valid app", false, None)
+            .expect_err("spaces must be rejected in scaffold ids");
+        assert!(invalid.message().contains("app id"));
+        assert!(!temp_dir.join("apps/not a valid app").exists());
+
+        app_new_at(&temp_dir, "youaskm3", false, None).expect("first scaffold should be created");
+        let duplicate = app_new_at(&temp_dir, "youaskm3", false, None)
+            .expect_err("an existing scaffold must not be overwritten");
+        assert!(
+            duplicate
+                .message()
+                .contains("app scaffold target already exists")
+        );
+        assert!(temp_dir.join("apps/youaskm3/manifest.json").is_file());
+    }
+
+    #[test]
     fn component_new_generates_manifest_contract_and_non_executable_package() {
         let temp_dir = unique_temp_dir();
 
