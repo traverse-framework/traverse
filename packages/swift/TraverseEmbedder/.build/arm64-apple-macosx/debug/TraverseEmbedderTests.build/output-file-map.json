@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/primary.swiftdeps"
+  },
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/TraverseEmbedderTests.swift": {
+    "dependencies": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.d",
+    "object": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swift.o",
+    "swiftmodule": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests~partial.swiftmodule",
+    "swift-dependencies": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swiftdeps",
+    "diagnostics": "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.dia"
+  }
+}
