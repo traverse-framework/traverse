@@ -592,6 +592,47 @@ mod tests {
     }
 
     #[test]
+    fn subject_subscription_filters_backlog_and_live_delivery() {
+        let event_type = "dev.traverse.subject-filter";
+        let broker = InProcessBroker::new(make_catalog(event_type, LifecycleStatus::Active))
+            .expect("broker must be created");
+        let mut other = sample_event(event_type, "evt-other");
+        other.subject_id = Some("subject-other".to_string());
+        let mut expected = sample_event(event_type, "evt-match");
+        expected.subject_id = Some("subject-match".to_string());
+        broker.publish(other).expect("backlog publish must succeed");
+        broker
+            .publish(expected.clone())
+            .expect("backlog publish must succeed");
+
+        let subscription = broker
+            .subscribe_for_subject(event_type, "0", Some("subject-match"))
+            .expect("subject subscription must succeed");
+        let backlog = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("backlog poll must succeed");
+        assert_eq!(backlog.events.len(), 1);
+        assert_eq!(backlog.events[0].event.id, expected.id);
+
+        let mut live_other = sample_event(event_type, "evt-live-other");
+        live_other.subject_id = Some("subject-other".to_string());
+        let mut live_expected = sample_event(event_type, "evt-live-match");
+        live_expected.subject_id = Some("subject-match".to_string());
+        broker
+            .publish(live_other)
+            .expect("non-matching live publish must succeed");
+        broker
+            .publish(live_expected.clone())
+            .expect("matching live publish must succeed");
+
+        let live = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("live poll must succeed");
+        assert_eq!(live.events.len(), 1);
+        assert_eq!(live.events[0].event.id, live_expected.id);
+    }
+
+    #[test]
     fn publish_rejects_deprecated_and_draft_event_types() {
         let deprecated = InProcessBroker::new(make_catalog(
             "dev.traverse.deprecated",

@@ -445,6 +445,38 @@ mod tests {
     }
 
     #[test]
+    fn durable_subject_subscription_delegates_to_inner_broker() {
+        let root = test_root("subject-subscription");
+        let journal = DurableEventJournal::open(
+            &root,
+            JournalConfig::default(),
+            Arc::new(crate::events::broker::SystemClock),
+        )
+        .expect("journal must open");
+        let broker = DurableBroker::new(
+            inner_broker(),
+            journal,
+            DurableBrokerConfig::default(),
+            Arc::new(RecordingAudit::default()),
+        );
+        let mut event = test_event();
+        event.subject_id = Some("subject-match".to_string());
+        broker.publish(event).expect("publish must succeed");
+
+        let subscription = broker
+            .subscribe_for_subject(EVENT_TYPE, "0", Some("subject-match"))
+            .expect("subject subscription must succeed");
+        let poll = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("poll must succeed");
+        assert_eq!(poll.events.len(), 1);
+        assert_eq!(
+            poll.events[0].event.subject_id.as_deref(),
+            Some("subject-match")
+        );
+    }
+
+    #[test]
     fn undeliverable_event_is_revoked_after_durable_write() {
         let (gate_tx, gate_rx) = channel();
         let (revoked_tx, revoked_rx) = channel();
