@@ -8267,6 +8267,19 @@ mod tests {
     }
 
     #[test]
+    fn local_dev_token_has_a_scoped_nonempty_suffix() {
+        let token = mint_local_dev_token("127.0.0.1:8787");
+        let prefix = format!("trv_local_{}_", std::process::id());
+
+        assert!(token.starts_with(&prefix));
+        assert!(
+            token
+                .strip_prefix(&prefix)
+                .is_some_and(|suffix| !suffix.is_empty())
+        );
+    }
+
+    #[test]
     fn server_discovery_file_records_dev_any_bind_address() {
         let repo_root = test_registry_root();
         let discovery_path = write_server_discovery(
