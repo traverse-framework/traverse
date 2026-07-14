@@ -2,6 +2,7 @@
 members = [
   "crates/traverse-cli",
   "crates/traverse-contracts",
+  "crates/traverse-embedder",
   "crates/traverse-expedition-wasm",
   "crates/traverse-mcp",
   "crates/traverse-registry",
