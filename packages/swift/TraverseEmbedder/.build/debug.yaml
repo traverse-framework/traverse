@@ -1,0 +1,112 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "PackageStructure": ["<PackageStructure>"]
+  "TraverseEmbedder-arm64-apple-macosx-debug.module": ["<TraverseEmbedder-arm64-apple-macosx-debug.module>"]
+  "TraverseEmbedderPackageTests-arm64-apple-macosx-debug.module": ["<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.module>"]
+  "TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test": ["<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test>"]
+  "TraverseEmbedderTests-arm64-apple-macosx-debug.module": ["<TraverseEmbedderTests-arm64-apple-macosx-debug.module>"]
+  "main": ["<TraverseEmbedder-arm64-apple-macosx-debug.module>"]
+  "test": ["<TraverseEmbedder-arm64-apple-macosx-debug.module>","<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test>","<TraverseEmbedderTests-arm64-apple-macosx-debug.module>"]
+default: "main"
+nodes:
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Sources/TraverseEmbedder/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Sources/TraverseEmbedder/TraverseEmbedder.swift"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/sources"]
+    description: "Write auxiliary file /private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/sources"
+
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.derived/runner.swift"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/sources"]
+    description: "Write auxiliary file /private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/sources"
+
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.derived/runner.swift":
+    tool: test-entry-point-tool
+    inputs: []
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.derived/runner.swift"]
+
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/TraverseEmbedder.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/runner.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swift.o"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.product/Objects.LinkFileList"
+
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/TraverseEmbedderTests.swift"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/sources"]
+    description: "Write auxiliary file /private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/sources"
+
+  "/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<TraverseEmbedder-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/TraverseEmbedder.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedder.swiftmodule"]
+    outputs: ["<TraverseEmbedder-arm64-apple-macosx-debug.module>"]
+
+  "<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/runner.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderPackageTests.swiftmodule"]
+    outputs: ["<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.module>"]
+
+  "<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test>":
+    tool: phony
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.xctest/Contents/MacOS/TraverseEmbedderPackageTests"]
+    outputs: ["<TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test>"]
+
+  "<TraverseEmbedderTests-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderTests.swiftmodule"]
+    outputs: ["<TraverseEmbedderTests-arm64-apple-macosx-debug.module>"]
+
+  "C.TraverseEmbedder-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Sources/TraverseEmbedder/TraverseEmbedder.swift","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/sources"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/TraverseEmbedder.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedder.swiftmodule"]
+    description: "Compiling Swift Module 'TraverseEmbedder' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","TraverseEmbedder","-emit-dependencies","-emit-module","-emit-module-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedder.swiftmodule","-output-file-map","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/output-file-map.json","-parse-as-library","-incremental","-c","@/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/sources","-I","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/include/TraverseEmbedder-Swift.h","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","traverseembedder"]
+
+  "C.TraverseEmbedderPackageTests-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.derived/runner.swift","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderTests.swiftmodule","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/sources"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/runner.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderPackageTests.swiftmodule"]
+    description: "Compiling Swift Module 'TraverseEmbedderPackageTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","TraverseEmbedderPackageTests","-emit-dependencies","-emit-module","-emit-module-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderPackageTests.swiftmodule","-output-file-map","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/sources","-I","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/include/TraverseEmbedderPackageTests-Swift.h","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","traverseembedder"]
+
+  "C.TraverseEmbedderPackageTests-arm64-apple-macosx-debug.test":
+    tool: shell
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedder.build/TraverseEmbedder.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.build/runner.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.product/Objects.LinkFileList"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.xctest/Contents/MacOS/TraverseEmbedderPackageTests"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.xctest/Contents/MacOS/TraverseEmbedderPackageTests"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug","-o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.xctest/Contents/MacOS/TraverseEmbedderPackageTests","-module-name","TraverseEmbedderPackageTests","-Xlinker","-no_warn_duplicate_libraries","-Xlinker","-bundle","-Xlinker","-rpath","-Xlinker","@loader_path/../../../","@/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderPackageTests.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedder.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderPackageTests.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderTests.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.TraverseEmbedderTests-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/TraverseEmbedderTests.swift","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedder.swiftmodule","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/sources"]
+    outputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/TraverseEmbedderTests.swift.o","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderTests.swiftmodule"]
+    description: "Compiling Swift Module 'TraverseEmbedderTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","TraverseEmbedderTests","-emit-dependencies","-emit-module","-emit-module-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules/TraverseEmbedderTests.swiftmodule","-output-file-map","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/TraverseEmbedderTests.build/sources","-I","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","traverseembedder"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Sources/TraverseEmbedder/","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Package.swift","/private/tmp/traverse-issue-647/packages/swift/TraverseEmbedder/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+
