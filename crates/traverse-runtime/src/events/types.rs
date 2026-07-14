@@ -116,6 +116,11 @@ pub trait EventBroker: Send + Sync {
     fn subscribe(&self, event_type: &str, from_cursor: &str) -> Result<Subscription, EventError>;
 
     /// Create a subscription optionally limited to one event subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::subscribe`] when the event type or
+    /// cursor is invalid.
     fn subscribe_for_subject(
         &self,
         event_type: &str,
@@ -227,6 +232,22 @@ pub struct SubscriptionPoll {
 mod tests {
     use super::*;
 
+    fn sample_event(event_type: &str) -> TraverseEvent {
+        TraverseEvent {
+            id: "f0f83e66-4d87-4dd6-884d-0128d94f730f".to_string(),
+            source: "traverse-runtime".to_string(),
+            event_type: event_type.to_string(),
+            datacontenttype: "application/json".to_string(),
+            time: "2026-07-14T00:00:00Z".to_string(),
+            data: serde_json::json!({"execution_id": "exec_test"}),
+            owner: "traverse-runtime".to_string(),
+            version: "1.0.0".to_string(),
+            lifecycle_status: LifecycleStatus::Active,
+            subject_id: Some("subject_test".to_string()),
+            actor_id: Some("actor_test".to_string()),
+        }
+    }
+
     #[test]
     fn event_error_display_covers_all_variants() {
         let cases: Vec<EventError> = vec![
@@ -247,5 +268,48 @@ mod tests {
             let rendered = err.to_string();
             assert!(!rendered.is_empty());
         }
+    }
+
+    #[test]
+    fn noop_runtime_event_sink_accepts_an_envelope() {
+        assert!(
+            NoopRuntimeEventSink
+                .emit(sample_event("dev.traverse.noop"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn broker_event_sink_forwards_the_original_envelope() {
+        let event_type = "dev.traverse.runtime.execution.completed";
+        let catalog = Arc::new(crate::events::EventCatalog::new());
+        catalog
+            .register(crate::events::EventCatalogEntry {
+                event_type: event_type.to_string(),
+                owner: "traverse-runtime".to_string(),
+                version: "1.0.0".to_string(),
+                lifecycle_status: LifecycleStatus::Active,
+                consumer_count: 0,
+            })
+            .expect("catalog registration must succeed");
+        let broker =
+            Arc::new(crate::events::InProcessBroker::new(catalog).expect("broker must be created"));
+        let sink = BrokerEventSink::new(broker.clone());
+        let event = sample_event(event_type);
+
+        sink.emit(event.clone())
+            .expect("sink delivery must succeed");
+        let subscription = broker
+            .subscribe_for_subject(event_type, "0", Some("subject_test"))
+            .expect("subject subscription must succeed");
+        let delivered = broker
+            .poll(&subscription.subscription_id, 1)
+            .expect("poll must succeed");
+
+        assert_eq!(format!("{sink:?}"), "BrokerEventSink { .. }");
+        assert_eq!(delivered.events.len(), 1);
+        assert_eq!(delivered.events[0].event.subject_id, event.subject_id);
+        assert_eq!(delivered.events[0].event.actor_id, event.actor_id);
+        assert_eq!(delivered.events[0].event.data, event.data);
     }
 }
