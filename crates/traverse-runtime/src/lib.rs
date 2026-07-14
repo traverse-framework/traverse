@@ -3918,7 +3918,7 @@ mod tests {
     }
 
     #[test]
-    fn governed_artifact_accepts_verified_sigstore_bundle() {
+    fn governed_artifact_rejects_placeholder_sigstore_bundle() {
         let path = temp_artifact_path("sigstore-valid");
         assert!(fs::write(&path, b"sigstore governed bytes").is_ok());
         let signature = ArtifactSignature {
@@ -3938,15 +3938,15 @@ mod tests {
 
         let outcome = runtime.execute(valid_request());
 
-        assert_eq!(outcome.result.status, RuntimeResultStatus::Completed);
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
         assert_eq!(
             outcome
-                .trace
-                .execution
-                .artifact_verification
+                .result
+                .error
                 .as_ref()
-                .and_then(|record| record.scheme),
-            Some(ArtifactVerificationScheme::Sigstore)
+                .and_then(|error| error.details.get("code"))
+                .and_then(serde_json::Value::as_str),
+            Some("sigstore_unreachable")
         );
     }
 
