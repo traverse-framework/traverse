@@ -9341,6 +9341,67 @@ mod tests {
     }
 
     #[test]
+    fn in_process_api_lists_an_authorized_empty_workspace() {
+        let registry_root = test_registry_root();
+        persist_local_test_workspace(&registry_root, "ws-authorized");
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root,
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: None,
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+
+        let (status, body) = api
+            .list_workflows("ws-authorized", true)
+            .expect("listing must render a JSON response");
+
+        assert_eq!(status, 200);
+        assert_eq!(body, json!([]));
+    }
+
+    #[test]
+    fn in_process_api_returns_not_found_for_missing_authorized_workflow() {
+        let registry_root = test_registry_root();
+        persist_local_test_workspace(&registry_root, "ws-authorized");
+        let api = InProcessApi::new(ApiServerConfig {
+            bind_address: "127.0.0.1:0".to_string(),
+            requested_auth_mode: None,
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            render_mobile_qr: false,
+            capability_registry: CapabilityRegistry::new(),
+            workflow_registry: WorkflowRegistry::new(),
+            registry_root,
+            executor: TestExecutor::ok(json!({})),
+            idempotency_retention_seconds: None,
+            jwt_verification_key_hex: None,
+            read_timeout: None,
+            write_timeout: None,
+            request_deadline: None,
+            max_concurrent_connections: None,
+        });
+
+        let (status, body) = api
+            .get_workflow("ws-authorized", "missing-workflow", None, true)
+            .expect("lookup must render a JSON response");
+
+        assert_eq!(status, 404);
+        assert_eq!(body["status"], 404);
+        assert_eq!(body["traverse_code"], "workflow_not_found");
+    }
+
+    #[test]
     fn execution_status_endpoint_returns_running_status() {
         let state = empty_state();
         state

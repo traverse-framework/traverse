@@ -6555,11 +6555,15 @@ mod tests {
 
         let registered =
             load_registered_bundle(&bundle_path).expect("starter bundle should register");
+        // Development security mode mirrors the CLI's own execution paths: the
+        // starter bundle ships unsigned local-dev artifacts, which the default
+        // production posture rejects on every workflow step (spec 030 FR-013).
         let runtime = traverse_runtime::Runtime::new(
             registered.capability_registry,
             ExpeditionExampleExecutor,
         )
-        .with_workflow_registry(registered.workflow_registry);
+        .with_workflow_registry(registered.workflow_registry)
+        .with_security_config(traverse_runtime::security::RuntimeSecurityConfig::development());
 
         let first_request =
             load_runtime_request(&request_path).expect("pipeline request should load");
