@@ -818,6 +818,19 @@
         "workflows/examples/",
         "specs/069-doc-approval-pipeline-canonicalization/"
       ]
+    },
+    {
+      "id": "070-runtime-event-sink-boundary",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/070-runtime-event-sink-boundary/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/",
+        "docs/",
+        "specs/070-runtime-event-sink-boundary/"
+      ]
     }
   ]
 }

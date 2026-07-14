@@ -433,3 +433,38 @@ or a migration from the established analysis contract.
 #538 is superseded. #555 can implement the deterministic recommendation step;
 the App Reference pipeline and manifests then follow that canonical two-step
 contract.
+
+## Decision 20: Make Runtime the Owner of Identity-Aware Event Envelopes
+
+- **Date**: 2026-07-14
+- **Status**: Accepted
+- **Governing spec**: `070-runtime-event-sink-boundary`
+- **Related issues**: `#591`, `#659`
+
+### Decision
+
+Runtime constructs complete identity-aware lifecycle event envelopes and emits
+them through a narrow injected event-sink interface. The broker is a sink
+adapter, not a concrete runtime dependency. Existing embedders retain a
+compatible default no-op/in-memory sink. Live delivery and durable replay share
+the same envelope and subject-filter semantics.
+
+### Outcome
+
+#591 can resume once Spec 070 lands; #659 then builds durable replay on the
+same identity/filter boundary rather than inventing a second path.
+
+## Decision 21: Defer Durable-Journal Storage Evolution Until Measurement
+
+- **Date**: 2026-07-14
+- **Status**: Accepted
+- **Governing specs**: `066-durable-identity-event-delivery`,
+  `067-durable-journal-retention-and-write-limits`
+- **Related issues**: `#629`, `#630`
+
+### Decision
+
+Keep the initial durable journal while #629 measures append latency, recovery,
+replay, retention compaction, and disk growth under representative workloads.
+Choose retain, SQLite, or a provider abstraction only from that evidence; no
+storage migration or abstraction is preselected.
