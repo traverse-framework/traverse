@@ -24,3 +24,21 @@ import Testing
         try harness.submit(TraverseSubmission(targetID: "demo.workflow", inputJSON: Data("{}".utf8)))
     }
 }
+
+@Test func incompatibleBundleIsRejectedWithoutInitializing() throws {
+    let harness = InMemoryTraverseEmbedder()
+    let bundle = try TraverseBundle(
+        rootURL: URL(fileURLWithPath: "/tmp/traverse-bundle"),
+        runtimeWasmDigest: "sha256:test",
+        embedderAPIVersion: "2.0.0"
+    )
+
+    #expect(throws: TraverseEmbedderError.incompatibleBundle(
+        "embedder API 2.0.0 is incompatible with 1.0.0"
+    )) {
+        try harness.initialize(bundle: bundle)
+    }
+    #expect(throws: TraverseEmbedderError.notInitialized) {
+        try harness.subscribe()
+    }
+}
