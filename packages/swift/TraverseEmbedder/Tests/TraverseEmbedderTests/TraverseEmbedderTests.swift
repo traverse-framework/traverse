@@ -42,3 +42,27 @@ import Testing
         try harness.subscribe()
     }
 }
+
+@Test func compatibleLifecycleIsDeterministicAndOrdered() throws {
+    let harness = InMemoryTraverseEmbedder()
+    try harness.initialize(bundle: TraverseBundle(
+        rootURL: URL(fileURLWithPath: "/tmp/traverse-bundle"),
+        runtimeWasmDigest: "sha256:test"
+    ))
+
+    let first = try harness.compatibleStart(capabilityID: "demo.compatible", inputJSON: Data("{}".utf8))
+    #expect(first == TraverseCompatibleResult(instanceID: "swift-compatible-1", status: "started"))
+    #expect(try harness.compatibleStop(capabilityID: "demo.compatible", instanceID: first.instanceID) == TraverseCompatibleResult(instanceID: "swift-compatible-1", status: "stopped"))
+    #expect(throws: TraverseEmbedderError.unsupportedOperation("compatible instance is not active")) {
+        try harness.compatibleKill(capabilityID: "demo.compatible", instanceID: first.instanceID)
+    }
+
+    let second = try harness.compatibleStart(capabilityID: "demo.compatible", inputJSON: Data("{}".utf8))
+    #expect(try harness.compatibleKill(capabilityID: "demo.compatible", instanceID: nil) == TraverseCompatibleResult(instanceID: "swift-compatible-2", status: "killed"))
+    #expect(try harness.subscribe() == [
+        TraverseRuntimeEvent(sequence: 1, targetID: "demo.compatible", status: "started", instanceID: first.instanceID),
+        TraverseRuntimeEvent(sequence: 2, targetID: "demo.compatible", status: "stopped", instanceID: first.instanceID),
+        TraverseRuntimeEvent(sequence: 3, targetID: "demo.compatible", status: "started", instanceID: second.instanceID),
+        TraverseRuntimeEvent(sequence: 4, targetID: "demo.compatible", status: "killed", instanceID: second.instanceID),
+    ])
+}
