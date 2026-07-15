@@ -95,7 +95,7 @@ struct DemoOutput: Decodable {
 
 enum DemoSessionRepository {
     static func sample() -> DemoSession {
-        let url = URL(fileURLWithPath: "apps/demo-fixtures/expedition-runtime-session.json")
+        let url = URL(fileURLWithPath: "examples/fixtures/expedition-runtime-session.json")
         let data = (try? Data(contentsOf: url)) ?? Data()
         let decoder = JSONDecoder()
 

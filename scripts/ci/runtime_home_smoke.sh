@@ -17,7 +17,7 @@ grep -q '.traverse/local/' "$doc"
 grep -q 'bin/' "$doc"
 grep -q 'fixtures/' "$doc"
 grep -q 'overlays/' "$doc"
-grep -q 'apps/demo-fixtures/' "$doc"
+grep -q 'examples/fixtures/' "$doc"
 grep -q 'package-local `./artifacts/` directories' "$doc"
 grep -q 'bash scripts/ci/runtime_home_smoke.sh' "$doc"
 

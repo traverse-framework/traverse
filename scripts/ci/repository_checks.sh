@@ -66,7 +66,7 @@ required_files=(
   "examples/hello-world/say-hello-agent/build-fixture.sh"
   "contracts/examples/hello-world/capabilities/say-hello/contract.json"
   "workflows/examples/hello-world/say-hello/workflow.json"
-  "apps/traverse-starter/app.manifest.json"
+  "examples/applications/traverse-starter/app.manifest.json"
   "apps/traverse-starter/components/process/component.manifest.json"
   "examples/traverse-starter/process-agent/manifest.json"
   "examples/traverse-starter/process-agent/build-fixture.sh"
@@ -328,7 +328,7 @@ grep -q "cargo run -p traverse-cli -- agent execute" examples/hello-world/README
 grep -q "hello.world.say-hello" examples/hello-world/README.md
 grep -q "traverse-starter.process" contracts/examples/traverse-starter/capabilities/process/contract.json
 grep -q "traverse-starter.process-agent" examples/traverse-starter/process-agent/manifest.json
-grep -q "traverse-starter.process-component" apps/traverse-starter/app.manifest.json
+grep -q "traverse-starter.process-component" examples/applications/traverse-starter/app.manifest.json
 grep -q "app validate --manifest \"\$app_manifest\" --json" scripts/ci/traverse_starter_example_smoke.sh
 grep -q "/v1/workspaces/local-default/execute" scripts/ci/traverse_starter_example_smoke.sh
 grep -q "starter_status: complete" scripts/ci/traverse_starter_example_smoke.sh
@@ -393,7 +393,7 @@ grep -q "newer for Phase 2 CLI registration" docs/releases/v0.5.0.md
 grep -q ".traverse/server.json" docs/releases/v0.5.0.md
 grep -q "schema version and discovery fields as \`v0.3.0\`" docs/releases/v0.5.0.md
 grep -q "Downstream App Registration Consumers" quickstart.md
-grep -q "apps/traverse-starter/app.manifest.json" quickstart.md
+grep -q "examples/applications/traverse-starter/app.manifest.json" quickstart.md
 grep -q "schema_version: \"1.0.0\"" quickstart.md
 grep -q "optional \`local_dev_token\`" quickstart.md
 grep -q "Traverse v0.6.0" docs/releases/v0.6.0.md

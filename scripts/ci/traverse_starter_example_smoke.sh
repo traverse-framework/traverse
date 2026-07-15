@@ -7,7 +7,7 @@ cd "$repo_root"
 
 agent_manifest="examples/traverse-starter/process-agent/manifest.json"
 agent_request="examples/traverse-starter/runtime-requests/process.json"
-app_manifest="apps/traverse-starter/app.manifest.json"
+app_manifest="examples/applications/traverse-starter/app.manifest.json"
 
 bash examples/traverse-starter/process-agent/build-fixture.sh >/tmp/traverse-starter-build.out
 
