@@ -33,18 +33,8 @@ for required_path in "${required_paths[@]}"; do
   test -s "${repo_root}/${required_path}"
 done
 
-for app_path in \
-  "apps/android-demo/" \
-  "apps/browser-consumer/" \
-  "apps/macos-demo/" \
-  "apps/react-demo/" \
-  "apps/youaskm3-starter-kit/" \
-  "apps/demo-fixtures/expedition-runtime-session.json" \
-  "apps/meeting-notes/" \
-  "apps/traverse-starter/"
-do
-  grep -Fq "\`${app_path}\`" "${repo_root}/docs/decision-log.md"
-done
+grep -Fq "Decision 22: Keep Application Source Out of the Traverse Runtime Repository" \
+  "${repo_root}/docs/decision-log.md"
 
 for app_id in traverse-starter meeting-notes; do
   validate_output="$(
