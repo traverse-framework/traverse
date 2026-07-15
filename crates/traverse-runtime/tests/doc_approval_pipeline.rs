@@ -10,6 +10,7 @@ use traverse_registry::{
     ApplicationRegistrationRequest, ApplicationRegistry, CapabilityRegistry, EventRegistry,
     LookupScope, RegistryScope, ResolvedCapability, WorkflowRegistry,
 };
+use traverse_runtime::security::RuntimeSecurityConfig;
 use traverse_runtime::{
     LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutor, Runtime,
     WorkflowExecutionRequest, WorkflowLookupScope, WorkflowTraversalStatus,
@@ -92,7 +93,13 @@ fn doc_approval_runtime() -> Runtime<DocApprovalExecutor> {
         "the canonical pipeline must not introduce an extract capability"
     );
 
-    Runtime::new(capabilities, DocApprovalExecutor).with_workflow_registry(workflows)
+    // The checked-in example agents are unsigned local fixtures, so the test
+    // opts into the development posture exactly like the dev sidecar; the
+    // workflow path enforces the same artifact verification gate as direct
+    // capability execution (spec 030 FR-013).
+    Runtime::new(capabilities, DocApprovalExecutor)
+        .with_workflow_registry(workflows)
+        .with_security_config(RuntimeSecurityConfig::development())
 }
 
 fn pipeline_request(request_id: &str) -> WorkflowExecutionRequest {
