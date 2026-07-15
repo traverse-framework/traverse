@@ -111,13 +111,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install web embedder package dependencies
-        working-directory: packages/web/TraverseEmbedder
-        run: npm install --no-fund --no-audit
-
-      - name: Build and test web embedder package
-        working-directory: packages/web/TraverseEmbedder
-        run: npm test
+      - name: Run web embedder package conformance
+        run: bash scripts/ci/embedder_conformance/web_package.sh
 
   coverage-gate:
     runs-on: ubuntu-latest

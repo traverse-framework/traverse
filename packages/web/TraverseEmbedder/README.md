@@ -6,14 +6,37 @@ row of spec `068-public-platform-embedder-packages`, exposing the
 operation surface. Production execution requires no `traverse-cli serve`
 sidecar and no `.traverse/server.json` discovery.
 
-## Status
+## Runtime-WASM execution
 
-This package currently ships the uniform typed boundary, the deterministic
-test double required by spec 068 FR-006, and deterministic bundle
-compatibility validation (NFR-001). The runtime-WASM execution path (loading
-the bundled Traverse runtime compiled to WebAssembly and executing bundled
-capability artifacts in the browser) lands behind the same `TraverseEmbedderApi`
-interface without changing this public surface.
+Unlike the native platform embedders, which embed Wasmtime to execute
+bundled capability artifacts, the browser *is already* a WebAssembly host.
+`BundleEmbedder` compiles each bundled capability module with
+`WebAssembly.compile` once at `init`, validates its imports against the
+Traverse Host ABI whitelist (only `wasi_snapshot_preview1.fd_read` /
+`fd_write` / `proc_exit` and the reserved `traverse_host.*` imports — no
+filesystem, no network, no environment, deny-by-default, matching the native
+`WasmExecutor`), and instantiates + invokes it synchronously per `submit`
+through a minimal WASI `preview1` shim that pipes JSON stdin/stdout exactly
+like the native executor. Workflow execution supports linear,
+`direct`-triggered pipelines (the shape used by every bundled example
+workflow today); event-driven/conditional edges are rejected deterministically
+at `init` rather than silently mis-executed.
+
+```ts
+import { BundleEmbedder, FetchBundleLoader } from "traverse-embedder-web";
+
+const embedder = await BundleEmbedder.init({
+  manifestPath: "/bundles/my-app/app.manifest.json",
+  loader: new FetchBundleLoader(),
+  platform: "web",
+});
+embedder.subscribe((event) => console.log(event));
+embedder.submit("my-app.process", { note: "hello" });
+```
+
+See `examples/react-integration/` for a working React page that loads the
+checked-in `traverse-starter` bundle straight from the repository and
+executes it with no `traverse-cli serve` process running.
 
 ## Operations
 
@@ -85,8 +108,10 @@ stable snake_case codes. Secrets never appear in events, errors, or evidence
 ## Release evidence
 
 `releaseEvidence()` returns JSON recording the package name/version, the
-runtime implementation, embedder API + conformance versions, supported
-bundle schemas, and bundle identity (spec 068 FR-008, NFR-002).
+runtime implementation (`browser-webassembly` for `BundleEmbedder`,
+`test-double` for `EmbedderTestDouble`), embedder API + conformance
+versions, supported bundle schemas, bundle identity, and the sha-256 digest
+of every bundled WASM component (spec 068 FR-008, NFR-002).
 
 ## Development
 
@@ -94,3 +119,10 @@ bundle schemas, and bundle identity (spec 068 FR-008, NFR-002).
 npm install
 npm test   # builds with tsc, then runs the node:test suite
 ```
+
+`npm test` compiles a set of real WASI capability modules from WebAssembly
+Text format via `wabt` (a devDependency, mirroring the Rust crate's `wat`
+crate test fixtures) and runs `BundleEmbedder` against them — including one
+test that loads and executes the real, checked-in `apps/traverse-starter`
+bundle end to end — so the browser execution engine is exercised for real,
+not mocked.

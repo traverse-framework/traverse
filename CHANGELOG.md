@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the `traverse-embedder-web` runtime-WASM execution path:
+  `BundleEmbedder` loads an application bundle, digest-verifies and
+  Traverse-Host-ABI-validates every bundled WASM capability, and executes it
+  directly in the browser's native WebAssembly host through a minimal WASI
+  `preview1` shim — no nested engine, no `traverse-cli serve` sidecar.
+  Supports linear `direct`-triggered workflow pipelines. Verified with real
+  WAT-compiled WASI test fixtures (via `wabt`), against the real checked-in
+  `traverse-starter` bundle, and with a working React integration example
+  (spec 068 FR-002, FR-009, NFR-001).
 - Added the `traverse-embedder-web` TypeScript package: the Web embedder SDK
   boundary implementing the `embedder-api/1.0.0` surface with the shared
   event envelope and deterministic identifiers, a deterministic test double,

@@ -23,9 +23,11 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test tests/embedder.test.mjs"
+    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.6.0"
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "wabt": "^1.0.39"
   }
 }
