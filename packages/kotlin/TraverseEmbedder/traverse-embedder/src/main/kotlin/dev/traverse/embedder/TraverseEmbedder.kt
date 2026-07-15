@@ -18,6 +18,23 @@ data class TraverseSubmission(val targetId: String, val inputJson: String) {
 
 data class TraverseSubmissionResult(val sessionId: String, val status: String)
 
+/** Traceability evidence published with a TraverseEmbedder package release. */
+data class TraverseReleaseEvidence(
+    val packageVersion: String,
+    val runtimeWasmDigest: String,
+    val conformanceVersion: String,
+    val supportedHostVersions: List<String>,
+) {
+    init {
+        require(packageVersion.isNotBlank()) { "package version is required" }
+        require(runtimeWasmDigest.isNotBlank()) { "runtime WASM digest is required" }
+        require(conformanceVersion.isNotBlank()) { "conformance version is required" }
+        require(supportedHostVersions.isNotEmpty() && supportedHostVersions.all { it.isNotBlank() }) {
+            "supported host versions are required"
+        }
+    }
+}
+
 /** Ordered runtime-shaped event exposed by the deterministic conformance harness. */
 data class TraverseRuntimeEvent(
     val sequence: Int,

@@ -5,6 +5,29 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TraverseEmbedderTest {
+    @Test fun releaseEvidenceRequiresCompleteVersionedInputs() {
+        assertEquals(
+            TraverseReleaseEvidence(
+                packageVersion = "1.0.0",
+                runtimeWasmDigest = "sha256:test",
+                conformanceVersion = "embedder-api/1.0.0",
+                supportedHostVersions = listOf("Android 26+"),
+            ),
+            TraverseReleaseEvidence(
+                packageVersion = "1.0.0",
+                runtimeWasmDigest = "sha256:test",
+                conformanceVersion = "embedder-api/1.0.0",
+                supportedHostVersions = listOf("Android 26+"),
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            TraverseReleaseEvidence("", "sha256:test", "embedder-api/1.0.0", listOf("Android 26+"))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TraverseReleaseEvidence("1.0.0", "sha256:test", "embedder-api/1.0.0", emptyList())
+        }
+    }
+
     @Test fun lifecycleAndSubmissionAreDeterministic() {
         val harness = InMemoryTraverseEmbedder()
         harness.initialize(TraverseBundle("assets/traverse", "sha256:test"))
