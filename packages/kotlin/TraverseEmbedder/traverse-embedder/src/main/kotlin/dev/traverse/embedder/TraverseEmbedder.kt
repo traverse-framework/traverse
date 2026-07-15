@@ -19,13 +19,22 @@ data class TraverseSubmission(val targetId: String, val inputJson: String) {
 data class TraverseSubmissionResult(val sessionId: String, val status: String)
 
 /** Ordered runtime-shaped event exposed by the deterministic conformance harness. */
-data class TraverseRuntimeEvent(val sequence: Int, val targetId: String, val status: String)
+data class TraverseRuntimeEvent(
+    val sequence: Int,
+    val targetId: String,
+    val status: String,
+    val instanceId: String? = null,
+)
+
+data class TraverseCompatibleResult(val instanceId: String?, val status: String)
 
 /** Deterministic test double; it never evaluates application business logic. */
 class InMemoryTraverseEmbedder {
     private var bundle: TraverseBundle? = null
     private var submissionSequence = 0
+    private var compatibleSequence = 0
     private val events = mutableListOf<TraverseRuntimeEvent>()
+    private val compatibleInstances = mutableMapOf<String, String>()
 
     fun initialize(bundle: TraverseBundle) {
         check(this.bundle == null) { "embedder is already initialized" }
@@ -35,7 +44,9 @@ class InMemoryTraverseEmbedder {
     fun shutdown() {
         bundle = null
         submissionSequence = 0
+        compatibleSequence = 0
         events.clear()
+        compatibleInstances.clear()
     }
 
     fun submit(submission: TraverseSubmission): TraverseSubmissionResult {
@@ -52,14 +63,41 @@ class InMemoryTraverseEmbedder {
         return events.filter { it.sequence > afterSequence }
     }
 
-    fun compatibleStart(capabilityId: String, inputJson: String) =
-        submit(TraverseSubmission(capabilityId, inputJson))
-
-    fun compatibleStop(capabilityId: String, instanceId: String?) {
+    fun compatibleStart(capabilityId: String, inputJson: String): TraverseCompatibleResult {
         check(bundle != null) { "embedder is not initialized" }
+        require(capabilityId.isNotBlank()) { "capability_id is required" }
+        compatibleSequence += 1
+        val instanceId = "kotlin-compatible-$compatibleSequence"
+        compatibleInstances[capabilityId] = instanceId
+        appendCompatibleEvent(capabilityId, instanceId, "started")
+        return TraverseCompatibleResult(instanceId, "started")
     }
 
-    fun compatibleKill(capabilityId: String, instanceId: String?) {
+    fun compatibleStop(capabilityId: String, instanceId: String?): TraverseCompatibleResult {
+        val resolvedInstanceId = compatibleInstance(capabilityId, instanceId)
+        compatibleInstances.remove(capabilityId)
+        appendCompatibleEvent(capabilityId, resolvedInstanceId, "stopped")
+        return TraverseCompatibleResult(resolvedInstanceId, "stopped")
+    }
+
+    fun compatibleKill(capabilityId: String, instanceId: String?): TraverseCompatibleResult {
+        val resolvedInstanceId = compatibleInstance(capabilityId, instanceId)
+        compatibleInstances.remove(capabilityId)
+        appendCompatibleEvent(capabilityId, resolvedInstanceId, "killed")
+        return TraverseCompatibleResult(resolvedInstanceId, "killed")
+    }
+
+    private fun compatibleInstance(capabilityId: String, instanceId: String?): String {
         check(bundle != null) { "embedder is not initialized" }
+        val activeInstanceId = compatibleInstances[capabilityId]
+        check(activeInstanceId != null && (instanceId == null || instanceId == activeInstanceId)) {
+            "compatible instance is not active"
+        }
+        return activeInstanceId
+    }
+
+    private fun appendCompatibleEvent(capabilityId: String, instanceId: String, status: String) {
+        submissionSequence += 1
+        events += TraverseRuntimeEvent(submissionSequence, capabilityId, status, instanceId)
     }
 }
