@@ -111,10 +111,10 @@ pub fn cache_verified_public_registry_bytes(
 
 fn commit_cache_entry(temporary: &Path, path: &Path) -> Result<(), PublicRegistryCacheError> {
     fs::rename(temporary, path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(temporary);
         cache_error(
             PublicRegistryCacheErrorCode::CacheWriteFailed,
-            &path,
+            path,
             format!("failed to commit public registry cache entry: {error}"),
         )
     })
