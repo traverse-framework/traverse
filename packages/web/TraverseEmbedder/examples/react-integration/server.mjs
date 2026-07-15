@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const exampleRoot = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url));
 const pkgDist = join(repoRoot, "packages/web/TraverseEmbedder/dist");
-const vendorRoot = join(repoRoot, "apps/react-demo/vendor");
+const vendorRoot = join(repoRoot, "packages/web/TraverseEmbedder/examples/react-integration/vendor");
 const defaultPort = 4175;
 
 const routes = [

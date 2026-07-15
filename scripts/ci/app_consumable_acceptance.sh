@@ -4,6 +4,6 @@ set -euo pipefail
 
 # scripts/ci/app_consumable_acceptance.sh is the authoritative app-consumable acceptance entrypoint.
 
-bash scripts/ci/react_demo_live_adapter_smoke.sh
+echo "Reference app smoke lives in traverse-framework/reference-apps"
 
 echo "App-consumable acceptance passed."

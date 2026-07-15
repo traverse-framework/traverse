@@ -17,7 +17,7 @@ It is a versioned compatibility record, not a new runtime behavior layer.
 
 For the first app-consumable release, the supported bundle points to:
 
-- the browser-targeted consumer package at [apps/browser-consumer/README.md](../apps/browser-consumer/README.md)
+- the browser-targeted consumer package at [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md)
 - the dedicated MCP stdio server package at [docs/mcp-stdio-server.md](mcp-stdio-server.md)
 - the live browser adapter path described in [quickstart.md](../quickstart.md)
 - the downstream integration and validation docs for `youaskm3`

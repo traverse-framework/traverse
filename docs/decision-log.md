@@ -486,11 +486,11 @@ Those artifacts live under `examples/`, never `apps/`.
 
 | Current path | Owner | Destination |
 | --- | --- | --- |
-| `apps/android-demo/` | Reference Apps | `reference-apps/android-demo/` |
-| `apps/browser-consumer/` | Reference Apps | `reference-apps/browser-consumer/` |
-| `apps/macos-demo/` | Reference Apps | `reference-apps/macos-demo/` |
-| `apps/react-demo/` | Reference Apps | `reference-apps/react-demo/` |
-| `apps/youaskm3-starter-kit/` | Reference Apps | `reference-apps/youaskm3-starter-kit/` |
+| `https://github.com/traverse-framework/reference-apps/tree/main/apps/android-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/android-demo/` |
+| `https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/` |
+| `https://github.com/traverse-framework/reference-apps/tree/main/apps/macos-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/macos-demo/` |
+| `https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/` |
+| `https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/` |
 | `apps/demo-fixtures/expedition-runtime-session.json` | Traverse fixture | `examples/fixtures/expedition-runtime-session.json` |
 | `apps/meeting-notes/` | Traverse fixture | `examples/applications/meeting-notes/` |
 | `apps/traverse-starter/` | Traverse fixture | `examples/applications/traverse-starter/` |

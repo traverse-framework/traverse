@@ -4,6 +4,11 @@ set -euo pipefail
 
 repo_root="${TRAVERSE_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
+if [[ -d "${repo_root}/apps" ]]; then
+  echo "Application source must live in traverse-framework/reference-apps, not apps/" >&2
+  exit 1
+fi
+
 for forbidden_path in \
   "apps/demo-fixtures" \
   "apps/meeting-notes" \

@@ -1,7 +1,0 @@
-{
-  "name": "traverse-browser-consumer",
-  "version": "0.1.0",
-  "private": true,
-  "main": "index.js",
-  "description": "Traverse browser-targeted consumer facade for downstream browser-hosted apps."
-}
