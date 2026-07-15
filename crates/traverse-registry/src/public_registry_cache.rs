@@ -188,7 +188,12 @@ mod tests {
 
     fn unique_temp_dir() -> PathBuf {
         let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("traverse-public-cache-test-{counter}"));
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("traverse-public-cache-test-{nanos}-{counter}"));
         fs::create_dir_all(&path).expect("temp directory must be created");
         path
     }
