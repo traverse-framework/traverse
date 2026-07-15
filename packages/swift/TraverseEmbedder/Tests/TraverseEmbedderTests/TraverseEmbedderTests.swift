@@ -66,3 +66,23 @@ import Testing
         TraverseRuntimeEvent(sequence: 4, targetID: "demo.compatible", status: "killed", instanceID: second.instanceID),
     ])
 }
+
+@Test func releaseEvidenceIsCompleteAndDeterministic() throws {
+    #expect(try TraverseReleaseEvidence(
+        packageVersion: "0.1.0",
+        runtimeWasmDigest: "sha256:test",
+        supportedHostVersions: ["iOS 17+", "macOS 14+"]
+    ) == TraverseReleaseEvidence(
+        packageVersion: "0.1.0",
+        runtimeWasmDigest: "sha256:test",
+        conformanceVersion: "1.0.0",
+        supportedHostVersions: ["iOS 17+", "macOS 14+"]
+    ))
+    #expect(throws: TraverseEmbedderError.invalidReleaseEvidence("supported host versions are required")) {
+        try TraverseReleaseEvidence(
+            packageVersion: "0.1.0",
+            runtimeWasmDigest: "sha256:test",
+            supportedHostVersions: []
+        )
+    }
+}

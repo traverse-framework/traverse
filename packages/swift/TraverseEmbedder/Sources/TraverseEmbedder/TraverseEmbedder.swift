@@ -26,9 +26,43 @@ public struct TraverseBundle: Sendable, Equatable {
 
 public enum TraverseEmbedderError: Error, Equatable, Sendable {
     case incompatibleBundle(String)
+    case invalidReleaseEvidence(String)
     case notInitialized
     case alreadyInitialized
     case unsupportedOperation(String)
+}
+
+/// Traceability evidence published with a TraverseEmbedder package release.
+public struct TraverseReleaseEvidence: Sendable, Equatable {
+    public let packageVersion: String
+    public let runtimeWasmDigest: String
+    public let conformanceVersion: String
+    public let supportedHostVersions: [String]
+
+    public init(
+        packageVersion: String,
+        runtimeWasmDigest: String,
+        conformanceVersion: String = TraverseEmbedder.apiVersion,
+        supportedHostVersions: [String]
+    ) throws {
+        guard !packageVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TraverseEmbedderError.invalidReleaseEvidence("package version is required")
+        }
+        guard !runtimeWasmDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TraverseEmbedderError.invalidReleaseEvidence("runtime WASM digest is required")
+        }
+        guard !conformanceVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TraverseEmbedderError.invalidReleaseEvidence("conformance version is required")
+        }
+        guard !supportedHostVersions.isEmpty,
+              supportedHostVersions.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw TraverseEmbedderError.invalidReleaseEvidence("supported host versions are required")
+        }
+        self.packageVersion = packageVersion
+        self.runtimeWasmDigest = runtimeWasmDigest
+        self.conformanceVersion = conformanceVersion
+        self.supportedHostVersions = supportedHostVersions
+    }
 }
 
 public struct TraverseSubmission: Sendable, Equatable {

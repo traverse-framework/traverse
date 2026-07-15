@@ -8,8 +8,13 @@ the ordered runtime-shaped events recorded by the harness. Compatible-capability
 start, stop, and kill operations return stable instance identifiers and lifecycle
 results. It never starts `traverse-cli serve` or uses server-discovery files.
 
-The production runtime-WASM bridge, event subscription stream, package release
-evidence, and app-reference integration are tracked by Traverse #647.
+The production runtime-WASM bridge, event subscription stream, evidence
+publication, and app-reference integration are tracked by Traverse #647.
+
+Release tooling constructs `TraverseReleaseEvidence` with the semantic package
+version, runtime-WASM digest, conformance version, and supported iOS/macOS host
+versions. The initializer rejects incomplete evidence before publication so a
+downstream binary can be traced to the exact package and runtime pairing.
 
 ## Bundle compatibility
 
