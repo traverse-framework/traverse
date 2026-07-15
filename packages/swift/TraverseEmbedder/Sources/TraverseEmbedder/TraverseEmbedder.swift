@@ -8,13 +8,19 @@ public enum TraverseEmbedder {
 public struct TraverseBundle: Sendable, Equatable {
     public let rootURL: URL
     public let runtimeWasmDigest: String
+    public let embedderAPIVersion: String
 
-    public init(rootURL: URL, runtimeWasmDigest: String) throws {
+    public init(
+        rootURL: URL,
+        runtimeWasmDigest: String,
+        embedderAPIVersion: String = TraverseEmbedder.apiVersion
+    ) throws {
         guard !runtimeWasmDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw TraverseEmbedderError.incompatibleBundle("runtime WASM digest is required")
         }
         self.rootURL = rootURL
         self.runtimeWasmDigest = runtimeWasmDigest
+        self.embedderAPIVersion = embedderAPIVersion
     }
 }
 
@@ -53,10 +59,22 @@ public struct TraverseRuntimeEvent: Sendable, Equatable {
     public let sequence: Int
     public let targetID: String
     public let status: String
+    public let instanceID: String?
 
-    public init(sequence: Int, targetID: String, status: String) {
+    public init(sequence: Int, targetID: String, status: String, instanceID: String? = nil) {
         self.sequence = sequence
         self.targetID = targetID
+        self.status = status
+        self.instanceID = instanceID
+    }
+}
+
+public struct TraverseCompatibleResult: Sendable, Equatable {
+    public let instanceID: String?
+    public let status: String
+
+    public init(instanceID: String?, status: String) {
+        self.instanceID = instanceID
         self.status = status
     }
 }
@@ -66,19 +84,28 @@ public struct TraverseRuntimeEvent: Sendable, Equatable {
 public final class InMemoryTraverseEmbedder: @unchecked Sendable {
     private var bundle: TraverseBundle?
     private var submissionSequence = 0
+    private var compatibleSequence = 0
     private var events: [TraverseRuntimeEvent] = []
+    private var compatibleInstances: [String: String] = [:]
 
     public init() {}
 
     public func initialize(bundle: TraverseBundle) throws {
         guard self.bundle == nil else { throw TraverseEmbedderError.alreadyInitialized }
+        guard bundle.embedderAPIVersion == TraverseEmbedder.apiVersion else {
+            throw TraverseEmbedderError.incompatibleBundle(
+                "embedder API \(bundle.embedderAPIVersion) is incompatible with \(TraverseEmbedder.apiVersion)"
+            )
+        }
         self.bundle = bundle
     }
 
     public func shutdown() {
         bundle = nil
         submissionSequence = 0
+        compatibleSequence = 0
         events = []
+        compatibleInstances = [:]
     }
 
     public func submit(_ submission: TraverseSubmission) throws -> TraverseSubmissionResult {
@@ -104,15 +131,50 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
         return events.filter { $0.sequence > sequence }
     }
 
-    public func compatibleStart(capabilityID: String, inputJSON: Data) throws -> TraverseSubmissionResult {
-        try submit(TraverseSubmission(targetID: capabilityID, inputJSON: inputJSON))
+    public func compatibleStart(capabilityID: String, inputJSON: Data) throws -> TraverseCompatibleResult {
+        guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
+        guard !capabilityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TraverseEmbedderError.unsupportedOperation("capability_id is required")
+        }
+        compatibleSequence += 1
+        let instanceID = "swift-compatible-\(compatibleSequence)"
+        compatibleInstances[capabilityID] = instanceID
+        appendCompatibleEvent(capabilityID: capabilityID, instanceID: instanceID, status: "started")
+        return TraverseCompatibleResult(instanceID: instanceID, status: "started")
     }
 
-    public func compatibleStop(capabilityID: String, instanceID: String?) throws {
-        guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
+    public func compatibleStop(capabilityID: String, instanceID: String?) throws -> TraverseCompatibleResult {
+        let resolvedInstanceID = try compatibleInstance(capabilityID: capabilityID, instanceID: instanceID)
+        compatibleInstances.removeValue(forKey: capabilityID)
+        appendCompatibleEvent(capabilityID: capabilityID, instanceID: resolvedInstanceID, status: "stopped")
+        return TraverseCompatibleResult(instanceID: resolvedInstanceID, status: "stopped")
     }
 
-    public func compatibleKill(capabilityID: String, instanceID: String?) throws {
+    public func compatibleKill(capabilityID: String, instanceID: String?) throws -> TraverseCompatibleResult {
+        let resolvedInstanceID = try compatibleInstance(capabilityID: capabilityID, instanceID: instanceID)
+        compatibleInstances.removeValue(forKey: capabilityID)
+        appendCompatibleEvent(capabilityID: capabilityID, instanceID: resolvedInstanceID, status: "killed")
+        return TraverseCompatibleResult(instanceID: resolvedInstanceID, status: "killed")
+    }
+
+    private func compatibleInstance(capabilityID: String, instanceID: String?) throws -> String {
         guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
+        guard let activeInstanceID = compatibleInstances[capabilityID],
+              instanceID == nil || instanceID == activeInstanceID else {
+            throw TraverseEmbedderError.unsupportedOperation("compatible instance is not active")
+        }
+        return activeInstanceID
+    }
+
+    private func appendCompatibleEvent(capabilityID: String, instanceID: String, status: String) {
+        submissionSequence += 1
+        events.append(
+            TraverseRuntimeEvent(
+                sequence: submissionSequence,
+                targetID: capabilityID,
+                status: status,
+                instanceID: instanceID
+            )
+        )
     }
 }
