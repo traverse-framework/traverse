@@ -344,6 +344,16 @@ impl DurableEventJournal {
         }
     }
 
+    /// The most recent cursor ever durably assigned, or `0` when nothing has
+    /// been written yet. [`super::durable::DurableBroker::open`] uses this to
+    /// seed a freshly constructed in-memory broker's restart floor (spec 066
+    /// FR-007), so it correctly defers cursors it cannot itself vouch for to
+    /// durable replay instead of accepting them by default.
+    #[must_use]
+    pub(crate) fn latest_cursor(&self) -> u64 {
+        self.next_seq.saturating_sub(1)
+    }
+
     /// Reclaim expired history by deleting whole sealed segments only — never
     /// rewriting or truncating in place (067 FR-002). A segment is deleted
     /// only once every event in it falls outside the retention window; the
