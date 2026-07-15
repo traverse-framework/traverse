@@ -68,6 +68,8 @@ pub enum EventError {
     /// Durable journal write exceeded the configured timeout; the event was
     /// rejected, not delivered (067 FR-003/FR-004).
     JournalWriteTimeout(String),
+    /// Durable journal read failed while serving replay (066 FR-005/FR-009).
+    JournalRead(String),
 }
 
 impl std::fmt::Display for EventError {
@@ -87,6 +89,7 @@ impl std::fmt::Display for EventError {
             Self::InvalidRetentionWindow(msg) => write!(f, "invalid retention window: {msg}"),
             Self::JournalWrite(msg) => write!(f, "journal write failed: {msg}"),
             Self::JournalWriteTimeout(msg) => write!(f, "journal_write_timeout: {msg}"),
+            Self::JournalRead(msg) => write!(f, "journal read failed: {msg}"),
         }
     }
 }
@@ -102,6 +105,36 @@ pub trait EventBroker: Send + Sync {
     /// Returns [`EventError::UnregisteredEventType`] if the event type is not in the catalog,
     /// or [`EventError::LifecycleViolation`] if the catalog entry is not `Active`.
     fn publish(&self, event: TraverseEvent) -> Result<(), EventError>;
+
+    /// Publish an event, threading a pre-assigned durable cursor through to
+    /// the broker's own cursor space when the implementation supports cursor
+    /// injection. [`DurableBroker`](super::durable::DurableBroker) uses this
+    /// to keep live-delivery cursors numerically consistent with the durable
+    /// journal's cursor space (spec 066 FR-007), so a cursor issued during
+    /// live polling remains valid when later resolved through durable
+    /// replay. The default implementation ignores `cursor` and behaves like
+    /// [`Self::publish`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::publish`].
+    fn publish_with_cursor(&self, event: TraverseEvent, cursor: &str) -> Result<(), EventError> {
+        let _ = cursor;
+        self.publish(event)
+    }
+
+    /// Establishes a floor below which any cursor, for any event type this
+    /// broker has not itself observed, is treated as potentially predating
+    /// this broker instance's own history (spec 066 FR-007: restart cursor
+    /// continuity). [`DurableBroker::open`](super::durable::DurableBroker::open)
+    /// calls this once at construction, seeded from the durable journal's
+    /// latest cursor, so a freshly constructed in-memory broker correctly
+    /// defers stale-looking cursors to durable replay after a restart
+    /// instead of accepting them outright. The default implementation is a
+    /// no-op.
+    fn seed_restart_floor(&self, floor: u64) {
+        let _ = floor;
+    }
 
     /// Create a subscription for the given `event_type` starting from `from_cursor`.
     ///
@@ -264,6 +297,7 @@ mod tests {
             EventError::InvalidRetentionWindow("bad".to_string()),
             EventError::JournalWrite("disk gone".to_string()),
             EventError::JournalWriteTimeout("exceeded 2000ms".to_string()),
+            EventError::JournalRead("disk gone".to_string()),
         ];
 
         for err in cases {

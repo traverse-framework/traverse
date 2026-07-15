@@ -69,6 +69,8 @@ struct BrokerState {
     buffers: HashMap<String, VecDeque<BufferedEvent>>,
     seen_event_ids: HashMap<String, HashSet<String>>,
     subscriptions: HashMap<SubscriptionId, SubscriptionState>,
+    /// See [`EventBroker::seed_restart_floor`].
+    restart_floor: u64,
 }
 
 /// Synchronous, in-memory implementation of [`EventBroker`].
@@ -182,6 +184,104 @@ impl InProcessBroker {
             cursor: cursor_to_string(from_cursor),
         })
     }
+
+    /// Shared implementation for `publish` and `publish_with_cursor`.
+    /// `assigned_cursor`, when given, is adopted as this event's cursor
+    /// instead of self-incrementing the per-type counter (spec 066 FR-007:
+    /// keeps live-delivery cursors consistent with the durable journal's
+    /// cursor space). The per-type counter still tracks the highest cursor
+    /// ever used so `validate_from_cursor`'s empty-buffer fallback remains
+    /// correct regardless of cursor source.
+    fn publish_internal(
+        &self,
+        event: &TraverseEvent,
+        assigned_cursor: Option<u64>,
+    ) -> Result<(), EventError> {
+        let entry = self
+            .catalog
+            .get(&event.event_type)
+            .ok_or_else(|| EventError::UnregisteredEventType(event.event_type.clone()))?;
+
+        match entry.lifecycle_status {
+            LifecycleStatus::Active => {}
+            LifecycleStatus::Deprecated => {
+                return Err(EventError::LifecycleViolation(format!(
+                    "event type '{}' is Deprecated and cannot be published",
+                    event.event_type
+                )));
+            }
+            LifecycleStatus::Draft => {
+                return Err(EventError::LifecycleViolation(format!(
+                    "event type '{}' is Draft and cannot be published",
+                    event.event_type
+                )));
+            }
+        }
+
+        let now = self.clock.now();
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EventError::LifecycleViolation("broker lock poisoned".to_owned()))?;
+
+        prune_expired(
+            &mut state,
+            &event.event_type,
+            self.config.retention_window,
+            now,
+        );
+
+        let seen = state
+            .seen_event_ids
+            .entry(event.event_type.clone())
+            .or_default();
+        if seen.contains(&event.id) {
+            // Duplicate emissions are silently discarded.
+            return Ok(());
+        }
+        seen.insert(event.id.clone());
+
+        let next = state
+            .next_cursor
+            .entry(event.event_type.clone())
+            .or_insert(0);
+        let cursor = if let Some(assigned) = assigned_cursor {
+            *next = (*next).max(assigned);
+            assigned
+        } else {
+            *next = next.saturating_add(1);
+            *next
+        };
+
+        let buffered = BufferedEvent {
+            cursor,
+            published_at: now,
+            event: event.clone(),
+        };
+
+        state
+            .buffers
+            .entry(event.event_type.clone())
+            .or_default()
+            .push_back(buffered.clone());
+
+        for sub in state.subscriptions.values_mut() {
+            if sub.event_type != event.event_type {
+                continue;
+            }
+            if sub
+                .subject_id
+                .as_deref()
+                .is_some_and(|subject_id| event.subject_id.as_deref() != Some(subject_id))
+            {
+                continue;
+            }
+            enqueue_with_drop_oldest(&mut sub.queue, self.config.max_queue_len, buffered.clone());
+        }
+
+        Ok(())
+    }
 }
 
 fn parse_cursor(raw: &str) -> Result<u64, EventError> {
@@ -263,7 +363,12 @@ fn validate_from_cursor(
         return Ok(());
     }
 
-    let last_cursor = state.next_cursor.get(event_type).copied().unwrap_or(0);
+    let last_cursor = state
+        .next_cursor
+        .get(event_type)
+        .copied()
+        .unwrap_or(0)
+        .max(state.restart_floor);
     if let Some(buffer) = state.buffers.get(event_type)
         && let Some(front) = buffer.front()
     {
@@ -299,6 +404,12 @@ impl EventBroker for InProcessBroker {
         self.subscribe_with_subject(event_type, from_cursor, subject_id)
     }
 
+    fn seed_restart_floor(&self, floor: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            state.restart_floor = state.restart_floor.max(floor);
+        }
+    }
+
     /// Publish `event` to all registered subscribers.
     ///
     /// # Errors
@@ -306,85 +417,23 @@ impl EventBroker for InProcessBroker {
     /// - [`EventError::UnregisteredEventType`] if the event type is not in the catalog.
     /// - [`EventError::LifecycleViolation`] if the catalog entry is `Draft` or `Deprecated`.
     fn publish(&self, event: TraverseEvent) -> Result<(), EventError> {
-        let entry = self
-            .catalog
-            .get(&event.event_type)
-            .ok_or_else(|| EventError::UnregisteredEventType(event.event_type.clone()))?;
+        self.publish_internal(&event, None)
+    }
 
-        match entry.lifecycle_status {
-            LifecycleStatus::Active => {}
-            LifecycleStatus::Deprecated => {
-                return Err(EventError::LifecycleViolation(format!(
-                    "event type '{}' is Deprecated and cannot be published",
-                    event.event_type
-                )));
-            }
-            LifecycleStatus::Draft => {
-                return Err(EventError::LifecycleViolation(format!(
-                    "event type '{}' is Draft and cannot be published",
-                    event.event_type
-                )));
-            }
-        }
-
-        let now = self.clock.now();
-
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EventError::LifecycleViolation("broker lock poisoned".to_owned()))?;
-
-        prune_expired(
-            &mut state,
-            &event.event_type,
-            self.config.retention_window,
-            now,
-        );
-
-        let seen = state
-            .seen_event_ids
-            .entry(event.event_type.clone())
-            .or_default();
-        if seen.contains(&event.id) {
-            // Duplicate emissions are silently discarded.
-            return Ok(());
-        }
-        seen.insert(event.id.clone());
-
-        let next = state
-            .next_cursor
-            .entry(event.event_type.clone())
-            .or_insert(0);
-        *next = next.saturating_add(1);
-        let cursor = *next;
-
-        let buffered = BufferedEvent {
-            cursor,
-            published_at: now,
-            event: event.clone(),
-        };
-
-        state
-            .buffers
-            .entry(event.event_type.clone())
-            .or_default()
-            .push_back(buffered.clone());
-
-        for sub in state.subscriptions.values_mut() {
-            if sub.event_type != event.event_type {
-                continue;
-            }
-            if sub
-                .subject_id
-                .as_deref()
-                .is_some_and(|subject_id| event.subject_id.as_deref() != Some(subject_id))
-            {
-                continue;
-            }
-            enqueue_with_drop_oldest(&mut sub.queue, self.config.max_queue_len, buffered.clone());
-        }
-
-        Ok(())
+    /// Publish `event`, adopting `cursor` as this broker's own cursor for it
+    /// instead of self-assigning the next per-type sequence value. Used by
+    /// [`DurableBroker`](super::durable::DurableBroker) so live-delivery
+    /// cursors stay numerically consistent with the durable journal's cursor
+    /// space (spec 066 FR-007): a cursor obtained during live polling
+    /// remains valid when a later `poll` falls back to durable replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventError::InvalidCursor`] when `cursor` is not a base-10
+    /// unsigned integer, plus the same errors as [`Self::publish`].
+    fn publish_with_cursor(&self, event: TraverseEvent, cursor: &str) -> Result<(), EventError> {
+        let assigned = parse_cursor(cursor)?;
+        self.publish_internal(&event, Some(assigned))
     }
 
     /// Create a subscription for `event_type` starting from `from_cursor`.
@@ -569,6 +618,105 @@ mod tests {
         )
         .expect_err("max_queue_len=0 must be rejected");
         assert!(matches!(err, EventError::InvalidRetentionWindow(_)));
+    }
+
+    #[test]
+    fn publish_with_cursor_adopts_the_given_cursor_instead_of_self_assigning() {
+        let event_type = "dev.traverse.injected-cursor";
+        let catalog = make_catalog(event_type, LifecycleStatus::Active);
+        let broker = InProcessBroker::new(catalog).expect("broker must be created");
+
+        broker
+            .publish_with_cursor(sample_event(event_type, "evt-1"), "42")
+            .expect("publish_with_cursor must succeed");
+
+        let subscription = broker
+            .subscribe(event_type, "0")
+            .expect("subscribe must succeed");
+        let poll = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("poll must succeed");
+        assert_eq!(poll.events.len(), 1);
+        assert_eq!(poll.events[0].cursor, "42");
+        assert_eq!(poll.cursor, "42");
+    }
+
+    #[test]
+    fn publish_with_cursor_rejects_a_malformed_cursor() {
+        let event_type = "dev.traverse.injected-cursor-invalid";
+        let catalog = make_catalog(event_type, LifecycleStatus::Active);
+        let broker = InProcessBroker::new(catalog).expect("broker must be created");
+
+        let err = broker
+            .publish_with_cursor(sample_event(event_type, "evt-1"), "not-a-cursor")
+            .expect_err("malformed cursor must be rejected");
+        assert!(matches!(err, EventError::InvalidCursor(_)));
+    }
+
+    #[test]
+    fn default_publish_with_cursor_ignores_the_cursor_and_self_assigns() {
+        struct SelfAssigningOnlyBroker(InProcessBroker);
+
+        impl EventBroker for SelfAssigningOnlyBroker {
+            fn publish(&self, event: TraverseEvent) -> Result<(), EventError> {
+                self.0.publish(event)
+            }
+            fn subscribe(
+                &self,
+                event_type: &str,
+                from_cursor: &str,
+            ) -> Result<Subscription, EventError> {
+                self.0.subscribe(event_type, from_cursor)
+            }
+            fn subscribe_for_subject(
+                &self,
+                event_type: &str,
+                from_cursor: &str,
+                subject_id: Option<&str>,
+            ) -> Result<Subscription, EventError> {
+                self.0
+                    .subscribe_for_subject(event_type, from_cursor, subject_id)
+            }
+            fn poll(
+                &self,
+                subscription_id: &str,
+                max_events: usize,
+            ) -> Result<SubscriptionPoll, EventError> {
+                self.0.poll(subscription_id, max_events)
+            }
+            fn cancel(&self, subscription_id: &str) -> Result<(), EventError> {
+                self.0.cancel(subscription_id)
+            }
+        }
+
+        let event_type = "dev.traverse.default-publish-with-cursor";
+        let catalog = make_catalog(event_type, LifecycleStatus::Active);
+        let broker =
+            SelfAssigningOnlyBroker(InProcessBroker::new(catalog).expect("broker must be created"));
+
+        // The default `publish_with_cursor` ignores the supplied cursor and
+        // behaves exactly like `publish` (self-assigning cursor "1").
+        broker
+            .publish_with_cursor(sample_event(event_type, "evt-1"), "999")
+            .expect("default publish_with_cursor must succeed");
+
+        let subscription = broker
+            .subscribe(event_type, "0")
+            .expect("subscribe must succeed");
+        let poll = broker
+            .poll(&subscription.subscription_id, 10)
+            .expect("poll must succeed");
+        assert_eq!(poll.events[0].cursor, "1");
+
+        // The default `seed_restart_floor` is a no-op; exercise it alongside
+        // this wrapper's other pass-through trait methods.
+        broker.seed_restart_floor(999);
+        let subject_subscription = broker
+            .subscribe_for_subject(event_type, "0", None)
+            .expect("subscribe_for_subject must succeed");
+        broker
+            .cancel(&subject_subscription.subscription_id)
+            .expect("cancel must succeed");
     }
 
     #[test]
