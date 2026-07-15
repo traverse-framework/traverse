@@ -22,6 +22,26 @@ public sealed record TraverseSubmission(string TargetId, string InputJson)
 
 public sealed record TraverseSubmissionResult(string SessionId, string Status);
 
+/// <summary>Traceability evidence published with a TraverseEmbedder package release.</summary>
+public sealed record TraverseReleaseEvidence(
+    string PackageVersion,
+    string RuntimeWasmDigest,
+    string ConformanceVersion,
+    IReadOnlyList<string> SupportedHostVersions)
+{
+    public void Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(PackageVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(RuntimeWasmDigest);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ConformanceVersion);
+        if (SupportedHostVersions is null || SupportedHostVersions.Count == 0 ||
+            SupportedHostVersions.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("supported host versions are required", nameof(SupportedHostVersions));
+        }
+    }
+}
+
 /// <summary>Ordered runtime-shaped event exposed by the conformance harness.</summary>
 public sealed record TraverseRuntimeEvent(
     int Sequence,
