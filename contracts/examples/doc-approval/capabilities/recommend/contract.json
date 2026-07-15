@@ -1,0 +1,138 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "doc-approval.recommend",
+  "namespace": "doc-approval",
+  "name": "recommend",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "owner": {
+    "team": "traverse-core",
+    "contact": "enrico.piovesan10@gmail.com"
+  },
+  "summary": "Turn one deterministic document analysis into the final approval recommendation.",
+  "description": "Final step of the canonical doc-approval pipeline (spec 069): consumes the doc-approval.analyze@1.0.0 output and produces a deterministic recommendation, rationale, and confidence without model, network, randomness, or host state dependencies.",
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "docType",
+        "parties",
+        "amounts",
+        "confidence",
+        "recommendation"
+      ],
+      "properties": {
+        "docType": {
+          "type": "string"
+        },
+        "parties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "amounts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "recommendation",
+        "rationale",
+        "confidence"
+      ],
+      "properties": {
+        "recommendation": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "analysis-provided",
+      "description": "The caller provides the doc-approval.analyze output fields."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "recommendation-produced",
+      "description": "The capability returns deterministic recommendation, rationale, and confidence fields for the provided analysis."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Produces one deterministic recommendation payload for the provided analysis."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "doc-approval.recommend"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "manual-approval-required"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "enricopiovesan",
+    "created_at": "2026-07-14T00:00:00Z",
+    "spec_ref": "069-doc-approval-pipeline-canonicalization@1.0.0",
+    "adr_refs": [
+      "0001-rust-wasm-foundation"
+    ],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "cloud",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native"
+}
