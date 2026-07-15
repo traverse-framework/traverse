@@ -1,0 +1,33 @@
+{
+  "name": "traverse-embedder-web",
+  "version": "0.7.0",
+  "description": "Public Traverse platform embedder SDK for Web/TypeScript clients, implementing embedder-api/1.0.0 (spec 068)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/traverse-framework/traverse",
+    "directory": "packages/web/TraverseEmbedder"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "wabt": "^1.0.39"
+  }
+}
