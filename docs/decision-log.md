@@ -468,3 +468,35 @@ Keep the initial durable journal while #629 measures append latency, recovery,
 replay, retention compaction, and disk growth under representative workloads.
 Choose retain, SQLite, or a provider abstraction only from that evidence; no
 storage migration or abstraction is preselected.
+
+## Decision 22: Keep Application Source Out of the Traverse Runtime Repository
+
+- **Date**: 2026-07-15
+- **Status**: Accepted
+- **Related issues**: `#703`, `#704`; App References `#151`
+
+### Decision
+
+Checked-in application UI, platform client demos, and starter/reference source
+belong in `traverse-framework/reference-apps`. Traverse owns only runtime
+conformance inputs: manifests, fixture agents, and deterministic test fixtures.
+Those artifacts live under `examples/`, never `apps/`.
+
+### Migration inventory
+
+| Current path | Owner | Destination |
+| --- | --- | --- |
+| `apps/android-demo/` | Reference Apps | `reference-apps/android-demo/` |
+| `apps/browser-consumer/` | Reference Apps | `reference-apps/browser-consumer/` |
+| `apps/macos-demo/` | Reference Apps | `reference-apps/macos-demo/` |
+| `apps/react-demo/` | Reference Apps | `reference-apps/react-demo/` |
+| `apps/youaskm3-starter-kit/` | Reference Apps | `reference-apps/youaskm3-starter-kit/` |
+| `apps/demo-fixtures/expedition-runtime-session.json` | Traverse fixture | `examples/fixtures/expedition-runtime-session.json` |
+| `apps/meeting-notes/app.manifest.json` | Traverse fixture | `examples/applications/meeting-notes/app.manifest.json` |
+| `apps/traverse-starter/app.manifest.json` | Traverse fixture | `examples/applications/traverse-starter/app.manifest.json` |
+
+### Outcome
+
+The Reference Apps migration preserves app validation against public Traverse
+surfaces. Traverse follows with removal of the now-obsolete `apps/` directory
+and a repository check that prevents application source from returning.

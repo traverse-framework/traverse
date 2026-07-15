@@ -55,7 +55,7 @@ These stay in checked-in source locations:
 - contracts: `contracts/`
 - workflows: `workflows/`
 - registry bundles and runtime requests: `examples/`
-- shared checked-in demo fixtures: `apps/demo-fixtures/`
+- shared checked-in demo fixtures: `examples/fixtures/`
 
 Executable capability packages may keep deterministic build outputs in package-local `./artifacts/` directories when those artifacts are part of the checked-in package shape. The local runtime home is for runtime-owned copies, caches, and overlays, not for replacing package-local layout.
 

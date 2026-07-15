@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="${TRAVERSE_REPO_ROOT:-$(pwd)}"
 
 required_files=(
-  "apps/demo-fixtures/expedition-runtime-session.json"
+  "examples/fixtures/expedition-runtime-session.json"
   "apps/macos-demo/Package.swift"
   "apps/macos-demo/README.md"
   "apps/macos-demo/Sources/TraverseMacOSDemoApp/TraverseMacOSDemoApp.swift"
@@ -21,7 +21,7 @@ done
 
 grep -q 'import SwiftUI' "${repo_root}/apps/macos-demo/Sources/TraverseMacOSDemoApp/TraverseMacOSDemoApp.swift"
 grep -q 'WindowGroup' "${repo_root}/apps/macos-demo/Sources/TraverseMacOSDemoApp/TraverseMacOSDemoApp.swift"
-grep -q '"status": "completed"' "${repo_root}/apps/demo-fixtures/expedition-runtime-session.json"
-grep -q '"state_updates"' "${repo_root}/apps/demo-fixtures/expedition-runtime-session.json"
+grep -q '"status": "completed"' "${repo_root}/examples/fixtures/expedition-runtime-session.json"
+grep -q '"state_updates"' "${repo_root}/examples/fixtures/expedition-runtime-session.json"
 
 echo "macOS demo smoke passed"

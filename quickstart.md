@@ -112,11 +112,11 @@ from the Traverse repository root:
 
 ```bash
 cargo run -p traverse-cli -- app validate \
-  --manifest apps/traverse-starter/app.manifest.json \
+  --manifest examples/applications/traverse-starter/app.manifest.json \
   --json
 
 cargo run -p traverse-cli -- app register \
-  --manifest apps/traverse-starter/app.manifest.json \
+  --manifest examples/applications/traverse-starter/app.manifest.json \
   --workspace local-default \
   --json
 ```

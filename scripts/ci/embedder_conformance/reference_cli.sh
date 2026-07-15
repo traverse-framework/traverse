@@ -34,7 +34,7 @@ cargo test -q -p traverse-registry --test application_manifest \
 
 validation_json="$(
   cargo run -q -p traverse-cli -- app validate \
-    --manifest apps/traverse-starter/app.manifest.json \
+    --manifest examples/applications/traverse-starter/app.manifest.json \
     --json
 )"
 

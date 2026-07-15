@@ -2,7 +2,7 @@ import { BundleEmbedder, FetchBundleLoader } from "/pkg/index.js";
 
 const { createElement: h, useEffect, useState } = React;
 
-const MANIFEST_PATH = "/repo/apps/traverse-starter/app.manifest.json";
+const MANIFEST_PATH = "/repo/examples/applications/traverse-starter/app.manifest.json";
 const CAPABILITY_ID = "traverse-starter.process";
 
 function eventList(events) {

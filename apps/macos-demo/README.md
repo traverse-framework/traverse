@@ -18,4 +18,4 @@ Expected local run path on a machine with full Xcode:
 - run the `TraverseMacOSDemoApp` target
 
 Fixture source:
-- `apps/demo-fixtures/expedition-runtime-session.json`
+- `examples/fixtures/expedition-runtime-session.json`

@@ -389,7 +389,7 @@ test("release evidence records the linked runtime and bundled wasm digests", asy
 
 test("real checked-in traverse-starter bundle loads and executes without a sidecar", async () => {
   const manifestPath = new URL(
-    "../../../../apps/traverse-starter/app.manifest.json",
+    "../../../../examples/applications/traverse-starter/app.manifest.json",
     import.meta.url,
   ).pathname;
   const embedder = await initEmbedder(manifestPath);

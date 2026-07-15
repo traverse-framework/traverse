@@ -13,7 +13,7 @@ a sidecar").
    (`/pkg/`), the existing React UMD vendor bundles already checked in under
    `apps/react-demo/vendor` (`/vendor/`), and the repository root itself
    (`/repo/`) so the browser can `fetch` the real
-   `apps/traverse-starter/app.manifest.json` bundle and every file it
+   `examples/applications/traverse-starter/app.manifest.json` bundle and every file it
    references (component manifest, workflow definition, compiled WASM
    artifact) by the same relative paths the bundle already declares.
 2. `src/main.js` is a small React app (no build step, `React.createElement`
