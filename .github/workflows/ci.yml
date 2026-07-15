@@ -99,6 +99,26 @@ jobs:
       - name: Run Rust embedder package conformance
         run: bash scripts/ci/embedder_conformance/rust_package.sh
 
+  web-embedder-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web embedder package dependencies
+        working-directory: packages/web/TraverseEmbedder
+        run: npm install --no-fund --no-audit
+
+      - name: Build and test web embedder package
+        working-directory: packages/web/TraverseEmbedder
+        run: npm test
+
   coverage-gate:
     runs-on: ubuntu-latest
 

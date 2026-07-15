@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added the `traverse-embedder-web` TypeScript package: the Web embedder SDK
+  boundary implementing the `embedder-api/1.0.0` surface with the shared
+  event envelope and deterministic identifiers, a deterministic test double,
+  bundle compatibility validation with WebCrypto digest verification, and a
+  CI-enforced node test suite (spec 068).
+
 - Added the public `traverse-embedder` crate: the Rust embedder SDK for Linux
   GTK and CLI clients implementing every `embedder-api/1.0.0` operation
   (init/shutdown/submit/subscribe and compatible start/stop/kill) against an
