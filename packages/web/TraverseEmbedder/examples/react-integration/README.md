@@ -11,7 +11,7 @@ a sidecar").
 1. `server.mjs` is a plain static file server (not a Traverse sidecar) that
    serves three things over HTTP: the built `traverse-embedder-web` package
    (`/pkg/`), the existing React UMD vendor bundles already checked in under
-   `apps/react-demo/vendor` (`/vendor/`), and the repository root itself
+   `packages/web/TraverseEmbedder/examples/react-integration/vendor` (`/vendor/`), and the repository root itself
    (`/repo/`) so the browser can `fetch` the real
    `examples/applications/traverse-starter/app.manifest.json` bundle and every file it
    references (component manifest, workflow definition, compiled WASM

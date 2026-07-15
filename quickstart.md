@@ -40,7 +40,7 @@ Keep this terminal open. The React demo proxies browser-subscription traffic thr
 In a second terminal from the repository root:
 
 ```bash
-node apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173
+node https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173
 ```
 
 Open:
@@ -74,7 +74,7 @@ The expected final consumer outcome is a completed expedition plan with the gove
 
 - This is the first supported consumer path, not a production deployment guide.
 - The browser app must proxy through the local browser adapter to use the live path.
-- The fallback static preview path in `apps/react-demo/README.md` is useful for offline inspection, but it is not the app-consumable v0.1 path.
+- The fallback static preview path in `https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/README.md` is useful for offline inspection, but it is not the app-consumable v0.1 path.
 - This quickstart does not redefine Traverse internals; it only documents the governed consumer flow that is already checked in.
 
 ## Validation

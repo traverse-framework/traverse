@@ -1,9 +1,0 @@
-{
-  "demo_id": "expedition.plan.v1",
-  "title": "Plan Expedition",
-  "request_id": "req-expedition-001",
-  "execution_id": "exec_req-expedition-001",
-  "trace_id": "trace_exec_req-expedition-001",
-  "status": "completed",
-  "summary": "Traverse evaluates the governed expedition workflow and assembles a final expedition plan."
-}

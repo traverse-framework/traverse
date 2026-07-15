@@ -47,10 +47,6 @@ required_files=(
   "specs/023-downstream-publication-strategy/spec.md"
   "specs/023-downstream-publication-strategy/data-model.md"
   "specs/023-downstream-publication-strategy/checklists/requirements.md"
-  "apps/browser-consumer/README.md"
-  "apps/browser-consumer/package.json"
-  "apps/youaskm3-starter-kit/README.md"
-  "apps/youaskm3-starter-kit/package.json"
   "docs/wasm-agent-team-readiness-example.md"
   "docs/app-consumable-acceptance.md"
   "docs/app-consumable-entry-path.md"
@@ -87,9 +83,6 @@ required_files=(
   "docs/adr/README.md"
   "docs/adr/0001-rust-wasm-foundation.md"
   "scripts/ci/browser_adapter_smoke.sh"
-  "apps/react-demo/server.mjs"
-  "apps/react-demo/src/browser-adapter-client.js"
-  "scripts/ci/react_demo_live_adapter_smoke.sh"
   "scripts/ci/mcp_stdio_server_execution_report_smoke.sh"
   "scripts/ci/youaskm3_compatibility_conformance.sh"
   "scripts/ci/downstream_app_mvp_conformance.sh"
@@ -99,7 +92,6 @@ required_files=(
   "scripts/ci/downstream_model_dependency_smoke.sh"
   "scripts/ci/downstream_http_json_smoke.sh"
   "scripts/ci/downstream_mcp_smoke.sh"
-  "scripts/ci/browser_consumer_package_smoke.sh"
   "scripts/ci/youaskm3_integration_validation.sh"
   "scripts/ci/youaskm3_published_artifact_validation.sh"
   "scripts/ci/youaskm3_real_shell_validation.sh"
@@ -258,7 +250,6 @@ grep -q "render_execution_report" docs/mcp-real-agent-exercise.md
 bash scripts/ci/openapi_structural_validation.sh
 bash scripts/ci/spec_context_check.sh
 grep -q "scripts/smoke.sh" docs/youaskm3-real-shell-validation.md
-grep -q "apps/browser-consumer/README.md" docs/mcp-consumption-validation.md
 grep -q "docs/app-consumable-consumer-bundle.md" README.md
 grep -q "docs/app-consumable-package-release-pointer.md" README.md
 grep -q "docs/packaged-traverse-mcp-server-artifact.md" README.md
@@ -273,7 +264,6 @@ grep -q "docs/youaskm3-published-artifact-validation.md" docs/app-consumable-rel
 grep -q "versioned Traverse consumer bundle" docs/app-consumable-consumer-bundle.md
 grep -q "supported version selection" docs/app-consumable-consumer-bundle.md
 grep -q "installation steps" docs/app-consumable-consumer-bundle.md
-grep -q "apps/browser-consumer/README.md" docs/app-consumable-consumer-bundle.md
 grep -q "docs/mcp-stdio-server.md" docs/app-consumable-consumer-bundle.md
 grep -q "docs/packaged-traverse-runtime-artifact.md" docs/app-consumable-consumer-bundle.md
 grep -q "bash scripts/ci/app_consumable_release_prep.sh" docs/app-consumable-consumer-bundle.md
@@ -350,24 +340,12 @@ grep -q "specs/013-browser-runtime-subscription/spec.md" docs/adapter-boundaries
 grep -q "specs/014-mcp-surface/spec.md" docs/adapter-boundaries.md
 grep -q "mandatory sidecar topology" docs/adapter-boundaries.md
 grep -q "optional adapter choices" docs/adapter-boundaries.md
-grep -q "browser-adapter serve" apps/react-demo/README.md
-grep -q "react_demo_live_adapter_smoke.sh" apps/react-demo/README.md
-grep -q "same-origin local proxy" apps/react-demo/README.md
-grep -q "app-consumable acceptance" apps/react-demo/README.md
-grep -q "Run the local browser adapter proxy again" apps/react-demo/README.md
 grep -q "browser-targeted consumer package" docs/app-consumable-consumer-bundle.md
 grep -q "consumer bundle" docs/app-consumable-consumer-bundle.md
 grep -q "docs/app-consumable-package-release-pointer.md" docs/app-consumable-consumer-bundle.md
 grep -q "youaskm3 integration validation" README.md
-grep -q "Traverse React demo serving on" apps/react-demo/server.mjs
-grep -q "runLiveBrowserSubscription" apps/react-demo/src/browser-adapter-client.js
-grep -q "applyBrowserSubscriptionMessage" apps/react-demo/src/browser-adapter-client.js
-grep -q "App" apps/react-demo/src/main.js
-grep -q "react_demo_live_adapter_smoke.sh" scripts/ci/react_demo_live_adapter_smoke.sh
 grep -q "## Prerequisites" quickstart.md
 grep -q "browser-adapter serve --bind 127.0.0.1:4174" quickstart.md
-grep -q "node apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173" quickstart.md
-grep -q "apps/browser-consumer/README.md" docs/app-consumable-entry-path.md
 grep -q "git checkout v0.3.0" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/v0.3.0-public-surface-compatibility.md
@@ -459,11 +437,6 @@ grep -q "POST /v1/workspaces/{workspace_id}/capabilities" docs/youaskm3-canonica
 grep -q "POST /v1/workspaces/{workspace_id}/execute" docs/youaskm3-canonical-app-http-path.md
 grep -q "GET /v1/workspaces/{workspace_id}/traces/{execution_id}" docs/youaskm3-canonical-app-http-path.md
 grep -q "bash scripts/ci/app_consumable_acceptance.sh" docs/youaskm3-canonical-app-http-path.md
-grep -q "browser-targeted consumer package" apps/browser-consumer/README.md
-grep -q "browser_consumer_package_smoke.sh" apps/browser-consumer/README.md
-grep -q "browser-hosted app" apps/browser-consumer/README.md
-grep -q "bash scripts/ci/react_demo_live_adapter_smoke.sh" quickstart.md
-grep -q "bash scripts/ci/react_demo_smoke.sh" quickstart.md
 grep -q "## Known Limitations" quickstart.md
 grep -q "bash scripts/ci/youaskm3_integration_validation.sh" docs/youaskm3-integration-validation.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/mcp-stdio-server.md

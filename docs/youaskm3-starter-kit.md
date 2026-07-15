@@ -2,7 +2,7 @@
 
 This document is the first integration guide for browser-hosted downstream apps such as `youaskm3`.
 
-It pairs with the reference starter kit at [apps/youaskm3-starter-kit/README.md](../apps/youaskm3-starter-kit/README.md).
+It pairs with the reference starter kit at [https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/README.md).
 
 This youaskm3 starter kit and integration guide is the canonical browser-hosted adoption path for the downstream app.
 
@@ -15,7 +15,7 @@ The goal is to give a downstream app team one clear adoption path for Traverse w
 Downstream apps should adopt the versioned Traverse consumer bundle and the browser-targeted consumer package documented in:
 
 - [docs/app-consumable-consumer-bundle.md](app-consumable-consumer-bundle.md)
-- [apps/browser-consumer/README.md](../apps/browser-consumer/README.md)
+- [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md)
 
 ## Setup
 

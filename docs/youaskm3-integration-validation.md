@@ -59,7 +59,7 @@ Use one deterministic repo-local validation flow to prove that `youaskm3` can co
 Run the browser and MCP validation smoke checks in order:
 
 ```bash
-bash scripts/ci/react_demo_live_adapter_smoke.sh
+bash Reference Apps smoke workflow
 bash scripts/ci/mcp_consumption_validation.sh
 ```
 
@@ -132,7 +132,7 @@ The path is expected to fail deterministically when:
 
 ## Validation
 
-- `bash scripts/ci/react_demo_live_adapter_smoke.sh`
+- `bash Reference Apps smoke workflow`
 - `bash scripts/ci/mcp_consumption_validation.sh`
 - `bash scripts/ci/mcp_real_agent_exercise_smoke.sh`
 - `bash scripts/ci/downstream_public_app_registration_smoke.sh`
