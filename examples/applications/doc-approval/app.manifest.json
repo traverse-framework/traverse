@@ -12,9 +12,21 @@
       "version": "1.0.0",
       "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
       "manifest_path": "components/analyze/component.manifest.json"
+    },
+    {
+      "component_id": "doc-approval.recommend-component",
+      "version": "1.0.0",
+      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "manifest_path": "components/recommend/component.manifest.json"
     }
   ],
-  "workflows": [],
+  "workflows": [
+    {
+      "workflow_id": "doc-approval.pipeline",
+      "workflow_version": "1.0.0",
+      "path": "../../../workflows/examples/doc-approval/pipeline/workflow.json"
+    }
+  ],
   "model_dependencies": [],
   "config_schema": {
     "type": "object",
