@@ -299,19 +299,20 @@ pub fn resolve_synced_public_registry_range(
     if let Some((_, record)) = active.into_iter().next() {
         return Ok(record);
     }
-    let code = if matching.is_empty() {
-        PublicRegistryStateErrorCode::NoMatchingVersion
+    let (code, message) = if matching.is_empty() {
+        (
+            PublicRegistryStateErrorCode::NoMatchingVersion,
+            format!(
+                "no synced public registry version for {namespace}:{id} satisfies {version_range}"
+            ),
+        )
     } else {
-        PublicRegistryStateErrorCode::OnlyDeprecatedVersions
-    };
-    let message = match code {
-        PublicRegistryStateErrorCode::NoMatchingVersion => format!(
-            "no synced public registry version for {namespace}:{id} satisfies {version_range}"
-        ),
-        PublicRegistryStateErrorCode::OnlyDeprecatedVersions => format!(
-            "only deprecated public registry versions for {namespace}:{id} satisfy {version_range}"
-        ),
-        _ => String::new(),
+        (
+            PublicRegistryStateErrorCode::OnlyDeprecatedVersions,
+            format!(
+                "only deprecated public registry versions for {namespace}:{id} satisfy {version_range}"
+            ),
+        )
     };
     Err(single_error(code, Path::new(version_range), message))
 }
@@ -756,6 +757,32 @@ mod tests {
         assert_eq!(
             yanked_only.errors[0].code,
             PublicRegistryStateErrorCode::OnlyDeprecatedVersions
+        );
+
+        let missing = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "other-namespace",
+            "missing-capability",
+            "^1.0",
+        )
+        .expect_err("missing range match should fail");
+        assert_eq!(
+            missing.errors[0].code,
+            PublicRegistryStateErrorCode::NoMatchingVersion
+        );
+
+        let invalid = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "not a range",
+        )
+        .expect_err("invalid range should fail");
+        assert_eq!(
+            invalid.errors[0].code,
+            PublicRegistryStateErrorCode::InvalidVersionRange
         );
     }
 

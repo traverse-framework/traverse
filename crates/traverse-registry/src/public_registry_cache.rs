@@ -86,17 +86,14 @@ pub fn cache_verified_public_registry_bytes(
         }
         return Ok(path);
     }
-    let parent = path.parent().ok_or_else(|| {
+    let parent = workspace_root
+        .join(".traverse")
+        .join("cache")
+        .join("sha256");
+    fs::create_dir_all(&parent).map_err(|error| {
         cache_error(
             PublicRegistryCacheErrorCode::CacheWriteFailed,
-            &path,
-            "public registry cache path has no parent".to_string(),
-        )
-    })?;
-    fs::create_dir_all(parent).map_err(|error| {
-        cache_error(
-            PublicRegistryCacheErrorCode::CacheWriteFailed,
-            parent,
+            &parent,
             format!("failed to create public registry cache directory: {error}"),
         )
     })?;
@@ -108,15 +105,19 @@ pub fn cache_verified_public_registry_bytes(
             format!("failed to write public registry cache entry: {error}"),
         )
     })?;
-    fs::rename(&temporary, &path).map_err(|error| {
+    commit_cache_entry(&temporary, &path)?;
+    Ok(path)
+}
+
+fn commit_cache_entry(temporary: &Path, path: &Path) -> Result<(), PublicRegistryCacheError> {
+    fs::rename(temporary, path).map_err(|error| {
         let _ = fs::remove_file(&temporary);
         cache_error(
             PublicRegistryCacheErrorCode::CacheWriteFailed,
             &path,
             format!("failed to commit public registry cache entry: {error}"),
         )
-    })?;
-    Ok(path)
+    })
 }
 
 fn normalize_digest(digest: &str) -> Option<String> {
@@ -184,6 +185,75 @@ mod tests {
         )
         .expect_err("mismatched bytes must fail");
         assert_eq!(failure.code, PublicRegistryCacheErrorCode::DigestMismatch);
+    }
+
+    #[test]
+    fn rejects_invalid_digest_shapes() {
+        let root = unique_temp_dir();
+        for digest in [
+            "invalid",
+            "sha256:short",
+            "sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+        ] {
+            let failure = cache_verified_public_registry_bytes(&root, digest, b"content")
+                .expect_err("invalid digest must fail");
+            assert_eq!(failure.code, PublicRegistryCacheErrorCode::InvalidDigest);
+        }
+    }
+
+    #[test]
+    fn reports_cache_read_and_directory_creation_failures() {
+        let root = unique_temp_dir();
+        let bytes = b"public contract";
+        let digest = format!("sha256:{}", sha256_hex(bytes));
+        let path = public_registry_cache_path(&root, &digest).expect("digest should be valid");
+        fs::create_dir_all(&path).expect("cache path directory should be created");
+        let read_failure = cache_verified_public_registry_bytes(&root, &digest, bytes)
+            .expect_err("directory cache entry must not read as bytes");
+        assert_eq!(
+            read_failure.code,
+            PublicRegistryCacheErrorCode::CacheReadFailed
+        );
+
+        let blocked_root = unique_temp_dir();
+        fs::write(blocked_root.join(".traverse"), b"not a directory")
+            .expect("blocking file should be created");
+        let write_failure = cache_verified_public_registry_bytes(&blocked_root, &digest, bytes)
+            .expect_err("cache directory creation must fail through a file");
+        assert_eq!(
+            write_failure.code,
+            PublicRegistryCacheErrorCode::CacheWriteFailed
+        );
+    }
+
+    #[test]
+    fn reports_temporary_write_and_commit_failures() {
+        let root = unique_temp_dir();
+        let bytes = b"public contract";
+        let digest = format!("sha256:{}", sha256_hex(bytes));
+        let path = public_registry_cache_path(&root, &digest).expect("digest should be valid");
+        let parent = path.parent().expect("cache path should have a parent");
+        fs::create_dir_all(parent).expect("cache parent should be created");
+        fs::create_dir(path.with_extension("tmp")).expect("temporary path should be blocked");
+        let write_failure = cache_verified_public_registry_bytes(&root, &digest, bytes)
+            .expect_err("writing through a directory must fail");
+        assert_eq!(
+            write_failure.code,
+            PublicRegistryCacheErrorCode::CacheWriteFailed
+        );
+
+        let commit_root = unique_temp_dir();
+        let temporary = commit_root.join("entry.tmp");
+        let destination = commit_root.join("entry");
+        fs::write(&temporary, bytes).expect("temporary entry should be written");
+        fs::create_dir(&destination).expect("destination directory should block rename");
+        let commit_failure = commit_cache_entry(&temporary, &destination)
+            .expect_err("rename onto a directory must fail");
+        assert_eq!(
+            commit_failure.code,
+            PublicRegistryCacheErrorCode::CacheWriteFailed
+        );
+        assert!(!temporary.exists());
     }
 
     fn unique_temp_dir() -> PathBuf {
