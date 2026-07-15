@@ -18,7 +18,7 @@
     {
       "workflow_id": "traverse-starter.process",
       "workflow_version": "1.0.0",
-      "path": "../../workflows/examples/traverse-starter/process/workflow.json"
+      "path": "../../../workflows/examples/traverse-starter/process/workflow.json"
     }
   ],
   "model_dependencies": [],

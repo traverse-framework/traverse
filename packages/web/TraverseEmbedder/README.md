@@ -123,6 +123,6 @@ npm test   # builds with tsc, then runs the node:test suite
 `npm test` compiles a set of real WASI capability modules from WebAssembly
 Text format via `wabt` (a devDependency, mirroring the Rust crate's `wat`
 crate test fixtures) and runs `BundleEmbedder` against them — including one
-test that loads and executes the real, checked-in `apps/traverse-starter`
+test that loads and executes the real, checked-in `examples/applications/traverse-starter`
 bundle end to end — so the browser execution engine is exercised for real,
 not mocked.

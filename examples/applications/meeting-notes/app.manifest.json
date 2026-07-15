@@ -18,7 +18,7 @@
     {
       "workflow_id": "meeting-notes.process",
       "workflow_version": "1.0.0",
-      "path": "../../workflows/examples/meeting-notes/process/workflow.json"
+      "path": "../../../workflows/examples/meeting-notes/process/workflow.json"
     }
   ],
   "model_dependencies": [],
