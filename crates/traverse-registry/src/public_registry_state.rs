@@ -1,3 +1,4 @@
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -24,6 +25,8 @@ pub struct PublicRegistryCapabilityRecord {
     pub version: String,
     pub digest: String,
     pub artifact_url: String,
+    pub contract_digest: String,
+    pub contract_url: String,
     pub deprecated: bool,
 }
 
@@ -54,6 +57,9 @@ pub enum PublicRegistryStateErrorCode {
     IncompatibleSchemaVersion,
     IncompatibleWorkspaceState,
     StateWriteFailed,
+    InvalidVersionRange,
+    NoMatchingVersion,
+    OnlyDeprecatedVersions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +111,20 @@ pub fn validate_public_registry_index(
             "artifact_url",
             &record.artifact_url,
             "artifact_url",
+        );
+        validate_record_field(
+            &mut errors,
+            position,
+            "contract_digest",
+            &record.contract_digest,
+            "contract_digest",
+        );
+        validate_record_field(
+            &mut errors,
+            position,
+            "contract_url",
+            &record.contract_url,
+            "contract_url",
         );
         if !seen.insert((&record.namespace, &record.id, &record.version)) {
             errors.push(error(
@@ -235,6 +255,68 @@ pub fn resolve_synced_public_registry_record(
     }))
 }
 
+/// Resolves the highest non-deprecated public record that satisfies a semver range.
+///
+/// # Errors
+///
+/// Returns stable resolution errors for malformed ranges, an absent matching
+/// version, or a range whose only matches are deprecated records. This function
+/// reads local synced state only and never contacts a registry service.
+pub fn resolve_synced_public_registry_range(
+    workspace_root: &Path,
+    workspace_id: &str,
+    namespace: &str,
+    id: &str,
+    version_range: &str,
+) -> Result<PublicRegistryCapabilityRecord, PublicRegistryStateFailure> {
+    let requirement = VersionReq::parse(version_range).map_err(|error| {
+        single_error(
+            PublicRegistryStateErrorCode::InvalidVersionRange,
+            Path::new(version_range),
+            format!("invalid registry_ref version_range {version_range}: {error}"),
+        )
+    })?;
+    let state = load_synced_public_registry_state(workspace_root, workspace_id)?;
+    let matching = state
+        .capabilities
+        .into_iter()
+        .filter_map(|record| {
+            if record.namespace != namespace || record.id != id {
+                return None;
+            }
+            Version::parse(&record.version)
+                .ok()
+                .filter(|version| requirement.matches(version))
+                .map(|version| (version, record))
+        })
+        .collect::<Vec<_>>();
+    let mut active = matching
+        .iter()
+        .filter(|(_, record)| !record.deprecated)
+        .cloned()
+        .collect::<Vec<_>>();
+    active.sort_by(|left, right| right.0.cmp(&left.0));
+    if let Some((_, record)) = active.into_iter().next() {
+        return Ok(record);
+    }
+    let (code, message) = if matching.is_empty() {
+        (
+            PublicRegistryStateErrorCode::NoMatchingVersion,
+            format!(
+                "no synced public registry version for {namespace}:{id} satisfies {version_range}"
+            ),
+        )
+    } else {
+        (
+            PublicRegistryStateErrorCode::OnlyDeprecatedVersions,
+            format!(
+                "only deprecated public registry versions for {namespace}:{id} satisfy {version_range}"
+            ),
+        )
+    };
+    Err(single_error(code, Path::new(version_range), message))
+}
+
 fn validate_synced_public_registry_state(
     path: &Path,
     workspace_id: &str,
@@ -348,6 +430,8 @@ fn capability_json_value(record: &PublicRegistryCapabilityRecord) -> Value {
         "version": record.version,
         "digest": record.digest,
         "artifact_url": record.artifact_url,
+        "contract_digest": record.contract_digest,
+        "contract_url": record.contract_url,
         "deprecated": record.deprecated
     })
 }
@@ -632,6 +716,77 @@ mod tests {
     }
 
     #[test]
+    fn range_resolution_selects_highest_active_version_and_reports_yanked_only() {
+        let workspace_root = unique_temp_dir();
+        let mut index = valid_index();
+        let mut newer = index.capabilities[0].clone();
+        newer.version = "1.2.0".to_string();
+        index.capabilities.push(newer);
+        let mut yanked = index.capabilities[0].clone();
+        yanked.version = "2.0.0".to_string();
+        yanked.deprecated = true;
+        index.capabilities.push(yanked);
+        write_synced_public_registry_state(
+            &workspace_root,
+            "local",
+            "traverse-framework/registry",
+            "index-v7",
+            "2026-07-06T00:00:00Z",
+            index,
+        )
+        .expect("state should write");
+
+        let selected = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "^1.0",
+        )
+        .expect("active range match should resolve");
+        assert_eq!(selected.version, "1.2.0");
+
+        let yanked_only = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "^2.0",
+        )
+        .expect_err("yanked-only range should fail");
+        assert_eq!(
+            yanked_only.errors[0].code,
+            PublicRegistryStateErrorCode::OnlyDeprecatedVersions
+        );
+
+        let missing = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "other-namespace",
+            "missing-capability",
+            "^1.0",
+        )
+        .expect_err("missing range match should fail");
+        assert_eq!(
+            missing.errors[0].code,
+            PublicRegistryStateErrorCode::NoMatchingVersion
+        );
+
+        let invalid = resolve_synced_public_registry_range(
+            &workspace_root,
+            "local",
+            "traverse-starter",
+            "traverse-starter.process",
+            "not a range",
+        )
+        .expect_err("invalid range should fail");
+        assert_eq!(
+            invalid.errors[0].code,
+            PublicRegistryStateErrorCode::InvalidVersionRange
+        );
+    }
+
+    #[test]
     fn write_failure_when_parent_component_is_file_leaves_no_state() {
         let workspace_root = unique_temp_dir();
         let registry_path = workspace_root.join(".traverse/workspaces/local/registry");
@@ -748,6 +903,8 @@ mod tests {
                 version: "1.0.0".to_string(),
                 digest: "sha256:5647".to_string(),
                 artifact_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/traverse-starter.wasm".to_string(),
+                contract_digest: "sha256:5647".to_string(),
+                contract_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/contract.json".to_string(),
                 deprecated: false,
             }],
         }

@@ -7004,6 +7004,8 @@ mod tests {
                 version: "1.0.0".to_string(),
                 digest: "sha256:5647c39a".to_string(),
                 artifact_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/traverse-starter.wasm".to_string(),
+                contract_digest: "sha256:5647c39a".to_string(),
+                contract_url: "https://github.com/traverse-framework/registry/releases/download/artifacts/traverse-starter.process-1.0.0/contract.json".to_string(),
                 deprecated: false,
             }],
         }
