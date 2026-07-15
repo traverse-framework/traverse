@@ -67,7 +67,7 @@ required_files=(
   "contracts/examples/hello-world/capabilities/say-hello/contract.json"
   "workflows/examples/hello-world/say-hello/workflow.json"
   "examples/applications/traverse-starter/app.manifest.json"
-  "apps/traverse-starter/components/process/component.manifest.json"
+  "examples/applications/traverse-starter/components/process/component.manifest.json"
   "examples/traverse-starter/process-agent/manifest.json"
   "examples/traverse-starter/process-agent/build-fixture.sh"
   "examples/traverse-starter/process-agent/src/agent.rs"
@@ -76,6 +76,7 @@ required_files=(
   "contracts/examples/traverse-starter/capabilities/process/contract.json"
   "workflows/examples/traverse-starter/process/workflow.json"
   "scripts/ci/traverse_starter_example_smoke.sh"
+  "scripts/ci/app_ownership_boundary_smoke.sh"
   "docs/exception-process.md"
   "docs/project-management.md"
   "docs/multi-thread-workflow.md"
@@ -329,6 +330,7 @@ grep -q "hello.world.say-hello" examples/hello-world/README.md
 grep -q "traverse-starter.process" contracts/examples/traverse-starter/capabilities/process/contract.json
 grep -q "traverse-starter.process-agent" examples/traverse-starter/process-agent/manifest.json
 grep -q "traverse-starter.process-component" examples/applications/traverse-starter/app.manifest.json
+grep -q "traverse-starter.process-component" examples/applications/traverse-starter/components/process/component.manifest.json
 grep -q "app validate --manifest \"\$app_manifest\" --json" scripts/ci/traverse_starter_example_smoke.sh
 grep -q "/v1/workspaces/local-default/execute" scripts/ci/traverse_starter_example_smoke.sh
 grep -q "starter_status: complete" scripts/ci/traverse_starter_example_smoke.sh
@@ -494,5 +496,8 @@ TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/new_capability_scaffold_smok
 
 echo "Running WASI host ABI import whitelist verification..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/wasi_host_abi_imports.sh"
+
+echo "Running app ownership boundary verification..."
+TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/app_ownership_boundary_smoke.sh"
 
 echo "Repository checks passed."

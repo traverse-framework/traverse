@@ -492,8 +492,8 @@ Those artifacts live under `examples/`, never `apps/`.
 | `apps/react-demo/` | Reference Apps | `reference-apps/react-demo/` |
 | `apps/youaskm3-starter-kit/` | Reference Apps | `reference-apps/youaskm3-starter-kit/` |
 | `apps/demo-fixtures/expedition-runtime-session.json` | Traverse fixture | `examples/fixtures/expedition-runtime-session.json` |
-| `apps/meeting-notes/app.manifest.json` | Traverse fixture | `examples/applications/meeting-notes/app.manifest.json` |
-| `apps/traverse-starter/app.manifest.json` | Traverse fixture | `examples/applications/traverse-starter/app.manifest.json` |
+| `apps/meeting-notes/` | Traverse fixture | `examples/applications/meeting-notes/` |
+| `apps/traverse-starter/` | Traverse fixture | `examples/applications/traverse-starter/` |
 
 ### Outcome
 
