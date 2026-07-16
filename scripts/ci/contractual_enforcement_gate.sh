@@ -94,7 +94,7 @@ if violations:
 manifest = {
     "bundle_id": "traverse.ci.governed-artifacts",
     "version": "0.0.0",
-    "scope": "public",
+    "scope": "private",
     "capabilities": capabilities,
     "events": events,
     "workflows": workflows,
@@ -107,4 +107,3 @@ PY
 cargo run -p traverse-cli -- bundle register "${manifest_path}"
 
 echo "Contractual enforcement gate passed."
-
