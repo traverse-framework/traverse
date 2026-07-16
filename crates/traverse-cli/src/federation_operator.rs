@@ -109,7 +109,7 @@ fn load_context(manifest_path: &Path) -> Result<LoadedFederationContext, String>
     let manifest = load_manifest(manifest_path)?;
     let bundle_manifest_path = resolve_relative_path(manifest_path, &manifest.bundle_manifest_path);
     let registered_bundle =
-        super::load_registered_bundle(&bundle_manifest_path).map_err(|e| e.to_string())?;
+        super::load_governed_public_bundle(&bundle_manifest_path).map_err(|e| e.to_string())?;
     let peer = manifest.peer.clone().into_peer();
     let trust = manifest.trust.clone().into_trust();
     let mut federation = FederationRegistry::new();
@@ -359,6 +359,7 @@ mod tests {
         render_federation_peers, render_federation_status, render_federation_sync,
         resolve_relative_path,
     };
+    use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -372,7 +373,7 @@ mod tests {
     fn federation_peers_and_status_renders_peer_listing_and_sync_summary() {
         let temp_dir = unique_temp_dir();
         let manifest_path = temp_dir.join("federation-operator.json");
-        let bundle_manifest_path = canonical_bundle_manifest_path();
+        let bundle_manifest_path = public_bundle_manifest_fixture(&temp_dir);
 
         fs::write(
             &manifest_path,
@@ -425,6 +426,35 @@ mod tests {
     fn canonical_bundle_manifest_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/expedition/registry-bundle/manifest.json")
+    }
+
+    fn public_bundle_manifest_fixture(temp_dir: &Path) -> PathBuf {
+        let source = canonical_bundle_manifest_path();
+        let source_parent = source.parent().expect("bundle manifest must have parent");
+        let mut manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&source).expect("canonical bundle manifest should read"),
+        )
+        .expect("canonical bundle manifest should parse");
+        manifest["scope"] = Value::String("public".to_string());
+        for collection in ["capabilities", "events", "workflows"] {
+            for artifact in manifest[collection]
+                .as_array_mut()
+                .expect("artifact collection should be an array")
+            {
+                let relative = artifact["path"]
+                    .as_str()
+                    .expect("artifact path should be a string");
+                artifact["path"] =
+                    Value::String(source_parent.join(relative).display().to_string());
+            }
+        }
+        let fixture = temp_dir.join("public-registry-bundle.json");
+        fs::write(
+            &fixture,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("public bundle fixture should write");
+        fixture
     }
 
     fn unique_temp_dir() -> PathBuf {

@@ -1,7 +1,7 @@
 {
   "bundle_id": "traverse-starter.seed-bundle",
   "version": "1.0.0",
-  "scope": "public",
+  "scope": "private",
   "capabilities": [
     {
       "id": "traverse-starter.validate",
