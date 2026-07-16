@@ -1,0 +1,33 @@
+{
+  "reviewed_at": "2026-07-15",
+  "policy": "Exact engine versions are selected and locked by each package implementation PR; major or engine changes require a renewed review and conformance evidence.",
+  "hosts": [
+    {
+      "platform": "Swift/iOS/macOS",
+      "engine": "WasmKit",
+      "source": "https://github.com/swiftwasm/WasmKit",
+      "reviewed_baseline": "0.3.1",
+      "license": "MIT for runtime modules",
+      "supported_hosts": "macOS 10.13+ and iOS 12.0+",
+      "security_boundary": "No WASI linkage; interpreter execution; bounded bridge memory and serialized calls"
+    },
+    {
+      "platform": "Kotlin/Android",
+      "engine": "Chicory",
+      "source": "https://github.com/dylibso/chicory",
+      "reviewed_baseline": "1.x exact version selected by #648",
+      "license": "Apache-2.0",
+      "supported_hosts": "Android/JVM versions declared and tested by #648",
+      "security_boundary": "Pure JVM with no JNI; no WASI linkage; interpreter and bounded bridge memory"
+    },
+    {
+      "platform": ".NET/WinUI",
+      "engine": "Wasmtime .NET",
+      "source": "https://github.com/bytecodealliance/wasmtime-dotnet",
+      "reviewed_baseline": "44.0.0",
+      "license": "Apache-2.0",
+      "supported_hosts": "Windows targets declared and tested by #649",
+      "security_boundary": "No WASI linkage; fuel/epoch interruption and bounded bridge memory"
+    }
+  ]
+}

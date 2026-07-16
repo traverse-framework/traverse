@@ -1,0 +1,17 @@
+{
+  "bridge": "runtime-wasm-bridge/1.0.0",
+  "fixture": "native_bridge_conformance",
+  "profiles": [
+    { "id": "swift-wasmkit", "ticket": 647, "engine": "WasmKit" },
+    { "id": "kotlin-chicory", "ticket": 648, "engine": "Chicory" },
+    { "id": "dotnet-wasmtime", "ticket": 649, "engine": "Wasmtime .NET" }
+  ],
+  "required_transcript": [
+    "ready",
+    "accepted",
+    "state_changed",
+    "capability_invoked",
+    "capability_result",
+    "stopped"
+  ]
+}
