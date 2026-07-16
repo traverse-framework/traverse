@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse.dev/runtime-wasm-bridge/1.0.0",
+  "title": "Traverse native runtime-WASM bridge ABI",
+  "version": "1.0.0",
+  "artifact": {
+    "kind": "core-webassembly-module",
+    "path": "runtime/runtime.wasm",
+    "wasi": "none",
+    "memory": "memory",
+    "output_descriptor": "little-endian u32 pointer followed by u32 length"
+  },
+  "exports": {
+    "traverse_bridge_abi_version": "() -> i32; 10000 for 1.0.0",
+    "traverse_alloc": "(length: i32) -> pointer: i32",
+    "traverse_dealloc": "(pointer: i32, length: i32) -> ()",
+    "traverse_init": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
+    "traverse_submit": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
+    "traverse_next_event": "(output_descriptor: i32) -> status: i32",
+    "traverse_cancel": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
+    "traverse_shutdown": "(output_descriptor: i32) -> status: i32"
+  },
+  "status": {
+    "ok": 0,
+    "event": 1,
+    "empty": 0,
+    "invalid_state": -1,
+    "invalid_input": -2,
+    "invalid_descriptor": -3,
+    "resource_limit": -4,
+    "internal_error": -5
+  },
+  "host_error_codes": [
+    "bridge_version_mismatch",
+    "bundle_digest_mismatch",
+    "bridge_invalid_descriptor",
+    "bridge_invalid_json",
+    "bridge_trap",
+    "bridge_timeout",
+    "bridge_resource_limit"
+  ]
+}

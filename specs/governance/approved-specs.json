@@ -831,6 +831,21 @@
         "docs/",
         "specs/070-runtime-event-sink-boundary/"
       ]
+    },
+    {
+      "id": "071-native-runtime-wasm-bridge",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/071-native-runtime-wasm-bridge/spec.md",
+      "governs": [
+        "crates/traverse-runtime/tests/native_bridge_conformance.rs",
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/TraverseEmbedder/",
+        "packages/dotnet/TraverseEmbedder/",
+        "docs/adr/0007-native-runtime-wasm-bridge.md",
+        "specs/071-native-runtime-wasm-bridge/"
+      ]
     }
   ]
 }

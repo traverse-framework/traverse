@@ -500,3 +500,37 @@ Those artifacts live under `examples/`, never `apps/`.
 The Reference Apps migration preserves app validation against public Traverse
 surfaces. Traverse follows with removal of the now-obsolete `apps/` directory
 and a repository check that prevents application source from returning.
+
+## Decision 23: Standardize Native Embedders on One Runtime-WASM Bridge
+
+- **Date**: 2026-07-15
+- **Status**: Accepted
+- **Governing spec**: `071-native-runtime-wasm-bridge`
+- **Related issues**: `#712`, `#647`, `#648`, `#649`
+
+### Context
+
+The Swift, Kotlin/Android, and .NET packages have deterministic API harnesses,
+but no production runtime artifact or shared host boundary. Choosing a native
+library or a platform-specific ABI per package would duplicate runtime
+semantics and make conformance depend on three unrelated implementations.
+
+### Decision
+
+Ship one digest-addressed core WebAssembly orchestrator module implementing
+`runtime-wasm-bridge/1.0.0`. The module owns lifecycle, submission, ordered
+event production, compatibility decisions, cancellation, resource limits, and
+structured errors. Platform packages only verify the bundle, instantiate the
+module, marshal UTF-8 JSON through the governed memory ABI, and adapt event
+delivery to idiomatic callbacks or streams.
+
+Use WasmKit for Swift, Chicory for Kotlin/Android, and the Bytecode Alliance
+Wasmtime .NET package for WinUI. Dependencies are exact-version pinned for a
+release, reviewed for license and security status, and recorded in release
+evidence. A host change is allowed only when the replacement passes the same
+bridge and embedder conformance suites.
+
+### Outcome
+
+Spec 071 and ADR-0007 define the bridge. Native package tickets may implement
+independently without changing runtime behavior or introducing a sidecar.
