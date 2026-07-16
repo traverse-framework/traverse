@@ -846,6 +846,18 @@
         "docs/adr/0007-native-runtime-wasm-bridge.md",
         "specs/071-native-runtime-wasm-bridge/"
       ]
+    },
+    {
+      "id": "072-native-bridge-compatible-lifecycle",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/072-native-bridge-compatible-lifecycle/spec.md",
+      "governs": [
+        "crates/traverse-runtime/tests/compatible_bridge_conformance.rs",
+        "docs/adr/0008-compatible-lifecycle-bridge.md",
+        "specs/072-native-bridge-compatible-lifecycle/"
+      ]
     }
   ]
 }

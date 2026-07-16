@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse.dev/runtime-wasm-bridge/1.1.0",
+  "title": "Traverse native runtime-WASM bridge ABI",
+  "version": "1.1.0",
+  "extends": "https://traverse.dev/runtime-wasm-bridge/1.0.0",
+  "artifact": {
+    "kind": "core-webassembly-module",
+    "path": "runtime/runtime.wasm",
+    "wasi": "none",
+    "memory": "memory",
+    "output_descriptor": "little-endian u32 pointer followed by u32 length"
+  },
+  "added_exports": {
+    "traverse_compatible_start": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
+    "traverse_compatible_stop": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
+    "traverse_compatible_kill": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32"
+  },
+  "requests": {
+    "compatible_start": { "required": ["capability_id", "input"] },
+    "compatible_stop": { "required": ["capability_id", "instance_id"] },
+    "compatible_kill": { "required": ["capability_id", "instance_id"] }
+  },
+  "errors": {
+    "invalid_input": -2,
+    "invalid_state": -1,
+    "compatible_instance_not_active": -1
+  },
+  "complete_embedder_api_range": ">=1.1.0,<2.0.0"
+}

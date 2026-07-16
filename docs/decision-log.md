@@ -534,3 +534,31 @@ bridge and embedder conformance suites.
 
 Spec 071 and ADR-0007 define the bridge. Native package tickets may implement
 independently without changing runtime behavior or introducing a sidecar.
+
+## Decision 24: Carry Compatible Lifecycle Through Bridge 1.1
+
+- **Date**: 2026-07-16
+- **Status**: Accepted
+- **Governing spec**: `072-native-bridge-compatible-lifecycle`
+- **Related issues**: `#716`, `#647`, `#648`, `#649`
+
+### Context
+
+Bridge 1.0 defined runtime initialization, submission, events, cancellation,
+and shutdown, but omitted the compatible-capability start, stop, and kill
+operations required by `embedder-api/1.0.0`. Implementing them in each native
+package would move lifecycle ownership out of the runtime.
+
+### Decision
+
+Bridge 1.1 adds `traverse_compatible_start`, `traverse_compatible_stop`, and
+`traverse_compatible_kill` using the existing UTF-8 JSON and output-descriptor
+ownership rules. The runtime owns instance identifiers, state validation,
+ordered lifecycle events, and shutdown cleanup. Bridge 1.1 is an additive ABI
+version, but native packages requiring the complete embedder API must reject a
+1.0 runtime artifact as incomplete.
+
+### Outcome
+
+All three native hosts implement one lifecycle contract and can resume without
+inventing platform-specific compatible-capability semantics.
