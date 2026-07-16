@@ -1,0 +1,68 @@
+name: Journal operational limits
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: ${{ matrix.os }} / ${{ matrix.profile }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            profile: host-local
+            pressure: false
+          - os: ubuntu-latest
+            profile: fsync-pressure
+            pressure: true
+          - os: macos-latest
+            profile: host-local
+            pressure: false
+          - os: windows-latest
+            profile: host-local
+            pressure: false
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Measure journal limits
+        shell: bash
+        env:
+          TRAVERSE_JOURNAL_BENCH_EVENTS: "1000"
+          TRAVERSE_JOURNAL_BENCH_PAYLOAD_BYTES: "512"
+          TRAVERSE_JOURNAL_BENCH_PROFILE: ${{ matrix.profile }}
+          TRAVERSE_JOURNAL_BENCH_ROOT: ${{ runner.temp }}
+          PRESSURE_ENABLED: ${{ matrix.pressure }}
+        run: |
+          set -euo pipefail
+          evidence="journal-operational-${{ runner.os }}-${{ matrix.profile }}.json"
+          pressure_pid=""
+          if [[ "${PRESSURE_ENABLED}" == "true" ]]; then
+            python scripts/ci/journal_storage_pressure.py "${RUNNER_TEMP}/journal-pressure" &
+            pressure_pid="$!"
+            trap 'kill "${pressure_pid}" 2>/dev/null || true' EXIT
+          fi
+          cargo run --release -p traverse-runtime --example journal_operational_limits > "${evidence}"
+          python scripts/ci/journal_operational_summary.py "${evidence}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload comparable evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: journal-operational-${{ runner.os }}-${{ matrix.profile }}
+          path: journal-operational-${{ runner.os }}-${{ matrix.profile }}.json
+          retention-days: 90

@@ -76,3 +76,23 @@ evidence.
 One operational risk remains: these measurements cover a single Darwin arm64
 host and local filesystem. Cross-platform and slower-storage regression
 tracking is a separate follow-up so it does not expand the initial evaluation.
+
+## Cross-platform regression workflow
+
+`.github/workflows/journal-operational-limits.yml` runs weekly and on manual
+dispatch. It executes the same release-mode harness on Linux, macOS, and
+Windows, plus a Linux `fsync-pressure` profile that places a bounded synchronous
+writer beside the journal workload. The pressure profile is a repeatable
+constrained-storage signal, not a claim about a named production disk class.
+
+Each matrix entry uploads a 90-day JSON artifact with the same workload,
+latency, recovery, replay, pruning, and disk-growth fields. The environment
+block records OS, architecture, and storage profile so results remain
+comparable. The workflow summary marks the investigation thresholds above but
+does not convert benchmark variance into a pull-request or unit-test gate.
+
+To collect a targeted run, dispatch **Journal operational limits** from GitHub
+Actions. Download all four artifacts and compare like-for-like profiles. Open a
+focused remediation issue when a threshold is exceeded on two consecutive
+runs or the same regression reproduces locally; attach both JSON artifacts and
+the runner image identifiers.

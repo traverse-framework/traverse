@@ -20,6 +20,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "TRAVERSE_JOURNAL_BENCH_PAYLOAD_BYTES",
         DEFAULT_PAYLOAD_BYTES,
     )?;
+    let storage_profile = std::env::var("TRAVERSE_JOURNAL_BENCH_PROFILE")
+        .unwrap_or_else(|_| "host-local".to_string());
     let root = benchmark_root()?;
     let config = JournalConfig {
         max_segment_bytes: BENCH_SEGMENT_BYTES,
@@ -58,6 +60,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append_micros.sort_unstable();
     let result = json!({
         "schema_version": "1.0.0",
+        "environment": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "storage_profile": storage_profile
+        },
         "workload": {
             "event_count": event_count,
             "payload_bytes": payload_bytes,
@@ -121,7 +128,9 @@ fn env_usize(name: &str, default: usize) -> Result<usize, Box<dyn std::error::Er
 
 fn benchmark_root() -> Result<PathBuf, std::time::SystemTimeError> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    Ok(std::env::temp_dir().join(format!("traverse-journal-benchmark-{nonce}")))
+    let base = std::env::var_os("TRAVERSE_JOURNAL_BENCH_ROOT")
+        .map_or_else(std::env::temp_dir, PathBuf::from);
+    Ok(base.join(format!("traverse-journal-benchmark-{nonce}")))
 }
 
 fn directory_bytes(root: &Path) -> Result<u64, std::io::Error> {
