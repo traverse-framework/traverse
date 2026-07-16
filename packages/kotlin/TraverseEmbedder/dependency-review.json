@@ -1,0 +1,18 @@
+{
+  "reviewed_at": "2026-07-16",
+  "engine": "Chicory",
+  "source": "https://github.com/dylibso/chicory",
+  "exact_version": "1.7.5",
+  "license": "Apache-2.0",
+  "compatibility": {
+    "java_release": "11",
+    "android_min_sdk": 28,
+    "traverse_jvm_target": 17
+  },
+  "selection": "1.7.5 is the current stable Maven Central release and includes upstream Android device-test coverage at minSdk 28.",
+  "security_boundary": "Pure JVM interpreter; runtime and wasm artifacts only; no chicory-wasi production dependency; imports rejected; SHA-256 verified before parsing; 32 MiB default artifact limit.",
+  "known_limitations": [
+    "Chicory 1.7.5 does not expose fuel or epoch interruption controls.",
+    "Runtime JSON marshalling, serialized event draining, and deadline enforcement remain follow-up work before package release."
+  ]
+}
