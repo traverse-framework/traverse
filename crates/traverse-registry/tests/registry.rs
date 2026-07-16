@@ -1041,7 +1041,7 @@ fn loads_canonical_registry_bundle_from_manifest() {
     let bundle = load_registry_bundle(manifest_path.as_path()).expect("canonical bundle loads");
 
     assert_eq!(bundle.bundle_id, "expedition.planning.seed-bundle");
-    assert_eq!(bundle.scope, RegistryScope::Public);
+    assert_eq!(bundle.scope, RegistryScope::Private);
     assert_eq!(bundle.capabilities.len(), 6);
     assert_eq!(bundle.events.len(), 5);
     assert_eq!(bundle.workflows.len(), 1);
