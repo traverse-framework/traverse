@@ -1,5 +1,7 @@
 import Foundation
+import CryptoKit
 import Testing
+import WAT
 @testable import TraverseEmbedder
 
 @Test func lifecycleAndSubmissionAreDeterministic() throws {
@@ -85,4 +87,73 @@ import Testing
             supportedHostVersions: []
         )
     }
+}
+
+@Test func wasmKitBridgeVerifiesAndInstantiatesTheGovernedABI() throws {
+    let wasm = try wat2wasm(validBridgeWAT)
+    let bundle = try fixtureBundle(wasm: wasm)
+
+    let bridge = try WasmKitRuntimeBridge(bundle: bundle)
+
+    #expect(bridge.runtimeWasmDigest == digest(of: wasm))
+    #expect(bridge.runtimeURL.lastPathComponent == "runtime.wasm")
+}
+
+@Test func wasmKitBridgeRejectsTamperingBeforeInstantiation() throws {
+    let wasm = try wat2wasm(validBridgeWAT)
+    let bundle = try fixtureBundle(wasm: wasm, declaredDigest: "sha256:" + String(repeating: "0", count: 64))
+
+    #expect(throws: TraverseEmbedderError.incompatibleBundle("bundle_digest_mismatch")) {
+        try WasmKitRuntimeBridge(bundle: bundle)
+    }
+}
+
+@Test func wasmKitBridgeRejectsAmbientImportsAndWrongABIMajor() throws {
+    let imported = try wat2wasm("""
+        (module
+          (import "wasi_snapshot_preview1" "fd_write" (func))
+          (memory (export "memory") 1)
+          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10000))
+        """)
+    let importedBundle = try fixtureBundle(wasm: imported)
+    #expect(throws: TraverseEmbedderError.incompatibleBundle("runtime/runtime.wasm requires undeclared ambient imports")) {
+        try WasmKitRuntimeBridge(bundle: importedBundle)
+    }
+
+    let wrongVersion = try wat2wasm(validBridgeWAT.replacingOccurrences(of: "i32.const 10100", with: "i32.const 20000"))
+    let wrongVersionBundle = try fixtureBundle(wasm: wrongVersion)
+    #expect(throws: TraverseEmbedderError.incompatibleBundle("bridge_version_mismatch")) {
+        try WasmKitRuntimeBridge(bundle: wrongVersionBundle)
+    }
+}
+
+private let validBridgeWAT = """
+    (module
+      (memory (export "memory") 1 16)
+      (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+      (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+      (func (export "traverse_dealloc") (param i32 i32))
+      (func (export "traverse_init") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_submit") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_next_event") (param i32) (result i32) i32.const 0)
+      (func (export "traverse_cancel") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_shutdown") (param i32) (result i32) i32.const 0))
+    """
+
+private func fixtureBundle(wasm: [UInt8], declaredDigest: String? = nil) throws -> TraverseBundle {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let runtime = root.appendingPathComponent("runtime", isDirectory: true)
+    try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: true)
+    try Data(wasm).write(to: runtime.appendingPathComponent("runtime.wasm"))
+    return try TraverseBundle(
+        rootURL: root,
+        runtimeWasmDigest: declaredDigest ?? digest(of: wasm)
+    )
+}
+
+private func digest(of bytes: [UInt8]) -> String {
+    "sha256:" + SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
 }
