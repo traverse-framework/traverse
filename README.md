@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.7.0-blue)](https://github.com/traverse-framework/traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.8.0-blue)](https://github.com/traverse-framework/traverse/releases)
 
 Your business logic runs in the browser, on your server, and in a cloud function.
 They drift. You maintain three versions of the same behavior.
@@ -102,7 +102,7 @@ Scaffolds a governed app bundle. Add your capability contracts, workflows, and W
 
 ### Consumer and release surfaces
 
-- [docs/releases/v0.7.0.md](docs/releases/v0.7.0.md) — current release notes
+- [docs/releases/v0.8.0.md](docs/releases/v0.8.0.md) — current release notes
 - [docs/app-consumable-consumer-bundle.md](docs/app-consumable-consumer-bundle.md) — versioned consumer bundle
 - [docs/app-consumable-package-release-pointer.md](docs/app-consumable-package-release-pointer.md) — package release pointer
 - [docs/packaged-traverse-runtime-artifact.md](docs/packaged-traverse-runtime-artifact.md) — packaged runtime artifact
