@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "measured_at": "2026-07-15",
+  "environment": {
+    "os": "macOS 26.5.2",
+    "architecture": "arm64",
+    "rustc": "1.96.0 (ac68faa20 2026-05-25)",
+    "profile": "release"
+  },
+  "runs": [
+    {
+      "workload": {
+        "event_count": 1000,
+        "payload_bytes": 512,
+        "segment_max_bytes": 16384,
+        "retention_max_total_bytes": 65536
+      },
+      "append_latency_micros": {
+        "min": 2610,
+        "p50": 3975,
+        "p95": 4639,
+        "p99": 5062,
+        "max": 8108
+      },
+      "restart_recovery_micros": 5856,
+      "replay": {
+        "event_count": 1000,
+        "elapsed_micros": 4803,
+        "events_per_second": 208203
+      },
+      "retention_compaction": {
+        "elapsed_micros": 4118,
+        "deleted_segments": 49,
+        "segments_before": 53,
+        "segments_after": 4,
+        "bytes_before": 901465,
+        "bytes_after": 62214
+      }
+    },
+    {
+      "workload": {
+        "event_count": 2500,
+        "payload_bytes": 4096,
+        "segment_max_bytes": 16384,
+        "retention_max_total_bytes": 65536
+      },
+      "append_latency_micros": {
+        "min": 1556,
+        "p50": 3971,
+        "p95": 5077,
+        "p99": 6205,
+        "max": 10809
+      },
+      "restart_recovery_micros": 55108,
+      "replay": {
+        "event_count": 2500,
+        "elapsed_micros": 17076,
+        "events_per_second": 146404
+      },
+      "retention_compaction": {
+        "elapsed_micros": 24932,
+        "deleted_segments": 622,
+        "segments_before": 625,
+        "segments_after": 3,
+        "bytes_before": 11216999,
+        "bytes_after": 53852
+      }
+    }
+  ]
+}
