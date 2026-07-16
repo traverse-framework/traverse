@@ -23,3 +23,7 @@ copies runtime-owned outputs before the next mutation, releases every caller
 allocation exactly once, bounds output descriptors, and exposes ordered
 single-event draining. Typed public result mapping, deadline enforcement,
 shared conformance, and Compose integration remain tracked by #648.
+
+`RuntimeTraverseEmbedder` maps that boundary into stable public Kotlin
+submission, event, and compatible-lifecycle result types while preserving
+runtime-owned identifiers and statuses.
