@@ -1,0 +1,20 @@
+{
+  "reviewed_at": "2026-07-16",
+  "engine": "WasmKit",
+  "source": "https://github.com/swiftwasm/WasmKit",
+  "exact_version": "0.2.2",
+  "license": "MIT for runtime modules",
+  "compatibility": {
+    "swift_tools": "6.0",
+    "macos": "10.13+",
+    "ios": "12.0+",
+    "swift_system": "1.5.0 exact"
+  },
+  "selection": "0.2.2 is the newest reviewed release compatible with the package Swift 6.0 toolchain. The Spec 071 baseline 0.3.1 requires Swift tools 6.3, macOS 15, and iOS 18 and is therefore not host-compatible.",
+  "transitive_resolution": "swift-system 1.5.0 is pinned because WasmKit's open lower bound otherwise resolves 1.7.x, whose Stat API conflicts with WasmKit 0.2.2 SystemExtras on current Xcode.",
+  "security_boundary": "Core Wasm interpreter only; no WasmKitWASI product; imports rejected; SHA-256 verified before parsing; 32 MiB default artifact limit.",
+  "known_limitations": [
+    "WasmKit 0.2.2 does not expose public fuel or epoch controls.",
+    "Runtime memory growth and serialized call enforcement remain follow-up work before package release."
+  ]
+}
