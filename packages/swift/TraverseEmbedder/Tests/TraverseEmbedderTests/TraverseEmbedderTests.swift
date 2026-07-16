@@ -120,7 +120,7 @@ import WAT
         try WasmKitRuntimeBridge(bundle: importedBundle)
     }
 
-    let wrongVersion = try wat2wasm(validBridgeWAT.replacingOccurrences(of: "i32.const 10000", with: "i32.const 20000"))
+    let wrongVersion = try wat2wasm(validBridgeWAT.replacingOccurrences(of: "i32.const 10100", with: "i32.const 20000"))
     let wrongVersionBundle = try fixtureBundle(wasm: wrongVersion)
     #expect(throws: TraverseEmbedderError.incompatibleBundle("bridge_version_mismatch")) {
         try WasmKitRuntimeBridge(bundle: wrongVersionBundle)
@@ -130,13 +130,16 @@ import WAT
 private let validBridgeWAT = """
     (module
       (memory (export "memory") 1 16)
-      (func (export "traverse_bridge_abi_version") (result i32) i32.const 10000)
+      (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
       (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
       (func (export "traverse_dealloc") (param i32 i32))
       (func (export "traverse_init") (param i32 i32 i32) (result i32) i32.const 0)
       (func (export "traverse_submit") (param i32 i32 i32) (result i32) i32.const 0)
       (func (export "traverse_next_event") (param i32) (result i32) i32.const 0)
       (func (export "traverse_cancel") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) i32.const 0)
+      (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) i32.const 0)
       (func (export "traverse_shutdown") (param i32) (result i32) i32.const 0))
     """
 

@@ -2,12 +2,12 @@ import CryptoKit
 import Foundation
 import WasmKit
 
-/// Production loader for the governed `runtime-wasm-bridge/1.0.0` module.
+/// Production loader for the governed `runtime-wasm-bridge/1.1.0` module.
 ///
 /// The loader verifies the artifact before WasmKit parses or instantiates it,
-/// rejects ambient imports, and validates the complete v1 export surface.
+/// rejects ambient imports, and validates the complete embedder export surface.
 public final class WasmKitRuntimeBridge: @unchecked Sendable {
-    public static let abiVersion = 10_000
+    public static let abiVersion = 10_100
     public static let defaultMaximumArtifactBytes = 32 * 1024 * 1024
 
     private static let requiredFunctions: [(String, [ValueType], [ValueType])] = [
@@ -18,6 +18,9 @@ public final class WasmKitRuntimeBridge: @unchecked Sendable {
         ("traverse_submit", [.i32, .i32, .i32], [.i32]),
         ("traverse_next_event", [.i32], [.i32]),
         ("traverse_cancel", [.i32, .i32, .i32], [.i32]),
+        ("traverse_compatible_start", [.i32, .i32, .i32], [.i32]),
+        ("traverse_compatible_stop", [.i32, .i32, .i32], [.i32]),
+        ("traverse_compatible_kill", [.i32, .i32, .i32], [.i32]),
         ("traverse_shutdown", [.i32], [.i32]),
     ]
 

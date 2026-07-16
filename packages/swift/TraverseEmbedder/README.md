@@ -12,7 +12,8 @@ results. It never starts `traverse-cli serve` or uses server-discovery files.
 core WasmKit product, verifies `runtime/runtime.wasm` against its declared
 SHA-256 digest and a 32 MiB default artifact limit before parsing, rejects all
 ambient imports, and validates the memory, function signatures, and ABI version
-required by `runtime-wasm-bridge/1.0.0`. It never links WasmKitWASI. JSON
+required by `runtime-wasm-bridge/1.1.0`, including compatible lifecycle exports.
+It never links WasmKitWASI. JSON
 marshalling, the serialized event-drain loop, evidence publication, and
 app-reference integration remain tracked by Traverse #647.
 
