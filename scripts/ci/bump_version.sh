@@ -38,26 +38,43 @@ trap 'rm -f "${tmp_file}"' EXIT
 awk -v new_version="${new_version}" '
   BEGIN {
     in_workspace_package = 0
-    replacements = 0
+    in_workspace_dependencies = 0
+    package_replacements = 0
+    dependency_replacements = 0
   }
   /^\[workspace\.package\]$/ {
     in_workspace_package = 1
+    in_workspace_dependencies = 0
+    print
+    next
+  }
+  /^\[workspace\.dependencies\]$/ {
+    in_workspace_package = 0
+    in_workspace_dependencies = 1
     print
     next
   }
   /^\[/ {
     in_workspace_package = 0
+    in_workspace_dependencies = 0
   }
   in_workspace_package && $1 == "version" && $2 == "=" {
     print "version = \"" new_version "\""
-    replacements += 1
+    package_replacements += 1
+    next
+  }
+  in_workspace_dependencies && /^traverse-[a-zA-Z0-9_-]+ = \{.*version = "[0-9]+\.[0-9]+\.[0-9]+"/ {
+    line = $0
+    gsub(/version = "[0-9]+\.[0-9]+\.[0-9]+"/, "version = \"" new_version "\"", line)
+    print line
+    dependency_replacements += 1
     next
   }
   {
     print
   }
   END {
-    if (replacements != 1) {
+    if (package_replacements != 1 || dependency_replacements < 1) {
       exit 1
     }
   }
