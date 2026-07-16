@@ -27,7 +27,7 @@
     }
   },
   "lookup": {
-    "scope": "public_only",
+    "scope": "prefer_private",
     "allow_ambiguity": false
   },
   "context": {
