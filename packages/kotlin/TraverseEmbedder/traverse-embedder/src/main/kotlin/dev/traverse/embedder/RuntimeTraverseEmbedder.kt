@@ -10,7 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** Typed public embedder backed exclusively by runtime-owned bridge results. */
-class RuntimeTraverseEmbedder private constructor(private val client: ChicoryBridgeClient) {
+class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBridgeClient) {
     constructor(bundle: TraverseBundle) : this(ChicoryBridgeClient(ChicoryRuntimeBridge(bundle)))
 
     fun initialize(configJson: String): String = client.initialize(configJson)
@@ -56,8 +56,11 @@ class RuntimeTraverseEmbedder private constructor(private val client: ChicoryBri
         instanceId: String? = null,
     ): String = buildJsonObject {
         put("capability_id", capabilityId)
-        if (inputJson != null) put("input", Json.parseToJsonElement(inputJson))
-        if (instanceId == null) put("instance_id", JsonNull) else put("instance_id", instanceId)
+        if (inputJson != null) {
+            put("input", Json.parseToJsonElement(inputJson))
+        } else {
+            if (instanceId == null) put("instance_id", JsonNull) else put("instance_id", instanceId)
+        }
     }.toString()
 
     private fun compatibleResult(json: String): TraverseCompatibleResult {

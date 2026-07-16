@@ -14,5 +14,11 @@
   "known_limitations": [
     "Chicory 1.7.5 does not expose fuel or epoch interruption controls.",
     "Runtime JSON marshalling, serialized event draining, and deadline enforcement remain follow-up work before package release."
-  ]
+  ],
+  "wire_format_dependency": {
+    "package": "org.jetbrains.kotlinx:kotlinx-serialization-json",
+    "version": "1.7.3",
+    "license": "Apache-2.0",
+    "purpose": "Strict typed mapping of runtime-owned UTF-8 JSON results without Android platform JSON stubs"
+  }
 }

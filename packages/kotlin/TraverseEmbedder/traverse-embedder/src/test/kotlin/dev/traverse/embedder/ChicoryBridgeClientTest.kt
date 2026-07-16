@@ -13,10 +13,25 @@ class ChicoryBridgeClientTest {
         val client = ChicoryBridgeClient(ChicoryRuntimeBridge(fixtureBundle()))
 
         assertEquals("{\"status\":\"ready\"}", client.initialize("{}"))
-        assertEquals("{\"status\":\"accepted\"}", client.submit("{\"target_id\":\"demo\"}"))
-        assertEquals("{\"sequence\":1}", client.nextEvent())
+        assertEquals("{\"session_id\":\"s1\",\"status\":\"accepted\"}", client.submit("{\"target_id\":\"demo\"}"))
+        assertEquals("{\"sequence\":1,\"target_id\":\"demo\",\"status\":\"completed\"}", client.nextEvent())
         assertNull(client.nextEvent())
         assertEquals("{\"status\":\"stopped\"}", client.shutdown())
+    }
+
+    @Test fun mapsRuntimeOwnedResultsIntoPublicTypes() {
+        val runtime = RuntimeTraverseEmbedder(ChicoryBridgeClient(ChicoryRuntimeBridge(fixtureBundle())))
+        runtime.initialize("{}")
+
+        assertEquals(
+            TraverseSubmissionResult("s1", "accepted"),
+            runtime.submit(TraverseSubmission("demo", "{}")),
+        )
+        assertEquals(
+            listOf(TraverseRuntimeEvent(1, "demo", "completed")),
+            runtime.subscribe(),
+        )
+        assertEquals("{\"status\":\"stopped\"}", runtime.shutdown())
     }
 
     private fun fixtureBundle(): TraverseBundle {
@@ -33,9 +48,9 @@ class ChicoryBridgeClientTest {
         (module
           (memory (export "memory") 1 16)
           (data (i32.const 512) "{\22status\22:\22ready\22}")
-          (data (i32.const 544) "{\22status\22:\22accepted\22}")
-          (data (i32.const 576) "{\22sequence\22:1}")
-          (data (i32.const 608) "{\22status\22:\22stopped\22}")
+          (data (i32.const 544) "{\22session_id\22:\22s1\22,\22status\22:\22accepted\22}")
+          (data (i32.const 608) "{\22sequence\22:1,\22target_id\22:\22demo\22,\22status\22:\22completed\22}")
+          (data (i32.const 704) "{\22status\22:\22stopped\22}")
           (global ${'$'}next (mut i32) (i32.const 0))
           (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
           (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
@@ -47,23 +62,23 @@ class ChicoryBridgeClientTest {
           (func (export "traverse_init") (param i32 i32 i32) (result i32)
             local.get 2 i32.const 512 i32.const 18 call ${'$'}result)
           (func (export "traverse_submit") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const 544 i32.const 21 call ${'$'}result)
+            local.get 2 i32.const 544 i32.const 39 call ${'$'}result)
           (func (export "traverse_next_event") (param i32) (result i32)
             global.get ${'$'}next i32.eqz
             if (result i32)
               i32.const 1 global.set ${'$'}next
-              local.get 0 i32.const 576 i32.const 14 call ${'$'}result drop
+              local.get 0 i32.const 608 i32.const 54 call ${'$'}result drop
               i32.const 1
             else i32.const 0 end)
           (func (export "traverse_cancel") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const 544 i32.const 21 call ${'$'}result)
+            local.get 2 i32.const 544 i32.const 39 call ${'$'}result)
           (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const 544 i32.const 21 call ${'$'}result)
+            local.get 2 i32.const 544 i32.const 39 call ${'$'}result)
           (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const 544 i32.const 21 call ${'$'}result)
+            local.get 2 i32.const 544 i32.const 39 call ${'$'}result)
           (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const 544 i32.const 21 call ${'$'}result)
+            local.get 2 i32.const 544 i32.const 39 call ${'$'}result)
           (func (export "traverse_shutdown") (param i32) (result i32)
-            local.get 0 i32.const 608 i32.const 20 call ${'$'}result))
+            local.get 0 i32.const 704 i32.const 20 call ${'$'}result))
     """.trimIndent()
 }
