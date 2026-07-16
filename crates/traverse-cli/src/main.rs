@@ -27,9 +27,10 @@ use traverse_registry::{
     BinaryReference, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
     ComposabilityMetadata, CompositionKind, CompositionPattern, ConnectorRegistration,
     DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind, LookupScope,
-    PublicRegistryIndex, RegistryBundle, RegistryProvenance, RegistryScope, SourceKind,
-    SourceReference, WorkflowDefinition, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    load_application_bundle_manifest, load_registry_bundle, write_synced_public_registry_state,
+    PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle, RegistryProvenance,
+    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowReference,
+    WorkflowRegistration, WorkflowRegistry, load_application_bundle_manifest, load_registry_bundle,
+    write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -1404,12 +1405,28 @@ fn inspect_bundle(manifest_path: &Path, json_output: bool) -> Result<String, Cli
 }
 
 fn register_bundle(manifest_path: &Path, json_output: bool) -> Result<String, CliError> {
-    let registered = load_registered_bundle(manifest_path)?;
+    let base_dir = env::current_dir().map_err(|error| {
+        CliError::IoError(format!("failed to resolve current directory: {error}"))
+    })?;
+    let workspace_id = env::var("TRAVERSE_WORKSPACE_ID").unwrap_or_else(|_| "system".to_string());
+    let public_state_path =
+        traverse_registry::synced_public_registry_state_path(&base_dir, &workspace_id);
+    let public_records = if public_state_path.exists() {
+        traverse_registry::load_synced_public_registry_state(&base_dir, &workspace_id)
+            .map_err(|failure| {
+                CliError::ValidationFailed(render_public_registry_state_failure(failure))
+            })?
+            .capabilities
+    } else {
+        Vec::new()
+    };
+    let registered = load_registered_bundle_with_public_records(manifest_path, &public_records)?;
     if json_output {
         let json = serde_json::json!({
             "registered_capabilities": registered.capability_records.len(),
             "registered_events": registered.event_records.len(),
             "registered_workflows": registered.workflow_records.len(),
+            "evidence": registered.evidence,
         });
         serde_json::to_string_pretty(&json).map_err(|e| {
             CliError::IoError(format!("failed to serialize registration summary: {e}"))
@@ -1420,8 +1437,20 @@ fn register_bundle(manifest_path: &Path, json_output: bool) -> Result<String, Cl
             &registered.capability_records,
             &registered.event_records,
             &registered.workflow_records,
+            &registered.evidence,
         ))
     }
+}
+
+fn render_public_registry_state_failure(
+    failure: traverse_registry::PublicRegistryStateFailure,
+) -> String {
+    failure
+        .errors
+        .into_iter()
+        .map(|error| format!("{:?}: {} ({})", error.code, error.message, error.path))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn app_new(app_id: &str, register: bool, workspace_id: Option<&str>) -> Result<String, CliError> {
@@ -3638,6 +3667,7 @@ fn render_bundle_registration_summary(
     capability_records: &[String],
     event_records: &[String],
     workflow_records: &[String],
+    evidence: &[BundleRegistrationEvidence],
 ) -> String {
     let mut lines = vec![
         format!("bundle_id: {}", bundle.bundle_id),
@@ -3661,6 +3691,14 @@ fn render_bundle_registration_summary(
     lines.push("workflow_records:".to_string());
     for record in workflow_records {
         lines.push(format!("  - {record}"));
+    }
+
+    lines.push("evidence:".to_string());
+    for item in evidence {
+        lines.push(format!(
+            "  - [{}] {}@{}: {}",
+            item.code, item.capability_id, item.capability_version, item.message
+        ));
     }
 
     lines.join("\n")
@@ -4012,6 +4050,17 @@ struct RegisteredBundle {
     capability_records: Vec<String>,
     event_records: Vec<String>,
     workflow_records: Vec<String>,
+    evidence: Vec<BundleRegistrationEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct BundleRegistrationEvidence {
+    code: &'static str,
+    path: String,
+    message: String,
+    capability_id: String,
+    capability_version: String,
+    lookup_scope: &'static str,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -4101,10 +4150,31 @@ fn build_capability_registration(
 }
 
 fn load_registered_bundle(manifest_path: &Path) -> Result<RegisteredBundle, CliError> {
+    load_registered_bundle_with_public_records(manifest_path, &[])
+}
+
+fn load_governed_public_bundle(manifest_path: &Path) -> Result<RegisteredBundle, CliError> {
+    load_registered_bundle_with_policy(manifest_path, &[], false)
+}
+
+fn load_registered_bundle_with_public_records(
+    manifest_path: &Path,
+    public_records: &[PublicRegistryCapabilityRecord],
+) -> Result<RegisteredBundle, CliError> {
+    load_registered_bundle_with_policy(manifest_path, public_records, true)
+}
+
+fn load_registered_bundle_with_policy(
+    manifest_path: &Path,
+    public_records: &[PublicRegistryCapabilityRecord],
+    reject_local_public_scope: bool,
+) -> Result<RegisteredBundle, CliError> {
     let bundle = load_registry_bundle(manifest_path).map_err(|failure| {
         let msg = failure.errors[0].message.clone();
         CliError::IoError(msg)
     })?;
+
+    let evidence = enforce_bundle_scope(&bundle, public_records, reject_local_public_scope)?;
 
     let mut capability_registry = CapabilityRegistry::new();
     let mut event_registry = EventRegistry::new();
@@ -4201,7 +4271,42 @@ fn load_registered_bundle(manifest_path: &Path) -> Result<RegisteredBundle, CliE
         capability_records,
         event_records,
         workflow_records,
+        evidence,
     })
+}
+
+fn enforce_bundle_scope(
+    bundle: &RegistryBundle,
+    public_records: &[PublicRegistryCapabilityRecord],
+    reject_local_public_scope: bool,
+) -> Result<Vec<BundleRegistrationEvidence>, CliError> {
+    if reject_local_public_scope && bundle.scope == RegistryScope::Public {
+        return Err(CliError::ValidationFailed(
+            "local_public_scope_rejected: local bundle registration cannot populate the public registry tier; use scope: private for local testing or traverse-cli capability publish for governed publication ($.scope)".to_string(),
+        ));
+    }
+
+    Ok(bundle
+        .capabilities
+        .iter()
+        .filter(|capability| {
+            public_records.iter().any(|public| {
+                public.id == capability.manifest.id
+                    && public.version == capability.manifest.version
+            })
+        })
+        .map(|capability| BundleRegistrationEvidence {
+            code: "private_shadows_synced_public",
+            path: capability.path.display().to_string(),
+            message: format!(
+                "private capability {}@{} overrides the synced public record for prefer-private lookup",
+                capability.manifest.id, capability.manifest.version
+            ),
+            capability_id: capability.manifest.id.clone(),
+            capability_version: capability.manifest.version.clone(),
+            lookup_scope: "prefer_private",
+        })
+        .collect())
 }
 
 fn register_reference_connectors(
@@ -4993,9 +5098,9 @@ mod tests {
         execute_agent, execute_expedition, execute_traverse_starter_process,
         execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
         inspect_bundle, inspect_event, inspect_trace, inspect_workflow, latest_index_release_asset,
-        load_registered_bundle, load_runtime_request, parse_command, publish_file_sha256_digest,
-        register_bundle, register_generated_app_bundle, registry_sync_at,
-        registry_sync_failure_json, reject_private_contract_scope, run_command,
+        load_registered_bundle, load_registered_bundle_with_public_records, load_runtime_request,
+        parse_command, publish_file_sha256_digest, register_bundle, register_generated_app_bundle,
+        registry_sync_at, registry_sync_failure_json, reject_private_contract_scope, run_command,
         validate_registry_path_segment,
     };
     use crate::agent_packages::fnv1a64;
@@ -6348,6 +6453,9 @@ mod tests {
     fn register_bundle_registers_canonical_expedition_artifacts() {
         let manifest_path = repo_root().join("examples/expedition/registry-bundle/manifest.json");
 
+        let registered = load_registered_bundle(&manifest_path)
+            .expect("non-shadowing private bundle should register");
+        assert!(registered.evidence.is_empty());
         let output =
             register_bundle(&manifest_path, false).expect("bundle register should succeed");
 
@@ -6355,6 +6463,77 @@ mod tests {
         assert!(output.contains("registered_events: 5"));
         assert!(output.contains("registered_workflows: 1"));
         assert!(output.contains("expedition.planning.plan-expedition@1.0.0 (workflow)"));
+    }
+
+    #[test]
+    fn register_bundle_rejects_local_public_scope_with_stable_guidance() {
+        let source = repo_root().join("examples/expedition/registry-bundle/manifest.json");
+        let source_parent = source.parent().expect("bundle manifest must have parent");
+        let mut manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&source).expect("canonical bundle manifest should read"),
+        )
+        .expect("canonical bundle manifest should parse");
+        manifest["scope"] = Value::String("public".to_string());
+        for collection in ["capabilities", "events", "workflows"] {
+            for artifact in manifest[collection]
+                .as_array_mut()
+                .expect("artifact collection should be an array")
+            {
+                let relative = artifact["path"]
+                    .as_str()
+                    .expect("artifact path should be a string");
+                artifact["path"] =
+                    Value::String(source_parent.join(relative).display().to_string());
+            }
+        }
+        let temp_dir = unique_temp_dir();
+        let manifest_path = temp_dir.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+
+        let error = load_registered_bundle(&manifest_path)
+            .expect_err("local public bundle registration must fail");
+
+        assert!(error.message().contains("local_public_scope_rejected"));
+        assert!(error.message().contains("scope: private"));
+        assert!(error.message().contains("capability publish"));
+    }
+
+    #[test]
+    fn private_bundle_shadow_emits_evidence_and_keeps_private_precedence() {
+        let manifest_path =
+            repo_root().join("examples/traverse-starter/registry-bundle/manifest.json");
+        let public = PublicRegistryCapabilityRecord {
+            namespace: "traverse-starter".to_string(),
+            id: "traverse-starter.process".to_string(),
+            version: "1.0.0".to_string(),
+            digest: "sha256:fixture".to_string(),
+            artifact_url: "https://example.invalid/process.wasm".to_string(),
+            contract_digest: "sha256:contract".to_string(),
+            contract_url: "https://example.invalid/contract.json".to_string(),
+            deprecated: false,
+        };
+
+        let registered = load_registered_bundle_with_public_records(&manifest_path, &[public])
+            .expect("private shadow registration should succeed");
+
+        assert_eq!(registered.evidence.len(), 1);
+        assert_eq!(registered.evidence[0].code, "private_shadows_synced_public");
+        let resolved = registered
+            .capability_registry
+            .find_exact(
+                traverse_registry::LookupScope::PreferPrivate,
+                "traverse-starter.process",
+                "1.0.0",
+            )
+            .expect("prefer-private lookup should resolve local shadow");
+        assert_eq!(
+            resolved.record.scope,
+            traverse_registry::RegistryScope::Private
+        );
     }
 
     #[test]
@@ -6366,7 +6545,7 @@ mod tests {
             r#"{
   "bundle_id": "expedition.planning.seed-bundle",
   "version": "1.0.0",
-  "scope": "public",
+  "scope": "private",
   "capabilities": [
     {
       "id": "expedition.planning.capture-expedition-objective",
@@ -6789,7 +6968,7 @@ mod tests {
     }
   },
   "lookup": {
-    "scope": "public_only",
+    "scope": "prefer_private",
     "allow_ambiguity": false
   },
   "context": {
