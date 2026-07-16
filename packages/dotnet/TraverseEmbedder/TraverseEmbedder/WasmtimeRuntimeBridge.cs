@@ -1,0 +1,131 @@
+using System.Security.Cryptography;
+using Wasmtime;
+
+namespace Traverse.Embedder;
+
+/// <summary>Fail-closed loader for runtime-wasm-bridge/1.1.0.</summary>
+public sealed class WasmtimeRuntimeBridge : IDisposable
+{
+    public const int AbiVersion = 10_100;
+    public const long DefaultMaximumArtifactBytes = 32L * 1024L * 1024L;
+
+    private readonly Engine engine;
+    private readonly Module module;
+    private readonly Linker linker;
+    private readonly Store store;
+
+    public string RuntimePath { get; }
+    public string RuntimeWasmDigest { get; }
+    internal Instance Instance { get; }
+
+    public WasmtimeRuntimeBridge(
+        TraverseBundle bundle,
+        long maximumArtifactBytes = DefaultMaximumArtifactBytes)
+    {
+        bundle.Validate();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumArtifactBytes);
+
+        RuntimePath = Path.Combine(bundle.RootPath, "runtime", "runtime.wasm");
+        if (!File.Exists(RuntimePath))
+        {
+            throw new TraverseBundleException("runtime/runtime.wasm is unavailable");
+        }
+
+        var file = new FileInfo(RuntimePath);
+        if (file.Length > maximumArtifactBytes)
+        {
+            throw new TraverseBundleException("runtime/runtime.wasm exceeds the configured size limit");
+        }
+
+        var bytes = File.ReadAllBytes(RuntimePath);
+        RuntimeWasmDigest = "sha256:" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        if (!string.Equals(NormalizeDigest(bundle.RuntimeWasmDigest), RuntimeWasmDigest, StringComparison.Ordinal))
+        {
+            throw new TraverseBundleException("bundle_digest_mismatch");
+        }
+
+        engine = new Engine();
+        try
+        {
+            module = Module.FromBytes(engine, "traverse-runtime", bytes);
+        }
+        catch (WasmtimeException error)
+        {
+            engine.Dispose();
+            throw new TraverseBundleException("runtime/runtime.wasm is not a valid core WebAssembly module", error);
+        }
+
+        if (module.Imports.Count != 0)
+        {
+            module.Dispose();
+            engine.Dispose();
+            throw new TraverseBundleException("runtime/runtime.wasm requires undeclared ambient imports");
+        }
+
+        linker = new Linker(engine);
+        store = new Store(engine);
+        try
+        {
+            Instance = linker.Instantiate(store, module);
+            ValidateExports(Instance);
+        }
+        catch
+        {
+            store.Dispose();
+            linker.Dispose();
+            module.Dispose();
+            engine.Dispose();
+            throw;
+        }
+    }
+
+    private static void ValidateExports(Instance instance)
+    {
+        if (instance.GetMemory("memory") is null)
+        {
+            throw new TraverseBundleException("runtime/runtime.wasm is missing required export memory");
+        }
+
+        RequireFunction(instance, "traverse_alloc", typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_dealloc", null, typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_init", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_submit", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_next_event", typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_cancel", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_compatible_start", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_compatible_stop", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_compatible_kill", typeof(int), typeof(int), typeof(int), typeof(int));
+        RequireFunction(instance, "traverse_shutdown", typeof(int), typeof(int));
+
+        var version = instance.GetFunction<int>("traverse_bridge_abi_version");
+        if (version is null || version() != AbiVersion)
+        {
+            throw new TraverseBundleException("bridge_version_mismatch");
+        }
+    }
+
+    private static void RequireFunction(Instance instance, string name, Type? result, params Type[] parameters)
+    {
+        if (instance.GetFunction(name, result, parameters) is null)
+        {
+            throw new TraverseBundleException($"runtime/runtime.wasm is missing or has an invalid signature for {name}");
+        }
+    }
+
+    private static string NormalizeDigest(string digest)
+    {
+        var normalized = digest.Trim().ToLowerInvariant();
+        return normalized.StartsWith("sha256:", StringComparison.Ordinal) ? normalized : $"sha256:{normalized}";
+    }
+
+    public void Dispose()
+    {
+        store.Dispose();
+        linker.Dispose();
+        module.Dispose();
+        engine.Dispose();
+    }
+}
+
+public sealed class TraverseBundleException(string message, Exception? innerException = null)
+    : ArgumentException(message, innerException);
