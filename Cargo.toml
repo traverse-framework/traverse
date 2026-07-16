@@ -17,6 +17,11 @@ repository = "https://github.com/traverse-framework/traverse"
 rust-version = "1.94"
 version = "0.7.0"
 
+[workspace.dependencies]
+traverse-contracts = { path = "crates/traverse-contracts", version = "0.7.0" }
+traverse-registry = { path = "crates/traverse-registry", version = "0.7.0" }
+traverse-runtime = { path = "crates/traverse-runtime", version = "0.7.0" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
