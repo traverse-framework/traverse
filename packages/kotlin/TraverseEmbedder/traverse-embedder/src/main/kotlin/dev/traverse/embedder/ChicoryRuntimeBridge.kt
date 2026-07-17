@@ -16,8 +16,7 @@ class ChicoryRuntimeBridge(
     val runtimeFile: File
     val runtimeWasmDigest: String
 
-    @Suppress("unused")
-    private val instance: Instance
+    internal val instance: Instance
 
     init {
         require(maximumArtifactBytes > 0) { "maximum runtime WASM size must be positive" }
