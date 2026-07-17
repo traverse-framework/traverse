@@ -344,23 +344,26 @@ impl<B: EventBroker> EventBroker for DurableBroker<B> {
                             self.audit.as_ref(),
                             &event_id,
                             &event_type,
-                        )?;
-                        let (lock, cvar) = &*revoke_ack;
-                        let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-                        let (mut state, _) = cvar
-                            .wait_timeout_while(guard, self.write_timeout, |state| {
-                                matches!(state, AckState::Pending)
-                            })
-                            .unwrap_or_else(PoisonError::into_inner);
-                        let revoke_outcome = std::mem::replace(&mut *state, AckState::Abandoned);
-                        map_revocation_outcome(
-                            revoke_outcome,
-                            self.audit.as_ref(),
-                            &event_id,
-                            &event_type,
-                            self.write_timeout,
-                        )?;
-                        Err(error)
+                        )
+                        .and_then(|()| {
+                            let (lock, cvar) = &*revoke_ack;
+                            let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                            let (mut state, _) = cvar
+                                .wait_timeout_while(guard, self.write_timeout, |state| {
+                                    matches!(state, AckState::Pending)
+                                })
+                                .unwrap_or_else(PoisonError::into_inner);
+                            let revoke_outcome =
+                                std::mem::replace(&mut *state, AckState::Abandoned);
+                            map_revocation_outcome(
+                                revoke_outcome,
+                                self.audit.as_ref(),
+                                &event_id,
+                                &event_type,
+                                self.write_timeout,
+                            )
+                        })
+                        .and(Err(error))
                     }
                 }
             }
