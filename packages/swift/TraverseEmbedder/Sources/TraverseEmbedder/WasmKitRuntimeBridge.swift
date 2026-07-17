@@ -25,7 +25,7 @@ public final class WasmKitRuntimeBridge: @unchecked Sendable {
     ]
 
     private let store: Store
-    private let instance: Instance
+    let instance: Instance
 
     public let runtimeURL: URL
     public let runtimeWasmDigest: String

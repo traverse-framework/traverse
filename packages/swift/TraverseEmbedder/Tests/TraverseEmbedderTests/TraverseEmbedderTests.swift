@@ -127,6 +127,29 @@ import WAT
     }
 }
 
+@Test func wasmKitBridgeClientCopiesResultsAndDrainsEventsInOrder() throws {
+    let wasm = try wat2wasm(clientBridgeWAT)
+    let client = try WasmKitBridgeClient(bridge: WasmKitRuntimeBridge(bundle: fixtureBundle(wasm: wasm)))
+
+    #expect(try client.initialize(configJSON: Data("{}".utf8)) == Data(#"{"status":"ready"}"#.utf8))
+    #expect(try client.submit(requestJSON: Data(#"{"target_id":"demo"}"#.utf8)) == Data(#"{"session_id":"s1","status":"accepted"}"#.utf8))
+    #expect(try client.nextEvent() == Data(#"{"sequence":1,"target_id":"demo","status":"completed"}"#.utf8))
+    #expect(try client.nextEvent() == nil)
+    #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
+}
+
+@Test func runtimeEmbedderMapsRuntimeOwnedResultsIntoPublicTypes() throws {
+    let wasm = try wat2wasm(clientBridgeWAT)
+    let client = try WasmKitBridgeClient(bridge: WasmKitRuntimeBridge(bundle: fixtureBundle(wasm: wasm)))
+    let runtime = RuntimeTraverseEmbedder(client: client)
+    _ = try runtime.initialize(configJSON: Data("{}".utf8))
+
+    #expect(try runtime.submit(TraverseSubmission(targetID: "demo", inputJSON: Data("{}".utf8))) ==
+        TraverseSubmissionResult(sessionID: "s1", status: "accepted"))
+    #expect(try runtime.subscribe() == [TraverseRuntimeEvent(sequence: 1, targetID: "demo", status: "completed")])
+    #expect(try runtime.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
+}
+
 private let validBridgeWAT = """
     (module
       (memory (export "memory") 1 16)
@@ -142,6 +165,44 @@ private let validBridgeWAT = """
       (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) i32.const 0)
       (func (export "traverse_shutdown") (param i32) (result i32) i32.const 0))
     """
+
+private let clientBridgeWAT = #"""
+    (module
+      (memory (export "memory") 1 16)
+      (data (i32.const 512) "{\22status\22:\22ready\22}")
+      (data (i32.const 544) "{\22session_id\22:\22s1\22,\22status\22:\22accepted\22}")
+      (data (i32.const 608) "{\22sequence\22:1,\22target_id\22:\22demo\22,\22status\22:\22completed\22}")
+      (data (i32.const 704) "{\22status\22:\22stopped\22}")
+      (global $next (mut i32) (i32.const 0))
+      (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+      (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+      (func (export "traverse_dealloc") (param i32 i32))
+      (func $result (param $d i32) (param $p i32) (param $n i32) (result i32)
+        local.get $d local.get $p i32.store
+        local.get $d i32.const 4 i32.add local.get $n i32.store
+        i32.const 0)
+      (func (export "traverse_init") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 512 i32.const 18 call $result)
+      (func (export "traverse_submit") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 544 i32.const 39 call $result)
+      (func (export "traverse_next_event") (param i32) (result i32)
+        global.get $next i32.eqz
+        if (result i32)
+          i32.const 1 global.set $next
+          local.get 0 i32.const 608 i32.const 54 call $result drop
+          i32.const 1
+        else i32.const 0 end)
+      (func (export "traverse_cancel") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 544 i32.const 39 call $result)
+      (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 544 i32.const 39 call $result)
+      (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 544 i32.const 39 call $result)
+      (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32)
+        local.get 2 i32.const 544 i32.const 39 call $result)
+      (func (export "traverse_shutdown") (param i32) (result i32)
+        local.get 0 i32.const 704 i32.const 20 call $result))
+    """#
 
 private func fixtureBundle(wasm: [UInt8], declaredDigest: String? = nil) throws -> TraverseBundle {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
