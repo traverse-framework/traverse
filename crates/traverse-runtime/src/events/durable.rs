@@ -191,6 +191,7 @@ enum WriterJob {
         cursor: String,
         event_id: String,
         event_type: String,
+        ack: Option<Ack>,
     },
 }
 
@@ -319,20 +320,71 @@ impl<B: EventBroker> EventBroker for DurableBroker<B> {
         drop(state);
 
         match outcome {
-            AckState::Done(cursor) => match self.inner.publish_with_cursor(event, &cursor) {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    // Durably written but undeliverable: revoke so replay
-                    // never surfaces an event that was never delivered live.
-                    let revoke = WriterJob::Revoke {
-                        cursor,
-                        event_id: String::new(),
-                        event_type: String::new(),
-                    };
-                    let _ = self.jobs.send(revoke);
-                    Err(error)
+            AckState::Done(cursor) => {
+                let event_id = event.id.clone();
+                let event_type = event.event_type.clone();
+                match self.inner.publish_with_cursor(event, &cursor) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        // Durably written but undeliverable: revoke so replay
+                        // never surfaces an event that was never delivered live.
+                        // Wait for the writer acknowledgement before returning;
+                        // otherwise an immediate replay can race the revocation.
+                        let revoke_ack: Ack =
+                            Arc::new((Mutex::new(AckState::Pending), Condvar::new()));
+                        let revoke = WriterJob::Revoke {
+                            cursor,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            ack: Some(Arc::clone(&revoke_ack)),
+                        };
+                        if self.jobs.send(revoke).is_ok() {
+                            let (lock, cvar) = &*revoke_ack;
+                            let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                            let (mut state, _) = cvar
+                                .wait_timeout_while(guard, self.write_timeout, |state| {
+                                    matches!(state, AckState::Pending)
+                                })
+                                .unwrap_or_else(PoisonError::into_inner);
+                            let revoke_outcome =
+                                std::mem::replace(&mut *state, AckState::Abandoned);
+                            match revoke_outcome {
+                                AckState::Done(_) => {}
+                                AckState::Failed(revoke_error) => {
+                                    return Err(EventError::JournalWrite(format!(
+                                        "journal revocation failed: {revoke_error}"
+                                    )));
+                                }
+                                AckState::Pending | AckState::Abandoned => {
+                                    let detail = format!(
+                                        "journal revocation exceeded {}ms; event remains rejected",
+                                        self.write_timeout.as_millis()
+                                    );
+                                    self.audit.record(&JournalWriteAuditRecord {
+                                        kind: "journal_revocation_failed".to_string(),
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        detail: detail.clone(),
+                                    });
+                                    return Err(EventError::JournalWriteTimeout(detail));
+                                }
+                            }
+                        } else {
+                            self.audit.record(&JournalWriteAuditRecord {
+                                kind: "journal_revocation_failed".to_string(),
+                                event_id,
+                                event_type,
+                                detail: "journal writer is unavailable".to_string(),
+                            });
+                            return Err(EventError::JournalWrite(
+                                "journal revocation failed: journal writer is unavailable"
+                                    .to_string(),
+                            ));
+                        }
+                        Err(error)
+                    }
                 }
-            },
+            }
             AckState::Failed(error) => Err(EventError::JournalWrite(error.to_string())),
             AckState::Pending | AckState::Abandoned => {
                 let detail = format!(
@@ -514,7 +566,7 @@ fn run_writer(
                     // The publisher already rejected this event; if the write
                     // completed anyway, durably suppress it (067 FR-004).
                     if let Ok(cursor) = result {
-                        revoke(&mut sink, audit, &cursor, &event.id, &event.event_type);
+                        let _ = revoke(&mut sink, audit, &cursor, &event.id, &event.event_type);
                     }
                 } else {
                     *state = match result {
@@ -528,7 +580,19 @@ fn run_writer(
                 cursor,
                 event_id,
                 event_type,
-            } => revoke(&mut sink, audit, &cursor, &event_id, &event_type),
+                ack,
+            } => {
+                let result = revoke(&mut sink, audit, &cursor, &event_id, &event_type);
+                if let Some(ack) = ack {
+                    let (lock, cvar) = &*ack;
+                    let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                    *state = match result {
+                        Ok(()) => AckState::Done(String::new()),
+                        Err(error) => AckState::Failed(error),
+                    };
+                    cvar.notify_one();
+                }
+            }
         }
     }
 }
@@ -539,15 +603,17 @@ fn revoke(
     cursor: &str,
     event_id: &str,
     event_type: &str,
-) {
-    if let Err(error) = sink.append_revocation(cursor) {
-        audit.record(&JournalWriteAuditRecord {
-            kind: "journal_revocation_failed".to_string(),
-            event_id: event_id.to_string(),
-            event_type: event_type.to_string(),
-            detail: error.to_string(),
-        });
-    }
+) -> Result<(), JournalError> {
+    sink.append_revocation(cursor)
+        .map(|_| ())
+        .inspect_err(|error| {
+            audit.record(&JournalWriteAuditRecord {
+                kind: "journal_revocation_failed".to_string(),
+                event_id: event_id.to_string(),
+                event_type: event_type.to_string(),
+                detail: error.to_string(),
+            });
+        })
 }
 
 #[cfg(test)]
