@@ -20,5 +20,9 @@ lifecycle export surface without enabling WASI. The host applies a 32 MiB
 runtime-memory ceiling, 10,000,000 fuel, and a 30-second epoch deadline to each
 bridge call by default.
 
+`WasmtimeBridgeClient` serializes UTF-8 JSON calls, copies runtime-owned output
+before the next mutation, bounds descriptors, and releases each caller-owned
+input and descriptor allocation exactly once.
+
 Request marshalling, event subscriptions, evidence publication, shared
 conformance, and WinUI reference-app integration remain tracked by Traverse #649.
