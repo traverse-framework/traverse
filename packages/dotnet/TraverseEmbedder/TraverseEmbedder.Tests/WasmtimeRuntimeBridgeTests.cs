@@ -41,6 +41,19 @@ public sealed class WasmtimeRuntimeBridgeTests
         Assert.Equal("bridge_version_mismatch", versionError.Message);
     }
 
+    [Fact]
+    public void EnforcesMemoryAndFuelLimitsBeforeAcceptingTheBridge()
+    {
+        var bundle = FixtureBundle().Bundle;
+        var memoryError = Assert.Throws<TraverseBundleException>(
+            () => new WasmtimeRuntimeBridge(bundle, maximumMemoryBytes: 32 * 1024));
+        Assert.Equal("bridge_resource_limit", memoryError.Message);
+
+        var fuelError = Assert.Throws<TraverseBundleException>(
+            () => new WasmtimeRuntimeBridge(bundle, fuelPerCall: 1));
+        Assert.Equal("bridge_resource_limit", fuelError.Message);
+    }
+
     private static (TraverseBundle Bundle, byte[] Bytes) FixtureBundle(
         string? declaredDigest = null,
         string fixture = BridgeFixture)

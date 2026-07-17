@@ -8,11 +8,17 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
 {
     public const int AbiVersion = 10_100;
     public const long DefaultMaximumArtifactBytes = 32L * 1024L * 1024L;
+    public const long DefaultMaximumMemoryBytes = 32L * 1024L * 1024L;
+    public const ulong DefaultFuelPerCall = 10_000_000;
+    public static readonly TimeSpan DefaultMaximumCallDuration = TimeSpan.FromSeconds(30);
 
     private readonly Engine engine;
     private readonly Module module;
     private readonly Linker linker;
     private readonly Store store;
+    private readonly ulong fuelPerCall;
+    private readonly TimeSpan maximumCallDuration;
+    private int executionGeneration;
 
     public string RuntimePath { get; }
     public string RuntimeWasmDigest { get; }
@@ -20,10 +26,21 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
 
     public WasmtimeRuntimeBridge(
         TraverseBundle bundle,
-        long maximumArtifactBytes = DefaultMaximumArtifactBytes)
+        long maximumArtifactBytes = DefaultMaximumArtifactBytes,
+        long maximumMemoryBytes = DefaultMaximumMemoryBytes,
+        ulong fuelPerCall = DefaultFuelPerCall,
+        TimeSpan? maximumCallDuration = null)
     {
         bundle.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumArtifactBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumMemoryBytes);
+        ArgumentOutOfRangeException.ThrowIfZero(fuelPerCall);
+        this.maximumCallDuration = maximumCallDuration ?? DefaultMaximumCallDuration;
+        if (this.maximumCallDuration <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumCallDuration));
+        }
+        this.fuelPerCall = fuelPerCall;
 
         RuntimePath = Path.Combine(bundle.RootPath, "runtime", "runtime.wasm");
         if (!File.Exists(RuntimePath))
@@ -44,7 +61,10 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
             throw new TraverseBundleException("bundle_digest_mismatch");
         }
 
-        engine = new Engine();
+        using var config = new Config()
+            .WithFuelConsumption(true)
+            .WithEpochInterruption(true);
+        engine = new Engine(config);
         try
         {
             module = Module.FromBytes(engine, "traverse-runtime", bytes);
@@ -64,22 +84,27 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
 
         linker = new Linker(engine);
         store = new Store(engine);
+        store.SetLimits(memorySize: maximumMemoryBytes, tableElements: null, instances: 1, tables: 1, memories: 1);
         try
         {
             Instance = linker.Instantiate(store, module);
             ValidateExports(Instance);
         }
-        catch
+        catch (Exception error)
         {
             store.Dispose();
             linker.Dispose();
             module.Dispose();
             engine.Dispose();
+            if (error is WasmtimeException)
+            {
+                throw new TraverseBundleException("bridge_resource_limit", error);
+            }
             throw;
         }
     }
 
-    private static void ValidateExports(Instance instance)
+    private void ValidateExports(Instance instance)
     {
         if (instance.GetMemory("memory") is null)
         {
@@ -98,9 +123,35 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
         RequireFunction(instance, "traverse_shutdown", typeof(int), typeof(int));
 
         var version = instance.GetFunction<int>("traverse_bridge_abi_version");
-        if (version is null || version() != AbiVersion)
+        if (version is null || Execute(version) != AbiVersion)
         {
             throw new TraverseBundleException("bridge_version_mismatch");
+        }
+    }
+
+    internal T Execute<T>(Func<T> action)
+    {
+        store.Fuel = fuelPerCall;
+        store.SetEpochDeadline(1);
+        var generation = Interlocked.Increment(ref executionGeneration);
+        using var timer = new Timer(
+            _ =>
+            {
+                if (Volatile.Read(ref executionGeneration) == generation)
+                {
+                    engine.IncrementEpoch();
+                }
+            },
+            null,
+            maximumCallDuration,
+            Timeout.InfiniteTimeSpan);
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            Interlocked.Increment(ref executionGeneration);
         }
     }
 
