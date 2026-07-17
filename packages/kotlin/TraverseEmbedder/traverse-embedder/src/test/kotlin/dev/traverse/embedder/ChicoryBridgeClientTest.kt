@@ -6,6 +6,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ChicoryBridgeClientTest {
@@ -34,8 +35,23 @@ class ChicoryBridgeClientTest {
         assertEquals("{\"status\":\"stopped\"}", runtime.shutdown())
     }
 
-    private fun fixtureBundle(): TraverseBundle {
-        val wasm = Wat2Wasm.parse(bridgeWat)
+    @Test fun interruptsCallsThatExceedTheInstructionBudget() {
+        val wasm = Wat2Wasm.parse(
+            bridgeWat.replace(
+                "local.get 2 i32.const 512 i32.const 18 call ${'$'}result",
+                "(loop ${'$'}forever br ${'$'}forever) i32.const 0",
+            ),
+        )
+        val client = ChicoryBridgeClient(
+            ChicoryRuntimeBridge(fixtureBundle(wasm), maximumInstructionsPerCall = 100),
+        )
+
+        val error = assertThrows(TraverseBridgeException::class.java) { client.initialize("{}") }
+        assertEquals(-4, error.status)
+        assertEquals("bridge_resource_limit", error.message)
+    }
+
+    private fun fixtureBundle(wasm: ByteArray = Wat2Wasm.parse(bridgeWat)): TraverseBundle {
         val root = Files.createTempDirectory("traverse-kotlin-client").toFile()
         val runtime = File(root, "runtime").apply { mkdirs() }
         File(runtime, "runtime.wasm").writeBytes(wasm)

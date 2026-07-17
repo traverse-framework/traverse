@@ -15,14 +15,15 @@ verifies `runtime/runtime.wasm` against its declared SHA-256 digest and a 32 MiB
 default artifact limit before parsing, rejects ambient imports, and validates
 the complete `runtime-wasm-bridge/1.1.0` memory, function-signature, and ABI
 surface without linking Chicory WASI. Runtime JSON marshalling, serialized
-event draining, release evidence publication, and Compose reference-app
-integration remain tracked by Traverse #648.
+event draining, typed mapping, and shared conformance are provided by the
+package; Compose reference-app integration remains tracked by Traverse #648.
 
 `ChicoryBridgeClient` now implements the serialized UTF-8 JSON ABI boundary,
 copies runtime-owned outputs before the next mutation, releases every caller
 allocation exactly once, bounds output descriptors, and exposes ordered
-single-event draining. Typed public result mapping, deadline enforcement,
-shared conformance, and Compose integration remain tracked by #648.
+single-event draining. Each call has a configurable instruction/deadline budget,
+and modules declaring memory above the configured host ceiling fail before
+instantiation. Compose integration remains tracked by #648.
 
 `RuntimeTraverseEmbedder` maps that boundary into stable public Kotlin
 submission, event, and compatible-lifecycle result types while preserving
