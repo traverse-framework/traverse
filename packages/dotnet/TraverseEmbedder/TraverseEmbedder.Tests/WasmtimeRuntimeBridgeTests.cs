@@ -10,6 +10,7 @@ public sealed class WasmtimeRuntimeBridgeTests
     private const string ImportedFixture = "AGFzbQEAAAABCAJgAABgAAF/AiMBFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAAAMCAQEFAwEAAQcoAgZtZW1vcnkCABt0cmF2ZXJzZV9icmlkZ2VfYWJpX3ZlcnNpb24AAQoIAQYAQfTOAAs=";
     private const string BridgeTenFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDAsAAQIDAwEDAwMDAQUEAQEBEAf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAADD3RyYXZlcnNlX3N1Ym1pdAAEE3RyYXZlcnNlX25leHRfZXZlbnQABQ90cmF2ZXJzZV9jYW5jZWwABhl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAcYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAgYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAkRdHJhdmVyc2Vfc2h1dGRvd24ACgo5CwYAQZDOAAsFAEHAAAsCAAsEAEEACwQAQQALBABBAAsEAEEACwQAQQALBABBAAsEAEEACwQAQQAL";
     private const string ClientFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDQwAAQIDAwMBAwMDAwEFBAEBARAGBgF/AUEACwf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAAED3RyYXZlcnNlX3N1Ym1pdAAFE3RyYXZlcnNlX25leHRfZXZlbnQABg90cmF2ZXJzZV9jYW5jZWwABxl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAgYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAkYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAoRdHJhdmVyc2Vfc2h1dGRvd24ACwqXAQwGAEH0zgALBQBBwAALAgALFQAgACABNgIAIABBBGogAjYCAEEACwsAIAJBgARBEhADCwsAIAJBoARBFRADCxsAIwBFBH9BASQAIABBwARBDhADGkEBBUEACwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACAAQeAEQRQQAwsLYgQAQYAECxJ7InN0YXR1cyI6InJlYWR5In0AQaAECxV7InN0YXR1cyI6ImFjY2VwdGVkIn0AQcAECw57InNlcXVlbmNlIjoxfQBB4AQLFHsic3RhdHVzIjoic3RvcHBlZCJ9";
+    private const string TypedClientFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDQwAAQIDAwMBAwMDAwEFBAEBARAGBgF/AUEACwf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAAED3RyYXZlcnNlX3N1Ym1pdAAFE3RyYXZlcnNlX25leHRfZXZlbnQABg90cmF2ZXJzZV9jYW5jZWwABxl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAgYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAkYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAoRdHJhdmVyc2Vfc2h1dGRvd24ACwqXAQwGAEH0zgALBQBBwAALAgALFQAgACABNgIAIABBBGogAjYCAEEACwsAIAJBgARBEhADCwsAIAJBoARBJxADCxsAIwBFBH9BASQAIABB4ARBNhADGkEBBUEACwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACAAQcAFQRQQAwsLnAEEAEGABAsSeyJzdGF0dXMiOiJyZWFkeSJ9AEGgBAsneyJzZXNzaW9uX2lkIjoiczEiLCJzdGF0dXMiOiJhY2NlcHRlZCJ9AEHgBAs2eyJzZXF1ZW5jZSI6MSwidGFyZ2V0X2lkIjoiZGVtbyIsInN0YXR1cyI6ImNvbXBsZXRlZCJ9AEHABQsUeyJzdGF0dXMiOiJzdG9wcGVkIn0=";
 
     [Fact]
     public void VerifiesAndInstantiatesTheGovernedBridge()
@@ -66,6 +67,22 @@ public sealed class WasmtimeRuntimeBridgeTests
         Assert.Equal("{\"sequence\":1}", Text(client.NextEvent()!));
         Assert.Null(client.NextEvent());
         Assert.Equal("{\"status\":\"stopped\"}", Text(client.Shutdown()));
+    }
+
+    [Fact]
+    public void RuntimeEmbedderMapsRuntimeOwnedResultsIntoPublicTypes()
+    {
+        using var bridge = new WasmtimeRuntimeBridge(FixtureBundle(fixture: TypedClientFixture).Bundle);
+        var runtime = new RuntimeTraverseEmbedder(new WasmtimeBridgeClient(bridge));
+        runtime.Initialize("{}");
+
+        Assert.Equal(
+            new TraverseSubmissionResult("s1", "accepted"),
+            runtime.Submit(new TraverseSubmission("demo", "{}")));
+        Assert.Equal(
+            [new TraverseRuntimeEvent(1, "demo", "completed")],
+            runtime.Subscribe());
+        Assert.Equal("{\"status\":\"stopped\"}", runtime.Shutdown());
     }
 
     private static (TraverseBundle Bundle, byte[] Bytes) FixtureBundle(

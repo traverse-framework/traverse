@@ -24,5 +24,9 @@ bridge call by default.
 before the next mutation, bounds descriptors, and releases each caller-owned
 input and descriptor allocation exactly once.
 
+`RuntimeTraverseEmbedder` maps the raw boundary into stable public submission,
+event, and compatible-lifecycle result records while preserving runtime-owned
+identifiers, ordering, and statuses.
+
 Request marshalling, event subscriptions, evidence publication, shared
 conformance, and WinUI reference-app integration remain tracked by Traverse #649.
