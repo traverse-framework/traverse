@@ -52,6 +52,14 @@ class ChicoryRuntimeBridgeTest {
         assertEquals("bridge_version_mismatch", versionError.message)
     }
 
+    @Test fun rejectsRuntimeMemoryAboveTheHostLimit() {
+        val error = assertThrows(TraverseBundleException::class.java) {
+            ChicoryRuntimeBridge(fixtureBundle(Wat2Wasm.parse(validBridgeWat)), maximumMemoryPages = 8)
+        }
+
+        assertEquals("runtime/runtime.wasm exceeds the configured memory limit", error.message)
+    }
+
     private fun fixtureBundle(wasm: ByteArray, declaredDigest: String = digest(wasm)): TraverseBundle {
         val root = Files.createTempDirectory("traverse-kotlin-bridge").toFile()
         val runtime = File(root, "runtime").apply { mkdirs() }
