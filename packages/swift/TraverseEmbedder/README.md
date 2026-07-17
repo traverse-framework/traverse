@@ -14,6 +14,9 @@ SHA-256 digest and a 32 MiB default artifact limit before parsing, rejects all
 ambient imports, and validates the memory, function signatures, and ABI version
 required by `runtime-wasm-bridge/1.1.0`, including compatible lifecycle exports.
 It never links WasmKitWASI. JSON
+marshalling is provided by `WasmKitBridgeClient`, which serializes calls,
+copies runtime-owned output before the next mutation, bounds descriptors, and
+releases every caller allocation exactly once.
 marshalling, the serialized event-drain loop, evidence publication, and
 app-reference integration remain tracked by Traverse #647.
 
