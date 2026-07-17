@@ -17,8 +17,12 @@ It never links WasmKitWASI. JSON
 marshalling is provided by `WasmKitBridgeClient`, which serializes calls,
 copies runtime-owned output before the next mutation, bounds descriptors, and
 releases every caller allocation exactly once.
-marshalling, the serialized event-drain loop, evidence publication, and
-app-reference integration remain tracked by Traverse #647.
+
+`RuntimeTraverseEmbedder` maps that boundary into stable public Swift
+submission, event, and compatible-lifecycle result types without synthesizing
+runtime identifiers, ordering, or statuses.
+Evidence publication and app-reference integration remain tracked by Traverse
+#647.
 
 Release tooling constructs `TraverseReleaseEvidence` with the semantic package
 version, runtime-WASM digest, conformance version, and supported iOS/macOS host
