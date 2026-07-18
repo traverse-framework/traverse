@@ -82,4 +82,11 @@ class TraverseEmbedderTest {
             harness.subscribe(),
         )
     }
+
+    @Test fun scriptedTargetOutputIsPublicAndRuntimeOwned() {
+        val harness = InMemoryTraverseEmbedder().withTargetOutput("{\"answer\":42}")
+        harness.initialize(TraverseBundle("assets/traverse", "sha256:test"))
+        harness.submit(TraverseSubmission("demo.target", "{}"))
+        assertEquals(TraverseRuntimeEvent(1, "demo.target", "accepted", eventType = "capability_result", sessionId = "kotlin-session-1", output = "{\"answer\":42}"), harness.subscribe().single())
+    }
 }

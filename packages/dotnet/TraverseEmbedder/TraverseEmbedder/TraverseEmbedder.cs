@@ -47,7 +47,11 @@ public sealed record TraverseRuntimeEvent(
     int Sequence,
     string TargetId,
     string Status,
-    string? InstanceId = null);
+    string? InstanceId = null,
+    string? EventType = null,
+    string? SessionId = null,
+    string? ErrorData = null,
+    string? Output = null);
 
 public sealed record TraverseCompatibleResult(string? InstanceId, string Status);
 
@@ -62,6 +66,13 @@ public sealed class InMemoryTraverseEmbedder
     private int compatibleSequence;
     private readonly List<TraverseRuntimeEvent> events = [];
     private readonly Dictionary<string, string> compatibleInstances = [];
+    private string? targetOutput;
+
+    public InMemoryTraverseEmbedder WithTargetOutput(string output)
+    {
+        targetOutput = output;
+        return this;
+    }
 
     public void Initialize(TraverseBundle value)
     {
@@ -85,7 +96,9 @@ public sealed class InMemoryTraverseEmbedder
         submission.Validate();
         submissionSequence++;
         var result = new TraverseSubmissionResult($"dotnet-session-{submissionSequence}", "accepted");
-        events.Add(new TraverseRuntimeEvent(submissionSequence, submission.TargetId, result.Status));
+        events.Add(new TraverseRuntimeEvent(submissionSequence, submission.TargetId, result.Status,
+            EventType: targetOutput is null ? null : "capability_result",
+            SessionId: targetOutput is null ? null : result.SessionId, Output: targetOutput));
         return result;
     }
 

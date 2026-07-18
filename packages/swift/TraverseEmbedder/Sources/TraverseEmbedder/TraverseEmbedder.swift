@@ -94,12 +94,20 @@ public struct TraverseRuntimeEvent: Sendable, Equatable {
     public let targetID: String
     public let status: String
     public let instanceID: String?
+    public let eventType: String?
+    public let sessionID: String?
+    public let errorData: Data?
+    public let output: Data?
 
-    public init(sequence: Int, targetID: String, status: String, instanceID: String? = nil) {
+    public init(sequence: Int, targetID: String, status: String, instanceID: String? = nil, eventType: String? = nil, sessionID: String? = nil, errorData: Data? = nil, output: Data? = nil) {
         self.sequence = sequence
         self.targetID = targetID
         self.status = status
         self.instanceID = instanceID
+        self.eventType = eventType
+        self.sessionID = sessionID
+        self.errorData = errorData
+        self.output = output
     }
 }
 
@@ -121,8 +129,14 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
     private var compatibleSequence = 0
     private var events: [TraverseRuntimeEvent] = []
     private var compatibleInstances: [String: String] = [:]
+    private var targetOutput: Data?
 
     public init() {}
+
+    public func withTargetOutput(_ output: Data) -> InMemoryTraverseEmbedder {
+        targetOutput = output
+        return self
+    }
 
     public func initialize(bundle: TraverseBundle) throws {
         guard self.bundle == nil else { throw TraverseEmbedderError.alreadyInitialized }
@@ -153,7 +167,10 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
             TraverseRuntimeEvent(
                 sequence: submissionSequence,
                 targetID: submission.targetID,
-                status: result.status
+                status: result.status,
+                eventType: targetOutput == nil ? nil : "capability_result",
+                sessionID: targetOutput == nil ? nil : result.sessionID,
+                output: targetOutput
             )
         )
         return result
