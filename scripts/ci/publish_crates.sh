@@ -109,15 +109,37 @@ publish_one() {
   return "${rc}"
 }
 
+sparse_index_path() {
+  local crate="$1"
+  local len="${#crate}"
+
+  if [[ "${len}" -eq 1 ]]; then
+    echo "1/${crate}"
+  elif [[ "${len}" -eq 2 ]]; then
+    echo "2/${crate}"
+  elif [[ "${len}" -eq 3 ]]; then
+    echo "3/${crate:0:1}/${crate}"
+  else
+    echo "${crate:0:2}/${crate:2:2}/${crate}"
+  fi
+}
+
 confirm_published() {
   local crate="$1"
+  local path
 
   if [[ "${dry_run}" == "1" ]]; then
     return 0
   fi
 
+  # crates.io's search index (used by `cargo search`) can lag well behind
+  # publish for a brand-new crate name, sometimes past 10 minutes. The
+  # sparse index that cargo itself uses for dependency resolution updates
+  # within seconds of a real publish, so check that directly instead.
+  path="$(sparse_index_path "${crate}")"
+
   for attempt in {1..20}; do
-    if cargo search "${crate}" --limit 5 2>/dev/null | grep -Eq "^${crate} = \"${workspace_version}\""; then
+    if curl -fsS "https://index.crates.io/${path}" 2>/dev/null | grep -Fq "\"vers\":\"${workspace_version}\""; then
       echo "Confirmed ${crate} ${workspace_version} on crates.io."
       return 0
     fi
