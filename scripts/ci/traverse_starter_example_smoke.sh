@@ -11,14 +11,14 @@ app_manifest="examples/applications/traverse-starter/app.manifest.json"
 
 bash examples/traverse-starter/process-agent/build-fixture.sh >/tmp/traverse-starter-build.out
 
-inspect_output="$(cargo run -q -p traverse-cli -- agent inspect "$agent_manifest")"
+inspect_output="$(cargo run -q -p traverse-cli-rs -- agent inspect "$agent_manifest")"
 printf '%s\n' "$inspect_output"
 
 grep -q "package_id: traverse-starter.process-agent" <<<"$inspect_output"
 grep -q "capability_id: traverse-starter.process" <<<"$inspect_output"
 grep -q "workflow_refs: traverse-starter.process@1.0.0" <<<"$inspect_output"
 
-execute_output="$(cargo run -q -p traverse-cli -- agent execute "$agent_manifest" "$agent_request")"
+execute_output="$(cargo run -q -p traverse-cli-rs -- agent execute "$agent_manifest" "$agent_request")"
 printf '%s\n' "$execute_output"
 
 grep -q "status: completed" <<<"$execute_output"
@@ -29,7 +29,7 @@ grep -q "noteType:" <<<"$execute_output"
 grep -q "suggestedNextAction:" <<<"$execute_output"
 grep -q "starter_status: complete" <<<"$execute_output"
 
-validate_output="$(cargo run -q -p traverse-cli -- app validate --manifest "$app_manifest" --json)"
+validate_output="$(cargo run -q -p traverse-cli-rs -- app validate --manifest "$app_manifest" --json)"
 printf '%s\n' "$validate_output"
 
 grep -q '"status": "validated"' <<<"$validate_output"
@@ -37,14 +37,14 @@ grep -q '"app_id": "traverse-starter"' <<<"$validate_output"
 grep -q '"component_id": "traverse-starter.process-component"' <<<"$validate_output"
 grep -q '"capability_id": "traverse-starter.process"' <<<"$validate_output"
 
-register_output="$(cargo run -q -p traverse-cli -- app register --manifest "$app_manifest" --workspace local-default --json)"
+register_output="$(cargo run -q -p traverse-cli-rs -- app register --manifest "$app_manifest" --workspace local-default --json)"
 printf '%s\n' "$register_output"
 
 grep -Eq '"status": "(registered|already_registered)"' <<<"$register_output"
 grep -q '"state_scope": "workspace_persisted"' <<<"$register_output"
 
 rm -f .traverse/server.json
-cargo run -q -p traverse-cli -- serve --port 0 --allow-unauthenticated >/tmp/traverse-starter-serve.out 2>&1 &
+cargo run -q -p traverse-cli-rs -- serve --port 0 --allow-unauthenticated >/tmp/traverse-starter-serve.out 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 

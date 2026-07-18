@@ -30,7 +30,7 @@ bash scripts/validate-setup.sh
 From the repository root:
 
 ```bash
-cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:4174
+cargo run -p traverse-cli-rs -- browser-adapter serve --bind 127.0.0.1:4174
 ```
 
 Keep this terminal open. The React demo proxies browser-subscription traffic through this local adapter.
@@ -111,18 +111,18 @@ For the `traverse-starter` reference app, validate and register the app bundle
 from the Traverse repository root:
 
 ```bash
-cargo run -p traverse-cli -- app validate \
+cargo run -p traverse-cli-rs -- app validate \
   --manifest examples/applications/traverse-starter/app.manifest.json \
   --json
 
-cargo run -p traverse-cli -- app register \
+cargo run -p traverse-cli-rs -- app register \
   --manifest examples/applications/traverse-starter/app.manifest.json \
   --workspace local-default \
   --json
 ```
 
 The local HTTP server discovery file remains backward-compatible with the
-`v0.3.0` schema. `cargo run -p traverse-cli -- serve` writes
+`v0.3.0` schema. `cargo run -p traverse-cli-rs -- serve` writes
 `.traverse/server.json` with `schema_version: "1.0.0"`, `base_url`,
 `health_url`, `workspace_default`, `pid`, `started_at`, `auth_mode`, and an
 optional `local_dev_token` for loopback development.

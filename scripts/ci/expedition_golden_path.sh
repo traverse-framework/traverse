@@ -14,21 +14,21 @@ invalid_manifest_path="${tmpdir}/invalid-manifest.json"
 
 pushd "${repo_root}" >/dev/null
 
-register_output="$(cargo run -p traverse-cli -- bundle register "${manifest_path}")"
+register_output="$(cargo run -p traverse-cli-rs -- bundle register "${manifest_path}")"
 printf '%s\n' "${register_output}"
 
 grep -q "registered_capabilities: 6" <<<"${register_output}"
 grep -q "registered_events: 5" <<<"${register_output}"
 grep -q "registered_workflows: 1" <<<"${register_output}"
 
-execution_output="$(cargo run -p traverse-cli -- expedition execute "${request_path}" --trace-out "${trace_path}")"
+execution_output="$(cargo run -p traverse-cli-rs -- expedition execute "${request_path}" --trace-out "${trace_path}")"
 printf '%s\n' "${execution_output}"
 
 grep -q "status: completed" <<<"${execution_output}"
 grep -q "recommended_route_style: conservative-alpine-push" <<<"${execution_output}"
 grep -q "trace_path: ${trace_path}" <<<"${execution_output}"
 
-trace_output="$(cargo run -p traverse-cli -- trace inspect "${trace_path}")"
+trace_output="$(cargo run -p traverse-cli-rs -- trace inspect "${trace_path}")"
 printf '%s\n' "${trace_output}"
 
 grep -q "result_status: completed" <<<"${trace_output}"
@@ -48,7 +48,7 @@ target.write_text(json.dumps(payload, indent=2) + "\n")
 PY
 
 set +e
-invalid_output="$(cargo run -p traverse-cli -- bundle register "${invalid_manifest_path}" 2>&1)"
+invalid_output="$(cargo run -p traverse-cli-rs -- bundle register "${invalid_manifest_path}" 2>&1)"
 invalid_status=$?
 set -e
 

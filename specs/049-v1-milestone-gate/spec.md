@@ -34,7 +34,7 @@ All six crates are published on crates.io at `v1.0.0`. CI `publish` job runs on 
 `supply-chain.yml` runs clean: SBOM generated, no critical advisories, dependency audit passes. Governed by `spec 031`.
 
 ### G-06: Developer entry path validated end-to-end
-The quickstart in `README.md` (`cargo run -p traverse-cli -- bundle inspect ...`) runs to documented expected output on a clean clone on Linux and macOS in CI. A downstream app can register, execute a workflow, and receive a result without private Traverse internals. Governed by `spec 046` conformance suite.
+The quickstart in `README.md` (`cargo run -p traverse-cli-rs -- bundle inspect ...`) runs to documented expected output on a clean clone on Linux and macOS in CI. A downstream app can register, execute a workflow, and receive a result without private Traverse internals. Governed by `spec 046` conformance suite.
 
 ### G-07: MCP library surface stable
 `traverse-mcp` library surface (`spec 042`) is complete: `discover_capabilities()` and `execute_capability()` are callable from a Rust binary without spawning a subprocess. Thread safety verified.
@@ -58,7 +58,7 @@ The repo lives at `traverse-framework/Traverse`. Old redirect from `enricopioves
 [G-03] test -f docs/compatibility-policy.md && grep -q "v1 stability" docs/compatibility-policy.md
 [G-04] CI matrix: all 5 legs green (checked via gh run list)
 [G-05] cargo audit — exits 0
-[G-06] cargo run -p traverse-cli -- bundle inspect examples/expedition/... (output matches)
+[G-06] cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/... (output matches)
 [G-07] cargo test -p traverse-mcp (all tests pass)
 [G-08] cargo llvm-cov — coverage >= 100% for all governed crate paths
 [G-09] gh issue list --label bug --state open — count = 0

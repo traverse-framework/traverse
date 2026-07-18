@@ -196,7 +196,7 @@ Rules:
 **Inspect the workflow** (validates structure without modifying state):
 
 ```bash
-cargo run -p traverse-cli -- workflow inspect \
+cargo run -p traverse-cli-rs -- workflow inspect \
   workflows/path/to/your-workflow/workflow.json
 ```
 
@@ -205,10 +205,10 @@ cargo run -p traverse-cli -- workflow inspect \
 Create a registry bundle manifest that includes the workflow and all capability contracts it references. Then:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect \
+cargo run -p traverse-cli-rs -- bundle inspect \
   examples/your-bundle/registry-bundle/manifest.json
 
-cargo run -p traverse-cli -- bundle register \
+cargo run -p traverse-cli-rs -- bundle register \
   examples/your-bundle/registry-bundle/manifest.json
 ```
 

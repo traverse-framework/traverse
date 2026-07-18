@@ -1812,7 +1812,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "traverse-cli"
+name = "traverse-cli-rs"
 version = "0.8.0"
 dependencies = [
  "ed25519-dalek",

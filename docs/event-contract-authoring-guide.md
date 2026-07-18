@@ -150,13 +150,13 @@ cargo test -p traverse-contracts
 6. Inspect an event contract via the CLI (this should fail fast if malformed):
 
 ```bash
-cargo run -p traverse-cli -- event inspect <path-to-contract.json>
+cargo run -p traverse-cli-rs -- event inspect <path-to-contract.json>
 ```
 
 7. Add the event contract to a bundle manifest and register it:
 
 ```bash
-cargo run -p traverse-cli -- bundle register <path-to-manifest.json>
+cargo run -p traverse-cli-rs -- bundle register <path-to-manifest.json>
 ```
 
 ## Common Mistakes
@@ -236,7 +236,7 @@ Optionally, list it in the event contract's `subscribers` array for documentatio
 ---
 ## How to Validate Locally
 Run the CLI inspect command against your event contract:
-cargo run -p traverse-cli -- event inspect contracts/path/to/event-name/contract.json
+cargo run -p traverse-cli-rs -- event inspect contracts/path/to/event-name/contract.json
 Expected output includes `id`, `version`, `lifecycle`, publisher count, and subscriber count. Any structural error is printed to stderr with a non-zero exit code.
 Then run the full spec-alignment gate:
 bash scripts/ci/spec_alignment_check.sh

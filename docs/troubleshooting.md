@@ -222,7 +222,7 @@ What to check first:
 1. Confirm the adapter command still works:
 
 ```bash
-cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:4174
+cargo run -p traverse-cli-rs -- browser-adapter serve --bind 127.0.0.1:4174
 ```
 
 2. Confirm the React demo command still works:

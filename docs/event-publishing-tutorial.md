@@ -298,12 +298,12 @@ To validate the full governed expedition event path using the checked-in CLI:
 
 ```bash
 # Register the expedition bundle (includes event contracts).
-cargo run -p traverse-cli -- bundle register \
+cargo run -p traverse-cli-rs -- bundle register \
   examples/expedition/registry-bundle/manifest.json
 
 # Execute the canonical expedition request, which triggers the full
 # workflow including event-driven progression.
-cargo run -p traverse-cli -- expedition execute \
+cargo run -p traverse-cli-rs -- expedition execute \
   examples/expedition/runtime-requests/plan-expedition.json
 ```
 

@@ -25,7 +25,7 @@ Traverse is the working implementation of [Universal Microservices Architecture]
 git clone https://github.com/traverse-framework/traverse.git
 cd traverse
 cargo build
-cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json
 ```
 
 Expected output:
@@ -77,7 +77,7 @@ deterministically and produces a structured trace you can inspect and audit.
 ### Your own app bundle
 
 ```bash
-cargo run -p traverse-cli -- app new my-app
+cargo run -p traverse-cli-rs -- app new my-app
 ```
 
 Scaffolds a governed app bundle. Add your capability contracts, workflows, and WASM components.
@@ -142,7 +142,7 @@ Scaffolds a governed app bundle. Add your capability contracts, workflows, and W
 | `traverse-runtime` | Core execution engine — validates, places, and executes capabilities |
 | `traverse-contracts` | Contract definitions, parsing, and validation |
 | `traverse-registry` | Capability and event registries with deterministic traversal |
-| `traverse-cli` | Command-line interface: register, list, validate, run |
+| `traverse-cli-rs` | Command-line interface (binary: `traverse-cli`) — register, list, validate, run |
 | `traverse-mcp` | Model Context Protocol stdio server and governed MCP-facing surface |
 
 ---

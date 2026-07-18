@@ -383,7 +383,7 @@ examples/notes/registry-bundle/manifest.json
 Inspect the bundle before registering:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect \
+cargo run -p traverse-cli-rs -- bundle inspect \
   examples/notes/registry-bundle/manifest.json
 ```
 
@@ -396,7 +396,7 @@ Expected output includes:
 Register the bundle:
 
 ```bash
-cargo run -p traverse-cli -- bundle register \
+cargo run -p traverse-cli-rs -- bundle register \
   examples/notes/registry-bundle/manifest.json
 ```
 
@@ -417,7 +417,7 @@ The registry validates both capability contracts before accepting the workflow. 
 Inspect the registered workflow:
 
 ```bash
-cargo run -p traverse-cli -- workflow inspect \
+cargo run -p traverse-cli-rs -- workflow inspect \
   workflows/examples/notes/draft-and-tag-note/workflow.json
 ```
 
@@ -443,7 +443,7 @@ Create a runtime request file at `examples/notes/runtime-requests/draft-and-tag-
 Execute it:
 
 ```bash
-cargo run -p traverse-cli -- execute \
+cargo run -p traverse-cli-rs -- execute \
   examples/notes/runtime-requests/draft-and-tag-note.json
 ```
 
@@ -463,7 +463,7 @@ Persist the trace to a file:
 
 ```bash
 tmpdir="$(mktemp -d)"
-cargo run -p traverse-cli -- execute \
+cargo run -p traverse-cli-rs -- execute \
   examples/notes/runtime-requests/draft-and-tag-note.json \
   --trace-out "$tmpdir/draft-and-tag-note-trace.json"
 ```
@@ -471,7 +471,7 @@ cargo run -p traverse-cli -- execute \
 Inspect the trace:
 
 ```bash
-cargo run -p traverse-cli -- trace inspect \
+cargo run -p traverse-cli-rs -- trace inspect \
   "$tmpdir/draft-and-tag-note-trace.json"
 ```
 

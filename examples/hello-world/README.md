@@ -31,14 +31,14 @@ bash examples/hello-world/say-hello-agent/build-fixture.sh
 Inspect the package:
 
 ```bash
-cargo run -p traverse-cli -- agent inspect \
+cargo run -p traverse-cli-rs -- agent inspect \
   examples/hello-world/say-hello-agent/manifest.json
 ```
 
 Execute the package:
 
 ```bash
-cargo run -p traverse-cli -- agent execute \
+cargo run -p traverse-cli-rs -- agent execute \
   examples/hello-world/say-hello-agent/manifest.json \
   examples/hello-world/runtime-requests/say-hello.json
 ```

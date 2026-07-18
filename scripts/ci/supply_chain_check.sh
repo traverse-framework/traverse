@@ -92,10 +92,10 @@ mkdir -p "${build_dir}"
 
 (
   cd "${repo_root}"
-  CARGO_TARGET_DIR="${build_dir}" cargo build --locked -p traverse-cli --release
+  CARGO_TARGET_DIR="${build_dir}" cargo build --locked -p traverse-cli-rs --release
   cp "${build_dir}/release/traverse-cli" "${output_dir}/traverse-cli.first"
-  CARGO_TARGET_DIR="${build_dir}" cargo clean -p traverse-cli --release
-  CARGO_TARGET_DIR="${build_dir}" cargo build --locked -p traverse-cli --release
+  CARGO_TARGET_DIR="${build_dir}" cargo clean -p traverse-cli-rs --release
+  CARGO_TARGET_DIR="${build_dir}" cargo build --locked -p traverse-cli-rs --release
   cp "${build_dir}/release/traverse-cli" "${output_dir}/traverse-cli.second"
 )
 
@@ -126,12 +126,12 @@ cat > "${provenance_path}" <<JSON
   "source_commit_sha": "${source_sha}",
   "build_system": "local-or-github-actions",
   "artifact_sha256": "${hash_one}",
-  "build_invocation": "CARGO_TARGET_DIR=<deterministic-dir> cargo build --locked -p traverse-cli --release"
+  "build_invocation": "CARGO_TARGET_DIR=<deterministic-dir> cargo build --locked -p traverse-cli-rs --release"
 }
 JSON
 
 verify_report="${output_dir}/artifact-verify-report.json"
-if ! cargo run --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli -- artifact verify "${artifact_one}" > "${verify_report}"; then
+if ! cargo run --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli-rs -- artifact verify "${artifact_one}" > "${verify_report}"; then
   fail "traverse-cli artifact verify failed for release artifact"
 fi
 

@@ -71,7 +71,7 @@ A command someone can actually run today (or after the PR merges) to see this wo
 
 ```bash
 # Example:
-cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json
 ```
 
 Expected output: <describe what success looks like>

@@ -15,13 +15,13 @@ bash examples/agents/expedition-intent-agent/build-fixture.sh
 Inspect the governed package:
 
 ```bash
-cargo run -p traverse-cli -- agent inspect examples/agents/expedition-intent-agent/manifest.json
+cargo run -p traverse-cli-rs -- agent inspect examples/agents/expedition-intent-agent/manifest.json
 ```
 
 Execute the agent through the Traverse runtime model:
 
 ```bash
-cargo run -p traverse-cli -- agent execute \
+cargo run -p traverse-cli-rs -- agent execute \
   examples/agents/expedition-intent-agent/manifest.json \
   examples/agents/runtime-requests/interpret-expedition-intent.json
 ```

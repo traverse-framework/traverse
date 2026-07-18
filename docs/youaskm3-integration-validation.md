@@ -27,8 +27,8 @@ For the first release-facing HTTP/JSON app path, use [docs/youaskm3-canonical-ap
 For public local-dev app setup, validate and register the downstream app through:
 
 ```bash
-cargo run -p traverse-cli -- app validate --manifest <path> --json
-cargo run -p traverse-cli -- app register --manifest <path> --workspace <workspace-id> --json
+cargo run -p traverse-cli-rs -- app validate --manifest <path> --json
+cargo run -p traverse-cli-rs -- app register --manifest <path> --workspace <workspace-id> --json
 ```
 
 That flow produces durable workspace state for Traverse runtime loading. It does not create an HTTP app registration endpoint, a service registry, a runtime-owned admin registration API, or a downstream UI deployment path. `youaskm3` owns the UI; Traverse owns validation, local workspace registration evidence, runtime loading, execution, traces, and eventing-oriented runtime contracts.
