@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "Contract definitions and validation for the Traverse capability runtime."
 
 [dependencies]
 semver = "1.0.27"
