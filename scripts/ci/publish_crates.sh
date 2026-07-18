@@ -99,7 +99,7 @@ publish_one() {
   fi
 
   cat "${output_file}" >&2
-  if grep -Eiq "already uploaded|crate version .* is already uploaded" "${output_file}"; then
+  if grep -Eiq "already uploaded|crate version .* is already uploaded|already exists on crates\.io index" "${output_file}"; then
     echo "${crate} ${workspace_version} is already published; continuing."
     rm -f "${output_file}"
     return 0
