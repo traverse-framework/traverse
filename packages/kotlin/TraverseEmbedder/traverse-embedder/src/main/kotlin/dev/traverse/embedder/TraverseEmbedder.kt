@@ -41,6 +41,10 @@ data class TraverseRuntimeEvent(
     val targetId: String,
     val status: String,
     val instanceId: String? = null,
+    val eventType: String? = null,
+    val sessionId: String? = null,
+    val errorData: String? = null,
+    val output: String? = null,
 )
 
 data class TraverseCompatibleResult(val instanceId: String?, val status: String)
@@ -52,6 +56,9 @@ class InMemoryTraverseEmbedder {
     private var compatibleSequence = 0
     private val events = mutableListOf<TraverseRuntimeEvent>()
     private val compatibleInstances = mutableMapOf<String, String>()
+    private var targetOutput: String? = null
+
+    fun withTargetOutput(output: String): InMemoryTraverseEmbedder = apply { targetOutput = output }
 
     fun initialize(bundle: TraverseBundle) {
         check(this.bundle == null) { "embedder is already initialized" }
@@ -70,7 +77,7 @@ class InMemoryTraverseEmbedder {
         check(bundle != null) { "embedder is not initialized" }
         submissionSequence += 1
         val result = TraverseSubmissionResult("kotlin-session-$submissionSequence", "accepted")
-        events += TraverseRuntimeEvent(submissionSequence, submission.targetId, result.status)
+        events += TraverseRuntimeEvent(submissionSequence, submission.targetId, result.status, eventType = if (targetOutput == null) null else "capability_result", sessionId = if (targetOutput == null) null else result.sessionId, output = targetOutput)
         return result
     }
 

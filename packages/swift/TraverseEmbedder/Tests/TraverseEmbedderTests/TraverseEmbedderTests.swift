@@ -45,6 +45,16 @@ import WAT
     }
 }
 
+@Test func scriptedTargetOutputIsPublicAndRuntimeOwned() throws {
+    let harness = InMemoryTraverseEmbedder().withTargetOutput(Data("{\"answer\":42}".utf8))
+    try harness.initialize(bundle: TraverseBundle(rootURL: URL(fileURLWithPath: "/tmp/traverse-bundle"), runtimeWasmDigest: "sha256:test"))
+    _ = try harness.submit(TraverseSubmission(targetID: "demo.target", inputJSON: Data("{}".utf8)))
+    let event = try #require(harness.subscribe().first)
+    #expect(event.eventType == "capability_result")
+    #expect(event.sessionID == "swift-session-1")
+    #expect(event.output == Data("{\"answer\":42}".utf8))
+}
+
 @Test func compatibleLifecycleIsDeterministicAndOrdered() throws {
     let harness = InMemoryTraverseEmbedder()
     try harness.initialize(bundle: TraverseBundle(

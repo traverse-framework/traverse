@@ -85,6 +85,15 @@ public sealed class WasmtimeRuntimeBridgeTests
         Assert.Equal("{\"status\":\"stopped\"}", runtime.Shutdown());
     }
 
+    [Fact]
+    public void TestDoubleExposesScriptedTargetOutputPublicly()
+    {
+        var harness = new InMemoryTraverseEmbedder().WithTargetOutput("{\"answer\":42}");
+        harness.Initialize(new TraverseBundle("assets/traverse", "sha256:test"));
+        harness.Submit(new TraverseSubmission("demo.target", "{}"));
+        Assert.Equal(new TraverseRuntimeEvent(1, "demo.target", "accepted", EventType: "capability_result", SessionId: "dotnet-session-1", Output: "{\"answer\":42}"), harness.Subscribe().Single());
+    }
+
     private static (TraverseBundle Bundle, byte[] Bytes) FixtureBundle(
         string? declaredDigest = null,
         string fixture = BridgeFixture)
