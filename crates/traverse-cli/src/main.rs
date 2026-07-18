@@ -28,8 +28,8 @@ use traverse_registry::{
     ComposabilityMetadata, CompositionKind, CompositionPattern, ConnectorRegistration,
     DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind, LookupScope,
     PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowReference,
-    WorkflowRegistration, WorkflowRegistry, load_application_bundle_manifest, load_registry_bundle,
+    RegistryScope, SourceKind, SourceReference, WorkflowReference, WorkflowRegistration,
+    WorkflowRegistry, load_application_bundle_manifest, load_registry_bundle,
     write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
@@ -3444,19 +3444,6 @@ fn inspect_event(contract_path: &Path) -> Result<String, CliError> {
     Ok(render_event_summary(contract_path, &validated.normalized))
 }
 
-#[allow(dead_code)]
-fn inspect_workflow(workflow_path: &Path) -> Result<String, CliError> {
-    let contents = read_text_file(workflow_path, "workflow artifact")?;
-    let definition = serde_json::from_str::<WorkflowDefinition>(&contents).map_err(|error| {
-        CliError::ValidationFailed(format!(
-            "failed to parse workflow artifact {}: {error}",
-            workflow_path.display()
-        ))
-    })?;
-
-    Ok(render_workflow_summary(workflow_path, &definition))
-}
-
 fn workflow_register(workflow_path: &Path, workspace_id: &str) -> Result<String, CliError> {
     let workflow_json = read_text_file(workflow_path, "workflow definition")?;
     let workflow_value: serde_json::Value =
@@ -3734,39 +3721,6 @@ fn render_event_summary(path: &Path, contract: &EventContract) -> String {
         lines.push(format!(
             "  - {}@{}",
             subscriber.capability_id, subscriber.version
-        ));
-    }
-
-    lines.join("\n")
-}
-
-#[allow(dead_code)]
-fn render_workflow_summary(path: &Path, definition: &WorkflowDefinition) -> String {
-    let mut lines = vec![
-        format!("path: {}", path.display()),
-        format!("id: {}", definition.id),
-        format!("version: {}", definition.version),
-        format!("lifecycle: {:?}", definition.lifecycle).to_lowercase(),
-        format!("start_node: {}", definition.start_node),
-        format!("terminal_nodes: {}", definition.terminal_nodes.join(",")),
-        format!("node_count: {}", definition.nodes.len()),
-        format!("edge_count: {}", definition.edges.len()),
-        format!("governing_spec: {}", definition.governing_spec),
-        "node_capabilities:".to_string(),
-    ];
-
-    for node in &definition.nodes {
-        lines.push(format!(
-            "  - {} -> {}@{}",
-            node.node_id, node.capability_id, node.capability_version
-        ));
-    }
-
-    lines.push("edges:".to_string());
-    for edge in &definition.edges {
-        lines.push(format!(
-            "  - {}: {} -> {}",
-            edge.edge_id, edge.from, edge.to
         ));
     }
 
@@ -5097,7 +5051,7 @@ mod tests {
         capability_publish_at, component_new_at, curl_text, ensure_clean_registry_checkout,
         execute_agent, execute_expedition, execute_traverse_starter_process,
         execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
-        inspect_bundle, inspect_event, inspect_trace, inspect_workflow, latest_index_release_asset,
+        inspect_bundle, inspect_event, inspect_trace, latest_index_release_asset,
         load_registered_bundle, load_registered_bundle_with_public_records, load_runtime_request,
         parse_command, publish_file_sha256_digest, register_bundle, register_generated_app_bundle,
         registry_sync_at, registry_sync_failure_json, reject_private_contract_scope, run_command,
@@ -7043,32 +6997,6 @@ mod tests {
             error
                 .message()
                 .contains("failed to validate event contract")
-        );
-    }
-
-    #[test]
-    fn inspect_workflow_renders_canonical_workflow() {
-        let path = repo_root().join("workflows/examples/expedition/plan-expedition/workflow.json");
-
-        let output = inspect_workflow(&path).expect("workflow inspect should succeed");
-
-        assert!(output.contains("id: expedition.planning.plan-expedition"));
-        assert!(output.contains("start_node: capture_objective"));
-        assert!(output.contains("node_capabilities:"));
-    }
-
-    #[test]
-    fn inspect_workflow_rejects_malformed_definition() {
-        let temp_dir = unique_temp_dir();
-        let path = temp_dir.join("workflow.json");
-        fs::write(&path, "{\"id\":true}").expect("workflow file should write");
-
-        let error = inspect_workflow(&path).expect_err("malformed workflow should fail");
-
-        assert!(
-            error
-                .message()
-                .contains("failed to parse workflow artifact")
         );
     }
 
