@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-cli-rs"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "ed25519-dalek",
  "qrcode",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-contracts"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "semver",
  "serde",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-embedder"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde_json",
  "sha2 0.11.0",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-expedition-wasm"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-mcp"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-registry"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "semver",
  "serde",
@@ -1879,7 +1879,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-runtime"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "chrono",
  "ed25519-dalek",
