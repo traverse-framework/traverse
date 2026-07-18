@@ -104,6 +104,6 @@ PY
 
 # Run the registration-time gate over the full local artifact tree (which includes
 # referential integrity checks like capability -> event references and workflow graph validity).
-cargo run -p traverse-cli -- bundle register "${manifest_path}"
+cargo run -p traverse-cli-rs -- bundle register "${manifest_path}"
 
 echo "Contractual enforcement gate passed."

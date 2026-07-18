@@ -9,7 +9,7 @@ examples/expedition/registry-bundle/manifest.json
 Use the current repo CLI to inspect it:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json
 ```
 
 What this walkthrough proves:
@@ -31,7 +31,7 @@ Expected ids in the output include:
 Validation commands:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json
 bash scripts/ci/expedition_artifact_smoke.sh
 bash scripts/ci/repository_checks.sh
 ```

@@ -12,13 +12,13 @@ trace_path="${tmpdir}/plan-expedition-trace.json"
 
 pushd "${repo_root}" >/dev/null
 
-execution_output="$(cargo run -p traverse-cli -- expedition execute "${request_path}" --trace-out "${trace_path}")"
+execution_output="$(cargo run -p traverse-cli-rs -- expedition execute "${request_path}" --trace-out "${trace_path}")"
 printf '%s\n' "${execution_output}"
 
 test -f "${trace_path}"
 grep -q "trace_path: ${trace_path}" <<<"${execution_output}"
 
-inspect_output="$(cargo run -p traverse-cli -- trace inspect "${trace_path}")"
+inspect_output="$(cargo run -p traverse-cli-rs -- trace inspect "${trace_path}")"
 printf '%s\n' "${inspect_output}"
 
 grep -q "trace_id: trace_exec_expedition-plan-request-001" <<<"${inspect_output}"
@@ -28,7 +28,7 @@ grep -q "selected_capability_id: expedition.planning.plan-expedition" <<<"${insp
 printf '{"trace_id":true}\n' > "${tmpdir}/invalid-trace.json"
 
 set +e
-invalid_output="$(cargo run -p traverse-cli -- trace inspect "${tmpdir}/invalid-trace.json" 2>&1)"
+invalid_output="$(cargo run -p traverse-cli-rs -- trace inspect "${tmpdir}/invalid-trace.json" 2>&1)"
 invalid_status=$?
 set -e
 

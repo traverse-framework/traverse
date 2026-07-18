@@ -60,7 +60,7 @@ echo ""
 cd "$REPO_ROOT"
 
 echo "Building release binary..."
-cargo build --release -p traverse-cli -q
+cargo build --release -p traverse-cli-rs -q
 TRAVERSE_CLI="$REPO_ROOT/target/release/traverse-cli"
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"

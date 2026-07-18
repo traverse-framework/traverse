@@ -33,7 +33,7 @@ cargo test -q -p traverse-registry --test application_manifest \
   rejects_compatible_component_without_platforms
 
 validation_json="$(
-  cargo run -q -p traverse-cli -- app validate \
+  cargo run -q -p traverse-cli-rs -- app validate \
     --manifest examples/applications/traverse-starter/app.manifest.json \
     --json
 )"

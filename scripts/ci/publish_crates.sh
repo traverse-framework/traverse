@@ -8,7 +8,7 @@ crates=(
   "traverse-runtime"
   "traverse-embedder"
   "traverse-mcp"
-  "traverse-cli"
+  "traverse-cli-rs"
   "traverse-expedition-wasm"
 )
 

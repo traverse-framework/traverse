@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 pushd "${repo_root}" >/dev/null
 
-cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:0 >"${log_file}" 2>&1 &
+cargo run -p traverse-cli-rs -- browser-adapter serve --bind 127.0.0.1:0 >"${log_file}" 2>&1 &
 server_pid=$!
 
 for _ in $(seq 1 200); do

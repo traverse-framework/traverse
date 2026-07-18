@@ -37,7 +37,7 @@ scripts/ci/              # Deterministic spec-alignment gate (vendored, pinned c
 ```bash
 cargo build              # Build all crates
 cargo test               # Run tests (no panics, unwraps, or TODOs)
-cargo run -p traverse-cli
+cargo run -p traverse-cli-rs
 bash scripts/ci/spec_alignment_check.sh   # Spec-alignment gate
 ```
 

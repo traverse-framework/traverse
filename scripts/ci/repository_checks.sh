@@ -296,18 +296,18 @@ grep -q "Start Here" docs/app-consumable-entry-path.md
 grep -q "quickstart.md" docs/app-consumable-entry-path.md
 grep -q "bash scripts/ci/executable_package_template_smoke.sh" docs/executable-package-template.md
 grep -q "docs/local-runtime-home.md" docs/executable-package-template.md
-grep -q "cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json" docs/expedition-example-authoring.md
-grep -q "cargo run -p traverse-cli -- expedition execute examples/expedition/runtime-requests/plan-expedition.json" docs/expedition-example-authoring.md
-grep -q "cargo run -p traverse-cli -- trace inspect" docs/expedition-example-authoring.md
-grep -q "cargo run -p traverse-cli -- bundle register examples/expedition/registry-bundle/manifest.json" docs/expedition-example-authoring.md
+grep -q "cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json" docs/expedition-example-authoring.md
+grep -q "cargo run -p traverse-cli-rs -- expedition execute examples/expedition/runtime-requests/plan-expedition.json" docs/expedition-example-authoring.md
+grep -q "cargo run -p traverse-cli-rs -- trace inspect" docs/expedition-example-authoring.md
+grep -q "cargo run -p traverse-cli-rs -- bundle register examples/expedition/registry-bundle/manifest.json" docs/expedition-example-authoring.md
 grep -q "workflows/examples/expedition/plan-expedition/workflow.json" docs/expedition-example-authoring.md
 grep -q ".traverse/local/" docs/expedition-example-authoring.md
 grep -q "capture-expedition-objective/contract.json" docs/getting-started.md
 grep -q "docs/troubleshooting.md" docs/getting-started.md
 grep -q "examples/hello-world/README.md" docs/getting-started.md
-grep -q "cargo run -p traverse-cli -- bundle register" docs/getting-started.md
-grep -q "cargo run -p traverse-cli -- expedition execute" docs/getting-started.md
-grep -q "cargo run -p traverse-cli -- trace inspect" docs/getting-started.md
+grep -q "cargo run -p traverse-cli-rs -- bundle register" docs/getting-started.md
+grep -q "cargo run -p traverse-cli-rs -- expedition execute" docs/getting-started.md
+grep -q "cargo run -p traverse-cli-rs -- trace inspect" docs/getting-started.md
 grep -q "bash scripts/ci/expedition_golden_path.sh" docs/getting-started.md
 grep -q "docs/troubleshooting.md" quickstart.md
 grep -q "docs/troubleshooting.md" docs/tutorial-index.md
@@ -316,7 +316,7 @@ grep -q "Rust Checks" docs/troubleshooting.md
 grep -q "Coverage Gate" docs/troubleshooting.md
 grep -q "Spec Alignment" docs/troubleshooting.md
 grep -q "Generated Local State And Safe Cleanup" docs/troubleshooting.md
-grep -q "cargo run -p traverse-cli -- agent execute" examples/hello-world/README.md
+grep -q "cargo run -p traverse-cli-rs -- agent execute" examples/hello-world/README.md
 grep -q "hello.world.say-hello" examples/hello-world/README.md
 grep -q "traverse-starter.process" contracts/examples/traverse-starter/capabilities/process/contract.json
 grep -q "traverse-starter.process-agent" examples/traverse-starter/process-agent/manifest.json
@@ -397,7 +397,7 @@ grep -q "journal-backed replay" docs/releases/v0.8.0.md
 grep -q "doc-approval.recommend" docs/releases/v0.8.0.md
 grep -q "coverage-gate" docs/releases/v0.8.0.md
 grep -q "cargo build" docs/v0.3.0-source-build-consumer-packaging.md
-grep -q "cargo run -p traverse-cli -- serve" docs/v0.3.0-source-build-consumer-packaging.md
+grep -q "cargo run -p traverse-cli-rs -- serve" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "traverse-sbom.cdx.json" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "No package-manager distribution" docs/v0.3.0-source-build-consumer-packaging.md
@@ -438,7 +438,7 @@ grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/compatibility-policy.
 grep -q "docs/youaskm3-canonical-app-http-path.md" README.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" docs/app-consumable-entry-path.md
 grep -q "Supported Traverse baseline: \`v0.3.0\`" docs/youaskm3-canonical-app-http-path.md
-grep -q "cargo run -p traverse-cli -- serve" docs/youaskm3-canonical-app-http-path.md
+grep -q "cargo run -p traverse-cli-rs -- serve" docs/youaskm3-canonical-app-http-path.md
 grep -q ".traverse/server.json" docs/youaskm3-canonical-app-http-path.md
 grep -q "POST /v1/workspaces/{workspace_id}/capabilities" docs/youaskm3-canonical-app-http-path.md
 grep -q "POST /v1/workspaces/{workspace_id}/execute" docs/youaskm3-canonical-app-http-path.md

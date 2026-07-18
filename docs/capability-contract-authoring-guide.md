@@ -165,13 +165,13 @@ cargo test -p traverse-contracts
 8. Add the contract to a bundle manifest and inspect the bundle:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect <path-to-manifest.json>
+cargo run -p traverse-cli-rs -- bundle inspect <path-to-manifest.json>
 ```
 
 9. Register the bundle:
 
 ```bash
-cargo run -p traverse-cli -- bundle register <path-to-manifest.json>
+cargo run -p traverse-cli-rs -- bundle register <path-to-manifest.json>
 ```
 
 ## Common Mistakes
@@ -341,7 +341,7 @@ bash scripts/ci/repository_checks.sh
 If you want to validate a single contract file's JSON structure locally:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect contracts/path/to/your/bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect contracts/path/to/your/bundle/manifest.json
 ```
 
 The bundle inspect command will surface any structural issues (missing required fields, unknown values) before you attempt registration.

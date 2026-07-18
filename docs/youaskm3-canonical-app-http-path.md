@@ -9,7 +9,7 @@ Supported Traverse baseline: `v0.3.0`
 For the first `youaskm3` release, the canonical Traverse app-facing path is a local source-build HTTP/JSON server:
 
 ```bash
-cargo run -p traverse-cli -- serve
+cargo run -p traverse-cli-rs -- serve
 ```
 
 This starts the governed app-consumable API on `127.0.0.1:8787` by default and writes a local discovery file at:
@@ -49,11 +49,11 @@ Implementation details inside `crates/traverse-cli/src/http_api.rs`, in-memory s
 Downstream app setup uses the CLI/local-dev registration path, not an HTTP app registration endpoint:
 
 ```bash
-cargo run -p traverse-cli -- app validate \
+cargo run -p traverse-cli-rs -- app validate \
   --manifest examples/applications/expedition-readiness/app.manifest.json \
   --json
 
-cargo run -p traverse-cli -- app register \
+cargo run -p traverse-cli-rs -- app register \
   --manifest examples/applications/expedition-readiness/app.manifest.json \
   --workspace "$WORKSPACE_ID" \
   --json
@@ -71,7 +71,7 @@ Downstream consumers should pin the released Traverse tag instead of following r
 git clone https://github.com/enricopiovesan/Traverse.git
 cd Traverse
 git checkout v0.3.0
-cargo run -p traverse-cli -- serve
+cargo run -p traverse-cli-rs -- serve
 ```
 
 Requirements:

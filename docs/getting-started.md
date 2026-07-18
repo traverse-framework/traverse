@@ -112,7 +112,7 @@ For more authoring depth after this guide, continue with:
 Traverse registers the expedition example through one approved bundle manifest:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect \
+cargo run -p traverse-cli-rs -- bundle inspect \
   examples/expedition/registry-bundle/manifest.json
 ```
 
@@ -130,7 +130,7 @@ What you should see in the output:
 Register the approved expedition bundle:
 
 ```bash
-cargo run -p traverse-cli -- bundle register \
+cargo run -p traverse-cli-rs -- bundle register \
   examples/expedition/registry-bundle/manifest.json
 ```
 
@@ -148,7 +148,7 @@ This is the step that makes the capability discoverable through Traverse instead
 The first capability is not most useful in isolation. It becomes meaningful as part of the approved expedition workflow:
 
 ```bash
-cargo run -p traverse-cli -- workflow inspect \
+cargo run -p traverse-cli-rs -- workflow inspect \
   workflows/examples/expedition/plan-expedition/workflow.json
 ```
 
@@ -165,7 +165,7 @@ That `start_node` is the first capability you inspected earlier.
 Run the approved expedition request:
 
 ```bash
-cargo run -p traverse-cli -- expedition execute \
+cargo run -p traverse-cli-rs -- expedition execute \
   examples/expedition/runtime-requests/plan-expedition.json
 ```
 
@@ -186,7 +186,7 @@ Traverse is built to keep runtime decisions explainable. Persist the trace:
 
 ```bash
 tmpdir="$(mktemp -d)"
-cargo run -p traverse-cli -- expedition execute \
+cargo run -p traverse-cli-rs -- expedition execute \
   examples/expedition/runtime-requests/plan-expedition.json \
   --trace-out "$tmpdir/plan-expedition-trace.json"
 ```
@@ -194,7 +194,7 @@ cargo run -p traverse-cli -- expedition execute \
 Then inspect it:
 
 ```bash
-cargo run -p traverse-cli -- trace inspect \
+cargo run -p traverse-cli-rs -- trace inspect \
   "$tmpdir/plan-expedition-trace.json"
 ```
 

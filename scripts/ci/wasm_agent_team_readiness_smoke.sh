@@ -10,12 +10,12 @@ request_path="$repo_root/examples/agents/runtime-requests/validate-team-readines
 
 bash "$agent_dir/build-fixture.sh" >/dev/null
 
-inspect_output="$(cargo run -p traverse-cli -- agent inspect "$manifest_path")"
+inspect_output="$(cargo run -p traverse-cli-rs -- agent inspect "$manifest_path")"
 printf '%s\n' "$inspect_output" | grep -q "package_id: expedition.planning.validate-team-readiness-agent"
 printf '%s\n' "$inspect_output" | grep -q "capability_id: expedition.planning.validate-team-readiness"
 printf '%s\n' "$inspect_output" | grep -q "workflow_refs: expedition.planning.plan-expedition@1.0.0"
 
-execute_output="$(cargo run -p traverse-cli -- agent execute "$manifest_path" "$request_path")"
+execute_output="$(cargo run -p traverse-cli-rs -- agent execute "$manifest_path" "$request_path")"
 printf '%s\n' "$execute_output" | grep -q "package_id: expedition.planning.validate-team-readiness-agent"
 printf '%s\n' "$execute_output" | grep -q "capability_id: expedition.planning.validate-team-readiness"
 printf '%s\n' "$execute_output" | grep -q "status: completed"

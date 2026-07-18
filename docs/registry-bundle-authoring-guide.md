@@ -114,7 +114,7 @@ Paths are resolved relative to the directory containing `manifest.json`, not rel
 **Inspect** (validates and prints a summary without modifying registries):
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect \
+cargo run -p traverse-cli-rs -- bundle inspect \
   examples/your-bundle/registry-bundle/manifest.json
 ```
 
@@ -123,7 +123,7 @@ Expected output includes `bundle_id`, `version`, `scope`, the count of discovere
 **Register** (loads into in-memory registries for the current session):
 
 ```bash
-cargo run -p traverse-cli -- bundle register \
+cargo run -p traverse-cli-rs -- bundle register \
   examples/your-bundle/registry-bundle/manifest.json
 ```
 

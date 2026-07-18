@@ -10,14 +10,14 @@ agent_request="examples/agents/runtime-requests/interpret-expedition-intent.json
 
 bash examples/agents/expedition-intent-agent/build-fixture.sh >/tmp/traverse-agent-build.out
 
-inspect_output="$(cargo run -q -p traverse-cli -- agent inspect "$agent_manifest")"
+inspect_output="$(cargo run -q -p traverse-cli-rs -- agent inspect "$agent_manifest")"
 printf '%s\n' "$inspect_output"
 
 grep -q "package_id: expedition.planning.interpret-expedition-intent-agent" <<<"$inspect_output"
 grep -q "capability_id: expedition.planning.interpret-expedition-intent" <<<"$inspect_output"
 grep -q "binary_digest: fnv1a64:dffc31d6401c84d6" <<<"$inspect_output"
 
-execute_output="$(cargo run -q -p traverse-cli -- agent execute "$agent_manifest" "$agent_request")"
+execute_output="$(cargo run -q -p traverse-cli-rs -- agent execute "$agent_manifest" "$agent_request")"
 printf '%s\n' "$execute_output"
 
 grep -q "status: completed" <<<"$execute_output"

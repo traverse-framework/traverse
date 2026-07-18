@@ -15,4 +15,4 @@ if [[ "${#wasm_artifacts[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-cargo run -q -p traverse-cli -- wasm abi verify "${wasm_artifacts[@]}"
+cargo run -q -p traverse-cli-rs -- wasm abi verify "${wasm_artifacts[@]}"

@@ -29,7 +29,7 @@ echo ""
 # G-01: crates.io publication
 check G-01 "all Traverse crates are on crates.io at v1.0.0" bash -c '
     for crate in \
-        traverse-cli \
+        traverse-cli-rs \
         traverse-contracts \
         traverse-expedition-wasm \
         traverse-mcp \
@@ -60,7 +60,7 @@ check G-05 "cargo audit passes" \
 
 # G-06: quickstart smoke
 check G-06 "quickstart command produces documented output" bash -c '
-    output="$(cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json 2>/dev/null)"
+    output="$(cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json 2>/dev/null)"
     grep -q "bundle_id: expedition.planning.seed-bundle" <<<"$output"
     grep -q "capabilities: 6" <<<"$output"
     grep -q "workflows: 1" <<<"$output"

@@ -12,7 +12,7 @@ validate_json="${tmpdir}/app-validate.json"
 register_json="${tmpdir}/app-register.json"
 runtime_json="${tmpdir}/runtime-load.json"
 
-cargo run --quiet --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli -- \
+cargo run --quiet --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli-rs -- \
   app validate \
   --manifest "${manifest_path}" \
   --json > "${validate_json}"
@@ -34,7 +34,7 @@ PY
 
 (
   cd "${tmpdir}"
-  cargo run --quiet --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli -- \
+  cargo run --quiet --manifest-path "${repo_root}/Cargo.toml" -p traverse-cli-rs -- \
     app register \
     --manifest "${manifest_path}" \
     --workspace "${workspace_id}" \

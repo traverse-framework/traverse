@@ -39,7 +39,7 @@ grep -Fq "Decision 22: Keep Application Source Out of the Traverse Runtime Repos
 for app_id in traverse-starter meeting-notes; do
   validate_output="$(
     cd "${repo_root}"
-    cargo run -q -p traverse-cli -- app validate \
+    cargo run -q -p traverse-cli-rs -- app validate \
       --manifest "examples/applications/${app_id}/app.manifest.json" --json
   )"
   grep -q '"status": "validated"' <<<"${validate_output}"
@@ -48,7 +48,7 @@ done
 
 starter_output="$(
   cd "${repo_root}"
-  cargo run -q -p traverse-cli -- agent execute \
+  cargo run -q -p traverse-cli-rs -- agent execute \
     examples/traverse-starter/process-agent/manifest.json \
     examples/traverse-starter/runtime-requests/process.json
 )"
@@ -57,7 +57,7 @@ grep -q "capability_id: traverse-starter.process" <<<"${starter_output}"
 
 meeting_output="$(
   cd "${repo_root}"
-  cargo run -q -p traverse-cli -- agent execute \
+  cargo run -q -p traverse-cli-rs -- agent execute \
     examples/meeting-notes/process-agent/manifest.json \
     examples/meeting-notes/runtime-requests/process.json
 )"

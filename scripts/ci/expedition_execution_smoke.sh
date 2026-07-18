@@ -7,7 +7,7 @@ request_path="${repo_root}/examples/expedition/runtime-requests/plan-expedition.
 
 pushd "${repo_root}" >/dev/null
 
-output="$(cargo run -p traverse-cli -- expedition execute "${request_path}")"
+output="$(cargo run -p traverse-cli-rs -- expedition execute "${request_path}")"
 printf '%s\n' "${output}"
 
 grep -q "capability_id: expedition.planning.plan-expedition" <<<"${output}"
@@ -30,7 +30,7 @@ target.write_text(json.dumps(payload, indent=2) + "\n")
 PY
 
 set +e
-invalid_output="$(cargo run -p traverse-cli -- expedition execute "${tmpdir}/invalid-plan-expedition.json" 2>&1)"
+invalid_output="$(cargo run -p traverse-cli-rs -- expedition execute "${tmpdir}/invalid-plan-expedition.json" 2>&1)"
 invalid_status=$?
 set -e
 

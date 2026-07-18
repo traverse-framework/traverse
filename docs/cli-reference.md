@@ -53,19 +53,19 @@ consistent with error output behaviour across the CLI.
 
 | Command | Purpose | Example | Expected Output |
 |---|---|---|---|
-| `bundle inspect <manifest-path>` | Validate and summarize a registry bundle manifest. | `cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, artifact counts, and the discovered capability/event/workflow ids. |
-| `bundle register <manifest-path>` | Load a registry bundle and register its contents into in-memory registries. | `cargo run -p traverse-cli -- bundle register examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, registered counts, and registration record summaries. |
-| `app new <app-id> [--register --workspace <workspace-id>]` | Create a governed Traverse app bundle scaffold under `apps/<app-id>`. | `cargo run -p traverse-cli -- app new youaskm3` | Creates `manifest.json`, `workspace.config.json`, component/workflow directories, and a bundle README. `--register` rejects the initial incomplete scaffold until real components and workflows are present. |
-| `app validate --manifest <path> --json` | Validate a downstream app manifest and emit stable setup evidence without writing workspace state. | `cargo run -p traverse-cli -- app validate --manifest examples/applications/expedition-readiness/app.manifest.json --json` | Prints JSON with `status: validated`, app identity, component/workflow ids, verified WASM digests, public surfaces, model readiness, and runtime references. |
-| `app register --manifest <path> --workspace <workspace-id> --json` | Validate a downstream app manifest and atomically persist local workspace registration state. | `cargo run -p traverse-cli -- app register --manifest examples/applications/expedition-readiness/app.manifest.json --workspace local --json` | Prints JSON with `status: registered` or `status: already_registered`, app identity, workspace id, `state_scope: workspace_persisted`, `state_path`, digest evidence, and runtime references. |
-| `component new <component-id>` | Create a governed WASM component package scaffold under `components/<component-id>`. | `cargo run -p traverse-cli -- component new knowledge.retrieve` | Creates a component `manifest.json`, draft capability `contract.json`, Rust package shell, source directory, and artifact directory without creating executable WASM behavior. |
-| `browser-adapter serve [--bind <address>]` | Start the local browser adapter for the governed browser consumer path. | `cargo run -p traverse-cli -- browser-adapter serve --bind 127.0.0.1:4174` | Prints `local browser adapter listening on http://...` and stays running until stopped. |
-| `agent inspect <manifest-path>` | Load and summarize a governed WASM agent package manifest. | `cargo run -p traverse-cli -- agent inspect examples/agents/expedition-intent-agent/manifest.json` | Prints `path`, `package_id`, `package_version`, `capability_id`, binary location, digest, and model/workflow references. |
-| `agent execute <manifest-path> <request-path>` | Load a governed WASM agent package and execute it against a runtime request. | `cargo run -p traverse-cli -- agent execute examples/agents/expedition-intent-agent/manifest.json examples/agents/runtime-requests/interpret-expedition-intent.json` | Prints `request_id`, `execution_id`, `package_id`, `capability_id`, `trace_ref`, `status`, and capability-specific result fields. |
-| `event inspect <contract-path>` | Parse and validate an event contract. | `cargo run -p traverse-cli -- event inspect contracts/examples/expedition/events/expedition-objective-captured/contract.json` | Prints `path`, `id`, `version`, lifecycle, classification, publisher/subscriber counts, and publisher/subscriber ids. |
-| `trace inspect <trace-path>` | Parse and summarize a runtime trace artifact. | `cargo run -p traverse-cli -- trace inspect target/traces/plan-expedition.json` | Prints `trace_id`, `execution_id`, `request_id`, governing spec, state-machine validation, state transition counts, and terminal outcome details. |
-| `workflow inspect <workflow-path>` | Parse and summarize a workflow definition artifact. | `cargo run -p traverse-cli -- workflow inspect workflows/examples/expedition/plan-expedition/workflow.json` | Prints `id`, `version`, lifecycle, start node, terminal nodes, node/edge counts, and workflow edges. |
-| `expedition execute <request-path> [--trace-out <trace-path>]` | Execute the canonical expedition workflow through the Traverse runtime. | `cargo run -p traverse-cli -- expedition execute examples/expedition/runtime-requests/plan-expedition.json --trace-out target/traces/plan-expedition.json` | Prints `request_id`, `execution_id`, `capability_id`, `status`, `trace_ref`, and expedition result fields such as `plan_id` and `summary`. |
+| `bundle inspect <manifest-path>` | Validate and summarize a registry bundle manifest. | `cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, artifact counts, and the discovered capability/event/workflow ids. |
+| `bundle register <manifest-path>` | Load a registry bundle and register its contents into in-memory registries. | `cargo run -p traverse-cli-rs -- bundle register examples/expedition/registry-bundle/manifest.json` | Prints `bundle_id`, `version`, `scope`, registered counts, and registration record summaries. |
+| `app new <app-id> [--register --workspace <workspace-id>]` | Create a governed Traverse app bundle scaffold under `apps/<app-id>`. | `cargo run -p traverse-cli-rs -- app new youaskm3` | Creates `manifest.json`, `workspace.config.json`, component/workflow directories, and a bundle README. `--register` rejects the initial incomplete scaffold until real components and workflows are present. |
+| `app validate --manifest <path> --json` | Validate a downstream app manifest and emit stable setup evidence without writing workspace state. | `cargo run -p traverse-cli-rs -- app validate --manifest examples/applications/expedition-readiness/app.manifest.json --json` | Prints JSON with `status: validated`, app identity, component/workflow ids, verified WASM digests, public surfaces, model readiness, and runtime references. |
+| `app register --manifest <path> --workspace <workspace-id> --json` | Validate a downstream app manifest and atomically persist local workspace registration state. | `cargo run -p traverse-cli-rs -- app register --manifest examples/applications/expedition-readiness/app.manifest.json --workspace local --json` | Prints JSON with `status: registered` or `status: already_registered`, app identity, workspace id, `state_scope: workspace_persisted`, `state_path`, digest evidence, and runtime references. |
+| `component new <component-id>` | Create a governed WASM component package scaffold under `components/<component-id>`. | `cargo run -p traverse-cli-rs -- component new knowledge.retrieve` | Creates a component `manifest.json`, draft capability `contract.json`, Rust package shell, source directory, and artifact directory without creating executable WASM behavior. |
+| `browser-adapter serve [--bind <address>]` | Start the local browser adapter for the governed browser consumer path. | `cargo run -p traverse-cli-rs -- browser-adapter serve --bind 127.0.0.1:4174` | Prints `local browser adapter listening on http://...` and stays running until stopped. |
+| `agent inspect <manifest-path>` | Load and summarize a governed WASM agent package manifest. | `cargo run -p traverse-cli-rs -- agent inspect examples/agents/expedition-intent-agent/manifest.json` | Prints `path`, `package_id`, `package_version`, `capability_id`, binary location, digest, and model/workflow references. |
+| `agent execute <manifest-path> <request-path>` | Load a governed WASM agent package and execute it against a runtime request. | `cargo run -p traverse-cli-rs -- agent execute examples/agents/expedition-intent-agent/manifest.json examples/agents/runtime-requests/interpret-expedition-intent.json` | Prints `request_id`, `execution_id`, `package_id`, `capability_id`, `trace_ref`, `status`, and capability-specific result fields. |
+| `event inspect <contract-path>` | Parse and validate an event contract. | `cargo run -p traverse-cli-rs -- event inspect contracts/examples/expedition/events/expedition-objective-captured/contract.json` | Prints `path`, `id`, `version`, lifecycle, classification, publisher/subscriber counts, and publisher/subscriber ids. |
+| `trace inspect <trace-path>` | Parse and summarize a runtime trace artifact. | `cargo run -p traverse-cli-rs -- trace inspect target/traces/plan-expedition.json` | Prints `trace_id`, `execution_id`, `request_id`, governing spec, state-machine validation, state transition counts, and terminal outcome details. |
+| `workflow inspect <workflow-path>` | Parse and summarize a workflow definition artifact. | `cargo run -p traverse-cli-rs -- workflow inspect workflows/examples/expedition/plan-expedition/workflow.json` | Prints `id`, `version`, lifecycle, start node, terminal nodes, node/edge counts, and workflow edges. |
+| `expedition execute <request-path> [--trace-out <trace-path>]` | Execute the canonical expedition workflow through the Traverse runtime. | `cargo run -p traverse-cli-rs -- expedition execute examples/expedition/runtime-requests/plan-expedition.json --trace-out target/traces/plan-expedition.json` | Prints `request_id`, `execution_id`, `capability_id`, `status`, `trace_ref`, and expedition result fields such as `plan_id` and `summary`. |
 
 ## Stable Public Surface
 
@@ -95,11 +95,11 @@ The public local-dev app setup flow is governed by `046-public-cli-app-registrat
 - `traverse-cli app register --manifest <path> --workspace <workspace-id> --json`
 
 ```bash
-cargo run -p traverse-cli -- app validate \
+cargo run -p traverse-cli-rs -- app validate \
   --manifest examples/applications/expedition-readiness/app.manifest.json \
   --json
 
-cargo run -p traverse-cli -- app register \
+cargo run -p traverse-cli-rs -- app register \
   --manifest examples/applications/expedition-readiness/app.manifest.json \
   --workspace local \
   --json
@@ -185,21 +185,21 @@ Those paths are useful for testing and documentation, but they are not a promise
 
 This reference was checked against the live CLI behavior with:
 
-- `cargo run -p traverse-cli -- --help`
-- `cargo run -p traverse-cli -- help`
-- `cargo run -p traverse-cli -- bundle inspect --help`
-- `cargo run -p traverse-cli -- bundle register --help`
-- `cargo run -p traverse-cli -- app new --help`
-- `cargo run -p traverse-cli -- app validate --help`
-- `cargo run -p traverse-cli -- app register --help`
-- `cargo run -p traverse-cli -- component new --help`
-- `cargo run -p traverse-cli -- agent inspect --help`
-- `cargo run -p traverse-cli -- agent execute --help`
-- `cargo run -p traverse-cli -- workflow inspect --help`
-- `cargo run -p traverse-cli -- expedition execute --help`
-- `cargo run -p traverse-cli -- event inspect --help`
-- `cargo run -p traverse-cli -- trace inspect --help`
-- `cargo run -p traverse-cli -- browser-adapter serve --help`
+- `cargo run -p traverse-cli-rs -- --help`
+- `cargo run -p traverse-cli-rs -- help`
+- `cargo run -p traverse-cli-rs -- bundle inspect --help`
+- `cargo run -p traverse-cli-rs -- bundle register --help`
+- `cargo run -p traverse-cli-rs -- app new --help`
+- `cargo run -p traverse-cli-rs -- app validate --help`
+- `cargo run -p traverse-cli-rs -- app register --help`
+- `cargo run -p traverse-cli-rs -- component new --help`
+- `cargo run -p traverse-cli-rs -- agent inspect --help`
+- `cargo run -p traverse-cli-rs -- agent execute --help`
+- `cargo run -p traverse-cli-rs -- workflow inspect --help`
+- `cargo run -p traverse-cli-rs -- expedition execute --help`
+- `cargo run -p traverse-cli-rs -- event inspect --help`
+- `cargo run -p traverse-cli-rs -- trace inspect --help`
+- `cargo run -p traverse-cli-rs -- browser-adapter serve --help`
 
 It should also remain consistent with:
 

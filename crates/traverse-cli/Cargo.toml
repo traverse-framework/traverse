@@ -1,10 +1,15 @@
 [package]
-name = "traverse-cli"
+name = "traverse-cli-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "Command-line interface for Traverse — register, list, validate, and run governed capabilities"
+
+[[bin]]
+name = "traverse-cli"
+path = "src/main.rs"
 
 [dependencies]
 ed25519-dalek = "3.0.0"

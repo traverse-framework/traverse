@@ -67,43 +67,43 @@ bash scripts/ci/expedition_artifact_smoke.sh
 Registry bundle inspection:
 
 ```bash
-cargo run -p traverse-cli -- bundle inspect examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle inspect examples/expedition/registry-bundle/manifest.json
 ```
 
 Registry bundle registration:
 
 ```bash
-cargo run -p traverse-cli -- bundle register examples/expedition/registry-bundle/manifest.json
+cargo run -p traverse-cli-rs -- bundle register examples/expedition/registry-bundle/manifest.json
 ```
 
 Expedition execution:
 
 ```bash
-cargo run -p traverse-cli -- expedition execute examples/expedition/runtime-requests/plan-expedition.json
+cargo run -p traverse-cli-rs -- expedition execute examples/expedition/runtime-requests/plan-expedition.json
 ```
 
 Expedition execution with persisted trace:
 
 ```bash
 tmpdir="$(mktemp -d)"
-cargo run -p traverse-cli -- expedition execute examples/expedition/runtime-requests/plan-expedition.json --trace-out "$tmpdir/plan-expedition-trace.json"
+cargo run -p traverse-cli-rs -- expedition execute examples/expedition/runtime-requests/plan-expedition.json --trace-out "$tmpdir/plan-expedition-trace.json"
 ```
 
 Trace inspection:
 
 ```bash
-cargo run -p traverse-cli -- trace inspect "$tmpdir/plan-expedition-trace.json"
+cargo run -p traverse-cli-rs -- trace inspect "$tmpdir/plan-expedition-trace.json"
 ```
 Event contract inspection:
 
 ```bash
-cargo run -p traverse-cli -- event inspect contracts/examples/expedition/events/expedition-objective-captured/contract.json
+cargo run -p traverse-cli-rs -- event inspect contracts/examples/expedition/events/expedition-objective-captured/contract.json
 ```
 
 Workflow artifact inspection:
 
 ```bash
-cargo run -p traverse-cli -- workflow inspect workflows/examples/expedition/plan-expedition/workflow.json
+cargo run -p traverse-cli-rs -- workflow inspect workflows/examples/expedition/plan-expedition/workflow.json
 ```
 
 Repository checks:
