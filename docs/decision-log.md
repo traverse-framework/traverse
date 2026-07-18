@@ -695,3 +695,44 @@ Issue `#740` tracks the version bump. `packages/swift/TraverseEmbedder`'s
 `dependency-review.json` `known_limitations` entry should be updated once the
 bump lands, and its resolution unblocks `#647`'s remaining Spec 071
 release-evidence item.
+
+## Decision 28: Define Native Embedder Baseline 1
+
+- **Date**: 2026-07-18
+- **Status**: Accepted
+- **Governing spec**: `073-native-embedder-release-baseline`
+- **Related issues**: `#752`, `#750`, `#751`, `#647`
+
+### Context
+
+Spec 071 defines the immutable 1.0 core-Wasm bridge base. Spec 072 adds the
+runtime-owned compatible-capability lifecycle and states that a complete
+`embedder-api/1.0.0` package needs bridge 1.1 or later within major version 1.
+Without a release-level composition, a package version and a runtime digest do
+not tell a downstream consumer whether all public embedder operations are
+available or which host profile certified them.
+
+### Decision
+
+Define Native Embedder Baseline 1 as `embedder-api/1.0.0` plus
+`runtime-wasm-bridge >=1.1.0,<2.0.0`. Native package releases must record the
+supported bridge range, exact certified bridge/runtime/engine/conformance
+inputs, and their host resource-control profile. They validate the mandatory
+bridge 1.1 exports as well as the version range. The bridge module remains
+import-free core Wasm; bounded capability-host services remain governed by
+Spec 057.
+
+### Alternatives Considered
+
+- Keep bridge 1.0 as the release baseline — rejected because it cannot
+  implement compatible lifecycle operations inside the runtime-owned boundary.
+- Require exactly 1.1.0 — rejected because it blocks compatible 1.1 patch
+  releases without a semantic reason.
+- Rewrite Specs 071 or 072 — rejected because both approved artifacts are
+  immutable and accurately preserve the additive ABI history.
+
+### Outcome
+
+Spec 073 and ADR-0010 record the release baseline. #750 delivers the real
+artifact and evidence, #751 completes public native event parity, and #647
+resolves the Swift production resource-control prerequisite.

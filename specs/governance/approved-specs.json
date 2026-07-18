@@ -860,6 +860,21 @@
       ]
     },
     {
+      "id": "073-native-embedder-release-baseline",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/073-native-embedder-release-baseline/spec.md",
+      "governs": [
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/TraverseEmbedder/",
+        "packages/dotnet/TraverseEmbedder/",
+        "scripts/ci/embedder_conformance/",
+        "docs/adr/0010-native-embedder-release-baseline.md",
+        "specs/073-native-embedder-release-baseline/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",
