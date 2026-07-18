@@ -2,7 +2,7 @@
 
 **Feature Branch**: `codex/issue-198-downstream-publication-strategy`  
 **Created**: 2026-04-07  
-**Status**: Draft  
+**Status**: Superseded (2026-07-18 — see decision-log.md Decision 25; never approved, no implementation commits reference this spec ID; superseded by `023-browser-hosted-mcp-consumer-model`)  
 **Input**: User description: "Specify downstream publication strategy for packaged Traverse runtime and MCP artifacts."
 
 ## User Scenarios & Testing *(mandatory)*

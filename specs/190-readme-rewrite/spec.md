@@ -2,7 +2,7 @@
 
 **Feature Branch**: `190-readme-rewrite`
 **Created**: 2026-04-07
-**Status**: Draft
+**Status**: Approved (retroactively, 2026-07-18 — see decision-log.md Decision 26; implementation independently verified complete in README.md)
 **Input**: GitHub issue #190
 
 > **Governance note**: README.md is governed by spec `001-foundation-v0-1`. This spec must be declared in the PR body. No runtime, contract, or CI gate changes.

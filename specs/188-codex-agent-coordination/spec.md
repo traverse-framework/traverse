@@ -2,7 +2,7 @@
 
 **Feature Branch**: `188-codex-agent-coordination`
 **Created**: 2026-04-07
-**Status**: Draft
+**Status**: Approved (retroactively, 2026-07-18 — see decision-log.md Decision 26; implementation independently verified complete in AGENTS.md and docs/multi-thread-workflow.md)
 **Input**: GitHub issue #188
 
 > **Governance note**: Dev tooling only. No runtime capability, no contract changes. Codex is human-triggered via starter prompts — the coordination mechanism lives in instructions and AGENTS.md, not in automated queue scanning.

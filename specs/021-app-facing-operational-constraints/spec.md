@@ -2,7 +2,7 @@
 
 **Feature Branch**: `021-app-facing-operational-constraints`  
 **Created**: 2026-04-03  
-**Status**: Draft  
+**Status**: Superseded (2026-07-18 — see decision-log.md Decision 25; never approved, no implementation commits reference this spec ID; no specific direct successor identified)  
 **Input**: The agreed decision that v0.1 needs one narrow operational-constraints slice covering first-consumer performance expectations and app-facing security/safety boundaries without attempting a full production operating model.
 
 ## Purpose

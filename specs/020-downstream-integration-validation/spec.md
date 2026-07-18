@@ -2,7 +2,7 @@
 
 **Feature Branch**: `020-downstream-integration-validation`  
 **Created**: 2026-04-03  
-**Status**: Draft  
+**Status**: Superseded (2026-07-18 — see decision-log.md Decision 25; never approved, no implementation commits reference this spec ID; no specific direct successor identified)  
 **Input**: The approved direction for Traverse as the runtime and MCP substrate under downstream apps such as `youaskm3`, plus the agreed decisions that the first proving path must validate browser/runtime consumption, MCP consumption, quickstart usability for humans and agents, and release-readiness evidence together.
 
 ## Purpose

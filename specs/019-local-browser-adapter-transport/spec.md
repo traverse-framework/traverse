@@ -2,7 +2,7 @@
 
 **Feature Branch**: `019-local-browser-adapter-transport`  
 **Created**: 2026-04-02  
-**Status**: Draft  
+**Status**: Superseded (2026-07-18 — see decision-log.md Decision 25; never approved, no implementation commits reference this spec ID; superseded by `019-downstream-consumer-contract`)  
 **Input**: Issue `#119`, the approved browser runtime subscription contract, the first app-consumable gap analysis, and the need for one concrete local browser transport that does not redefine core runtime semantics.
 
 ## Purpose
