@@ -59,10 +59,10 @@ public sealed class WasmtimeRuntimeBridgeTests
         string fixture = BridgeFixture)
     {
         var bytes = Convert.FromBase64String(fixture);
-        var root = Path.Combine(Path.GetTempPath(), $"traverse-dotnet-bridge-{Guid.NewGuid():N}");
-        var runtime = Path.Combine(root, "runtime");
+        var root = Path.Join(Path.GetTempPath(), $"traverse-dotnet-bridge-{Guid.NewGuid():N}");
+        var runtime = Path.Join(root, "runtime");
         Directory.CreateDirectory(runtime);
-        File.WriteAllBytes(Path.Combine(runtime, "runtime.wasm"), bytes);
+        File.WriteAllBytes(Path.Join(runtime, "runtime.wasm"), bytes);
         return (new TraverseBundle(root, declaredDigest ?? Digest(bytes)), bytes);
     }
 

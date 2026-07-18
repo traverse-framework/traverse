@@ -42,7 +42,16 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
         }
         this.fuelPerCall = fuelPerCall;
 
-        RuntimePath = Path.Combine(bundle.RootPath, "runtime", "runtime.wasm");
+        var bundleRoot = Path.GetFullPath(bundle.RootPath);
+        var runtimePath = Path.GetFullPath(Path.Join(bundleRoot, "runtime", "runtime.wasm"));
+        var rootPrefix = Path.EndsInDirectorySeparator(bundleRoot)
+            ? bundleRoot
+            : bundleRoot + Path.DirectorySeparatorChar;
+        if (!runtimePath.StartsWith(rootPrefix, StringComparison.Ordinal))
+        {
+            throw new TraverseBundleException("runtime/runtime.wasm escapes the bundle root");
+        }
+        RuntimePath = runtimePath;
         if (!File.Exists(RuntimePath))
         {
             throw new TraverseBundleException("runtime/runtime.wasm is unavailable");
@@ -61,10 +70,12 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
             throw new TraverseBundleException("bundle_digest_mismatch");
         }
 
-        using var config = new Config()
-            .WithFuelConsumption(true)
-            .WithEpochInterruption(true);
-        engine = new Engine(config);
+        using (var config = new Config()
+                   .WithFuelConsumption(true)
+                   .WithEpochInterruption(true))
+        {
+            engine = new Engine(config);
+        }
         try
         {
             module = Module.FromBytes(engine, "traverse-runtime", bytes);
