@@ -1,0 +1,9 @@
+{
+  "reviewed_at": "2026-07-16",
+  "package": "Wasmtime",
+  "version": "44.0.0",
+  "license": "Apache-2.0",
+  "source": "https://github.com/bytecodealliance/wasmtime-dotnet",
+  "supported_hosts": "net8.0 and Windows/WinUI targets compatible with net8.0",
+  "security_boundary": "No WASI linkage or host imports; SHA-256 verified before compilation; 32 MiB default artifact and runtime-memory limits; 10,000,000 fuel and 30-second epoch deadline per bridge call"
+}

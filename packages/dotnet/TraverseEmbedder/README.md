@@ -13,5 +13,12 @@ version, runtime-WASM digest, conformance version, and supported Windows host
 versions. `Validate` rejects incomplete evidence before publication so a
 downstream binary can be traced to its exact package and runtime pairing.
 
-The runtime-WASM bridge, event subscriptions, evidence publication, and WinUI
-reference-app integration remain tracked by Traverse #649.
+`WasmtimeRuntimeBridge` pins Wasmtime .NET 44.0.0, verifies the runtime artifact
+before compilation, rejects all ambient imports, and validates the complete
+`runtime-wasm-bridge/1.1.0` memory, function-signature, ABI, and compatible
+lifecycle export surface without enabling WASI. The host applies a 32 MiB
+runtime-memory ceiling, 10,000,000 fuel, and a 30-second epoch deadline to each
+bridge call by default.
+
+Request marshalling, event subscriptions, evidence publication, shared
+conformance, and WinUI reference-app integration remain tracked by Traverse #649.
