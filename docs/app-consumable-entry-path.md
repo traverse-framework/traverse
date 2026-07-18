@@ -19,7 +19,7 @@ This is the canonical documentation path for humans and coding agents working on
    - [docs/youaskm3-published-artifact-validation.md](youaskm3-published-artifact-validation.md)
    - [docs/youaskm3-compatibility-conformance-suite.md](youaskm3-compatibility-conformance-suite.md)
    - [docs/youaskm3-real-shell-validation.md](youaskm3-real-shell-validation.md)
-   - [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md)
+   - [https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md)
 
 ## Canonical Rule
 

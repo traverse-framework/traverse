@@ -144,6 +144,8 @@ Scaffolds a governed app bundle. Add your capability contracts, workflows, and W
 | `traverse-registry` | Capability and event registries with deterministic traversal |
 | `traverse-cli-rs` | Command-line interface (binary: `traverse-cli`) — register, list, validate, run |
 | `traverse-mcp` | Model Context Protocol stdio server and governed MCP-facing surface |
+| `traverse-embedder` | Public Rust embedder SDK (`embedder-api/1.0.0`) for Linux GTK and CLI clients |
+| `traverse-expedition-wasm` | Expedition example domain compiled to `wasm32-wasi` |
 
 ---
 

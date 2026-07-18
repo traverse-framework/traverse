@@ -41,5 +41,5 @@ The acceptance path fails deterministically when:
 ## Related Docs
 
 - [quickstart.md](../quickstart.md)
-- [https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/README.md)
+- [https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/README.md)
 - [docs/expedition-example-smoke.md](expedition-example-smoke.md)

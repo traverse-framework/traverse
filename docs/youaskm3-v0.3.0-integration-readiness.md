@@ -59,7 +59,7 @@ Use this checklist before `youaskm3` cites Traverse in a release note or app-fac
 From a clean Traverse checkout pinned to `v0.3.0`, use:
 
 ```bash
-git clone https://github.com/enricopiovesan/Traverse.git
+git clone https://github.com/traverse-framework/traverse.git
 cd Traverse
 git checkout v0.3.0
 cargo build

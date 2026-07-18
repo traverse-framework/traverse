@@ -16,7 +16,7 @@ This validation path is governed by:
 - `specs/020-downstream-integration-validation/spec.md`
 - `specs/021-app-facing-operational-constraints/spec.md`
 
-For the first real downstream browser + MCP integration path, also see [docs/youaskm3-integration-validation.md](youaskm3-integration-validation.md), [docs/youaskm3-compatibility-conformance-suite.md](youaskm3-compatibility-conformance-suite.md), and the browser-targeted consumer package at [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md).
+For the first real downstream browser + MCP integration path, also see [docs/youaskm3-integration-validation.md](youaskm3-integration-validation.md), [docs/youaskm3-compatibility-conformance-suite.md](youaskm3-compatibility-conformance-suite.md), and the browser-targeted consumer package at [https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md).
 
 For the real-agent exercise against the same MCP substrate, also see [docs/mcp-real-agent-exercise.md](mcp-real-agent-exercise.md).
 

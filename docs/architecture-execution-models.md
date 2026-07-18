@@ -48,7 +48,7 @@ LLM tool call → MCP stdio server → traverse-mcp → traverse-runtime → Was
 
 **Entry point**: [`docs/mcp-stdio-server.md`](mcp-stdio-server.md)
 
-**Important**: In v0.1, `traverse-mcp` is a stdio binary server. Agents cannot link it as a library — they must communicate via the MCP wire protocol. See [#310](https://github.com/enricopiovesan/Traverse/issues/310) for the planned library API.
+**Important**: In v0.1, `traverse-mcp` is a stdio binary server. Agents cannot link it as a library — they must communicate via the MCP wire protocol. See [#310](https://github.com/traverse-framework/traverse/issues/310) for the planned library API.
 
 ---
 
@@ -68,7 +68,7 @@ Browser client → HTTP/SSE → browser-adapter server → traverse-runtime subs
 
 **Entry point**: [`docs/browser-adapter.md`](browser-adapter.md)
 
-**Important**: The browser adapter delivers events only to actively connected clients. There is no replay for late-connecting clients in v0.1. See [#312](https://github.com/enricopiovesan/Traverse/issues/312).
+**Important**: The browser adapter delivers events only to actively connected clients. There is no replay for late-connecting clients in v0.1. See [#312](https://github.com/traverse-framework/traverse/issues/312).
 
 ---
 
@@ -111,7 +111,7 @@ All three surfaces drive the same runtime. A CLI invocation, an MCP tool call, a
 | An LLM integration that needs to discover and call capabilities | MCP surface |
 | A web UI that shows live execution status | Browser adapter |
 | A CI pipeline or script that invokes capabilities | CLI (`traverse-cli expedition execute`) |
-| An autonomous agent that needs to register and invoke capabilities programmatically | CLI with `--json` (planned, [#305](https://github.com/enricopiovesan/Traverse/issues/305)) or MCP |
+| An autonomous agent that needs to register and invoke capabilities programmatically | CLI with `--json` (planned, [#305](https://github.com/traverse-framework/traverse/issues/305)) or MCP |
 | A multi-capability workflow | Workflow contract + registry traversal |
 
 ---

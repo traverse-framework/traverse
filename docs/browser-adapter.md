@@ -19,7 +19,7 @@ Relevant docs:
 - [quickstart.md](../quickstart.md)
 - [docs/youaskm3-canonical-app-http-path.md](youaskm3-canonical-app-http-path.md)
 - [docs/app-consumable-entry-path.md](app-consumable-entry-path.md)
-- [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md)
+- [https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md)
 - [docs/adapter-boundaries.md](adapter-boundaries.md)
 
 ## What The Browser Adapter Is Not

@@ -228,7 +228,7 @@ cargo run -p traverse-cli-rs -- browser-adapter serve --bind 127.0.0.1:4174
 2. Confirm the React demo command still works:
 
 ```bash
-node https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173
+node https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/server.mjs --adapter http://127.0.0.1:4174 --port 4173
 ```
 
 3. Re-read:
