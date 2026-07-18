@@ -858,6 +858,29 @@
         "docs/adr/0008-compatible-lifecycle-bridge.md",
         "specs/072-native-bridge-compatible-lifecycle/"
       ]
+    },
+    {
+      "id": "188-codex-agent-coordination",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/188-codex-agent-coordination/spec.md",
+      "governs": [
+        "AGENTS.md",
+        "docs/multi-thread-workflow.md",
+        "specs/188-codex-agent-coordination/"
+      ]
+    },
+    {
+      "id": "190-readme-rewrite",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/190-readme-rewrite/spec.md",
+      "governs": [
+        "README.md",
+        "specs/190-readme-rewrite/"
+      ]
     }
   ]
 }

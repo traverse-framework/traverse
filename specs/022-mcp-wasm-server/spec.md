@@ -2,7 +2,7 @@
 
 **Feature Branch**: `022-mcp-wasm-server`  
 **Created**: 2026-04-06  
-**Status**: Draft  
+**Status**: Superseded (2026-07-18 — see decision-log.md Decision 25; never approved, no implementation commits reference this spec ID; no specific direct successor identified)  
 **Input**: User description: "Specify the first dedicated Traverse MCP WASM server model using the portable MCP runtime lessons from UMA Chapter 13."
 
 ## Purpose

@@ -571,3 +571,127 @@ version, but native packages requiring the complete embedder API must reject a
 
 All three native hosts implement one lifecycle contract and can resume without
 inventing platform-specific compatible-capability semantics.
+
+## Decision 25: Archive Stale April-2026 Spec Drafts with No Implementation
+
+- **Date**: 2026-07-18
+- **Status**: Accepted
+- **Related issues**: none — repository/spec-hygiene decision, no implementation ticket
+
+### Context
+
+Five spec directories from April 2026 (`019-local-browser-adapter-transport`,
+`020-downstream-integration-validation`, `021-app-facing-operational-constraints`,
+`022-mcp-wasm-server`, `023-downstream-publication-strategy`) exist on `main`,
+still `Status: Draft`, and were never added to
+`specs/governance/approved-specs.json`. No commit in the repository's history
+references any of their spec IDs. Two of them (`019`, `023`) share a spec
+number with a different, later spec that was approved and implemented instead,
+suggesting these were early exploratory drafts superseded before the real
+scope was specified.
+
+### Decision
+
+Treat "older than ~60 days, zero implementation commits, never approved" as
+sufficient signal on its own — no per-spec review needed. Move all five to
+`Status: Superseded` in their own `spec.md`, with a one-line note pointing to
+whatever superseded it where known (`019` → `019-downstream-consumer-contract`,
+`023` → `023-browser-hosted-mcp-consumer-model`; `020`/`021`/`022` noted as
+superseded with no specific direct successor identified).
+
+### Alternatives Considered
+
+- Review each of the five individually before deciding — more thorough, but
+  the batch signal (age + zero implementation + never approved) was judged
+  strong enough on its own.
+- Leave them untouched — avoids any risk of archiving something still wanted,
+  but leaves the spec directory permanently cluttered with dead drafts.
+
+### Outcome
+
+`specs/` no longer carries unapproved, unreferenced drafts alongside the real
+governing-spec history. The one-line successor notes preserve the "why" for
+anyone who finds the archived draft later.
+
+## Decision 26: Retroactively Approve Specs for Already-Completed Governance/Docs Work
+
+- **Date**: 2026-07-18
+- **Status**: Accepted
+- **Related issues**: `#188`, `#190`
+
+### Context
+
+`188-codex-agent-coordination` and `190-readme-rewrite` were both left
+`Status: Draft` and never added to `approved-specs.json`, but the work they
+describe was independently verified complete: `AGENTS.md` and
+`docs/multi-thread-workflow.md` already implement 188's exact pre-flight/claim
+rules (FR-001 through FR-004), and `README.md` already has every badge and
+section 190 required, including the GitHub repository description and topics
+188 asked for.
+
+### Decision
+
+Add both specs to `specs/governance/approved-specs.json` with `status:
+approved` and `immutable: true`, noting they were approved retroactively after
+independent verification that the implementation already satisfies every
+functional requirement — no code changes needed. `188-codex-agent-coordination`
+governs `AGENTS.md` and `docs/multi-thread-workflow.md`; `190-readme-rewrite`
+governs `README.md`.
+
+### Alternatives Considered
+
+- Archive both as superseded, on the reasoning that formal approval doesn't
+  matter once the goal is met — rejected because the spec content is still an
+  accurate description of the current, real behavior, unlike the five drafts
+  in Decision 25.
+- Leave them unapproved indefinitely — leaves a governance gap where real,
+  load-bearing behavior (agent coordination rules, README requirements) has no
+  approved spec backing it.
+
+### Outcome
+
+The spec-alignment gate can now correctly attribute `AGENTS.md`,
+`docs/multi-thread-workflow.md`, and `README.md` changes to an approved spec
+instead of leaving them ungoverned.
+
+## Decision 27: Raise the Swift Embedder's WasmKit Floor to 0.3.1 for Public Resource Controls
+
+- **Date**: 2026-07-18
+- **Status**: Accepted
+- **Governing spec**: `071-native-runtime-wasm-bridge`
+- **Related issues**: `#740`, `#647`
+
+### Context
+
+`packages/swift/TraverseEmbedder` pins WasmKit 0.2.2, which exposes no public
+fuel/epoch/deadline interruption hooks and no public memory-growth limiter —
+only an `@_spi(Fuzzing) Store.resourceLimiter`, which is not a supported
+production API (documented in the package's own `dependency-review.json`,
+reviewed 2026-07-16). WasmKit 0.3.1 has the public hooks needed, but requires
+Swift tools 6.3, macOS 15, and iOS 18 — newer than the package's current Swift
+6.0 / macOS 14 / iOS 17 floor.
+
+### Decision
+
+Bump `packages/swift/TraverseEmbedder/Package.swift` to WasmKit 0.3.1 and the
+corresponding Swift 6.3 / macOS 15 / iOS 18 minimums. Same engine, same
+integration code, no new dependency-review risk — the tradeoff is a narrower
+supported-device matrix (drops macOS 14 / iOS 17) in exchange for genuine
+production-grade resource controls.
+
+### Alternatives Considered
+
+- Track upstream WasmKit for a 0.2.x-compatible public-hook release, or
+  contribute a backport — keeps the wider device floor, but the timeline isn't
+  in Traverse's control.
+- Swap to a different Swift WASM engine entirely — preserves both the device
+  matrix and gets real safety, but means a full re-integration (bridge, ABI
+  validation, digest verification, tests) against an unproven alternative,
+  for no confirmed benefit over just bumping WasmKit.
+
+### Outcome
+
+Issue `#740` tracks the version bump. `packages/swift/TraverseEmbedder`'s
+`dependency-review.json` `known_limitations` entry should be updated once the
+bump lands, and its resolution unblocks `#647`'s remaining Spec 071
+release-evidence item.
