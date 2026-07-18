@@ -70,10 +70,10 @@ public sealed class WasmtimeRuntimeBridge : IDisposable
             throw new TraverseBundleException("bundle_digest_mismatch");
         }
 
-        using (var config = new Config()
-                   .WithFuelConsumption(true)
-                   .WithEpochInterruption(true))
+        using (var config = new Config())
         {
+            config.WithFuelConsumption(true);
+            config.WithEpochInterruption(true);
             engine = new Engine(config);
         }
         try
