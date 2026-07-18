@@ -454,9 +454,9 @@ the same envelope and subject-filter semantics.
 #591 can resume once Spec 070 lands; #659 then builds durable replay on the
 same identity/filter boundary rather than inventing a second path.
 
-## Decision 21: Defer Durable-Journal Storage Evolution Until Measurement
+## Decision 21: Retain the Durable Journal After Operational Evaluation
 
-- **Date**: 2026-07-14
+- **Date**: 2026-07-17
 - **Status**: Accepted
 - **Governing specs**: `066-durable-identity-event-delivery`,
   `067-durable-journal-retention-and-write-limits`
@@ -464,10 +464,19 @@ same identity/filter boundary rather than inventing a second path.
 
 ### Decision
 
-Keep the initial durable journal while #629 measures append latency, recovery,
-replay, retention compaction, and disk growth under representative workloads.
-Choose retain, SQLite, or a provider abstraction only from that evidence; no
-storage migration or abstraction is preselected.
+Retain the initial append-only journal. The completed #713 matrix measured
+Linux, macOS, Windows, and a Linux `fsync-pressure` profile using the
+checked-in #629 harness. Host-local append p99 remained 0.524-6.160 ms,
+recovery 2.732-5.366 ms, and replay 202k-312k events/s. The pressure profile
+reached 41.557 ms p99, above the 25 ms investigation threshold but far below
+the two-second fail-closed write timeout; it is a single constrained-profile
+signal, so it does not justify a storage migration.
+
+Do not add SQLite or a storage-provider boundary now. Preserve the existing
+cursor and replay semantics, keep the weekly/manual measurement workflow, and
+revisit this decision only after a comparable threshold breach occurs on two
+consecutive runs or reproduces on the affected storage class. ADR-0009 records
+the evidence and alternatives.
 
 ## Decision 22: Keep Application Source Out of the Traverse Runtime Repository
 
