@@ -21,7 +21,7 @@ Traverse MUST NOT claim `app-consumable v0.1` unless all of the following are sa
 
 - [ ] The governed browser consumer path exists and is documented in [quickstart.md](../quickstart.md).
 - [ ] The live local browser adapter path passes [scripts/ci/react_demo_live_adapter_smoke.sh](../scripts/ci/react_demo_live_adapter_smoke.sh).
-- [ ] The browser demo path is documented as a real live adapter consumer in [https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/README.md).
+- [ ] The browser demo path is documented as a real live adapter consumer in [https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/README.md).
 - [ ] The first versioned Traverse consumer bundle is documented in [docs/app-consumable-consumer-bundle.md](app-consumable-consumer-bundle.md).
 - [ ] The downstream MCP consumption path exists and passes [scripts/ci/mcp_consumption_validation.sh](../scripts/ci/mcp_consumption_validation.sh).
 - [ ] The first real `youaskm3` integration path exists and passes [scripts/ci/youaskm3_integration_validation.sh](../scripts/ci/youaskm3_integration_validation.sh).

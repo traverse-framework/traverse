@@ -205,9 +205,9 @@ It should also remain consistent with:
 
 - `bash scripts/ci/repository_checks.sh`
 
-## Federation Commands (Not Yet Implemented)
+## Federation Commands (Partial Surface, Deferred by Design)
 
-The `federation` command family appears in the CLI codebase as a planned surface but is **not yet fully implemented** in v0.1. The following subcommands are listed here for completeness but should not be used in production:
+The `federation` command family implements manual multi-instance registry federation with remote registry validation, conflict audit evidence, and trust evidence. Automatic sync, a central coordinator, automatic conflict resolution, and a streaming sync transport are intentionally out of scope for now — deferred by design, not blocked on open work. The following subcommands are listed here for completeness but reflect this partial scope:
 
 | Subcommand              | Status           |
 |-------------------------|------------------|
@@ -215,10 +215,6 @@ The `federation` command family appears in the CLI codebase as a planned surface
 | `federation sync`       | Partial — manual sync trigger only |
 | `federation status`     | Partial — peer sync summary only |
 
-Automatic federation sync, conflict resolution, and the central federation coordinator are tracked in:
-- [#236 Automatic federation sync after peer registration](https://github.com/enricopiovesan/Traverse/issues/236)
-- [#237 Central federation coordinator](https://github.com/enricopiovesan/Traverse/issues/237)
-- [#238 Federation conflict auto-resolution policy](https://github.com/enricopiovesan/Traverse/issues/238)
-- [#239 Streaming federation sync transport](https://github.com/enricopiovesan/Traverse/issues/239)
+Automatic federation sync, conflict resolution, and the central federation coordinator were tracked in #236–#239, closed as deferred-by-design; new tickets will be opened if and when that scope is picked back up.
 
-Do not build workflows that depend on federation behavior until these issues are resolved.
+Do not build workflows that depend on automatic federation sync, conflict resolution, or a central coordinator — they do not exist yet.

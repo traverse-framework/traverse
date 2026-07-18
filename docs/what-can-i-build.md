@@ -21,7 +21,7 @@ Relevant docs:
 
 - [quickstart.md](../quickstart.md)
 - [docs/app-consumable-entry-path.md](app-consumable-entry-path.md)
-- [https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md](../https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/README.md)
+- [https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md](https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/README.md)
 - [docs/youaskm3-integration-validation.md](youaskm3-integration-validation.md)
 
 Good fit:

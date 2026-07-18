@@ -68,7 +68,7 @@ This slice deliberately does not provide HTTP app registration, runtime-owned do
 Downstream consumers should pin the released Traverse tag instead of following repository head:
 
 ```bash
-git clone https://github.com/enricopiovesan/Traverse.git
+git clone https://github.com/traverse-framework/traverse.git
 cd Traverse
 git checkout v0.3.0
 cargo run -p traverse-cli-rs -- serve

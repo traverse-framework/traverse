@@ -487,7 +487,7 @@ the evidence and alternatives.
 ### Decision
 
 Checked-in application UI, platform client demos, and starter/reference source
-belong in `traverse-framework/reference-apps`. Traverse owns only runtime
+belong in `traverse-framework/App-References`. Traverse owns only runtime
 conformance inputs: manifests, fixture agents, and deterministic test fixtures.
 Those artifacts live under `examples/`, never `apps/`.
 
@@ -495,11 +495,11 @@ Those artifacts live under `examples/`, never `apps/`.
 
 | Current path | Owner | Destination |
 | --- | --- | --- |
-| `https://github.com/traverse-framework/reference-apps/tree/main/apps/android-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/android-demo/` |
-| `https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/browser-consumer/` |
-| `https://github.com/traverse-framework/reference-apps/tree/main/apps/macos-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/macos-demo/` |
-| `https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/react-demo/` |
-| `https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/` | Reference Apps | `reference-https://github.com/traverse-framework/reference-apps/tree/main/apps/youaskm3-starter-kit/` |
+| `https://github.com/traverse-framework/App-References/tree/main/apps/android-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/App-References/tree/main/apps/android-demo/` |
+| `https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/` | Reference Apps | `reference-https://github.com/traverse-framework/App-References/tree/main/apps/browser-consumer/` |
+| `https://github.com/traverse-framework/App-References/tree/main/apps/macos-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/App-References/tree/main/apps/macos-demo/` |
+| `https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/` | Reference Apps | `reference-https://github.com/traverse-framework/App-References/tree/main/apps/react-demo/` |
+| `https://github.com/traverse-framework/App-References/tree/main/apps/youaskm3-starter-kit/` | Reference Apps | `reference-https://github.com/traverse-framework/App-References/tree/main/apps/youaskm3-starter-kit/` |
 | `apps/demo-fixtures/expedition-runtime-session.json` | Traverse fixture | `examples/fixtures/expedition-runtime-session.json` |
 | `apps/meeting-notes/` | Traverse fixture | `examples/applications/meeting-notes/` |
 | `apps/traverse-starter/` | Traverse fixture | `examples/applications/traverse-starter/` |
