@@ -12,8 +12,8 @@
   "selection": "1.7.5 is the current stable Maven Central release and includes upstream Android device-test coverage at minSdk 28.",
   "security_boundary": "Pure JVM interpreter; runtime and wasm artifacts only; no chicory-wasi production dependency; imports rejected; SHA-256 verified before parsing; 32 MiB default artifact limit.",
   "known_limitations": [
-    "Chicory 1.7.5 does not expose fuel or epoch interruption controls.",
-    "Runtime JSON marshalling, serialized event draining, and deadline enforcement remain follow-up work before package release."
+    "Chicory 1.7.5 does not expose fuel or epoch interruption controls; Traverse uses its interpreter execution listener for per-call instruction and monotonic-deadline budgets.",
+    "The listener is an interpreter boundary and must be re-reviewed if the package adopts Chicory compiled execution."
   ],
   "wire_format_dependency": {
     "package": "org.jetbrains.kotlinx:kotlinx-serialization-json",
