@@ -8,6 +8,7 @@ class ChicoryBridgeClient(
     private val maximumOutputBytes: Int = DEFAULT_MAXIMUM_OUTPUT_BYTES,
 ) {
     private val instance = bridge.instance
+    private val executionBudget = bridge.executionBudget
     private val memory = instance.memory()
     private val allocate = instance.export("traverse_alloc")
     private val deallocate = instance.export("traverse_dealloc")
@@ -16,42 +17,47 @@ class ChicoryBridgeClient(
         require(maximumOutputBytes > 0) { "maximum bridge output size must be positive" }
     }
 
-    @Synchronized fun initialize(configJson: String): String =
+    @Synchronized fun initialize(configJson: String): String = executionBudget.run {
         invokeWithInput("traverse_init", configJson)
+    }
 
-    @Synchronized fun submit(submissionJson: String): String =
+    @Synchronized fun submit(submissionJson: String): String = executionBudget.run {
         invokeWithInput("traverse_submit", submissionJson)
+    }
 
-    @Synchronized fun cancel(cancellationJson: String): String =
+    @Synchronized fun cancel(cancellationJson: String): String = executionBudget.run {
         invokeWithInput("traverse_cancel", cancellationJson)
+    }
 
-    @Synchronized fun compatibleStart(requestJson: String): String =
+    @Synchronized fun compatibleStart(requestJson: String): String = executionBudget.run {
         invokeWithInput("traverse_compatible_start", requestJson)
+    }
 
-    @Synchronized fun compatibleStop(requestJson: String): String =
+    @Synchronized fun compatibleStop(requestJson: String): String = executionBudget.run {
         invokeWithInput("traverse_compatible_stop", requestJson)
+    }
 
-    @Synchronized fun compatibleKill(requestJson: String): String =
+    @Synchronized fun compatibleKill(requestJson: String): String = executionBudget.run {
         invokeWithInput("traverse_compatible_kill", requestJson)
+    }
 
-    @Synchronized fun nextEvent(): String? {
+    @Synchronized fun nextEvent(): String? = executionBudget.run {
         val descriptor = allocate(DESCRIPTOR_BYTES)
         try {
             val status = instance.export("traverse_next_event").apply(descriptor.toLong()).single().toInt()
-            if (status == STATUS_EMPTY) return null
-            return readResult(status, descriptor)
+            if (status == STATUS_EMPTY) null else readResult(status, descriptor)
         } finally {
-            deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong())
+            executionBudget.cleanup { deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong()) }
         }
     }
 
-    @Synchronized fun shutdown(): String {
+    @Synchronized fun shutdown(): String = executionBudget.run {
         val descriptor = allocate(DESCRIPTOR_BYTES)
         try {
             val status = instance.export("traverse_shutdown").apply(descriptor.toLong()).single().toInt()
-            return readResult(status, descriptor)
+            readResult(status, descriptor)
         } finally {
-            deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong())
+            executionBudget.cleanup { deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong()) }
         }
     }
 
@@ -67,8 +73,10 @@ class ChicoryBridgeClient(
                 .toInt()
             return readResult(status, descriptor)
         } finally {
-            deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong())
-            deallocate.apply(inputPointer.toLong(), input.size.toLong())
+            executionBudget.cleanup {
+                deallocate.apply(descriptor.toLong(), DESCRIPTOR_BYTES.toLong())
+                deallocate.apply(inputPointer.toLong(), input.size.toLong())
+            }
         }
     }
 

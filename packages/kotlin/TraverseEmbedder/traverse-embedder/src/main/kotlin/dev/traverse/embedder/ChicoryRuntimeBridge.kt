@@ -1,6 +1,7 @@
 package dev.traverse.embedder
 
 import com.dylibso.chicory.runtime.Instance
+import com.dylibso.chicory.runtime.ExecutionListener
 import com.dylibso.chicory.wasm.Parser
 import com.dylibso.chicory.wasm.types.ExternalType
 import com.dylibso.chicory.wasm.types.FunctionType
@@ -12,14 +13,22 @@ import java.security.MessageDigest
 class ChicoryRuntimeBridge(
     bundle: TraverseBundle,
     maximumArtifactBytes: Int = DEFAULT_MAXIMUM_ARTIFACT_BYTES,
+    maximumMemoryPages: Int = DEFAULT_MAXIMUM_MEMORY_PAGES,
+    maximumInstructionsPerCall: Long = DEFAULT_MAXIMUM_INSTRUCTIONS_PER_CALL,
+    maximumCallDurationMillis: Long = DEFAULT_MAXIMUM_CALL_DURATION_MILLIS,
 ) {
     val runtimeFile: File
     val runtimeWasmDigest: String
 
     internal val instance: Instance
+    internal val executionBudget = ChicoryExecutionBudget(
+        maximumInstructionsPerCall,
+        maximumCallDurationMillis,
+    )
 
     init {
         require(maximumArtifactBytes > 0) { "maximum runtime WASM size must be positive" }
+        require(maximumMemoryPages > 0) { "maximum runtime memory pages must be positive" }
 
         runtimeFile = File(bundle.rootPath, "runtime/runtime.wasm")
         if (!runtimeFile.isFile) {
@@ -52,9 +61,17 @@ class ChicoryRuntimeBridge(
         if (memoryExports.size != 1 || memoryExports.single().name() != "memory") {
             throw TraverseBundleException("runtime/runtime.wasm must export exactly one bridge memory")
         }
+        val memory = module.memorySection().orElseThrow {
+            TraverseBundleException("runtime/runtime.wasm must declare bridge memory")
+        }.getMemory(0)
+        if (memory.limits().maximumPages() > maximumMemoryPages) {
+            throw TraverseBundleException("runtime/runtime.wasm exceeds the configured memory limit")
+        }
 
         instance = try {
-            Instance.builder(module).build()
+            Instance.builder(module)
+                .withUnsafeExecutionListener(executionBudget.listener)
+                .build()
         } catch (error: RuntimeException) {
             throw TraverseBundleException("runtime/runtime.wasm could not be instantiated", error)
         }
@@ -70,7 +87,7 @@ class ChicoryRuntimeBridge(
         }
 
         val version = try {
-            instance.export("traverse_bridge_abi_version").apply()
+            executionBudget.run { instance.export("traverse_bridge_abi_version").apply() }
         } catch (error: RuntimeException) {
             throw TraverseBundleException("bridge_version_mismatch", error)
         }
@@ -82,6 +99,9 @@ class ChicoryRuntimeBridge(
     companion object {
         const val ABI_VERSION = 10_100
         const val DEFAULT_MAXIMUM_ARTIFACT_BYTES = 32 * 1024 * 1024
+        const val DEFAULT_MAXIMUM_MEMORY_PAGES = 512
+        const val DEFAULT_MAXIMUM_INSTRUCTIONS_PER_CALL = 10_000_000L
+        const val DEFAULT_MAXIMUM_CALL_DURATION_MILLIS = 30_000L
 
         private val I32_TO_I32 = FunctionType.of(listOf(ValType.I32), listOf(ValType.I32))
         private val THREE_I32_TO_I32 = FunctionType.of(
@@ -105,6 +125,55 @@ class ChicoryRuntimeBridge(
         private fun normalizeDigest(digest: String): String {
             val normalized = digest.trim().lowercase()
             return if (normalized.startsWith("sha256:")) normalized else "sha256:$normalized"
+        }
+    }
+}
+
+internal class ChicoryExecutionBudget(
+    private val maximumInstructions: Long,
+    maximumDurationMillis: Long,
+) {
+    private val maximumDurationNanos: Long
+    private var active = false
+    private var instructions = 0L
+    private var deadlineNanos = 0L
+
+    init {
+        require(maximumInstructions > 0) { "maximum instructions per call must be positive" }
+        require(maximumDurationMillis > 0 && maximumDurationMillis <= Long.MAX_VALUE / 1_000_000L) {
+            "maximum call duration must be positive and representable"
+        }
+        maximumDurationNanos = maximumDurationMillis * 1_000_000L
+    }
+
+    val listener = ExecutionListener { _, _ ->
+        if (active) {
+            instructions += 1
+            if (instructions > maximumInstructions || System.nanoTime() - deadlineNanos >= 0) {
+                throw TraverseBridgeException(-4, "bridge_resource_limit")
+            }
+        }
+    }
+
+    fun <T> run(block: () -> T): T {
+        check(!active) { "bridge execution budget is already active" }
+        instructions = 0
+        deadlineNanos = System.nanoTime() + maximumDurationNanos
+        active = true
+        return try {
+            block()
+        } finally {
+            active = false
+        }
+    }
+
+    fun <T> cleanup(block: () -> T): T {
+        val wasActive = active
+        active = false
+        return try {
+            block()
+        } finally {
+            active = wasActive
         }
     }
 }
