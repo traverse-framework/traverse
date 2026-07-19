@@ -895,7 +895,9 @@
       "path": "specs/075-native-runtime-distribution-contract/spec.md",
       "governs": [
         "crates/traverse-native-bridge/",
+        "crates/traverse-registry/src/native_runtime_artifact.rs",
         "docs/adr/0012-native-runtime-distribution-channel.md",
+        "docs/native-runtime-artifact-registry.md",
         "specs/075-native-runtime-distribution-contract/"
       ]
     },
