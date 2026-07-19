@@ -1,11 +1,11 @@
 # Feature Specification: Native Runtime Distribution Contract
 
-**Feature Branch**: `074-native-runtime-distribution-contract`
+**Feature Branch**: `075-native-runtime-distribution-contract`
 **Created**: 2026-07-18
-**Status**: Draft
-**Version**: 1.0.0 (pending approval)
-**Input**: Traverse #755, parent #750, Specs 057, 068, 071, 072, 073, and
-ADR-0007.
+**Status**: Approved
+**Version**: 1.0.0
+**Input**: Decision 30, ADR-0012, and Traverse #755, parent #750, Specs 057,
+068, 071, 072, 073, and ADR-0007.
 
 ## Purpose
 
@@ -23,10 +23,6 @@ one canonical build travels from a single build step to Swift, Kotlin, and
 (production build), #757 (registry-facing publication and resolution), and
 #758 (cross-host conformance and release-smoke coverage), all blocked on this
 spec.
-
-**Approval**: Per Traverse #755's Definition of Done, this draft requires
-explicit human approval. It is not added to
-`specs/governance/approved-specs.json` by this change.
 
 ## User Scenarios & Testing
 
@@ -165,9 +161,6 @@ declared host profiles and compare the fields consumed.
   network or HTTP sidecar dependency at runtime; verification and rejection
   MUST occur using locally resolvable metadata and bundled artifacts,
   consistent with the no-sidecar requirement in Specs 057, 068, and 071.
-- **FR-010**: This spec MUST NOT be added to
-  `specs/governance/approved-specs.json` until it receives explicit human
-  approval separate from drafting, per Traverse #755's Definition of Done.
 
 ### Key Entities
 
@@ -206,13 +199,10 @@ declared host profiles and compare the fields consumed.
 - The distribution metadata mechanism reuses Traverse's existing registry
   publish/resolve infrastructure (Spec 051's `traverse-registry`, moving to
   `traverse-framework/registry`) rather than introducing a new distribution
-  channel; see ADR-0011.
+  channel; see ADR-0012.
 - The artifact bytes may be hosted by any content-addressed storage the
   registry metadata references; this spec constrains identity and
   verification, not the physical storage choice.
-- This spec's approval is explicit and human-gated per Traverse #755's
-  Definition of Done; it is not auto-added to
-  `specs/governance/approved-specs.json` on merge.
 
 ## Out of Scope
 

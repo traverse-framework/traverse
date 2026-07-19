@@ -875,6 +875,31 @@
       ]
     },
     {
+      "id": "074-swift-native-resource-control-certification",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/074-swift-native-resource-control-certification/spec.md",
+      "governs": [
+        "packages/swift/TraverseEmbedder/",
+        "scripts/ci/embedder_conformance/swift_package.sh",
+        "docs/adr/0011-swift-native-resource-controls.md",
+        "specs/074-swift-native-resource-control-certification/"
+      ]
+    },
+    {
+      "id": "075-native-runtime-distribution-contract",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/075-native-runtime-distribution-contract/spec.md",
+      "governs": [
+        "crates/traverse-native-bridge/",
+        "docs/adr/0012-native-runtime-distribution-channel.md",
+        "specs/075-native-runtime-distribution-contract/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",
