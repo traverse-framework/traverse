@@ -1,11 +1,15 @@
-# Native iOS Runtime Foundation: Hands-On Article Source
+# Native iOS Runtime Foundation
+
+> **Editorial status:** This is the single, self-contained source for one
+> blog post. It contains the narrative, diagrams, hands-on walkthrough,
+> verification evidence, references, and limits on claims.
 
 ## Audience
 
 Developers building portable WebAssembly capability systems that need a native
 iOS host without relying on a JIT runtime.
 
-## What this article demonstrates
+## Executive summary
 
 Traverse validated that a Swift application can call a Rust static library
 containing the `wasmi` interpreter, enforce host-owned WebAssembly memory and
@@ -13,6 +17,9 @@ fuel limits, and run successfully on a physical Apple device.
 
 This is a foundation for a production iOS runtime path. It is not an
 announcement that the full Traverse runtime or SDK has shipped on iOS.
+
+The key result is that native iOS execution is now an implementable Traverse
+and UMA delivery path rather than a speculative engine choice.
 
 ## Architecture
 
