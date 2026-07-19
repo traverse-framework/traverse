@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
 use std::env;
+use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
 
@@ -43,14 +44,13 @@ const MODULE: &str = r#"(module
 fn main() -> Result<(), String> {
     let destination = env::args()
         .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("runtime"));
+        .map_or_else(|| PathBuf::from("runtime"), PathBuf::from);
     fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     let bytes = wat::parse_str(MODULE).map_err(|error| error.to_string())?;
-    let digest = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let mut digest = String::with_capacity(64);
+    for byte in Sha256::digest(&bytes) {
+        write!(&mut digest, "{byte:02x}").map_err(|error| error.to_string())?;
+    }
     fs::write(destination.join("runtime.wasm"), bytes).map_err(|error| error.to_string())?;
     fs::write(destination.join("runtime-release.json"), format!("{{\"runtime_version\":\"{}\",\"bridge_version\":\"{}\",\"bridge_abi_version\":{},\"sha256\":\"{}\"}}\n", env!("CARGO_PKG_VERSION"), BRIDGE_VERSION, ABI_VERSION, digest)).map_err(|error| error.to_string())?;
     Ok(())
