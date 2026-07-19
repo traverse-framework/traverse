@@ -5,6 +5,7 @@ members = [
   "crates/traverse-embedder",
   "crates/traverse-expedition-wasm",
   "crates/traverse-mcp",
+  "crates/traverse-native-bridge",
   "crates/traverse-registry",
   "crates/traverse-runtime",
 ]
