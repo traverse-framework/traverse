@@ -26,8 +26,9 @@ only `#[unsafe(no_mangle)]` for the three reviewed C-ABI exports:
 - `traverse_swift_host_fuel_limit_fixture`
 
 `scripts/ci/scoped_unsafe_boundary_check.sh` is part of the required Rust
-checks. It rejects a changed workspace policy, any additional opt-out, unsafe
-syntax outside the boundary, or an expanded export set.
+checks under the spec-alignment gate. It rejects a changed workspace policy,
+any additional opt-out, unsafe syntax outside the boundary, or an expanded
+export set.
 
 The boundary is limited to the feasibility static library. It must not contain
 unsafe blocks, raw-pointer dereferences, FFI imports, mutable globals, manual
