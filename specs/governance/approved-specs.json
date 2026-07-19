@@ -875,6 +875,19 @@
       ]
     },
     {
+      "id": "074-swift-native-resource-control-certification",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/074-swift-native-resource-control-certification/spec.md",
+      "governs": [
+        "packages/swift/TraverseEmbedder/",
+        "scripts/ci/embedder_conformance/swift_package.sh",
+        "docs/adr/0011-swift-native-resource-controls.md",
+        "specs/074-swift-native-resource-control-certification/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",
