@@ -78,7 +78,7 @@ pub extern "C" fn traverse_swift_host_fuel_limit_fixture() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::configured_memory_limit;
-    use wasmi::StoreLimits;
+    use wasmi::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, TrapCode};
 
     fn memory_store(limit: usize) -> Store<StoreLimits> {
         let engine = Engine::default();
