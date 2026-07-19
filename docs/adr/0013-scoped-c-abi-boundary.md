@@ -36,6 +36,8 @@ allocation, or production runtime behavior. Any new C-ABI symbol or different
 unsafe operation requires a successor ADR, an explicit owner and expiry, and
 security review before merge.
 
+This policy does not alter the runtime event boundary or event semantics.
+
 ## Consequences
 
 - The feasibility evidence remains reproducible without silently relaxing
