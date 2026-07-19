@@ -1,0 +1,18 @@
+[package]
+name = "traverse-swift-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Apple static-library feasibility host for the Traverse runtime bridge."
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+wasmi = { version = "1.1.0", default-features = false }
+wat = "1"
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
   "crates/traverse-native-bridge",
   "crates/traverse-registry",
   "crates/traverse-runtime",
+  "crates/traverse-swift-host",
 ]
 resolver = "3"
 
@@ -24,7 +25,9 @@ traverse-registry = { path = "crates/traverse-registry", version = "0.8.1" }
 traverse-runtime = { path = "crates/traverse-runtime", version = "0.8.1" }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# C-ABI exports for the Apple feasibility host are temporarily isolated in
+# `traverse-swift-host`; #771 will decide the permanent governance boundary.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
