@@ -1916,6 +1916,7 @@ name = "traverse-swift-host"
 version = "0.8.1"
 dependencies = [
  "wasmi",
+ "wat",
 ]
 
 [[package]]
