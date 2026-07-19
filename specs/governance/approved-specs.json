@@ -888,6 +888,18 @@
       ]
     },
     {
+      "id": "075-native-runtime-distribution-contract",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/075-native-runtime-distribution-contract/spec.md",
+      "governs": [
+        "crates/traverse-native-bridge/",
+        "docs/adr/0012-native-runtime-distribution-channel.md",
+        "specs/075-native-runtime-distribution-contract/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",

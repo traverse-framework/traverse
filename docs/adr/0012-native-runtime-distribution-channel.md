@@ -1,6 +1,6 @@
-# ADR-0011: Distribute the Native Runtime Artifact Through Traverse's Existing Registry Infrastructure
+# ADR-0012: Distribute the Native Runtime Artifact Through Traverse's Existing Registry Infrastructure
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-18
 
 ## Context
@@ -65,8 +65,6 @@ scope.
 
 ## Approval Note
 
-This ADR accompanies draft spec `074-native-runtime-distribution-contract`
-and is Proposed, not Accepted, pending the same explicit human approval
-required by Traverse #755's Definition of Done. It should move to Accepted
-alongside that spec's approval, with a corresponding decision-log entry
-added at that time.
+This ADR accompanies spec `075-native-runtime-distribution-contract`. Both
+were approved together per Decision 30, following the explicit human
+approval required by Traverse #755's Definition of Done.

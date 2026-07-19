@@ -777,3 +777,53 @@ Decision 27 is superseded. #647 remains blocked on a certified Swift profile;
 #761 records the governing requirements and #762 evaluates the smallest
 supported path. Kotlin and .NET work may continue without calling the release
 cross-platform.
+
+## Decision 30: Approve the Native Runtime Distribution Contract
+
+- **Date**: 2026-07-19
+- **Status**: Accepted
+- **Governing spec**: `075-native-runtime-distribution-contract`
+- **Related issues**: `#755`, `#750`, `#756`, `#757`, `#758`
+
+### Context
+
+Spec 071 defines the immutable bridge ABI and Spec 073 defines the release
+compatibility baseline, but neither states how the one canonical
+`runtime.wasm` build becomes an identified, digest-pinned, host-certified
+release that Swift, Kotlin, and .NET packages actually acquire and resolve.
+Traverse #755 drafted spec 075 (originally numbered 074, renumbered after a
+concurrent numbering collision with #761's
+`074-swift-native-resource-control-certification`) and ADR-0012 (originally
+drafted as ADR-0011, renumbered for the same reason) to close that gap, with
+its Definition of Done requiring explicit human approval rather than the
+default post-brainstorm auto-approval.
+
+### Decision
+
+Approve spec `075-native-runtime-distribution-contract` and ADR-0012 as
+drafted: runtime artifact releases are identified by an immutable
+`runtime_version` + certified `bridge_version` + SHA-256 digest tuple,
+resolution deterministically rejects tampered, incompatible, or uncertified
+artifacts before instantiation, releases remain independently resolvable
+after upgrade, and the distribution metadata schema is host-agnostic across
+Swift, Kotlin, and .NET. Distribution is implemented through Traverse's
+existing registry publish/resolve infrastructure (Spec 051) rather than a
+bespoke channel.
+
+### Alternatives Considered
+
+- Leave the spec in Draft and let #756/#757/#758 proceed against an
+  unapproved contract — rejected because those tickets are explicitly
+  blocked on this spec's approval and an unapproved contract cannot govern
+  new code paths under the spec-alignment gate.
+- Fold this contract into Spec 073 as an amendment — rejected because Spec
+  073 is immutable and already approved; a distribution layer beneath it is
+  additive, not a revision.
+
+### Outcome
+
+`crates/traverse-native-bridge/` (already introduced by #756's in-progress
+work) and `docs/adr/0012-native-runtime-distribution-channel.md` are now
+governed by spec 075 in `specs/governance/approved-specs.json`. #756, #757,
+and #758 may proceed and declare `075-native-runtime-distribution-contract`
+as their governing spec.
