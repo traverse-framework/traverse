@@ -41,7 +41,10 @@ const MODULE: &str = r#"(module
   (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) i32.const -1))"#;
 
 fn main() -> Result<(), String> {
-    let destination = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("runtime"));
+    let destination = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("runtime"));
     fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     let bytes = wat::parse_str(MODULE).map_err(|error| error.to_string())?;
     let digest = Sha256::digest(&bytes)
