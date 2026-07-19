@@ -880,10 +880,14 @@
       "status": "approved",
       "immutable": true,
       "path": "specs/074-swift-native-resource-control-certification/spec.md",
-      "governs": [
-        "packages/swift/TraverseEmbedder/",
-        "scripts/ci/embedder_conformance/swift_package.sh",
-        "docs/adr/0011-swift-native-resource-controls.md",
+    "governs": [
+      "packages/swift/TraverseEmbedder/",
+      "crates/traverse-swift-host/",
+      "scripts/ci/embedder_conformance/swift_package.sh",
+      "scripts/build_swift_host_xcframework.sh",
+      "scripts/swift_host_macos_smoke.sh",
+      "docs/swift-host-device-test.md",
+      "docs/adr/0011-swift-native-resource-controls.md",
         "specs/074-swift-native-resource-control-certification/"
       ]
     },
