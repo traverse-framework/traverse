@@ -1867,6 +1867,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-native-bridge"
+version = "0.8.1"
+dependencies = [
+ "sha2 0.11.0",
+ "wat",
+]
+
+[[package]]
 name = "traverse-registry"
 version = "0.8.1"
 dependencies = [
