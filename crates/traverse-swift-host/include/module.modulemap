@@ -1,0 +1,4 @@
+module TraverseSwiftHost {
+  header "traverse_swift_host.h"
+  export *
+}
