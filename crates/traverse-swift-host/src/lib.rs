@@ -3,7 +3,7 @@
 //! The production surface remains deliberately small: Swift configures limits
 //! and invokes only governed runtime operations through a later safe wrapper.
 
-#![allow(unsafe_code)] // Temporary, scoped C-ABI exception tracked by #771.
+#![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0013 and #771.
 
 use wasmi::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder, TrapCode};
 

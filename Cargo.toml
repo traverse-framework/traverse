@@ -25,8 +25,9 @@ traverse-registry = { path = "crates/traverse-registry", version = "0.8.1" }
 traverse-runtime = { path = "crates/traverse-runtime", version = "0.8.1" }
 
 [workspace.lints.rust]
-# C-ABI exports for the Apple feasibility host are temporarily isolated in
-# `traverse-swift-host`; #771 will decide the permanent governance boundary.
+# C-ABI exports are permitted only in the audited Apple feasibility boundary.
+# `scripts/ci/scoped_unsafe_boundary_check.sh` verifies that no other crate
+# can opt out of this workspace policy.
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
