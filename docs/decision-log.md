@@ -736,3 +736,44 @@ Spec 057.
 Spec 073 and ADR-0010 record the release baseline. #750 delivers the real
 artifact and evidence, #751 completes public native event parity, and #647
 resolves the Swift production resource-control prerequisite.
+
+## Decision 29: Require Supported Swift Resource Controls Before Certification
+
+- **Date**: 2026-07-18
+- **Status**: Accepted
+- **Governing spec**: `074-swift-native-resource-control-certification`
+- **Related issues**: `#761`, `#762`, `#647`, `#750`, `#758`
+
+### Context
+
+Decision 27 selected WasmKit 0.3.1 based on a false premise: its official
+source still exposes `Store.resourceLimiter` only through `@_spi(Fuzzing)` and
+does not expose a supported fuel, epoch, deadline, or interruption API.
+Raising the Swift and platform floors alone would leave untrusted execution
+without the required supported resource controls.
+
+### Decision
+
+Do not certify the Swift package or a cross-platform Native Embedder Baseline
+until its runtime profile proves bounded memory growth and deterministic
+execution interruption through supported public APIs on physical iOS and
+macOS. Prohibit SPI and watchdogs that cannot stop untrusted execution.
+Evaluate supported options in #762 before changing engines. A replacement
+engine needs its own approved ADR, security/license review, Apple distribution
+evidence, and full bridge conformance.
+
+### Alternatives Considered
+
+- Upgrade to WasmKit 0.3.1 alone — rejected because it does not expose the
+  required supported controls.
+- Use the existing SPI — rejected because unsupported APIs cannot justify a
+  production certification claim.
+- Adopt an alternative engine immediately — rejected pending device-level
+  feasibility, packaging, security, and conformance evidence.
+
+### Outcome
+
+Decision 27 is superseded. #647 remains blocked on a certified Swift profile;
+#761 records the governing requirements and #762 evaluates the smallest
+supported path. Kotlin and .NET work may continue without calling the release
+cross-platform.
