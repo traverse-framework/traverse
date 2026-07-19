@@ -33,8 +33,10 @@ fn memory_fixture() -> Result<(), wasmi::Error> {
             .build(),
     );
     store.limiter(|limits| limits);
-    let bytes = wat::parse_str("(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))")
-        .map_err(|_| wasmi::Error::new("invalid memory fixture"))?;
+    let bytes = wat::parse_str(
+        "(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))",
+    )
+    .map_err(|_| wasmi::Error::new("invalid memory fixture"))?;
     let module = Module::new(store.engine(), bytes)?;
     let instance = Linker::new(store.engine()).instantiate_and_start(&mut store, &module)?;
     let grow = instance.get_typed_func::<(), i32>(&store, "grow")?;
@@ -101,8 +103,10 @@ mod tests {
     #[test]
     fn memory_growth_traps_at_the_configured_limit() {
         let mut store = memory_store(65_536);
-        let bytes = wat::parse_str("(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))")
-            .expect("fixture is valid WAT");
+        let bytes = wat::parse_str(
+            "(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))",
+        )
+        .expect("fixture is valid WAT");
         let module = Module::new(store.engine(), bytes).expect("module compiles");
         let instance = Linker::new(store.engine())
             .instantiate_and_start(&mut store, &module)
@@ -130,7 +134,9 @@ mod tests {
         let run = instance
             .get_typed_func::<(), ()>(&store, "loop")
             .expect("loop export exists");
-        let error = run.call(&mut store, ()).expect_err("fuel must stop the loop");
+        let error = run
+            .call(&mut store, ())
+            .expect_err("fuel must stop the loop");
         assert_eq!(error.as_trap_code(), Some(TrapCode::OutOfFuel));
     }
 }
