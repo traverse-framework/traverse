@@ -31,6 +31,5 @@ or implementation.
 
 ## Notes
 
-This spec is a draft pending explicit human approval (Traverse #755
-Definition of Done) and is intentionally not registered in
-`specs/governance/approved-specs.json` by the change that introduces it.
+Approved per explicit human sign-off following Traverse #755's Definition of
+Done. See Decision 30 and ADR-0012.
