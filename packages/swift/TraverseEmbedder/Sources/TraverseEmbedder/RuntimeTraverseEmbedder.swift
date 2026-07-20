@@ -2,13 +2,13 @@ import Foundation
 
 /// Typed public embedder backed exclusively by runtime-owned bridge results.
 public final class RuntimeTraverseEmbedder: @unchecked Sendable {
-    private let client: WasmKitBridgeClient
+    private let client: any TraverseBridgeClient
 
     public convenience init(bundle: TraverseBundle) throws {
-        try self.init(client: WasmKitBridgeClient(bridge: WasmKitRuntimeBridge(bundle: bundle)))
+        try self.init(client: WasmiHostBridgeClient(bundle: bundle))
     }
 
-    public init(client: WasmKitBridgeClient) {
+    public init(client: any TraverseBridgeClient) {
         self.client = client
     }
 

@@ -1,13 +1,10 @@
 import TraverseSwiftHost
 
 let version = traverse_swift_host_abi_version()
-guard version == 1 else {
+guard version == 2 else {
     fatalError("unexpected Traverse Swift host ABI version: \(version)")
 }
-guard traverse_swift_host_memory_limit_fixture() == 0 else {
-    fatalError("memory fixture did not stop at the configured limit")
+guard String(cString: traverse_swift_host_status_message(0)) == "ok" else {
+    fatalError("production status mapping is unavailable")
 }
-guard traverse_swift_host_fuel_limit_fixture() == 0 else {
-    fatalError("fuel fixture did not stop execution")
-}
-print("Traverse Swift host ABI \(version) is available")
+print("Traverse Swift host production ABI \(version) is available")

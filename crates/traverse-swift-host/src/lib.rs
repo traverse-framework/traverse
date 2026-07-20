@@ -1,98 +1,631 @@
-//! Minimal C-ABI boundary for the Apple `wasmi` feasibility proof.
+//! Audited five-symbol C ABI for the bounded Apple `wasmi` bridge.
 //!
-//! The production surface remains deliberately small: Swift configures limits
-//! and invokes only governed runtime operations through a later safe wrapper.
+//! All raw-pointer conversion is intentionally confined to this file. The
+//! opaque handle owns a `wasmi` store and cannot grant filesystem, network,
+//! environment, clock, process, or arbitrary-import authority.
 
-#![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0013 and #771.
+#![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0015 and Spec 076.
 
-use wasmi::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder, TrapCode};
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
+use wasmi::{
+    Config, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
+};
 
-/// Builds the engine-owned memory ceiling used by the feasibility fixture.
-///
-/// This function proves that the engine limit API is available to a static
-/// Apple host without relying on SPI or a watchdog.
-#[must_use]
-pub fn configured_memory_limit(bytes: usize) -> usize {
-    let _limits = StoreLimitsBuilder::new().memory_size(bytes).build();
-    bytes
+const ABI_VERSION: u32 = 2;
+const OK: i32 = 0;
+const INVALID_HANDLE: i32 = -1;
+const INVALID_INPUT: i32 = -2;
+const INVALID_DESCRIPTOR: i32 = -3;
+const RESOURCE_LIMIT: i32 = -4;
+const INTERNAL_ERROR: i32 = -5;
+const BUFFER_TOO_SMALL: i32 = -6;
+const BRIDGE_VERSION: i32 = 10_100;
+const MAX_ERROR_BYTES: usize = 512;
+
+#[repr(C)]
+pub struct TraverseSwiftHostLimits {
+    maximum_artifact_bytes: u64,
+    maximum_memory_bytes: u64,
+    fuel_per_invocation: u64,
+    maximum_input_bytes: u64,
+    maximum_output_bytes: u64,
+    maximum_queued_events: u64,
 }
 
-/// C-compatible build marker for Swift/XCFramework integration checks.
-#[unsafe(no_mangle)]
-pub extern "C" fn traverse_swift_host_abi_version() -> u32 {
-    1
-}
-
-fn memory_fixture() -> Result<(), wasmi::Error> {
-    let engine = Engine::default();
-    let mut store = Store::new(
-        &engine,
-        StoreLimitsBuilder::new()
-            .memory_size(65_536)
-            .trap_on_grow_failure(true)
-            .build(),
-    );
-    store.limiter(|limits| limits);
-    let bytes = wat::parse_str(
-        "(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))",
-    )
-    .map_err(|_| wasmi::Error::new("invalid memory fixture"))?;
-    let module = Module::new(store.engine(), bytes)?;
-    let instance = Linker::new(store.engine()).instantiate_and_start(&mut store, &module)?;
-    let grow = instance.get_typed_func::<(), i32>(&store, "grow")?;
-    match grow.call(&mut store, ()) {
-        Err(error) if error.as_trap_code() == Some(TrapCode::GrowthOperationLimited) => Ok(()),
-        Err(error) => Err(error),
-        Ok(_) => Err(wasmi::Error::new("memory fixture unexpectedly grew")),
+impl TraverseSwiftHostLimits {
+    fn checked(&self) -> Result<Limits, HostError> {
+        let values = [
+            self.maximum_artifact_bytes,
+            self.maximum_memory_bytes,
+            self.fuel_per_invocation,
+            self.maximum_input_bytes,
+            self.maximum_output_bytes,
+            self.maximum_queued_events,
+        ];
+        if values.contains(&0) {
+            return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
+        }
+        Ok(Limits {
+            maximum_artifact_bytes: usize::try_from(self.maximum_artifact_bytes)
+                .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+            maximum_memory_bytes: usize::try_from(self.maximum_memory_bytes)
+                .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+            fuel_per_invocation: self.fuel_per_invocation,
+            maximum_input_bytes: usize::try_from(self.maximum_input_bytes)
+                .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+            maximum_output_bytes: usize::try_from(self.maximum_output_bytes)
+                .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+        })
     }
 }
 
-fn fuel_fixture() -> Result<(), wasmi::Error> {
+struct Limits {
+    maximum_artifact_bytes: usize,
+    maximum_memory_bytes: usize,
+    fuel_per_invocation: u64,
+    maximum_input_bytes: usize,
+    maximum_output_bytes: usize,
+}
+
+struct Host {
+    store: Store<StoreLimits>,
+    instance: Instance,
+    memory: Memory,
+    limits: Limits,
+}
+
+struct HostError {
+    status: i32,
+    code: &'static str,
+}
+
+impl HostError {
+    const fn new(status: i32, code: &'static str) -> Self {
+        Self { status, code }
+    }
+    fn json(&self) -> Vec<u8> {
+        format!(
+            r#"{{\"code\":\"{}\",\"message\":\"{}\",\"details\":{{}}}}"#,
+            self.code, self.code
+        )
+        .into_bytes()
+    }
+}
+
+fn required_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "init"
+            | "submit"
+            | "next_event"
+            | "cancel"
+            | "compatible_start"
+            | "compatible_stop"
+            | "compatible_kill"
+            | "shutdown"
+    )
+}
+
+fn export_name(operation: &str) -> &'static str {
+    match operation {
+        "init" => "traverse_init",
+        "submit" => "traverse_submit",
+        "next_event" => "traverse_next_event",
+        "cancel" => "traverse_cancel",
+        "compatible_start" => "traverse_compatible_start",
+        "compatible_stop" => "traverse_compatible_stop",
+        "compatible_kill" => "traverse_compatible_kill",
+        "shutdown" => "traverse_shutdown",
+        _ => "",
+    }
+}
+
+fn digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
+    format!("sha256:{hex}")
+}
+
+fn normalised_digest(bytes: &[u8]) -> Result<String, HostError> {
+    let value = std::str::from_utf8(bytes)
+        .map_err(|_| HostError::new(INVALID_INPUT, "bundle_digest_mismatch"))?;
+    let value = value.trim().to_ascii_lowercase();
+    Ok(if value.starts_with("sha256:") {
+        value
+    } else {
+        format!("sha256:{value}")
+    })
+}
+
+fn require_exports(
+    store: &mut Store<StoreLimits>,
+    instance: Instance,
+) -> Result<Memory, HostError> {
+    let memory = instance
+        .get_memory(&*store, "memory")
+        .ok_or_else(|| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    let version = instance
+        .get_typed_func::<(), i32>(&*store, "traverse_bridge_abi_version")
+        .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    if version
+        .call(&mut *store, ())
+        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+        != BRIDGE_VERSION
+    {
+        return Err(HostError::new(INVALID_INPUT, "bridge_version_mismatch"));
+    }
+    for name in [
+        "traverse_alloc",
+        "traverse_dealloc",
+        "traverse_init",
+        "traverse_submit",
+        "traverse_next_event",
+        "traverse_cancel",
+        "traverse_compatible_start",
+        "traverse_compatible_stop",
+        "traverse_compatible_kill",
+        "traverse_shutdown",
+    ] {
+        if instance.get_func(&*store, name).is_none() {
+            return Err(HostError::new(
+                INVALID_DESCRIPTOR,
+                "bridge_invalid_descriptor",
+            ));
+        }
+    }
+    Ok(memory)
+}
+
+fn create_host(runtime: &[u8], expected_digest: &[u8], limits: Limits) -> Result<Host, HostError> {
+    if runtime.len() > limits.maximum_artifact_bytes {
+        return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
+    }
+    if normalised_digest(expected_digest)? != digest(runtime) {
+        return Err(HostError::new(INVALID_INPUT, "bundle_digest_mismatch"));
+    }
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
-    let mut store = Store::new(&engine, ());
-    store.set_fuel(10)?;
-    let bytes = wat::parse_str("(module (func (export \"loop\") (loop br 0)))")
-        .map_err(|_| wasmi::Error::new("invalid fuel fixture"))?;
-    let module = Module::new(&engine, bytes)?;
-    let instance = Linker::new(&engine).instantiate_and_start(&mut store, &module)?;
-    let run = instance.get_typed_func::<(), ()>(&store, "loop")?;
-    match run.call(&mut store, ()) {
-        Err(error) if error.as_trap_code() == Some(TrapCode::OutOfFuel) => Ok(()),
-        Err(error) => Err(error),
-        Ok(()) => Err(wasmi::Error::new("fuel fixture unexpectedly returned")),
+    let module = Module::new(&engine, runtime)
+        .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_module"))?;
+    if module.imports().next().is_some() {
+        return Err(HostError::new(INVALID_INPUT, "bridge_ambient_import"));
+    }
+    let store_limits = StoreLimitsBuilder::new()
+        .memory_size(limits.maximum_memory_bytes)
+        .trap_on_grow_failure(true)
+        .build();
+    let mut store = Store::new(&engine, store_limits);
+    store.limiter(|value| value);
+    store
+        .set_fuel(limits.fuel_per_invocation)
+        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?;
+    let instance = Linker::new(&engine)
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+    let memory = require_exports(&mut store, instance)?;
+    Ok(Host {
+        store,
+        instance,
+        memory,
+        limits,
+    })
+}
+
+fn output(result: &[u8], buffer: *mut u8, capacity: usize, length_out: *mut usize) -> i32 {
+    // SAFETY: callers validate `length_out` before this helper; its one write is bounded to that object.
+    unsafe {
+        *length_out = result.len();
+    }
+    if result.len() > capacity {
+        return BUFFER_TOO_SMALL;
+    }
+    if result.is_empty() {
+        return OK;
+    }
+    if buffer.is_null() {
+        return INVALID_DESCRIPTOR;
+    }
+    // SAFETY: the caller promises a writable output region of `capacity`; this copy is limited to `result.len() <= capacity`.
+    unsafe {
+        std::ptr::copy_nonoverlapping(result.as_ptr(), buffer, result.len());
+    }
+    OK
+}
+
+fn call_export(
+    host: &mut Host,
+    operation: &str,
+    input: &[u8],
+    input_pointer: i32,
+    descriptor: i32,
+) -> Result<i32, HostError> {
+    if operation == "next_event" || operation == "shutdown" {
+        host.instance
+            .get_typed_func::<i32, i32>(&host.store, export_name(operation))
+            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+            .call(&mut host.store, descriptor)
+    } else {
+        host.instance
+            .get_typed_func::<(i32, i32, i32), i32>(&host.store, export_name(operation))
+            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+            .call(
+                &mut host.store,
+                (
+                    input_pointer,
+                    i32::try_from(input.len())
+                        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+                    descriptor,
+                ),
+            )
+    }
+    .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))
+}
+
+fn read_descriptor(host: &Host, descriptor: i32) -> Result<(u32, usize), HostError> {
+    let mut descriptor_bytes = [0_u8; 8];
+    host.memory
+        .read(
+            &host.store,
+            usize::try_from(descriptor)
+                .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+            &mut descriptor_bytes,
+        )
+        .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    let pointer = u32::from_le_bytes(
+        descriptor_bytes[..4]
+            .try_into()
+            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+    );
+    let length = u32::from_le_bytes(
+        descriptor_bytes[4..]
+            .try_into()
+            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+    ) as usize;
+    Ok((pointer, length))
+}
+
+fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, HostError> {
+    if !required_operation(operation) {
+        return Err(HostError::new(
+            INVALID_INPUT,
+            "bridge_operation_not_allowed",
+        ));
+    }
+    if input.len() > host.limits.maximum_input_bytes {
+        return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
+    }
+    if !input.is_empty() {
+        serde_json::from_slice::<serde_json::Value>(input)
+            .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_json"))?;
+    }
+    host.store
+        .set_fuel(host.limits.fuel_per_invocation)
+        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?;
+    let alloc = host
+        .instance
+        .get_typed_func::<i32, i32>(&host.store, "traverse_alloc")
+        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+    let dealloc = host
+        .instance
+        .get_typed_func::<(i32, i32), ()>(&host.store, "traverse_dealloc")
+        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+    let descriptor = alloc
+        .call(&mut host.store, 8)
+        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+    let input_pointer = if input.is_empty() {
+        0
+    } else {
+        alloc
+            .call(
+                &mut host.store,
+                i32::try_from(input.len())
+                    .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+            )
+            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+    };
+    if !input.is_empty() {
+        host.memory
+            .write(
+                &mut host.store,
+                usize::try_from(input_pointer)
+                    .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+                input,
+            )
+            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    }
+    let status = call_export(host, operation, input, input_pointer, descriptor)?;
+    let (pointer, length) = read_descriptor(host, descriptor)?;
+    if length > host.limits.maximum_output_bytes {
+        return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
+    }
+    let mut result = vec![0; length];
+    host.memory
+        .read(&host.store, pointer as usize, &mut result)
+        .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    let _ = dealloc.call(&mut host.store, (descriptor, 8));
+    if input_pointer != 0 {
+        let _ = dealloc.call(
+            &mut host.store,
+            (input_pointer, i32::try_from(input.len()).unwrap_or(0)),
+        );
+    }
+    if status < 0 {
+        return Err(HostError::new(status, "bridge_runtime_error"));
+    }
+    Ok(result)
+}
+
+/// C-compatible ABI marker.
+#[unsafe(no_mangle)]
+pub extern "C" fn traverse_swift_host_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+/// Creates one verified, bounded host and returns its opaque handle.
+///
+/// # Safety
+///
+/// `runtime` and `expected` must each be valid for reads of their stated
+/// length; `limits` must point to one readable `TraverseSwiftHostLimits`;
+/// `handle_out` must point to one writable `u64`. All four must be non-null,
+/// which this function checks before dereferencing any of them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn traverse_swift_host_create(
+    runtime: *const u8,
+    runtime_length: usize,
+    expected: *const u8,
+    expected_length: usize,
+    limits: *const TraverseSwiftHostLimits,
+    handle_out: *mut u64,
+) -> i32 {
+    if runtime.is_null() || expected.is_null() || limits.is_null() || handle_out.is_null() {
+        return INVALID_INPUT;
+    }
+    // SAFETY: every pointer is checked non-null; callers supply immutable ranges of the stated lengths.
+    let result = unsafe {
+        (*limits).checked().and_then(|value| {
+            create_host(
+                std::slice::from_raw_parts(runtime, runtime_length),
+                std::slice::from_raw_parts(expected, expected_length),
+                value,
+            )
+        })
+    };
+    match result {
+        Ok(host) => {
+            let raw = Box::into_raw(Box::new(host)) as u64; // SAFETY: validated non-null output pointer writes one u64.
+            unsafe {
+                *handle_out = raw;
+            }
+            OK
+        }
+        Err(error) => error.status,
     }
 }
 
-/// Runs the bounded-memory fixture through the static-library boundary.
+/// Invokes a governed bridge operation using caller-owned buffers.
+///
+/// # Safety
+///
+/// `handle` must be a live value returned by [`traverse_swift_host_create`]
+/// and not yet passed to [`traverse_swift_host_destroy`]. `operation` and
+/// `input` must each be valid for reads of their stated length.
+/// `output_length_out` must point to one writable `usize`; `output_buffer`
+/// must be valid for writes of `output_capacity` bytes whenever
+/// `output_capacity` is greater than zero. Non-null pointers are checked
+/// before use, but pointer validity and the handle's provenance cannot be
+/// checked by this function and remain the caller's obligation.
 #[unsafe(no_mangle)]
-pub extern "C" fn traverse_swift_host_memory_limit_fixture() -> u32 {
-    u32::from(memory_fixture().is_err())
+pub unsafe extern "C" fn traverse_swift_host_invoke(
+    handle: u64,
+    operation: *const u8,
+    operation_length: usize,
+    input: *const u8,
+    input_length: usize,
+    output_buffer: *mut u8,
+    output_capacity: usize,
+    output_length_out: *mut usize,
+) -> i32 {
+    if handle == 0 || operation.is_null() || input.is_null() || output_length_out.is_null() {
+        return INVALID_INPUT;
+    }
+    // SAFETY: C caller supplies valid ranges; the opaque handle came from `create` and is used only synchronously by the Swift serialization wrapper.
+    let result = unsafe {
+        (|| -> Result<Vec<u8>, HostError> {
+            let host = &mut *(handle as *mut Host);
+            let operation =
+                std::str::from_utf8(std::slice::from_raw_parts(operation, operation_length))
+                    .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_json"))?;
+            invoke(
+                host,
+                operation,
+                std::slice::from_raw_parts(input, input_length),
+            )
+        })()
+    };
+    match result {
+        Ok(value) => output(&value, output_buffer, output_capacity, output_length_out),
+        Err(error) => {
+            let details = error.json();
+            let write_status = output(
+                &details[..details.len().min(MAX_ERROR_BYTES)],
+                output_buffer,
+                output_capacity,
+                output_length_out,
+            );
+            if write_status == BUFFER_TOO_SMALL {
+                BUFFER_TOO_SMALL
+            } else {
+                error.status
+            }
+        }
+    }
 }
 
-/// Runs the fuel-budget fixture through the static-library boundary.
+/// Destroys a host handle; null is an idempotent success.
 #[unsafe(no_mangle)]
-pub extern "C" fn traverse_swift_host_fuel_limit_fixture() -> u32 {
-    u32::from(fuel_fixture().is_err())
+pub extern "C" fn traverse_swift_host_destroy(handle: u64) -> i32 {
+    if handle == 0 {
+        return OK;
+    } // SAFETY: `create` allocates this exact opaque Host pointer; callers must destroy at most once.
+    unsafe {
+        drop(Box::from_raw(handle as *mut Host));
+    }
+    OK
+}
+
+/// Maps a status to a bounded static UTF-8 message.
+#[unsafe(no_mangle)]
+pub extern "C" fn traverse_swift_host_status_message(status: i32) -> *const std::ffi::c_char {
+    let value = match status {
+        OK => "ok\0",
+        INVALID_HANDLE => "invalid_handle\0",
+        INVALID_INPUT => "invalid_input\0",
+        INVALID_DESCRIPTOR => "invalid_descriptor\0",
+        RESOURCE_LIMIT => "resource_limit\0",
+        INTERNAL_ERROR => "internal_error\0",
+        BUFFER_TOO_SMALL => "buffer_too_small\0",
+        _ => "unknown_status\0",
+    };
+    value.as_ptr().cast()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_memory_limit, fuel_fixture, memory_fixture};
+    #![allow(clippy::expect_used)]
+
+    use super::{
+        ABI_VERSION, BUFFER_TOO_SMALL, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits, digest,
+        traverse_swift_host_abi_version, traverse_swift_host_create, traverse_swift_host_destroy,
+        traverse_swift_host_invoke,
+    };
 
     #[test]
-    fn exposes_the_configured_memory_limit() {
-        assert_eq!(configured_memory_limit(65_536), 65_536);
+    fn exposes_a_versioned_production_boundary() {
+        assert_eq!(traverse_swift_host_abi_version(), ABI_VERSION);
     }
 
     #[test]
-    fn memory_growth_traps_at_the_configured_limit() {
-        assert!(memory_fixture().is_ok());
+    fn rejects_unbounded_limits_before_module_instantiation() {
+        let limits = TraverseSwiftHostLimits {
+            maximum_artifact_bytes: 0,
+            maximum_memory_bytes: 1,
+            fuel_per_invocation: 1,
+            maximum_input_bytes: 1,
+            maximum_output_bytes: 1,
+            maximum_queued_events: 1,
+        };
+        let bytes = [0_u8];
+        let digest = b"sha256:00";
+        let mut handle = 0_u64;
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let status = unsafe {
+            traverse_swift_host_create(
+                bytes.as_ptr(),
+                bytes.len(),
+                digest.as_ptr(),
+                digest.len(),
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(status, RESOURCE_LIMIT);
+        assert_eq!(handle, 0);
     }
 
     #[test]
-    fn fuel_exhaustion_stops_a_non_terminating_module() {
-        assert!(fuel_fixture().is_ok());
+    fn creates_and_invokes_with_a_caller_sized_retry_buffer() {
+        let runtime = wat::parse_str(BRIDGE_FIXTURE).expect("fixture must compile");
+        let expected_digest = digest(&runtime);
+        let limits = limits();
+        let mut handle = 0_u64;
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let create_status = unsafe {
+            traverse_swift_host_create(
+                runtime.as_ptr(),
+                runtime.len(),
+                expected_digest.as_ptr(),
+                expected_digest.len(),
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(create_status, OK);
+        let operation = b"init";
+        let input = b"{}";
+        let mut required = 0_usize;
+        let mut too_small = [0_u8; 1];
+        // SAFETY: `handle` is live from the create call above; all other
+        // pointers are valid for their stated lengths.
+        let retry_status = unsafe {
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                too_small.as_mut_ptr(),
+                too_small.len(),
+                &raw mut required,
+            )
+        };
+        assert_eq!(retry_status, BUFFER_TOO_SMALL);
+        let mut output = vec![0_u8; required];
+        // SAFETY: `handle` is still live; `output` is sized to the required
+        // length reported by the retry call above.
+        let invoke_status = unsafe {
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &raw mut required,
+            )
+        };
+        assert_eq!(invoke_status, OK);
+        assert_eq!(&output[..required], br#"{"status":"ready"}"#);
+        assert_eq!(traverse_swift_host_destroy(handle), OK);
     }
+
+    fn limits() -> TraverseSwiftHostLimits {
+        TraverseSwiftHostLimits {
+            maximum_artifact_bytes: 1024 * 1024,
+            maximum_memory_bytes: 1024 * 1024,
+            fuel_per_invocation: 10_000,
+            maximum_input_bytes: 1024,
+            maximum_output_bytes: 1024,
+            maximum_queued_events: 8,
+        }
+    }
+
+    const BRIDGE_FIXTURE: &str = r#"
+        (module
+          (memory (export "memory") 1 2)
+          (data (i32.const 128) "{\22status\22:\22ready\22}")
+          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+          (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+          (func (export "traverse_dealloc") (param i32 i32))
+          (func $result (param $descriptor i32) (result i32)
+            local.get $descriptor i32.const 128 i32.store
+            local.get $descriptor i32.const 4 i32.add i32.const 18 i32.store
+            i32.const 0)
+          (func (export "traverse_init") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_submit") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_next_event") (param i32) (result i32) local.get 0 call $result)
+          (func (export "traverse_cancel") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_shutdown") (param i32) (result i32) local.get 0 call $result))
+    "#;
 }

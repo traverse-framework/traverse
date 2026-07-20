@@ -148,6 +148,16 @@ import WAT
     #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
 }
 
+@Test func wasmiHostBridgeClientUsesThePackagedProductionBoundary() throws {
+    let wasm = try wat2wasm(clientBridgeWAT)
+    let client = try WasmiHostBridgeClient(bundle: fixtureBundle(wasm: wasm))
+
+    #expect(try client.initialize(configJSON: Data("{}".utf8)) == Data(#"{"status":"ready"}"#.utf8))
+    #expect(try client.submit(requestJSON: Data(#"{"target_id":"demo"}"#.utf8)) == Data(#"{"session_id":"s1","status":"accepted"}"#.utf8))
+    #expect(try client.nextEvent() == Data(#"{"sequence":1,"target_id":"demo","status":"completed"}"#.utf8))
+    #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
+}
+
 @Test func runtimeEmbedderMapsRuntimeOwnedResultsIntoPublicTypes() throws {
     let wasm = try wat2wasm(clientBridgeWAT)
     let client = try WasmKitBridgeClient(bridge: WasmKitRuntimeBridge(bundle: fixtureBundle(wasm: wasm)))
