@@ -158,6 +158,24 @@ import WAT
     #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
 }
 
+@Test func realNativeArtifactRunsWithoutASidecar() throws {
+    guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return }
+    let runtimeURL = URL(fileURLWithPath: rootPath).appendingPathComponent("runtime/runtime.wasm")
+    let runtime = try Data(contentsOf: runtimeURL)
+    let client = try WasmiHostBridgeClient(bundle: TraverseBundle(
+        rootURL: URL(fileURLWithPath: rootPath),
+        runtimeWasmDigest: digest(of: Array(runtime))
+    ))
+
+    #expect(try client.initialize(configJSON: Data("{}".utf8)) == Data(#"{"status":"ready","error":null}"#.utf8))
+    #expect(try client.submit(requestJSON: Data(#"{"target_id":"traverse-starter.pipeline"}"#.utf8)) == Data(#"{"session_id":"runtime-session-1","status":"accepted","error":null}"#.utf8))
+    #expect(try client.nextEvent() == Data(#"{"type":"state_changed","session_id":"runtime-session-1","data":{"state":"running"}}"#.utf8))
+    #expect(try client.nextEvent() == Data(#"{"type":"capability_invoked","session_id":"runtime-session-1","data":{}}"#.utf8))
+    #expect(try client.nextEvent() == Data(#"{"type":"capability_result","session_id":"runtime-session-1","data":{"output":{}}}"#.utf8))
+    #expect(try client.nextEvent() == nil)
+    #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
+}
+
 @Test func runtimeEmbedderMapsRuntimeOwnedResultsIntoPublicTypes() throws {
     let wasm = try wat2wasm(clientBridgeWAT)
     let client = try WasmKitBridgeClient(bridge: WasmKitRuntimeBridge(bundle: fixtureBundle(wasm: wasm)))
