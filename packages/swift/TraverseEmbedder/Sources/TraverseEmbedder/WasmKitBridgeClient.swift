@@ -2,7 +2,8 @@ import Foundation
 import WasmKit
 
 /// Serialized UTF-8 JSON client for the governed runtime-WASM bridge.
-public final class WasmKitBridgeClient: @unchecked Sendable {
+@available(*, deprecated, message: "Use WasmiHostBridgeClient; WasmKit is retained only for source compatibility.")
+public final class WasmKitBridgeClient: @unchecked Sendable, TraverseBridgeClient {
     public static let defaultMaximumOutputBytes = 1024 * 1024
 
     private let instance: Instance
@@ -160,4 +161,15 @@ public struct TraverseBridgeError: Error, Equatable, Sendable {
         self.status = status
         self.message = message
     }
+}
+
+protocol TraverseBridgeClient: Sendable {
+    func initialize(configJSON: Data) throws -> Data
+    func submit(requestJSON: Data) throws -> Data
+    func cancel(requestJSON: Data) throws -> Data
+    func compatibleStart(requestJSON: Data) throws -> Data
+    func compatibleStop(requestJSON: Data) throws -> Data
+    func compatibleKill(requestJSON: Data) throws -> Data
+    func nextEvent() throws -> Data?
+    func shutdown() throws -> Data
 }
