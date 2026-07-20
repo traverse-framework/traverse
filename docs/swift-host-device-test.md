@@ -1,4 +1,4 @@
-# iPhone Test Guide: Traverse Swift Host Feasibility
+# iPhone Test Guide: Traverse Swift Host Boundary
 
 Use this guide after building the branch's XCFramework on a Mac with Xcode and
 an Apple signing identity. It records the final physical-device evidence for
@@ -32,9 +32,8 @@ import TraverseSwiftHost
 @main
 struct TraverseSwiftHostProofApp: App {
     init() {
-        precondition(traverse_swift_host_abi_version() == 1)
-        precondition(traverse_swift_host_memory_limit_fixture() == 0)
-        precondition(traverse_swift_host_fuel_limit_fixture() == 0)
+        precondition(traverse_swift_host_abi_version() == 2)
+        precondition(String(cString: traverse_swift_host_status_message(0)) == "ok")
     }
 
     var body: some Scene { WindowGroup { Text("Traverse Swift host proof passed") } }

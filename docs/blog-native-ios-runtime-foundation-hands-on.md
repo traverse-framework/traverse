@@ -117,9 +117,8 @@ import TraverseSwiftHost
 @main
 struct TraverseSwiftHostProofApp: App {
     init() {
-        precondition(traverse_swift_host_abi_version() == 1)
-        precondition(traverse_swift_host_memory_limit_fixture() == 0)
-        precondition(traverse_swift_host_fuel_limit_fixture() == 0)
+        precondition(traverse_swift_host_abi_version() == 2)
+        precondition(String(cString: traverse_swift_host_status_message(0)) == "ok")
     }
 
     var body: some Scene {
