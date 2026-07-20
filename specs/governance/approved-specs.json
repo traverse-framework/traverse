@@ -906,6 +906,20 @@
       ]
     },
     {
+      "id": "076-production-swift-wasmi-cabi",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/076-production-swift-wasmi-cabi/spec.md",
+      "governs": [
+        "crates/traverse-swift-host/",
+        "packages/swift/TraverseEmbedder/",
+        "scripts/ci/scoped_unsafe_boundary_check.sh",
+        "docs/adr/0015-production-swift-wasmi-c-abi.md",
+        "specs/076-production-swift-wasmi-cabi/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",
