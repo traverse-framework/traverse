@@ -200,6 +200,9 @@ fn create_host(runtime: &[u8], expected_digest: &[u8], limits: Limits) -> Result
         .build();
     let mut store = Store::new(&engine, store_limits);
     store.limiter(|value| value);
+    store
+        .set_fuel(limits.fuel_per_invocation)
+        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?;
     let instance = Linker::new(&engine)
         .instantiate_and_start(&mut store, &module)
         .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
@@ -462,8 +465,9 @@ pub extern "C" fn traverse_swift_host_status_message(status: i32) -> *const std:
 #[cfg(test)]
 mod tests {
     use super::{
-        ABI_VERSION, RESOURCE_LIMIT, TraverseSwiftHostLimits, traverse_swift_host_abi_version,
-        traverse_swift_host_create,
+        ABI_VERSION, BUFFER_TOO_SMALL, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits, digest,
+        traverse_swift_host_abi_version, traverse_swift_host_create, traverse_swift_host_destroy,
+        traverse_swift_host_invoke,
     };
 
     #[test]
@@ -497,4 +501,88 @@ mod tests {
         );
         assert_eq!(handle, 0);
     }
+
+    #[test]
+    fn creates_and_invokes_with_a_caller_sized_retry_buffer() {
+        let runtime = wat::parse_str(BRIDGE_FIXTURE).expect("fixture must compile");
+        let expected_digest = digest(&runtime);
+        let limits = limits();
+        let mut handle = 0_u64;
+        assert_eq!(
+            traverse_swift_host_create(
+                runtime.as_ptr(),
+                runtime.len(),
+                expected_digest.as_ptr(),
+                expected_digest.len(),
+                &limits,
+                &mut handle,
+            ),
+            OK
+        );
+        let operation = b"init";
+        let input = b"{}";
+        let mut required = 0_usize;
+        let mut too_small = [0_u8; 1];
+        assert_eq!(
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                too_small.as_mut_ptr(),
+                too_small.len(),
+                &mut required,
+            ),
+            BUFFER_TOO_SMALL
+        );
+        let mut output = vec![0_u8; required];
+        assert_eq!(
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut required,
+            ),
+            OK
+        );
+        assert_eq!(&output[..required], br#"{"status":"ready"}"#);
+        assert_eq!(traverse_swift_host_destroy(handle), OK);
+    }
+
+    fn limits() -> TraverseSwiftHostLimits {
+        TraverseSwiftHostLimits {
+            maximum_artifact_bytes: 1024 * 1024,
+            maximum_memory_bytes: 1024 * 1024,
+            fuel_per_invocation: 10_000,
+            maximum_input_bytes: 1024,
+            maximum_output_bytes: 1024,
+            maximum_queued_events: 8,
+        }
+    }
+
+    const BRIDGE_FIXTURE: &str = r#"
+        (module
+          (memory (export "memory") 1 2)
+          (data (i32.const 128) "{\22status\22:\22ready\22}")
+          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+          (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+          (func (export "traverse_dealloc") (param i32 i32))
+          (func $result (param $descriptor i32) (result i32)
+            local.get $descriptor i32.const 128 i32.store
+            local.get $descriptor i32.const 4 i32.add i32.const 18 i32.store
+            i32.const 0)
+          (func (export "traverse_init") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_submit") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_next_event") (param i32) (result i32) local.get 0 call $result)
+          (func (export "traverse_cancel") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_shutdown") (param i32) (result i32) local.get 0 call $result))
+    "#;
 }
