@@ -163,7 +163,7 @@ public struct TraverseBridgeError: Error, Equatable, Sendable {
     }
 }
 
-protocol TraverseBridgeClient: Sendable {
+public protocol TraverseBridgeClient: Sendable {
     func initialize(configJSON: Data) throws -> Data
     func submit(requestJSON: Data) throws -> Data
     func cancel(requestJSON: Data) throws -> Data

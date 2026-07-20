@@ -37,7 +37,11 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
     private let lock = NSLock()
     private let limits: TraverseHostLimits
 
-    public init(bundle: TraverseBundle, limits: TraverseHostLimits = try TraverseHostLimits()) throws {
+    public convenience init(bundle: TraverseBundle) throws {
+        try self.init(bundle: bundle, limits: TraverseHostLimits())
+    }
+
+    public init(bundle: TraverseBundle, limits: TraverseHostLimits) throws {
         guard bundle.embedderAPIVersion == TraverseEmbedder.apiVersion else {
             throw TraverseEmbedderError.incompatibleBundle("embedder API \(bundle.embedderAPIVersion) is incompatible with \(TraverseEmbedder.apiVersion)")
         }
@@ -95,7 +99,10 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
         try lock.withLock {
             guard handle != 0 else { throw TraverseBridgeError(status: -1, message: "invalid_handle") }
             var required = 0
-            var output = Data()
+            guard let outputCapacity = Int(exactly: limits.maximumOutputBytes) else {
+                throw TraverseBridgeError(status: -4, message: "bridge_resource_limit")
+            }
+            var output = Data(repeating: 0, count: outputCapacity)
             let status = call(operation: operation, input: input, output: &output, required: &required)
             if status == -6 {
                 output = Data(repeating: 0, count: required)
@@ -112,6 +119,7 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
 
     private func call(operation: String, input: Data, output: inout Data, required: inout Int) -> Int32 {
         let operationData = Data(operation.utf8)
+        let outputCapacity = output.count
         return operationData.withUnsafeBytes { operationBuffer in
             input.withUnsafeBytes { inputBuffer in
                 output.withUnsafeMutableBytes { outputBuffer in
@@ -122,7 +130,7 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
                         inputBuffer.bindMemory(to: UInt8.self).baseAddress,
                         input.count,
                         outputBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        output.count,
+                        outputCapacity,
                         &required
                     )
                 }
