@@ -10,6 +10,22 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ChicoryBridgeClientTest {
+    @Test fun realNativeArtifactRunsWithoutASidecar() {
+        val rootPath = System.getenv("TRAVERSE_NATIVE_ARTIFACT_ROOT") ?: return
+        val runtime = File(rootPath, "runtime/runtime.wasm").readBytes()
+        val digest = "sha256:" + MessageDigest.getInstance("SHA-256")
+            .digest(runtime).joinToString("") { "%02x".format(it) }
+        val client = ChicoryBridgeClient(ChicoryRuntimeBridge(TraverseBundle(rootPath, digest)))
+
+        assertEquals("{\"status\":\"ready\",\"error\":null}", client.initialize("{}"))
+        assertEquals("{\"session_id\":\"runtime-session-1\",\"status\":\"accepted\",\"error\":null}", client.submit("{\"target_id\":\"traverse-starter.pipeline\"}"))
+        assertEquals("{\"type\":\"state_changed\",\"session_id\":\"runtime-session-1\",\"data\":{\"state\":\"running\"}}", client.nextEvent())
+        assertEquals("{\"type\":\"capability_invoked\",\"session_id\":\"runtime-session-1\",\"data\":{}}", client.nextEvent())
+        assertEquals("{\"type\":\"capability_result\",\"session_id\":\"runtime-session-1\",\"data\":{\"output\":{}}}", client.nextEvent())
+        assertNull(client.nextEvent())
+        assertEquals("{\"status\":\"stopped\"}", client.shutdown())
+    }
+
     @Test fun copiesJsonResultsAndDrainsEventsInOrder() {
         val client = ChicoryBridgeClient(ChicoryRuntimeBridge(fixtureBundle()))
 

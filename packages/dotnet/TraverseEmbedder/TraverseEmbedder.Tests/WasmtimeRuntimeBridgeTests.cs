@@ -13,6 +13,24 @@ public sealed class WasmtimeRuntimeBridgeTests
     private const string TypedClientFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDQwAAQIDAwMBAwMDAwEFBAEBARAGBgF/AUEACwf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAAED3RyYXZlcnNlX3N1Ym1pdAAFE3RyYXZlcnNlX25leHRfZXZlbnQABg90cmF2ZXJzZV9jYW5jZWwABxl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAgYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAkYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAoRdHJhdmVyc2Vfc2h1dGRvd24ACwqXAQwGAEH0zgALBQBBwAALAgALFQAgACABNgIAIABBBGogAjYCAEEACwsAIAJBgARBEhADCwsAIAJBoARBJxADCxsAIwBFBH9BASQAIABB4ARBNhADGkEBBUEACwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACAAQcAFQRQQAwsLnAEEAEGABAsSeyJzdGF0dXMiOiJyZWFkeSJ9AEGgBAsneyJzZXNzaW9uX2lkIjoiczEiLCJzdGF0dXMiOiJhY2NlcHRlZCJ9AEHgBAs2eyJzZXF1ZW5jZSI6MSwidGFyZ2V0X2lkIjoiZGVtbyIsInN0YXR1cyI6ImNvbXBsZXRlZCJ9AEHABQsUeyJzdGF0dXMiOiJzdG9wcGVkIn0=";
 
     [Fact]
+    public void RealNativeArtifactRunsWithoutASidecar()
+    {
+        var root = Environment.GetEnvironmentVariable("TRAVERSE_NATIVE_ARTIFACT_ROOT");
+        if (string.IsNullOrWhiteSpace(root)) return;
+        var bytes = File.ReadAllBytes(Path.Join(root, "runtime", "runtime.wasm"));
+        using var bridge = new WasmtimeRuntimeBridge(new TraverseBundle(root, Digest(bytes)));
+        var client = new WasmtimeBridgeClient(bridge);
+
+        Assert.Equal("{\"status\":\"ready\",\"error\":null}", Text(client.Initialize("{}"u8)));
+        Assert.Equal("{\"session_id\":\"runtime-session-1\",\"status\":\"accepted\",\"error\":null}", Text(client.Submit("{\"target_id\":\"traverse-starter.pipeline\"}"u8)));
+        Assert.Equal("{\"type\":\"state_changed\",\"session_id\":\"runtime-session-1\",\"data\":{\"state\":\"running\"}}", Text(client.NextEvent()!));
+        Assert.Equal("{\"type\":\"capability_invoked\",\"session_id\":\"runtime-session-1\",\"data\":{}}", Text(client.NextEvent()!));
+        Assert.Equal("{\"type\":\"capability_result\",\"session_id\":\"runtime-session-1\",\"data\":{\"output\":{}}}", Text(client.NextEvent()!));
+        Assert.Null(client.NextEvent());
+        Assert.Equal("{\"status\":\"stopped\"}", Text(client.Shutdown()));
+    }
+
+    [Fact]
     public void VerifiesAndInstantiatesTheGovernedBridge()
     {
         var (bundle, bytes) = FixtureBundle();
