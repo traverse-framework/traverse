@@ -7,6 +7,7 @@
 #![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0015 and Spec 076.
 
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use wasmi::{
     Config, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
 };
@@ -122,10 +123,10 @@ fn export_name(operation: &str) -> &'static str {
 
 fn digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    let hex = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
     format!("sha256:{hex}")
 }
 
@@ -142,7 +143,7 @@ fn normalised_digest(bytes: &[u8]) -> Result<String, HostError> {
 
 fn require_exports(
     store: &mut Store<StoreLimits>,
-    instance: &Instance,
+    instance: Instance,
 ) -> Result<Memory, HostError> {
     let memory = instance
         .get_memory(&*store, "memory")
@@ -206,7 +207,7 @@ fn create_host(runtime: &[u8], expected_digest: &[u8], limits: Limits) -> Result
     let instance = Linker::new(&engine)
         .instantiate_and_start(&mut store, &module)
         .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
-    let memory = require_exports(&mut store, &instance)?;
+    let memory = require_exports(&mut store, instance)?;
     Ok(Host {
         store,
         instance,
@@ -234,6 +235,58 @@ fn output(result: &[u8], buffer: *mut u8, capacity: usize, length_out: *mut usiz
         std::ptr::copy_nonoverlapping(result.as_ptr(), buffer, result.len());
     }
     OK
+}
+
+fn call_export(
+    host: &mut Host,
+    operation: &str,
+    input: &[u8],
+    input_pointer: i32,
+    descriptor: i32,
+) -> Result<i32, HostError> {
+    if operation == "next_event" || operation == "shutdown" {
+        host.instance
+            .get_typed_func::<i32, i32>(&host.store, export_name(operation))
+            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+            .call(&mut host.store, descriptor)
+    } else {
+        host.instance
+            .get_typed_func::<(i32, i32, i32), i32>(&host.store, export_name(operation))
+            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+            .call(
+                &mut host.store,
+                (
+                    input_pointer,
+                    i32::try_from(input.len())
+                        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
+                    descriptor,
+                ),
+            )
+    }
+    .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))
+}
+
+fn read_descriptor(host: &Host, descriptor: i32) -> Result<(u32, usize), HostError> {
+    let mut descriptor_bytes = [0_u8; 8];
+    host.memory
+        .read(
+            &host.store,
+            usize::try_from(descriptor)
+                .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+            &mut descriptor_bytes,
+        )
+        .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
+    let pointer = u32::from_le_bytes(
+        descriptor_bytes[..4]
+            .try_into()
+            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+    );
+    let length = u32::from_le_bytes(
+        descriptor_bytes[4..]
+            .try_into()
+            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
+    ) as usize;
+    Ok((pointer, length))
 }
 
 fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, HostError> {
@@ -285,45 +338,8 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
             )
             .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
     }
-    let status = if operation == "next_event" || operation == "shutdown" {
-        host.instance
-            .get_typed_func::<i32, i32>(&host.store, export_name(operation))
-            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
-            .call(&mut host.store, descriptor)
-    } else {
-        host.instance
-            .get_typed_func::<(i32, i32, i32), i32>(&host.store, export_name(operation))
-            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
-            .call(
-                &mut host.store,
-                (
-                    input_pointer,
-                    i32::try_from(input.len())
-                        .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
-                    descriptor,
-                ),
-            )
-    }
-    .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
-    let mut descriptor_bytes = [0_u8; 8];
-    host.memory
-        .read(
-            &host.store,
-            usize::try_from(descriptor)
-                .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
-            &mut descriptor_bytes,
-        )
-        .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
-    let pointer = u32::from_le_bytes(
-        descriptor_bytes[..4]
-            .try_into()
-            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
-    );
-    let length = u32::from_le_bytes(
-        descriptor_bytes[4..]
-            .try_into()
-            .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?,
-    ) as usize;
+    let status = call_export(host, operation, input, input_pointer, descriptor)?;
+    let (pointer, length) = read_descriptor(host, descriptor)?;
     if length > host.limits.maximum_output_bytes {
         return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
     }
@@ -351,8 +367,15 @@ pub extern "C" fn traverse_swift_host_abi_version() -> u32 {
 }
 
 /// Creates one verified, bounded host and returns its opaque handle.
+///
+/// # Safety
+///
+/// `runtime` and `expected` must each be valid for reads of their stated
+/// length; `limits` must point to one readable `TraverseSwiftHostLimits`;
+/// `handle_out` must point to one writable `u64`. All four must be non-null,
+/// which this function checks before dereferencing any of them.
 #[unsafe(no_mangle)]
-pub extern "C" fn traverse_swift_host_create(
+pub unsafe extern "C" fn traverse_swift_host_create(
     runtime: *const u8,
     runtime_length: usize,
     expected: *const u8,
@@ -363,7 +386,6 @@ pub extern "C" fn traverse_swift_host_create(
     if runtime.is_null() || expected.is_null() || limits.is_null() || handle_out.is_null() {
         return INVALID_INPUT;
     }
-    // SAFETY: every pointer is checked non-null; callers supply immutable ranges of the stated lengths.
     // SAFETY: every pointer is checked non-null; callers supply immutable ranges of the stated lengths.
     let result = unsafe {
         (*limits).checked().and_then(|value| {
@@ -387,8 +409,19 @@ pub extern "C" fn traverse_swift_host_create(
 }
 
 /// Invokes a governed bridge operation using caller-owned buffers.
+///
+/// # Safety
+///
+/// `handle` must be a live value returned by [`traverse_swift_host_create`]
+/// and not yet passed to [`traverse_swift_host_destroy`]. `operation` and
+/// `input` must each be valid for reads of their stated length.
+/// `output_length_out` must point to one writable `usize`; `output_buffer`
+/// must be valid for writes of `output_capacity` bytes whenever
+/// `output_capacity` is greater than zero. Non-null pointers are checked
+/// before use, but pointer validity and the handle's provenance cannot be
+/// checked by this function and remain the caller's obligation.
 #[unsafe(no_mangle)]
-pub extern "C" fn traverse_swift_host_invoke(
+pub unsafe extern "C" fn traverse_swift_host_invoke(
     handle: u64,
     operation: *const u8,
     operation_length: usize,
@@ -464,6 +497,8 @@ pub extern "C" fn traverse_swift_host_status_message(status: i32) -> *const std:
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::{
         ABI_VERSION, BUFFER_TOO_SMALL, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits, digest,
         traverse_swift_host_abi_version, traverse_swift_host_create, traverse_swift_host_destroy,
@@ -488,17 +523,19 @@ mod tests {
         let bytes = [0_u8];
         let digest = b"sha256:00";
         let mut handle = 0_u64;
-        assert_eq!(
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let status = unsafe {
             traverse_swift_host_create(
                 bytes.as_ptr(),
                 bytes.len(),
                 digest.as_ptr(),
                 digest.len(),
-                &limits,
-                &mut handle,
-            ),
-            RESOURCE_LIMIT
-        );
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(status, RESOURCE_LIMIT);
         assert_eq!(handle, 0);
     }
 
@@ -508,22 +545,26 @@ mod tests {
         let expected_digest = digest(&runtime);
         let limits = limits();
         let mut handle = 0_u64;
-        assert_eq!(
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let create_status = unsafe {
             traverse_swift_host_create(
                 runtime.as_ptr(),
                 runtime.len(),
                 expected_digest.as_ptr(),
                 expected_digest.len(),
-                &limits,
-                &mut handle,
-            ),
-            OK
-        );
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(create_status, OK);
         let operation = b"init";
         let input = b"{}";
         let mut required = 0_usize;
         let mut too_small = [0_u8; 1];
-        assert_eq!(
+        // SAFETY: `handle` is live from the create call above; all other
+        // pointers are valid for their stated lengths.
+        let retry_status = unsafe {
             traverse_swift_host_invoke(
                 handle,
                 operation.as_ptr(),
@@ -532,12 +573,14 @@ mod tests {
                 input.len(),
                 too_small.as_mut_ptr(),
                 too_small.len(),
-                &mut required,
-            ),
-            BUFFER_TOO_SMALL
-        );
+                &raw mut required,
+            )
+        };
+        assert_eq!(retry_status, BUFFER_TOO_SMALL);
         let mut output = vec![0_u8; required];
-        assert_eq!(
+        // SAFETY: `handle` is still live; `output` is sized to the required
+        // length reported by the retry call above.
+        let invoke_status = unsafe {
             traverse_swift_host_invoke(
                 handle,
                 operation.as_ptr(),
@@ -546,10 +589,10 @@ mod tests {
                 input.len(),
                 output.as_mut_ptr(),
                 output.len(),
-                &mut required,
-            ),
-            OK
-        );
+                &raw mut required,
+            )
+        };
+        assert_eq!(invoke_status, OK);
         assert_eq!(&output[..required], br#"{"status":"ready"}"#);
         assert_eq!(traverse_swift_host_destroy(handle), OK);
     }
