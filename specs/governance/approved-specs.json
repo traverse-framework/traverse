@@ -955,6 +955,22 @@
         "docs/adr/0016-embedded-trace-api-companion-surface.md",
         "specs/517-embedded-trace-api/"
       ]
+    },
+    {
+      "id": "516-agent-artifact-execution",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/516-agent-artifact-execution/spec.md",
+      "governs": [
+        "crates/traverse-cli/",
+        "crates/traverse-runtime/",
+        "contracts/examples/",
+        "examples/",
+        "scripts/ci/",
+        "docs/adr/0011-agent-artifact-stdout-only.md",
+        "specs/516-agent-artifact-execution/"
+      ]
     }
   ]
 }
