@@ -1184,33 +1184,14 @@ fn subject_from_request(
             return derive_identity_from_jwt(&token, auth_mode, jwt_key);
         }
 
-        // Non-JWT bearer tokens are accepted as direct subject identifiers only
-        // in the local/dev auth modes. A network-facing (`bearer-required`)
-        // listener requires a signature-verified JWT and never trusts an opaque
-        // token, so it can never yield an admin identity.
-        if !is_dev_auth_mode(auth_mode) {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "unauthorized",
-                message: "a signed JWT bearer token is required".to_string(),
-            });
-        }
-
-        validate_subject_id(&token).map_err(|msg| ApiError {
+        // An opaque bearer value has no authenticated subject binding.  Dev
+        // modes may relax JWT signature verification, but must not turn a
+        // caller-controlled string into an auditable identity.
+        return Err(ApiError {
             status: 401,
             reason: "Unauthorized",
             code: "unauthorized",
-            message: msg,
-        })?;
-
-        return Ok(DerivedIdentity {
-            subject_id: token.clone(),
-            // Opaque development tokens identify a caller only. They are never
-            // credentials for elevated access, regardless of their literal
-            // value or whether `dev-any` permits the caller's network address.
-            is_admin: false,
-            scopes: Vec::new(),
+            message: "a signed JWT bearer token is required".to_string(),
         });
     }
 
@@ -11811,18 +11792,17 @@ mod tests {
     }
 
     #[test]
-    fn opaque_dev_any_admin_literal_never_grants_admin() {
+    fn opaque_dev_any_token_cannot_impersonate_a_subject() {
         let mut headers = HashMap::new();
         headers.insert(
             "authorization".to_string(),
             format!("Bearer {SYSTEM_ADMIN_SUBJECT}"),
         );
 
-        let identity = subject_from_request(&headers, "dev-any", false, false, None)
-            .expect("opaque development subject must be accepted");
-
-        assert_eq!(identity.subject_id, SYSTEM_ADMIN_SUBJECT);
-        assert!(!identity.is_admin);
+        let err = subject_from_request(&headers, "dev-any", false, false, None)
+            .expect_err("opaque development token must not become a subject");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "unauthorized");
     }
 
     #[test]
