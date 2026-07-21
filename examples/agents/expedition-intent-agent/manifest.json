@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/interpret-expedition-intent-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "expected_digest": "fnv1a64:b31e3df407cd8e3c",
     "abi_version": "1.0.0"
   },
   "constraints": {

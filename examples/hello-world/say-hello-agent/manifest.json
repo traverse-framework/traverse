@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/say-hello-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "expected_digest": "fnv1a64:f23957223e5d7166",
     "abi_version": "1.0.0"
   },
   "constraints": {

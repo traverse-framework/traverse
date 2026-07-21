@@ -10,7 +10,7 @@
     {
       "component_id": "meeting-notes.process-component",
       "version": "1.0.0",
-      "digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+      "digest": "sha256:bddc4423a5ae611b5606886d5b0b9c87bbfb39fff2826724f6c34850d88020f6",
       "manifest_path": "components/process/component.manifest.json"
     }
   ],
