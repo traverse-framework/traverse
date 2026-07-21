@@ -585,11 +585,15 @@ mod tests {
                 .expect("target registration should succeed");
         }
 
-        let targeted =
-            registry.discover_by_id(RegistryScope::Public, CAP_ID, &crate::DiscoveryQuery::default());
+        let targeted = registry.discover_by_id(
+            RegistryScope::Public,
+            CAP_ID,
+            &crate::DiscoveryQuery::default(),
+        );
         assert_eq!(targeted.len(), 3);
 
-        let full_scan = registry.discover(LookupScope::PublicOnly, &crate::DiscoveryQuery::default());
+        let full_scan =
+            registry.discover(LookupScope::PublicOnly, &crate::DiscoveryQuery::default());
         assert_eq!(full_scan.len(), 253);
     }
 }

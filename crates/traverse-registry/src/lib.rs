@@ -609,9 +609,7 @@ impl CapabilityRegistry {
         let mut results: Vec<DiscoveryIndexEntry> = self
             .index
             .range(lower..)
-            .take_while(|((entry_scope, entry_id, _), _)| {
-                *entry_scope == scope && entry_id == id
-            })
+            .take_while(|((entry_scope, entry_id, _), _)| *entry_scope == scope && entry_id == id)
             .map(|(_, entry)| entry)
             .filter(|entry| matches_query(entry, query))
             .cloned()
@@ -1508,17 +1506,20 @@ mod tests {
             ))
             .expect("private target registration should succeed");
 
-        let targeted = registry.discover_by_id(
-            RegistryScope::Public,
-            target_id,
-            &DiscoveryQuery::default(),
-        );
-        let mut targeted_versions: Vec<&str> =
-            targeted.iter().map(|entry| entry.version.as_str()).collect();
+        let targeted =
+            registry.discover_by_id(RegistryScope::Public, target_id, &DiscoveryQuery::default());
+        let mut targeted_versions: Vec<&str> = targeted
+            .iter()
+            .map(|entry| entry.version.as_str())
+            .collect();
         targeted_versions.sort_unstable();
         assert_eq!(targeted_versions, ["1.0.0", "1.1.0", "2.0.0"]);
         assert!(targeted.iter().all(|entry| entry.id == target_id));
-        assert!(targeted.iter().all(|entry| entry.scope == RegistryScope::Public));
+        assert!(
+            targeted
+                .iter()
+                .all(|entry| entry.scope == RegistryScope::Public)
+        );
 
         // Equivalent to the old full-scan approach: discover everything and
         // filter by id/scope. The targeted lookup must return the same set.
@@ -1540,7 +1541,11 @@ mod tests {
         // Unknown id returns empty rather than falling through to neighbors.
         assert!(
             registry
-                .discover_by_id(RegistryScope::Public, "test.registry.nonexistent", &DiscoveryQuery::default())
+                .discover_by_id(
+                    RegistryScope::Public,
+                    "test.registry.nonexistent",
+                    &DiscoveryQuery::default()
+                )
                 .is_empty()
         );
     }
