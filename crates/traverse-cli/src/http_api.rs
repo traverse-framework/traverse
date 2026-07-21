@@ -1184,30 +1184,14 @@ fn subject_from_request(
             return derive_identity_from_jwt(&token, auth_mode, jwt_key);
         }
 
-        // Non-JWT bearer tokens are accepted as direct subject identifiers only
-        // in the local/dev auth modes. A network-facing (`bearer-required`)
-        // listener requires a signature-verified JWT and never trusts an opaque
-        // token, so it can never yield an admin identity.
-        if !is_dev_auth_mode(auth_mode) {
-            return Err(ApiError {
-                status: 401,
-                reason: "Unauthorized",
-                code: "unauthorized",
-                message: "a signed JWT bearer token is required".to_string(),
-            });
-        }
-
-        validate_subject_id(&token).map_err(|msg| ApiError {
+        // An opaque bearer value has no authenticated subject binding.  Dev
+        // modes may relax JWT signature verification, but must not turn a
+        // caller-controlled string into an auditable identity.
+        return Err(ApiError {
             status: 401,
             reason: "Unauthorized",
             code: "unauthorized",
-            message: msg,
-        })?;
-
-        return Ok(DerivedIdentity {
-            subject_id: token.clone(),
-            is_admin: token == SYSTEM_ADMIN_SUBJECT,
-            scopes: Vec::new(),
+            message: "a signed JWT bearer token is required".to_string(),
         });
     }
 
@@ -8463,7 +8447,11 @@ mod tests {
 
     #[test]
     fn capabilities_endpoint_rejects_unauthorized_workspace_access() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let metadata = WorkspaceMetadataV1 {
             schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
             workspace_id: "ws-owned".to_string(),
@@ -8479,7 +8467,7 @@ mod tests {
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 "ws-owned",
             ),
-            "bob",
+            &make_jwt("bob", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -8492,7 +8480,11 @@ mod tests {
 
     #[test]
     fn capabilities_endpoint_allows_shared_workspace_members() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let metadata = WorkspaceMetadataV1 {
             schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
             workspace_id: "ws-shared".to_string(),
@@ -8508,7 +8500,7 @@ mod tests {
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 "ws-shared",
             ),
-            "bob",
+            &make_jwt("bob", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -8826,13 +8818,17 @@ mod tests {
 
     #[test]
     fn system_workspace_requires_privileged_claim() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let req = with_bearer(
             with_workspace_query(
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 SYSTEM_WORKSPACE_ID,
             ),
-            "alice",
+            &make_jwt("alice", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -11804,7 +11800,21 @@ mod tests {
         let err = subject_from_request(&headers, "dev-loopback", false, true, None)
             .expect_err("oversized opaque subject must be rejected");
         assert_eq!(err.status, 401);
-        assert!(err.message.contains("256"));
+        assert_eq!(err.code, "unauthorized");
+    }
+
+    #[test]
+    fn opaque_dev_any_token_cannot_impersonate_a_subject() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            format!("Bearer {SYSTEM_ADMIN_SUBJECT}"),
+        );
+
+        let err = subject_from_request(&headers, "dev-any", false, false, None)
+            .expect_err("opaque development token must not become a subject");
+        assert_eq!(err.status, 401);
+        assert_eq!(err.code, "unauthorized");
     }
 
     #[test]
