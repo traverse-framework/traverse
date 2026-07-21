@@ -59,6 +59,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
       - name: Run expedition artifact smoke path
         run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/expedition_artifact_smoke.sh
 
@@ -76,13 +83,6 @@ jobs:
 
       - name: Run repository checks
         run: bash scripts/ci/repository_checks.sh
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.94.0
-          components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
