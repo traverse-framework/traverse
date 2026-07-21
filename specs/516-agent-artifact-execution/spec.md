@@ -37,19 +37,22 @@ request through the CLI and verify a completed result produced by the package.
 
 ### User Story 2 - Preserve declared isolation (Priority: P1)
 
-As an operator, I can trust a package declaring `host_api_access: none` not to
-receive undeclared host imports.
+As an operator, I can trust a package declaring `host_api_access: stdout-only`
+to receive only the narrowly declared output capability and no other host
+access.
 
 **Independent Test**: Validate and execute the rebuilt doc-approval package;
-its artifact has no WASI host imports and its constraint declaration remains
-unchanged.
+its artifact imports only `wasi_snapshot_preview1::fd_write` for stdout and
+its constraint declaration explicitly allows that limited capability.
 
 **Acceptance Scenarios**:
 
-1. **Given** a package declaring no host access, **When** its artifact imports
-   a host capability, **Then** validation rejects it before execution.
-2. **Given** a package declaring no host access and importing none, **When** it
-   is executed, **Then** it completes without host access.
+1. **Given** a package declaring `stdout-only`, **When** its artifact imports
+   any host capability other than `wasi_snapshot_preview1::fd_write`, **Then**
+   validation rejects it before execution.
+2. **Given** a package declaring `stdout-only` and importing only `fd_write`,
+   **When** it is executed, **Then** it completes with no filesystem,
+   environment, network, clock, or other host access.
 
 ### User Story 3 - Adopt corrected artifacts deliberately (Priority: P2)
 
@@ -77,10 +80,12 @@ version increment with the prior package version still identifiable.
   artifact execution boundary defined by Spec 064.
 - **FR-002**: Shipped agent packages MUST contain real executable artifacts
   that write exactly one valid JSON result for their canonical request.
-- **FR-003**: A package declaring `host_api_access: none` MUST contain no WASI
-  or other host imports.
-- **FR-004**: The rebuilt `doc-approval.analyze` package MUST preserve its
-  no-host-access declaration and execute without host imports.
+- **FR-003**: A package declaring `host_api_access: stdout-only` MAY import
+  only `wasi_snapshot_preview1::fd_write`, solely to write its one JSON result
+  to stdout. It MUST NOT receive filesystem, environment, network, clock, or
+  any other WASI or host capability.
+- **FR-004**: The rebuilt `doc-approval.analyze` package MUST declare
+  `stdout-only` and execute using only that constrained output import.
 - **FR-005**: Every replacement shipped artifact/package MUST receive a minor
   version increment; prior versions remain distinguishable migration history.
 - **FR-006**: CI MUST execute every shipped agent package through `agent
@@ -103,8 +108,8 @@ version increment with the prior package version still identifiable.
 
 - **SC-001**: 100% of shipped agent packages execute successfully through the
   production CLI path in CI.
-- **SC-002**: 100% of packages declaring no host access pass an import-free ABI
-  validation before execution.
+- **SC-002**: 100% of packages declaring `stdout-only` pass ABI validation
+  allowing only `wasi_snapshot_preview1::fd_write` before execution.
 - **SC-003**: Every corrected package metadata record has a minor version
   increment and a canonical execution fixture.
 - **SC-004**: No capability-specific demonstration executor is reachable from
@@ -121,6 +126,7 @@ version increment with the prior package version still identifiable.
 ## Out of Scope
 
 - Adding a demo-only execution mode.
-- Granting new WASI or host capabilities to packages that declare none.
+- Granting filesystem, environment, network, clock, or other WASI/host
+  capabilities to shipped packages.
 - Changing capability contract behavior or business rules.
 - Remote placement or dynamic native plugin loading.
