@@ -53,6 +53,13 @@ In the current supported path, the browser adapter is responsible for:
 
 It should not invent new runtime states, custom message formats, or host-only execution semantics.
 
+## Request Limits
+
+The local HTTP adapter accepts request headers up to 64 KiB and request bodies
+up to 4 MiB. A request declaring a larger body is rejected before the adapter
+allocates body storage, with a machine-readable `413 payload too large`
+response (`request_too_large`).
+
 ## When To Use It
 
 Use the browser adapter when:
