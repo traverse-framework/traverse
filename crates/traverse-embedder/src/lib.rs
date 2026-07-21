@@ -1744,6 +1744,10 @@ mod tests {
         let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
             .with_target_output("demo.success", json!({ "secret": secret_output }))
             .with_target_error("demo.failure", "execution_failed", secret_error);
+        assert_eq!(
+            embedder.embedded_trace_api_version(),
+            EMBEDDED_TRACE_API_VERSION
+        );
 
         let accepted = embedder.submit("demo.success", &json!({ "secret": secret_input }));
         assert_eq!(accepted.status, SubmitStatus::Accepted);
@@ -1787,6 +1791,12 @@ mod tests {
         let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
             .with_target_output("demo.success", json!({ "value": "safe" }));
         let _ = embedder.submit("demo.success", &json!({}));
+        let _ = embedder.submit("demo.success", &json!({}));
+        let cursor = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)
+            .map_err(|error| error.message.to_string())?
+            .next_cursor
+            .ok_or("two retained traces should produce a cursor")?;
 
         let version_error = embedder
             .trace_list("2.0.0", 10, None)
@@ -1801,6 +1811,18 @@ mod tests {
             .err()
             .ok_or("a malformed cursor should fail")?;
         assert_eq!(cursor_error.code, EmbeddedTraceApiErrorCode::InvalidCursor);
+
+        let mut other_session = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
+            .with_target_output("demo.success", json!({ "value": "safe" }));
+        let _ = other_session.submit("demo.success", &json!({}));
+        let foreign_cursor_error = other_session
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 10, Some(&cursor))
+            .err()
+            .ok_or("a cursor from another session should fail")?;
+        assert_eq!(
+            foreign_cursor_error.code,
+            EmbeddedTraceApiErrorCode::InvalidCursor
+        );
 
         let _ = embedder.shutdown();
         let stopped_error = embedder
@@ -1847,5 +1869,88 @@ mod tests {
             .ok_or("the oldest record should have been evicted")?;
         assert_eq!(evicted.code, EmbeddedTraceApiErrorCode::TraceNotFound);
         Ok(())
+    }
+
+    #[test]
+    fn embedded_trace_error_codes_render_stably() {
+        let codes = [
+            (EmbeddedTraceApiErrorCode::InvalidCursor, "invalid_cursor"),
+            (EmbeddedTraceApiErrorCode::TraceNotFound, "trace_not_found"),
+            (
+                EmbeddedTraceApiErrorCode::TraceApiUnavailable,
+                "trace_api_unavailable",
+            ),
+            (
+                EmbeddedTraceApiErrorCode::IncompatibleVersion,
+                "incompatible_version",
+            ),
+        ];
+        for (code, expected) in codes {
+            assert_eq!(code.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn trace_projection_codes_cover_public_runtime_enums() {
+        let states = [
+            (traverse_runtime::RuntimeState::Idle, "idle"),
+            (
+                traverse_runtime::RuntimeState::LoadingRegistry,
+                "loading_registry",
+            ),
+            (traverse_runtime::RuntimeState::Ready, "ready"),
+            (traverse_runtime::RuntimeState::Discovering, "discovering"),
+            (
+                traverse_runtime::RuntimeState::EvaluatingConstraints,
+                "evaluating_constraints",
+            ),
+            (traverse_runtime::RuntimeState::Selecting, "selecting"),
+            (traverse_runtime::RuntimeState::Executing, "executing"),
+            (
+                traverse_runtime::RuntimeState::EmittingEvents,
+                "emitting_events",
+            ),
+            (traverse_runtime::RuntimeState::Completed, "completed"),
+            (traverse_runtime::RuntimeState::Error, "error"),
+        ];
+        for (state, expected) in states {
+            assert_eq!(runtime_state_code(state), expected);
+        }
+
+        let placements = [
+            (PlacementTarget::Local, "local"),
+            (PlacementTarget::Browser, "browser"),
+            (PlacementTarget::Edge, "edge"),
+            (PlacementTarget::Cloud, "cloud"),
+            (PlacementTarget::Worker, "worker"),
+            (PlacementTarget::Device, "device"),
+        ];
+        for (target, expected) in placements {
+            assert_eq!(placement_target_code(target), expected);
+        }
+
+        let failures = [
+            (
+                ExecutionFailureReason::ContractInputInvalid,
+                "contract_input_invalid",
+            ),
+            (ExecutionFailureReason::ArtifactMissing, "artifact_missing"),
+            (
+                ExecutionFailureReason::ArtifactNotRunnable,
+                "artifact_not_runnable",
+            ),
+            (
+                ExecutionFailureReason::PlacementUnsupported,
+                "placement_unsupported",
+            ),
+            (ExecutionFailureReason::ExecutionFailed, "execution_failed"),
+            (
+                ExecutionFailureReason::ContractOutputInvalid,
+                "contract_output_invalid",
+            ),
+        ];
+        for (reason, expected) in failures {
+            assert_eq!(execution_failure_code(reason), expected);
+        }
     }
 }
