@@ -872,3 +872,56 @@ with the prior candidate set and a large unrelated-entry case.
 The approval record is internally consistent. The targeted lookup work may
 proceed under Spec 037, provided it supplies the stated compatibility,
 determinism, and regression evidence.
+
+## Decision 32: Approve the Companion Public Embedded Trace API
+
+- **Date**: 2026-07-21
+- **Status**: Accepted
+- **Governing spec**: `517-embedded-trace-api`
+- **Related pull request**: `#797`
+- **Related Project tickets**: `embedded-trace-api-decision`, `embedded-trace-api`
+
+### Context
+
+Trace Explorer requires a production embedded path for browsing the current
+local runtime session, but the existing public embedder API has no trace
+operations. Exposing `RuntimeTrace` directly would disclose unsafe request and
+result data, and adding required operations to the existing public Rust
+embedder trait would break external implementations. The older `TraceStore`
+and MCP tools are not the source used by the current embedded runtime path and
+do not form a portable consumer contract.
+
+### Decision
+
+Approve Spec 517 and ADR-0016 as drafted. Traverse publishes the additive,
+versioned `embedded-trace-api/1.0.0` companion surface. It provides only
+public `trace.list` and `trace.get` operations for the owning application and
+the current embedded session. Results are deterministic, cursor-paged, and
+bounded by documented process-local retention.
+
+The public projection includes only safe runtime-owned diagnostic evidence.
+Raw inputs, outputs, caller and correlation metadata, private trace entries
+and hashes, raw telemetry attributes, and unfiltered error details are
+prohibited. The API clears its retained history at shutdown or
+reinitialization, makes no HTTP or sidecar fallback, and does not promise
+durable or cross-restart history. A separate extension capability preserves
+all existing `embedder-api/1.0.0` consumers and external Rust implementers.
+
+### Alternatives Considered
+
+- Extend the baseline embedder trait directly — rejected because required
+  trait methods would be a breaking public API change.
+- Expose `RuntimeTrace` or `TraceStore` directly — rejected because they are
+  not a portable safe consumer contract.
+- Reuse the HTTP trace endpoint — rejected because it preserves the sidecar
+  exception that this decision removes.
+- Require durable trace storage first — rejected because the current
+  no-sidecar diagnostic use case is independently valuable.
+
+### Outcome
+
+Spec 517 is immutable and governs the runtime, embedder, Web embedder package,
+ADR-0016, and its own artifacts. The `embedded-trace-api` implementation ticket
+may move from Blocked to Ready. Its first delivery must prove that a
+Trace Explorer-equivalent Web consumer can browse local traces without HTTP
+and that baseline embedder conformance remains compatible.
