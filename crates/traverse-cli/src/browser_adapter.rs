@@ -16,6 +16,8 @@ const SETUP_ERROR_KIND: &str = "local_browser_subscription_setup_error";
 const STREAM_ERROR_KIND: &str = "local_browser_subscription_stream_error";
 const LISTENING_PREFIX: &str = "local browser adapter listening on ";
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+const REQUEST_BODY_TOO_LARGE: &str = "browser adapter request body too large";
 // This adapter serves one connection at a time by design (spec
 // 019-local-browser-adapter-transport, local dev tool). Bounded socket
 // timeouts still apply so a slow or idle caller cannot hang the process
@@ -94,7 +96,22 @@ impl LocalBrowserAdapter {
 
     fn handle_connection(&mut self, stream: &mut TcpStream) -> Result<(), String> {
         let deadline = Instant::now() + REQUEST_DEADLINE;
-        let request = read_http_request(stream, deadline)?;
+        let request = match read_http_request(stream, deadline) {
+            Ok(request) => request,
+            Err(error) if error == REQUEST_BODY_TOO_LARGE => {
+                return write_plain_response(
+                    stream,
+                    413,
+                    "payload too large",
+                    &json_error(
+                        SETUP_ERROR_KIND,
+                        "request_too_large",
+                        "browser adapter request body exceeds the 4 MiB limit",
+                    ),
+                );
+            }
+            Err(error) => return Err(error),
+        };
         match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/local/browser-subscriptions") => {
                 self.handle_create_subscription(stream, &request)
@@ -327,12 +344,15 @@ fn read_http_request(stream: &mut TcpStream, deadline: Instant) -> Result<HttpRe
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
+    if content_length > MAX_REQUEST_BODY_BYTES {
+        return Err(REQUEST_BODY_TOO_LARGE.to_string());
+    }
     let mut body = buffer[header_end + 4..].to_vec();
     while body.len() < content_length {
         if Instant::now() >= deadline {
             return Err("browser adapter request timed out reading body".to_string());
         }
-        let mut chunk = vec![0_u8; content_length - body.len()];
+        let mut chunk = [0_u8; 1024];
         let read = stream.read(&mut chunk).map_err(|error| {
             if is_timeout_error(&error) {
                 "browser adapter request timed out reading body".to_string()
@@ -797,6 +817,24 @@ mod tests {
         // any such error (it doesn't distinguish error kinds like http_api.rs
         // does).
         assert!(String::from_utf8_lossy(&response).contains("500"));
+    }
+
+    #[test]
+    fn oversized_content_length_is_rejected_before_body_allocation() {
+        let address = spawn_test_adapter();
+        let mut client = TcpStream::connect(address).expect("client connection must connect");
+        let request = format!(
+            "POST /local/browser-subscriptions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            MAX_REQUEST_BODY_BYTES + 1
+        );
+        client
+            .write_all(request.as_bytes())
+            .expect("oversized request headers must write");
+        let response = read_all(&mut client);
+        let response = String::from_utf8_lossy(&response);
+
+        assert!(response.contains("413 payload too large"));
+        assert!(response.contains("request_too_large"));
     }
 
     #[test]
