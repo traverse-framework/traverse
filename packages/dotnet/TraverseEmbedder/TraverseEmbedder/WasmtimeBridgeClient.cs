@@ -10,6 +10,7 @@ public sealed class WasmtimeBridgeClient
     private const int DescriptorBytes = 8;
 
     private readonly object synchronization = new();
+    private readonly WasmtimeRuntimeBridge bridge;
     private readonly Instance instance;
     private readonly Memory memory;
     private readonly Func<int, int> allocate;
@@ -21,6 +22,7 @@ public sealed class WasmtimeBridgeClient
         int maximumOutputBytes = DefaultMaximumOutputBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
+        this.bridge = bridge;
         instance = bridge.Instance;
         memory = instance.GetMemory("memory")
             ?? throw new TraverseBridgeException(-3, "bridge_invalid_descriptor");
@@ -143,7 +145,7 @@ public sealed class WasmtimeBridgeClient
 
     private T Serialized<T>(Func<T> operation)
     {
-        lock (synchronization) return operation();
+        lock (synchronization) return bridge.Execute(operation);
     }
 }
 
