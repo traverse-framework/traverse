@@ -827,3 +827,48 @@ work) and `docs/adr/0012-native-runtime-distribution-channel.md` are now
 governed by spec 075 in `specs/governance/approved-specs.json`. #756, #757,
 and #758 may proceed and declare `075-native-runtime-distribution-contract`
 as their governing spec.
+
+## Decision 31: Reconcile Spec 037's Approval Record
+
+- **Date**: 2026-07-21
+- **Status**: Accepted
+- **Governing spec**: `037-semver-range-resolution`
+- **Related pull requests**: `#358`, `#794`
+
+### Context
+
+PR #355 introduced Spec 037 with a Draft header. PR #358 formally registered
+the same immutable `037-semver-range-resolution` specification as approved on
+2026-04-19. The registry is the repository's canonical approval record, but
+the source header was never reconciled. That stale header incorrectly made the
+targeted registry-lookup performance work appear to be blocked on a new
+architecture decision.
+
+### Decision
+
+Record Spec 037 as approved as of its original 2026-04-19 registry approval.
+This is a metadata correction only: Spec 037 remains version `1.0.0` and its
+functional requirements are unchanged. In particular, NFR-003 continues to
+require range evaluation in `O(n log n)` time or better for the registered
+versions of the requested capability id.
+
+The targeted lookup implementation must preserve existing exact-version and
+range-resolution compatibility, produce deterministic results for identical
+registry state and requests, and validate that unrelated capability entries
+cannot affect lookup results. Its regression evidence must cover equivalence
+with the prior candidate set and a large unrelated-entry case.
+
+### Alternatives Considered
+
+- Create a successor specification — rejected because no requirement or
+  contract changed; a successor would falsely imply a new API decision.
+- Treat the registry entry as erroneous and re-open approval — rejected
+  because PR #358 explicitly registered Spec 037 as approved and immutable.
+- Leave the mismatch in place — rejected because it creates avoidable tracker
+  and implementation blockage while obscuring the actual approved contract.
+
+### Outcome
+
+The approval record is internally consistent. The targeted lookup work may
+proceed under Spec 037, provided it supplies the stated compatibility,
+determinism, and regression evidence.

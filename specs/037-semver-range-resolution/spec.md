@@ -2,7 +2,7 @@
 
 **Feature Branch**: `037-semver-range-resolution`
 **Created**: 2026-04-19
-**Status**: Draft
+**Status**: Approved (2026-04-19 — registered by PR #358; status header reconciled 2026-07-21 — see decision-log.md Decision 31)
 **Input**: Version resolution model for Traverse capability lookup, covering semver range syntax, highest-satisfying-version selection, contract compatibility gating, exact-version pinning, and workspace-scoped resolution fallback. Unblocks GitHub issue #311.
 
 ## Purpose
