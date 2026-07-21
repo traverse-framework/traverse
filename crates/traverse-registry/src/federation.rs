@@ -2398,7 +2398,7 @@ mod tests {
         assert_eq!(private_snapshot.provenance.origin_peer_id, "peer-governed");
         assert_eq!(
             private_snapshot.provenance.approval_chain[0].spec_ref,
-            "026-federation-registry-routing"
+            "078-federation-registry-routing"
         );
         assert!(federation.governance_decisions().iter().any(|decision| {
             decision.decision_kind == GovernanceDecisionKind::SnapshotAcceptance
@@ -2648,7 +2648,7 @@ mod tests {
                 peer_id: "peer-local".to_string(),
                 trust_model: "local-only".to_string(),
                 allowed_scopes: Vec::new(),
-                approved_spec_refs: vec!["026-federation-registry-routing".to_string()],
+                approved_spec_refs: vec!["078-federation-registry-routing".to_string()],
                 approved_at: "2026-04-09T19:30:00Z".to_string(),
                 revoked_at: None,
             }),
@@ -2683,7 +2683,7 @@ mod tests {
             peer_id: peer_id.to_string(),
             trust_model: "shared-api-token".to_string(),
             allowed_scopes: scopes,
-            approved_spec_refs: vec!["026-federation-registry-routing".to_string()],
+            approved_spec_refs: vec!["078-federation-registry-routing".to_string()],
             approved_at: "2026-04-09T19:30:00Z".to_string(),
             revoked_at: None,
         }
@@ -2771,7 +2771,7 @@ mod tests {
                 source: traverse_contracts::ProvenanceSource::Greenfield,
                 author: "enricopiovesan".to_string(),
                 created_at: "2026-04-09T19:00:00Z".to_string(),
-                spec_ref: Some("026-federation-registry-routing".to_string()),
+                spec_ref: Some("078-federation-registry-routing".to_string()),
                 adr_refs: vec![],
                 exception_refs: vec![],
             },

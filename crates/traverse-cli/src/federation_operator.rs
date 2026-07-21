@@ -393,7 +393,7 @@ mod tests {
     "peer_id": "peer-a",
     "trust_model": "allowlist",
     "allowed_scopes": ["Public"],
-    "approved_spec_refs": ["026-federation-registry-routing"],
+    "approved_spec_refs": ["078-federation-registry-routing"],
     "approved_at": "2026-04-10T00:00:00Z",
     "revoked_at": null
   }},
@@ -492,7 +492,7 @@ mod tests {
                 RegistryScopeManifest::Public,
                 RegistryScopeManifest::Private,
             ],
-            approved_spec_refs: vec!["026-federation-registry-routing".to_string()],
+            approved_spec_refs: vec!["078-federation-registry-routing".to_string()],
             approved_at: "2026-04-10T00:00:00Z".to_string(),
             revoked_at: None,
         }
