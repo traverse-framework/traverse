@@ -2,7 +2,7 @@
 
 **Feature Branch**: `517-embedded-trace-api`
 **Created**: 2026-07-21
-**Status**: Draft
+**Status**: Approved (2026-07-21 — see decision-log.md Decision 32 and ADR-0016)
 **Input**: Public, portable trace browsing for a local embedded Traverse session
 without an HTTP sidecar, raw payload exposure, or a durable-history requirement.
 

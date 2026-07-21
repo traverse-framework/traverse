@@ -1,6 +1,6 @@
 # ADR-0016: Add a Companion Public Embedded Trace Surface
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-21
 - Governing spec: Draft `517-embedded-trace-api`
 - Owner: Traverse maintainers

@@ -941,6 +941,20 @@
         "README.md",
         "specs/190-readme-rewrite/"
       ]
+    },
+    {
+      "id": "517-embedded-trace-api",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/517-embedded-trace-api/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-embedder/",
+        "packages/web/TraverseEmbedder/",
+        "docs/adr/0016-embedded-trace-api-companion-surface.md",
+        "specs/517-embedded-trace-api/"
+      ]
     }
   ]
 }
