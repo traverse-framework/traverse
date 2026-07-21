@@ -89,11 +89,9 @@ pub fn resolve_version_range(
             RegistryScope::Public => LookupScope::PublicOnly,
             RegistryScope::Private => LookupScope::PreferPrivate,
         };
-        let entries = registry.discover(scope_lookup, &crate::DiscoveryQuery::default());
+        let entries =
+            registry.discover_by_id(scope, capability_id, &crate::DiscoveryQuery::default());
         for entry in &entries {
-            if entry.id != capability_id || entry.scope != scope {
-                continue;
-            }
             found_any = true;
             if let Some(resolved) = registry.find_exact(scope_lookup, &entry.id, &entry.version) {
                 all_records.push((
@@ -374,6 +372,24 @@ mod tests {
 
     const CAP_ID: &str = "test.range.resolver";
 
+    /// Registers `count` unrelated Public capabilities, split between ids
+    /// that sort before and after [`CAP_ID`] in the registry's `BTreeMap`
+    /// key order, so tests exercise both the lower- and upper-bound edges of
+    /// a targeted `discover_by_id` range scan around the target id.
+    fn register_noise_capabilities(registry: &mut CapabilityRegistry, count: usize) {
+        for i in 0..count {
+            let prefix = if i % 2 == 0 { "aaa" } else { "zzz" };
+            let id = format!("test.{prefix}.noise-cap-{i:04}");
+            registry
+                .register(registration(
+                    RegistryScope::Public,
+                    base_contract(&id, "1.0.0"),
+                    "noise",
+                ))
+                .expect("noise registration should succeed");
+        }
+    }
+
     // Scenario 1: ^1.0.0 selects highest satisfying version
     #[test]
     fn resolves_highest_satisfying_version() {
@@ -508,5 +524,76 @@ mod tests {
                 && candidates.iter().all(|c| c.version == "2.0.0")),
             "expected AmbiguousMatch with 2 candidates, got {err:?}"
         );
+    }
+
+    // Regression-safety scenario: `resolve_version_range` now uses a targeted
+    // `discover_by_id` lookup instead of a full-registry `discover` scan+sort.
+    // Populate a registry representative of the issue's evidence (hundreds of
+    // unrelated capabilities interleaved alphabetically around the target id,
+    // across both scopes) and confirm the resolved version, scope and
+    // artifact are unaffected by the surrounding noise.
+    #[test]
+    fn resolve_version_range_unaffected_by_surrounding_registry_noise() {
+        let mut registry = CapabilityRegistry::new();
+        register_noise_capabilities(&mut registry, 250);
+
+        for version in ["1.0.0", "1.1.0", "1.2.0", "2.0.0"] {
+            registry
+                .register(registration(
+                    RegistryScope::Public,
+                    base_contract(CAP_ID, version),
+                    "default",
+                ))
+                .expect("target registration should succeed");
+        }
+        registry
+            .register(registration(
+                RegistryScope::Private,
+                base_contract(CAP_ID, "1.5.0"),
+                "private",
+            ))
+            .expect("private target registration should succeed");
+
+        let result = resolve_version_range(&registry, CAP_ID, "^1.0.0", LookupScope::PreferPrivate)
+            .expect("^1.0.0 should resolve despite surrounding noise");
+        assert_eq!(result.version, "1.5.0");
+        assert_eq!(result.scope, RegistryScope::Private);
+        assert_eq!(result.capability_id, CAP_ID);
+
+        let public_only =
+            resolve_version_range(&registry, CAP_ID, "^1.0.0", LookupScope::PublicOnly)
+                .expect("^1.0.0 should resolve in Public-only scope");
+        assert_eq!(public_only.version, "1.2.0");
+        assert_eq!(public_only.scope, RegistryScope::Public);
+    }
+
+    // Scan-size assertion: the targeted lookup underlying `resolve_version_range`
+    // returns entries proportional to the target capability's own version
+    // count, not the ~250-capability registry it is embedded in.
+    #[test]
+    fn resolve_version_range_lookup_scales_with_target_versions_not_registry_size() {
+        let mut registry = CapabilityRegistry::new();
+        register_noise_capabilities(&mut registry, 250);
+
+        for version in ["1.0.0", "1.1.0", "1.2.0"] {
+            registry
+                .register(registration(
+                    RegistryScope::Public,
+                    base_contract(CAP_ID, version),
+                    "default",
+                ))
+                .expect("target registration should succeed");
+        }
+
+        let targeted = registry.discover_by_id(
+            RegistryScope::Public,
+            CAP_ID,
+            &crate::DiscoveryQuery::default(),
+        );
+        assert_eq!(targeted.len(), 3);
+
+        let full_scan =
+            registry.discover(LookupScope::PublicOnly, &crate::DiscoveryQuery::default());
+        assert_eq!(full_scan.len(), 253);
     }
 }

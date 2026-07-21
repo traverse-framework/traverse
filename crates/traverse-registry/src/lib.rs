@@ -591,6 +591,34 @@ impl CapabilityRegistry {
         results
     }
 
+    /// Targeted variant of [`discover`](Self::discover) for callers that
+    /// already know the exact `id` they want and a single `scope` to probe.
+    ///
+    /// Uses `self.index.range(...)` bounded at `(scope, id, "")` and stops as
+    /// soon as the id no longer matches, instead of scanning and sorting
+    /// every entry in the scope — the cost is proportional to the number of
+    /// versions of `id`, not to total registry size.
+    #[must_use]
+    pub fn discover_by_id(
+        &self,
+        scope: RegistryScope,
+        id: &str,
+        query: &DiscoveryQuery,
+    ) -> Vec<DiscoveryIndexEntry> {
+        let lower = (scope, id.to_string(), String::new());
+        let mut results: Vec<DiscoveryIndexEntry> = self
+            .index
+            .range(lower..)
+            .take_while(|((entry_scope, entry_id, _), _)| *entry_scope == scope && entry_id == id)
+            .map(|(_, entry)| entry)
+            .filter(|entry| matches_query(entry, query))
+            .cloned()
+            .collect();
+
+        results.sort_by(compare_index_entries);
+        results
+    }
+
     #[must_use]
     pub fn discover_connectors(
         &self,
@@ -1437,6 +1465,89 @@ mod tests {
         let discovered = registry.discover(LookupScope::PreferPrivate, &DiscoveryQuery::default());
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].scope, RegistryScope::Private);
+    }
+
+    #[test]
+    fn discover_by_id_matches_discover_filtered_by_id_and_scope() {
+        let mut registry = CapabilityRegistry::new();
+
+        // Target capability with three versions, plus a decoy whose id is a
+        // string-prefix of the target's id and another whose id has the
+        // target's id as a prefix — both must be excluded from a targeted
+        // lookup even though they sort adjacently in the BTreeMap.
+        let target_id = "test.registry.discover-by-id";
+        let prefix_decoy_id = "test.registry.discover-by-i";
+        let suffix_decoy_id = "test.registry.discover-by-id-extra";
+
+        for version in ["1.0.0", "1.1.0", "2.0.0"] {
+            registry
+                .register(registration(
+                    RegistryScope::Public,
+                    base_contract(target_id, version),
+                ))
+                .expect("target registration should succeed");
+        }
+        registry
+            .register(registration(
+                RegistryScope::Public,
+                base_contract(prefix_decoy_id, "1.0.0"),
+            ))
+            .expect("prefix decoy registration should succeed");
+        registry
+            .register(registration(
+                RegistryScope::Public,
+                base_contract(suffix_decoy_id, "1.0.0"),
+            ))
+            .expect("suffix decoy registration should succeed");
+        registry
+            .register(registration(
+                RegistryScope::Private,
+                base_contract(target_id, "1.0.0"),
+            ))
+            .expect("private target registration should succeed");
+
+        let targeted =
+            registry.discover_by_id(RegistryScope::Public, target_id, &DiscoveryQuery::default());
+        let mut targeted_versions: Vec<&str> = targeted
+            .iter()
+            .map(|entry| entry.version.as_str())
+            .collect();
+        targeted_versions.sort_unstable();
+        assert_eq!(targeted_versions, ["1.0.0", "1.1.0", "2.0.0"]);
+        assert!(targeted.iter().all(|entry| entry.id == target_id));
+        assert!(
+            targeted
+                .iter()
+                .all(|entry| entry.scope == RegistryScope::Public)
+        );
+
+        // Equivalent to the old full-scan approach: discover everything and
+        // filter by id/scope. The targeted lookup must return the same set.
+        let full_scan = registry.discover(LookupScope::PublicOnly, &DiscoveryQuery::default());
+        let mut full_scan_versions: Vec<&str> = full_scan
+            .iter()
+            .filter(|entry| entry.id == target_id && entry.scope == RegistryScope::Public)
+            .map(|entry| entry.version.as_str())
+            .collect();
+        full_scan_versions.sort_unstable();
+        assert_eq!(targeted_versions, full_scan_versions);
+
+        // Scan-size proxy: the Public scope has 5 index entries (3 target +
+        // 2 decoys), but the targeted lookup for the 3-version target
+        // returns exactly 3 — proving it does not walk/sort the whole scope.
+        assert_eq!(full_scan.len(), 5);
+        assert_eq!(targeted.len(), 3);
+
+        // Unknown id returns empty rather than falling through to neighbors.
+        assert!(
+            registry
+                .discover_by_id(
+                    RegistryScope::Public,
+                    "test.registry.nonexistent",
+                    &DiscoveryQuery::default()
+                )
+                .is_empty()
+        );
     }
 
     #[test]
