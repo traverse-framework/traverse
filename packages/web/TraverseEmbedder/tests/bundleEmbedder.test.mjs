@@ -395,16 +395,18 @@ test("real checked-in traverse-starter bundle loads and executes without a sidec
   const embedder = await initEmbedder(manifestPath);
   const events = collectEvents(embedder);
 
-  // The checked-in process-agent.wasm artifact is a placeholder stub (no
-  // WASI imports, an empty _start body) — see examples/traverse-starter.
   // This proves the full no-sidecar pipeline genuinely runs against the
   // real repository bundle: manifest/workflow resolution, sha-256 digest
   // verification, Traverse Host ABI import validation, and real
-  // WebAssembly.instantiate + invocation. The honest outcome for a stub
-  // with no output is a deserialization failure, not a mocked success.
+  // WebAssembly.instantiate + invocation. Public Trace API records are
+  // independently safe projections, never a serialization of this payload.
   const outcome = embedder.submit("traverse-starter.process", { note: "hello" });
   assert.equal(outcome.status, "accepted");
   const terminal = events[events.length - 1];
-  assert.equal(terminal.event_type, "error");
-  assert.equal(terminal.data.error.code, "output_deserialization_failed");
+  assert.equal(terminal.event_type, "capability_result");
+  const page = embedder.traceList("1.0.0", 10);
+  assert.equal(page.summaries.length, 1);
+  const detail = embedder.traceGet("1.0.0", page.summaries[0].traceId);
+  assert.equal(detail.summary.targetId, "traverse-starter.process");
+  assert.equal(JSON.stringify(detail).includes("hello"), false);
 });

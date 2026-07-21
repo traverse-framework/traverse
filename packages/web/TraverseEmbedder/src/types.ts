@@ -11,6 +11,15 @@ export const EMBEDDER_API_VERSION = "1.0.0";
 /** Conformance suite revision this package certifies against (spec 057). */
 export const EMBEDDER_CONFORMANCE_VERSION = "1.0.0";
 
+/** Implemented additive public Trace API companion version (spec 517). */
+export const EMBEDDED_TRACE_API_VERSION = "1.0.0";
+
+/** Maximum public trace records retained by one embedded session. */
+export const EMBEDDED_TRACE_RETENTION_LIMIT = 100;
+
+/** Largest `trace.list` page returned by this package. */
+export const EMBEDDED_TRACE_MAX_PAGE_SIZE = 100;
+
 /** Application bundle manifest `schema_version` values this package accepts. */
 export const SUPPORTED_BUNDLE_SCHEMA_VERSIONS: readonly string[] = ["1.0.0"];
 
@@ -59,6 +68,65 @@ export interface CompatibleLifecycleOutcome {
 /** `runtime.shutdown` output (always stopped; idempotent). */
 export interface ShutdownOutcome {
   readonly killedInstances: number;
+}
+
+/** Stable public Trace API failures (spec 517 FR-010). */
+export type EmbeddedTraceApiErrorCode =
+  | "invalid_cursor"
+  | "trace_not_found"
+  | "trace_api_unavailable"
+  | "incompatible_version";
+
+/** A safe public Trace API failure. It never contains runtime error details. */
+export interface EmbeddedTraceApiError {
+  readonly code: EmbeddedTraceApiErrorCode;
+  readonly message: string;
+}
+
+/** Safe terminal outcome exposed through the public Trace API. */
+export type EmbeddedTraceOutcome = "completed" | "error";
+
+/** A safe phase classification with no event payload or telemetry attributes. */
+export interface EmbeddedTracePhase {
+  readonly code: string;
+}
+
+/** Safe selected-target evidence from a completed execution. */
+export interface EmbeddedTraceSelectedTarget {
+  readonly targetId: string;
+  readonly targetVersion: string | null;
+}
+
+/** Safe placement evidence from a completed execution. */
+export interface EmbeddedTracePlacement {
+  readonly target: string;
+}
+
+/** Safe list-oriented public record for one completed local execution. */
+export interface EmbeddedTraceSummary {
+  readonly traceId: string;
+  readonly executionId: string;
+  readonly targetId: string;
+  readonly completedAt: string;
+  readonly completionSequence: number;
+  readonly outcome: EmbeddedTraceOutcome;
+}
+
+/** Safe public diagnostic detail for one retained local trace. */
+export interface EmbeddedTraceDetail {
+  readonly summary: EmbeddedTraceSummary;
+  readonly phases: readonly EmbeddedTracePhase[];
+  readonly selectedTarget: EmbeddedTraceSelectedTarget | null;
+  readonly placement: EmbeddedTracePlacement | null;
+  readonly failureCode: string | null;
+  readonly stateMachineValid: boolean | null;
+}
+
+/** Cursor-paged, bounded public Trace API response. */
+export interface EmbeddedTracePage {
+  readonly summaries: readonly EmbeddedTraceSummary[];
+  readonly nextCursor: string | null;
+  readonly retentionLimit: number;
 }
 
 /** JSON value type for wire payloads. */
@@ -139,6 +207,28 @@ export interface TraverseEmbedderApi {
    * NFR-002).
    */
   releaseEvidence(): JsonValue;
+}
+
+/**
+ * The additive `embedded-trace-api/1.0.0` companion surface (spec 517).
+ * It is intentionally separate from `TraverseEmbedderApi` so baseline hosts
+ * and external implementers retain their existing `embedder-api/1.0.0`
+ * compatibility.
+ */
+export interface EmbeddedTraceApi {
+  /** Advertised companion API version. */
+  embeddedTraceApiVersion(): string;
+  /** `trace.list`: safe newest-first summaries for this local session. */
+  traceList(
+    requestedVersion: string,
+    pageSize: number,
+    cursor?: string | null,
+  ): EmbeddedTracePage | EmbeddedTraceApiError;
+  /** `trace.get`: one safe retained detail by opaque public trace ID. */
+  traceGet(
+    requestedVersion: string,
+    traceId: string,
+  ): EmbeddedTraceDetail | EmbeddedTraceApiError;
 }
 
 export function embedderError(code: EmbedderErrorCode, message: string): EmbedderError {

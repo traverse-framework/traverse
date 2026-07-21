@@ -22,6 +22,9 @@
 export {
   EMBEDDER_API_VERSION,
   EMBEDDER_CONFORMANCE_VERSION,
+  EMBEDDED_TRACE_API_VERSION,
+  EMBEDDED_TRACE_MAX_PAGE_SIZE,
+  EMBEDDED_TRACE_RETENTION_LIMIT,
   SUPPORTED_BUNDLE_SCHEMA_VERSIONS,
 } from "./types.js";
 export type {
@@ -29,6 +32,16 @@ export type {
   CompatibleStartOutcome,
   EmbedderError,
   EmbedderErrorCode,
+  EmbeddedTraceApi,
+  EmbeddedTraceApiError,
+  EmbeddedTraceApiErrorCode,
+  EmbeddedTraceDetail,
+  EmbeddedTraceOutcome,
+  EmbeddedTracePage,
+  EmbeddedTracePhase,
+  EmbeddedTracePlacement,
+  EmbeddedTraceSelectedTarget,
+  EmbeddedTraceSummary,
   EmbedderEvent,
   EventCallback,
   JsonValue,
