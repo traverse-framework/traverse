@@ -1206,7 +1206,10 @@ fn subject_from_request(
 
         return Ok(DerivedIdentity {
             subject_id: token.clone(),
-            is_admin: token == SYSTEM_ADMIN_SUBJECT,
+            // Opaque development tokens identify a caller only. They are never
+            // credentials for elevated access, regardless of their literal
+            // value or whether `dev-any` permits the caller's network address.
+            is_admin: false,
             scopes: Vec::new(),
         });
     }
@@ -11805,6 +11808,21 @@ mod tests {
             .expect_err("oversized opaque subject must be rejected");
         assert_eq!(err.status, 401);
         assert!(err.message.contains("256"));
+    }
+
+    #[test]
+    fn opaque_dev_any_admin_literal_never_grants_admin() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            format!("Bearer {SYSTEM_ADMIN_SUBJECT}"),
+        );
+
+        let identity = subject_from_request(&headers, "dev-any", false, false, None)
+            .expect("opaque development subject must be accepted");
+
+        assert_eq!(identity.subject_id, SYSTEM_ADMIN_SUBJECT);
+        assert!(!identity.is_admin);
     }
 
     #[test]
