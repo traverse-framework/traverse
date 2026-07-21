@@ -32,9 +32,9 @@ const MODULE: &str = r#"(module
   (func (export "traverse_submit") (param i32 i32 i32) (result i32)
     i32.const 0 global.set $event local.get 2 i32.const 8256 i32.const 67 call $out i32.const 0)
   (func (export "traverse_next_event") (param $d i32) (result i32)
-    global.get $event i32.const 0 i32.eq if local.get $d i32.const 8384 i32.const 83 call $out i32.const 1 global.set $event i32.const 1 return end
-    global.get $event i32.const 1 i32.eq if local.get $d i32.const 8512 i32.const 70 call $out i32.const 2 global.set $event i32.const 1 return end
-    global.get $event i32.const 2 i32.eq if local.get $d i32.const 8640 i32.const 83 call $out i32.const 3 global.set $event i32.const 1 return end i32.const 0)
+    global.get $event i32.const 0 i32.eq if local.get $d i32.const 8384 i32.const 84 call $out i32.const 1 global.set $event i32.const 1 return end
+    global.get $event i32.const 1 i32.eq if local.get $d i32.const 8512 i32.const 72 call $out i32.const 2 global.set $event i32.const 1 return end
+    global.get $event i32.const 2 i32.eq if local.get $d i32.const 8640 i32.const 82 call $out i32.const 3 global.set $event i32.const 1 return end i32.const 0)
   (func (export "traverse_cancel") (param i32 i32 i32) (result i32) i32.const 0)
   (func (export "traverse_shutdown") (param i32) (result i32) local.get 0 i32.const 8768 i32.const 20 call $out i32.const 0)
   (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) i32.const -1)

@@ -10,13 +10,13 @@ header_dir="${repo_root}/crates/traverse-swift-host/include"
 for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin; do
   RUSTC="${rustc_path}" rustup run "${toolchain}" cargo build \
     --manifest-path "${repo_root}/Cargo.toml" \
-    -p traverse-swift-host --target "${target}"
+    -p traverse-swift-host --release --target "${target}"
 done
 
 mkdir -p "${output_dir}"
 rm -rf "${output_dir}/TraverseSwiftHost.xcframework"
 xcodebuild -create-xcframework \
-  -library "${repo_root}/target/aarch64-apple-ios/debug/libtraverse_swift_host.a" -headers "${header_dir}" \
-  -library "${repo_root}/target/aarch64-apple-ios-sim/debug/libtraverse_swift_host.a" -headers "${header_dir}" \
-  -library "${repo_root}/target/aarch64-apple-darwin/debug/libtraverse_swift_host.a" -headers "${header_dir}" \
+  -library "${repo_root}/target/aarch64-apple-ios/release/libtraverse_swift_host.a" -headers "${header_dir}" \
+  -library "${repo_root}/target/aarch64-apple-ios-sim/release/libtraverse_swift_host.a" -headers "${header_dir}" \
+  -library "${repo_root}/target/aarch64-apple-darwin/release/libtraverse_swift_host.a" -headers "${header_dir}" \
   -output "${output_dir}/TraverseSwiftHost.xcframework"

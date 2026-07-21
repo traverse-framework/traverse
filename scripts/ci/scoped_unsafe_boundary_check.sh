@@ -18,19 +18,30 @@ if [[ "${#opt_outs[@]}" -ne 1 || "${opt_outs[0]:-}" != "${approved_boundary}" ]]
   exit 1
 fi
 
-unsafe_sites=()
-while IFS= read -r site; do
-  unsafe_sites+=("${site}")
-done < <(grep -RIn --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
-for site in "${unsafe_sites[@]}"; do
-  if [[ "${site}" != "${approved_boundary}:"* ]] || [[ "${site}" != *'#[unsafe(no_mangle)]'* ]]; then
-    echo "Unsafe syntax is permitted only for no_mangle exports in ${approved_boundary}: ${site}" >&2
+unsafe_files=()
+while IFS= read -r path; do
+  unsafe_files+=("${path}")
+done < <(grep -RIl --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
+if [[ "${#unsafe_files[@]}" -ne 1 || "${unsafe_files[0]:-}" != "${approved_boundary}" ]]; then
+  echo "Unsafe syntax is permitted only in ${approved_boundary}." >&2
+  exit 1
+fi
+
+exports=(
+  traverse_swift_host_abi_version
+  traverse_swift_host_create
+  traverse_swift_host_invoke
+  traverse_swift_host_destroy
+  traverse_swift_host_status_message
+)
+for symbol in "${exports[@]}"; do
+  if [[ "$(grep -Fc "fn ${symbol}" "${approved_boundary}")" -ne 1 ]]; then
+    echo "Missing or duplicate audited C-ABI symbol: ${symbol}" >&2
     exit 1
   fi
 done
-
-if [[ "${#unsafe_sites[@]}" -ne 3 ]]; then
-  echo "The audited Swift host must expose exactly three C-ABI symbols." >&2
+if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${approved_boundary}")" -ne 5 ]]; then
+  echo "The audited Swift host must expose exactly five production C-ABI symbols." >&2
   exit 1
 fi
 

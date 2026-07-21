@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
@@ -92,7 +93,7 @@ pub fn verify_artifact(input_path: &Path) -> ArtifactVerificationReport {
     let actual_sha256 = artifact_bytes.as_ref().ok().map(|bytes| sha256_hex(bytes));
 
     let checksum = verify_checksum(manifest.as_ref(), actual_sha256.as_deref(), &artifact_bytes);
-    let signature = verify_signature(manifest.as_ref());
+    let signature = verify_signature(manifest.as_ref(), artifact_bytes.as_deref().ok());
     let (provenance_path, provenance) = verify_provenance(
         input_path,
         &artifact_path,
@@ -237,7 +238,10 @@ fn verify_checksum(
     }
 }
 
-fn verify_signature(manifest: Option<&ArtifactManifest>) -> CheckEvidence {
+fn verify_signature(
+    manifest: Option<&ArtifactManifest>,
+    artifact_bytes: Option<&[u8]>,
+) -> CheckEvidence {
     let Some(manifest) = manifest else {
         return missing_signature();
     };
@@ -251,25 +255,56 @@ fn verify_signature(manifest: Option<&ArtifactManifest>) -> CheckEvidence {
                 .signature_hex
                 .as_deref()
                 .or(manifest.signature.as_deref());
-            match (
-                manifest
-                    .public_key_hex
-                    .as_deref()
-                    .filter(|v| is_hex_len(v, 64)),
-                signature.filter(|v| is_hex_len(v, 128)),
-            ) {
-                (Some(_), Some(_)) => CheckEvidence {
-                    status: CheckStatus::Verified,
-                    message: "ed25519 signature metadata is present and well-formed".to_string(),
-                    expected: Some("ed25519 public key and signature".to_string()),
-                    actual: Some("present".to_string()),
-                },
-                _ => CheckEvidence {
+            let (Some(public_key), Some(signature), Some(artifact_bytes)) = (
+                manifest.public_key_hex.as_deref(),
+                signature,
+                artifact_bytes,
+            ) else {
+                return CheckEvidence {
+                    status: CheckStatus::Invalid,
+                    message: "ed25519 signature metadata or artifact bytes are unavailable"
+                        .to_string(),
+                    expected: Some(
+                        "signed artifact bytes with a 32-byte public key and 64-byte signature"
+                            .to_string(),
+                    ),
+                    actual: None,
+                };
+            };
+            let (Some(public_key), Some(signature)) = (
+                decode_hex_array::<32>(public_key),
+                decode_hex_array::<64>(signature),
+            ) else {
+                return CheckEvidence {
                     status: CheckStatus::Invalid,
                     message: "ed25519 signature metadata is malformed".to_string(),
                     expected: Some("64-char public key and 128-char signature hex".to_string()),
                     actual: Some("malformed".to_string()),
-                },
+                };
+            };
+            let Ok(public_key) = VerifyingKey::from_bytes(&public_key) else {
+                return CheckEvidence {
+                    status: CheckStatus::Invalid,
+                    message: "ed25519 public key is invalid".to_string(),
+                    expected: Some("valid Ed25519 public key".to_string()),
+                    actual: Some("invalid".to_string()),
+                };
+            };
+            let signature = Signature::from_bytes(&signature);
+            if public_key.verify(artifact_bytes, &signature).is_ok() {
+                CheckEvidence {
+                    status: CheckStatus::Verified,
+                    message: "ed25519 signature verifies the artifact bytes".to_string(),
+                    expected: Some("valid Ed25519 signature".to_string()),
+                    actual: Some("verified".to_string()),
+                }
+            } else {
+                CheckEvidence {
+                    status: CheckStatus::Invalid,
+                    message: "ed25519 signature does not verify the artifact bytes".to_string(),
+                    expected: Some("valid Ed25519 signature".to_string()),
+                    actual: Some("verification failed".to_string()),
+                }
             }
         }
         "sigstore" | "Sigstore" => match manifest.sigstore_bundle_ref.as_deref() {
@@ -420,6 +455,19 @@ fn is_hex_len(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn decode_hex_array<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if !is_hex_len(value, N * 2) {
+        return None;
+    }
+    let mut bytes = [0_u8; N];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let start = index.checked_mul(2)?;
+        let end = start.checked_add(2)?;
+        *byte = u8::from_str_radix(value.get(start..end)?, 16).ok()?;
+    }
+    Some(bytes)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(digest.len() * 2);
@@ -434,6 +482,8 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{CheckStatus, OverallStatus, sha256_hex, verify_artifact};
+    use ed25519_dalek::{Signer, SigningKey};
+    use std::fmt::Write as _;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -454,6 +504,36 @@ mod tests {
         assert_eq!(report.signature_status, CheckStatus::Verified);
         assert_eq!(report.provenance_status, CheckStatus::Verified);
         assert!(report.passed());
+    }
+
+    #[test]
+    fn rejects_a_well_formed_forged_ed25519_signature() {
+        let dir = temp_dir("supply-chain-forged-signature");
+        let artifact = dir.join("artifact.wasm");
+        fs::write(&artifact, b"portable bytes").expect("artifact should write");
+        let hash = sha256_hex(b"portable bytes");
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        fs::write(
+            format!("{}.manifest.json", artifact.display()),
+            format!(
+                r#"{{
+  "checksum_algorithm": "sha256",
+  "checksum_sha256": "{hash}",
+  "signing_scheme": "ed25519",
+  "public_key_hex": "{}",
+  "signature_hex": "{}"
+}}"#,
+                hex(&signing_key.verifying_key().to_bytes()),
+                "00".repeat(64)
+            ),
+        )
+        .expect("manifest should write");
+        write_provenance(&artifact, &hash, "abc123");
+
+        let report = verify_artifact(&artifact);
+
+        assert_eq!(report.signature_status, CheckStatus::Invalid);
+        assert_eq!(report.overall_status, OverallStatus::Failed);
     }
 
     #[test]
@@ -682,6 +762,9 @@ mod tests {
     }
 
     fn write_manifest(artifact: &Path, checksum: &str, artifact_path: Option<&Path>) {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let artifact_bytes = fs::read(artifact).expect("artifact should read for signing");
+        let signature = signing_key.sign(&artifact_bytes);
         let path_field = artifact_path
             .map(|path| format!(r#""artifact_path": "{}","#, path.display()))
             .unwrap_or_default();
@@ -696,11 +779,19 @@ mod tests {
   "public_key_hex": "{}",
   "signature_hex": "{}"
 }}"#,
-                "a".repeat(64),
-                "b".repeat(128)
+                hex(&signing_key.verifying_key().to_bytes()),
+                hex(&signature.to_bytes())
             ),
         )
         .expect("manifest should write");
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        let mut encoded = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            assert!(write!(&mut encoded, "{byte:02x}").is_ok());
+        }
+        encoded
     }
 
     fn write_provenance(artifact: &Path, checksum: &str, commit: &str) {

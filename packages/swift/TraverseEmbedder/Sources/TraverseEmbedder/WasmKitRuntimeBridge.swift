@@ -6,6 +6,7 @@ import WasmKit
 ///
 /// The loader verifies the artifact before WasmKit parses or instantiates it,
 /// rejects ambient imports, and validates the complete embedder export surface.
+@available(*, deprecated, message: "Use WasmiHostBridgeClient; WasmKit is retained only for source compatibility.")
 public final class WasmKitRuntimeBridge: @unchecked Sendable {
     public static let abiVersion = 10_100
     public static let defaultMaximumArtifactBytes = 32 * 1024 * 1024
