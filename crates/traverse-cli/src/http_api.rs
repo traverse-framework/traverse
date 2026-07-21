@@ -8447,7 +8447,11 @@ mod tests {
 
     #[test]
     fn capabilities_endpoint_rejects_unauthorized_workspace_access() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let metadata = WorkspaceMetadataV1 {
             schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
             workspace_id: "ws-owned".to_string(),
@@ -8463,7 +8467,7 @@ mod tests {
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 "ws-owned",
             ),
-            "bob",
+            &make_jwt("bob", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -8476,7 +8480,11 @@ mod tests {
 
     #[test]
     fn capabilities_endpoint_allows_shared_workspace_members() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let metadata = WorkspaceMetadataV1 {
             schema_version: WORKSPACE_METADATA_SCHEMA_VERSION.to_string(),
             workspace_id: "ws-shared".to_string(),
@@ -8492,7 +8500,7 @@ mod tests {
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 "ws-shared",
             ),
-            "bob",
+            &make_jwt("bob", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -8810,13 +8818,17 @@ mod tests {
 
     #[test]
     fn system_workspace_requires_privileged_claim() {
-        let state = empty_state();
+        let mut state = empty_state();
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
         let req = with_bearer(
             with_workspace_query(
                 make_http_request("GET", "/v1/capabilities", Vec::new()),
                 SYSTEM_WORKSPACE_ID,
             ),
-            "alice",
+            &make_jwt("alice", future_exp(), false),
         );
         let mut out = Vec::new();
         handle_list_capabilities(&mut out, &req, &state, true).expect("list must write a response");
@@ -11788,7 +11800,7 @@ mod tests {
         let err = subject_from_request(&headers, "dev-loopback", false, true, None)
             .expect_err("oversized opaque subject must be rejected");
         assert_eq!(err.status, 401);
-        assert!(err.message.contains("256"));
+        assert_eq!(err.code, "unauthorized");
     }
 
     #[test]
