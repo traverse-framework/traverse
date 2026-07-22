@@ -37,7 +37,7 @@ fn loads_checked_in_application_manifest_with_real_wasm_component() {
     );
     assert_eq!(
         bundle.components[0].verified_wasm_digest,
-        Some("sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99".to_string())
+        Some("sha256:e975c0eac1491c7c9e7dc004fac8aecb209f5fe238ae1832364e0de10fd4b48a".to_string())
     );
 }
 
