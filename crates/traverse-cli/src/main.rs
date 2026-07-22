@@ -1784,13 +1784,10 @@ impl RegistryComponentResolver for SyncedRegistryComponentResolver<'_> {
             &reference.version_range,
         )
         .map_err(|failure| {
-            registry_resolution_failure(
-                failure
-                    .errors
-                    .first()
-                    .map(|error| error.message.clone())
-                    .unwrap_or_else(|| "public registry resolution failed".to_string()),
-            )
+            registry_resolution_failure(failure.errors.first().map_or_else(
+                || "public registry resolution failed".to_string(),
+                |error| error.message.clone(),
+            ))
         })?;
         let contract_path = cache_registry_asset(
             self.workspace_root,
@@ -5787,6 +5784,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Exercises the complete synced-reference registration flow.
     fn synced_registry_reference_validates_registers_and_reuses_verified_cache() {
         let state_root = unique_temp_dir();
         let fixture_root = unique_temp_dir();
