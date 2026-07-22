@@ -70,6 +70,116 @@ fn defaults_component_execution_mode_to_wasm() {
 }
 
 #[test]
+fn rejects_component_without_a_local_or_registry_source() {
+    let fixture = AppFixture::new("missing-component-source");
+    fixture.write_component_manifest(&json!({ "contract_path": null }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("component source is required");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn rejects_component_with_both_local_and_registry_sources() {
+    let fixture = AppFixture::new("duplicate-component-source");
+    fixture.write_component_manifest(&json!({
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("component sources must be exclusive");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn rejects_incomplete_registry_reference() {
+    let fixture = AppFixture::new("invalid-registry-reference");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference fields are required");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::RegistryReferenceInvalid
+    );
+}
+
+#[test]
+fn rejects_registry_reference_with_local_wasm_fields() {
+    let fixture = AppFixture::new("registry-reference-local-wasm");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference cannot declare local wasm fields");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn registry_reference_requires_registration_resolution() {
+    let fixture = AppFixture::new("registry-reference-resolution");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference must be resolved during registration");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::RegistryReferenceRequiresResolution
+    );
+}
+
+#[test]
 fn component_execution_mode_renders_manifest_values() {
     assert_eq!(
         traverse_registry::ComponentExecutionMode::Wasm.as_str(),
@@ -2642,6 +2752,10 @@ impl AppFixture {
             .get("wrapper_path")
             .cloned()
             .unwrap_or(Value::Null);
+        let registry_ref = overrides
+            .get("registry_ref")
+            .cloned()
+            .unwrap_or(Value::Null);
         let component = json!({
             "component_id": component_id,
             "version": version,
@@ -2650,6 +2764,7 @@ impl AppFixture {
             "capability_id": capability_id,
             "capability_version": capability_version,
             "contract_path": contract_path,
+            "registry_ref": registry_ref,
             "wasm_binary_path": wasm_binary_path,
             "wasm_digest": wasm_digest,
             "platforms": platforms,
