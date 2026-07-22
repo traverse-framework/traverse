@@ -6537,13 +6537,14 @@ mod tests {
 
     #[test]
     fn execute_agent_runs_governed_ai_agent_request() {
-        let manifest_path = repo_root().join("examples/agents/expedition-intent-agent/manifest.json");
+        let manifest_path =
+            repo_root().join("examples/agents/expedition-intent-agent/manifest.json");
         build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/agents/runtime-requests/interpret-expedition-intent.json");
 
-        let output = execute_agent(&manifest_path, &request_path)
-            .expect("agent execution should succeed");
+        let output =
+            execute_agent(&manifest_path, &request_path).expect("agent execution should succeed");
 
         assert!(
             output.contains("package_id: expedition.planning.interpret-expedition-intent-agent")
@@ -6572,8 +6573,8 @@ mod tests {
         let request_path =
             repo_root().join("examples/agents/runtime-requests/validate-team-readiness.json");
 
-        let output = execute_agent(&manifest_path, &request_path)
-            .expect("agent execution should succeed");
+        let output =
+            execute_agent(&manifest_path, &request_path).expect("agent execution should succeed");
 
         assert!(output.contains("package_id: expedition.planning.validate-team-readiness-agent"));
         assert!(output.contains("capability_id: expedition.planning.validate-team-readiness"));
@@ -6611,7 +6612,8 @@ mod tests {
 
     #[test]
     fn execute_agent_runs_traverse_starter_process_request() {
-        let manifest_path = repo_root().join("examples/traverse-starter/process-agent/manifest.json");
+        let manifest_path =
+            repo_root().join("examples/traverse-starter/process-agent/manifest.json");
         build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/process.json");
@@ -6631,7 +6633,8 @@ mod tests {
 
     #[test]
     fn execute_agent_runs_traverse_starter_validate_request() {
-        let manifest_path = repo_root().join("examples/traverse-starter/validate-agent/manifest.json");
+        let manifest_path =
+            repo_root().join("examples/traverse-starter/validate-agent/manifest.json");
         build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/validate.json");
@@ -6648,7 +6651,8 @@ mod tests {
 
     #[test]
     fn execute_agent_runs_traverse_starter_summarize_request() {
-        let manifest_path = repo_root().join("examples/traverse-starter/summarize-agent/manifest.json");
+        let manifest_path =
+            repo_root().join("examples/traverse-starter/summarize-agent/manifest.json");
         build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/summarize.json");
@@ -7290,7 +7294,10 @@ mod tests {
             .arg(package_dir.join("build-fixture.sh"))
             .status()
             .expect("real agent fixture builder should start");
-        assert!(status.success(), "real agent fixture builder should succeed");
+        assert!(
+            status.success(),
+            "real agent fixture builder should succeed"
+        );
     }
 
     fn create_interpret_expedition_intent_agent_fixture() -> AgentFixture {
