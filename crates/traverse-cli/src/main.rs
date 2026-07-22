@@ -23,14 +23,16 @@ use traverse_contracts::{
 };
 use traverse_contracts::{ViolationRecord, reference_connector_contracts};
 use traverse_registry::{
+    ApplicationManifestError, ApplicationManifestErrorCode, ApplicationManifestFailure,
     ApplicationRegistrationRequest, ApplicationRegistry, ArtifactDigests, BinaryFormat,
     BinaryReference, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
     ComposabilityMetadata, CompositionKind, CompositionPattern, ConnectorRegistration,
     DiscoveryQuery, EventRegistration, EventRegistry, ImplementationKind, LookupScope,
-    PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference, WorkflowReference, WorkflowRegistration,
-    WorkflowRegistry, load_application_bundle_manifest, load_registry_bundle,
-    write_synced_public_registry_state,
+    PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle, RegistryComponentResolver,
+    RegistryProvenance, RegistryReference, RegistryScope, ResolvedRegistryComponent, SourceKind,
+    SourceReference, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
+    load_application_bundle_manifest, load_application_bundle_manifest_with_resolver,
+    load_registry_bundle, write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -1730,6 +1732,119 @@ fn app_register(
     app_register_at(&base_dir, manifest_path, workspace_id, json_output)
 }
 
+struct SyncedRegistryComponentResolver<'a> {
+    workspace_root: &'a Path,
+    workspace_id: &'a str,
+}
+
+impl RegistryComponentResolver for SyncedRegistryComponentResolver<'_> {
+    fn resolve(
+        &self,
+        reference: &RegistryReference,
+    ) -> Result<ResolvedRegistryComponent, ApplicationManifestFailure> {
+        let record = traverse_registry::resolve_synced_public_registry_range(
+            self.workspace_root,
+            self.workspace_id,
+            &reference.namespace,
+            &reference.id,
+            &reference.version_range,
+        )
+        .map_err(|failure| {
+            registry_resolution_failure(
+                failure
+                    .errors
+                    .first()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "public registry resolution failed".to_string()),
+            )
+        })?;
+        let contract_path = cache_registry_asset(
+            self.workspace_root,
+            &record.contract_url,
+            &record.contract_digest,
+        )?;
+        let contract_text = fs::read_to_string(&contract_path).map_err(|error| {
+            registry_resolution_failure(format!("failed to read cached registry contract: {error}"))
+        })?;
+        let contract = parse_contract(&contract_text).map_err(|failure| {
+            registry_resolution_failure(format!(
+                "cached registry contract is invalid: {}",
+                failure.errors[0].message
+            ))
+        })?;
+        let wasm_binary_path =
+            cache_registry_asset(self.workspace_root, &record.artifact_url, &record.digest)?;
+        Ok(ResolvedRegistryComponent {
+            contract_path,
+            contract,
+            wasm_binary_path,
+            wasm_digest: record.digest,
+        })
+    }
+}
+
+fn registry_resolution_failure(message: String) -> ApplicationManifestFailure {
+    ApplicationManifestFailure {
+        errors: vec![ApplicationManifestError {
+            code: ApplicationManifestErrorCode::RegistryReferenceRequiresResolution,
+            path: "$.registry_ref".to_string(),
+            message,
+        }],
+    }
+}
+
+fn cache_registry_asset(
+    workspace_root: &Path,
+    url: &str,
+    expected_digest: &str,
+) -> Result<PathBuf, ApplicationManifestFailure> {
+    let digest = expected_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(expected_digest);
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(registry_resolution_failure(
+            "registry asset has invalid SHA-256 digest".to_string(),
+        ));
+    }
+    let cache_path = workspace_root.join(".traverse/cache/sha256").join(digest);
+    if cache_path.exists() {
+        let bytes = fs::read(&cache_path).map_err(|error| {
+            registry_resolution_failure(format!("failed to read cached registry asset: {error}"))
+        })?;
+        if sha256_hex(&bytes) == digest.to_ascii_lowercase() {
+            return Ok(cache_path);
+        }
+        return Err(registry_resolution_failure(
+            "cached registry asset digest mismatch".to_string(),
+        ));
+    }
+    let output = std::process::Command::new("curl")
+        .args(["-fsSL", url])
+        .output()
+        .map_err(|error| {
+            registry_resolution_failure(format!("failed to fetch registry asset: {error}"))
+        })?;
+    if !output.status.success() || sha256_hex(&output.stdout) != digest.to_ascii_lowercase() {
+        return Err(registry_resolution_failure(
+            "registry asset download or digest verification failed".to_string(),
+        ));
+    }
+    let parent = cache_path.parent().ok_or_else(|| {
+        registry_resolution_failure("registry cache path has no parent".to_string())
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        registry_resolution_failure(format!("failed to create registry cache: {error}"))
+    })?;
+    let temporary = cache_path.with_extension("tmp");
+    fs::write(&temporary, output.stdout).map_err(|error| {
+        registry_resolution_failure(format!("failed to write registry cache: {error}"))
+    })?;
+    fs::rename(&temporary, &cache_path).map_err(|error| {
+        registry_resolution_failure(format!("failed to commit registry cache: {error}"))
+    })?;
+    Ok(cache_path)
+}
+
 fn app_register_at(
     base_dir: &Path,
     manifest_path: &Path,
@@ -1750,21 +1865,26 @@ fn app_register_at(
         return render_app_registration_failure(manifest_path, workspace_id, vec![error], None);
     }
 
-    let manifest = match load_application_bundle_manifest(manifest_path) {
-        Ok(manifest) => manifest,
-        Err(failure) => {
-            return render_app_registration_failure(
-                manifest_path,
-                workspace_id,
-                failure
-                    .errors
-                    .into_iter()
-                    .map(AppValidationError::from_manifest_error)
-                    .collect(),
-                None,
-            );
-        }
+    let resolver = SyncedRegistryComponentResolver {
+        workspace_root: base_dir,
+        workspace_id,
     };
+    let manifest =
+        match load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver)) {
+            Ok(manifest) => manifest,
+            Err(failure) => {
+                return render_app_registration_failure(
+                    manifest_path,
+                    workspace_id,
+                    failure
+                        .errors
+                        .into_iter()
+                        .map(AppValidationError::from_manifest_error)
+                        .collect(),
+                    None,
+                );
+            }
+        };
 
     let state_path =
         app_registration_state_path(base_dir, workspace_id, &manifest.app_id, &manifest.version);
