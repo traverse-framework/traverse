@@ -7,14 +7,28 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use traverse_contracts::{ExecutionTarget, parse_event_contract};
+use traverse_contracts::{ExecutionTarget, parse_contract, parse_event_contract};
 use traverse_registry::{
     ApplicationManifestErrorCode, ApplicationRegistrationErrorCode, ApplicationRegistrationRequest,
     ApplicationRegistrationStatus, ApplicationRegistry, ApplicationStateTransitionConditionOp,
     CapabilityRegistry, EventRegistration, EventRegistry, LookupScope, ModelCandidateRejectionCode,
-    ModelResolutionEvidence, ModelResolutionPhase, RegistryScope, SelectedModelCandidate,
-    WorkflowRegistry, load_application_bundle_manifest,
+    ModelResolutionEvidence, ModelResolutionPhase, RegistryComponentResolver, RegistryReference,
+    RegistryScope, ResolvedRegistryComponent, SelectedModelCandidate, WorkflowRegistry,
+    load_application_bundle_manifest, load_application_bundle_manifest_with_resolver,
 };
+
+struct StaticRegistryResolver {
+    component: ResolvedRegistryComponent,
+}
+
+impl RegistryComponentResolver for StaticRegistryResolver {
+    fn resolve(
+        &self,
+        _reference: &RegistryReference,
+    ) -> Result<ResolvedRegistryComponent, traverse_registry::ApplicationManifestFailure> {
+        Ok(self.component.clone())
+    }
+}
 
 #[test]
 fn loads_checked_in_application_manifest_with_real_wasm_component() {
@@ -67,6 +81,314 @@ fn defaults_component_execution_mode_to_wasm() {
         bundle.components[0].verified_wasm_digest,
         Some(format!("sha256:{wasm_digest}"))
     );
+}
+
+#[test]
+fn rejects_component_without_a_local_or_registry_source() {
+    let fixture = AppFixture::new("missing-component-source");
+    fixture.write_component_manifest(&json!({ "contract_path": null }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("component source is required");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn rejects_component_with_both_local_and_registry_sources() {
+    let fixture = AppFixture::new("duplicate-component-source");
+    fixture.write_component_manifest(&json!({
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("component sources must be exclusive");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn rejects_incomplete_registry_reference() {
+    let fixture = AppFixture::new("invalid-registry-reference");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference fields are required");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::RegistryReferenceInvalid
+    );
+}
+
+#[test]
+fn rejects_registry_reference_with_local_wasm_fields() {
+    let fixture = AppFixture::new("registry-reference-local-wasm");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference cannot declare local wasm fields");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentSourceMustBeExclusive
+    );
+}
+
+#[test]
+fn registry_reference_requires_registration_resolution() {
+    let fixture = AppFixture::new("registry-reference-resolution");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+
+    let failure = load_application_bundle_manifest(&fixture.app_manifest_path())
+        .expect_err("registry reference must be resolved during registration");
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::RegistryReferenceRequiresResolution
+    );
+}
+
+#[test]
+fn loads_registry_reference_from_caller_verified_material() {
+    let fixture = AppFixture::new("resolved-registry-reference");
+    let wasm_digest = fixture.write_wasm("registry component bytes");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        &format!("sha256:{wasm_digest}"),
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+    let contract_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+    );
+    let contract =
+        parse_contract(&fs::read_to_string(&contract_path).expect("contract fixture should read"))
+            .expect("contract fixture should parse");
+    let resolver = StaticRegistryResolver {
+        component: ResolvedRegistryComponent {
+            contract_path,
+            contract,
+            wasm_binary_path: fixture.wasm_path(),
+            wasm_digest: format!("sha256:{wasm_digest}"),
+        },
+    };
+
+    let bundle = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect("caller-verified registry material should load");
+    assert_eq!(
+        bundle.components[0].verified_wasm_digest,
+        Some(format!("sha256:{wasm_digest}"))
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_mismatched_reference_identity() {
+    let fixture = AppFixture::new("registry-reference-identity-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "other.component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve application component identity");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentReferenceMismatch
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_invalid_application_digest() {
+    let fixture = AppFixture::new("registry-reference-invalid-application-digest");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "not-a-digest",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must require a valid application digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::InvalidDigestMetadata
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_invalid_resolved_digest() {
+    let fixture = AppFixture::new("registry-reference-invalid-resolved-digest");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "not-a-digest",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must require a valid resolved digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::InvalidDigestMetadata
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_digest_mismatch() {
+    let fixture = AppFixture::new("registry-reference-digest-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve the application digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentDigestMismatch
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_contract_identity_mismatch() {
+    let fixture = AppFixture::new("registry-reference-contract-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../contracts/examples/expedition/capabilities/interpret-expedition-intent/contract.json",
+        ),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve the component capability identity");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentContractMismatch
+    );
+}
+
+fn resolved_registry_reference_fixture(
+    fixture: &AppFixture,
+    reference_component_id: &str,
+    reference_digest: &str,
+    resolved_digest: &str,
+    contract_path: PathBuf,
+) -> StaticRegistryResolver {
+    fixture.write_wasm("registry component bytes");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        reference_component_id,
+        "1.0.0",
+        reference_digest,
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+    let contract =
+        parse_contract(&fs::read_to_string(&contract_path).expect("contract fixture should read"))
+            .expect("contract fixture should parse");
+    StaticRegistryResolver {
+        component: ResolvedRegistryComponent {
+            contract_path,
+            contract,
+            wasm_binary_path: fixture.wasm_path(),
+            wasm_digest: resolved_digest.to_string(),
+        },
+    }
+}
+
+fn readiness_contract_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+    )
 }
 
 #[test]
@@ -2642,6 +2964,10 @@ impl AppFixture {
             .get("wrapper_path")
             .cloned()
             .unwrap_or(Value::Null);
+        let registry_ref = overrides
+            .get("registry_ref")
+            .cloned()
+            .unwrap_or(Value::Null);
         let component = json!({
             "component_id": component_id,
             "version": version,
@@ -2650,6 +2976,7 @@ impl AppFixture {
             "capability_id": capability_id,
             "capability_version": capability_version,
             "contract_path": contract_path,
+            "registry_ref": registry_ref,
             "wasm_binary_path": wasm_binary_path,
             "wasm_digest": wasm_digest,
             "platforms": platforms,
