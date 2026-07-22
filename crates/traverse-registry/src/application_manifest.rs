@@ -463,6 +463,11 @@ pub struct ResolvedRegistryComponent {
 /// Resolves a registry reference without granting application loading network access.
 pub trait RegistryComponentResolver {
     /// Returns a digest-verified cached component selected from local synced state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application-manifest failure when the referenced component
+    /// cannot be resolved or verified from the local synced state.
     fn resolve(
         &self,
         reference: &RegistryReference,
@@ -1779,6 +1784,7 @@ fn looks_like_placeholder(value: &str) -> bool {
         .any(|marker| lowered.contains(marker))
 }
 
+#[allow(clippy::too_many_lines)] // Coordinates the complete local and synced component validation flow.
 fn load_component(
     manifest_dir: &Path,
     reference: &ApplicationComponentRef,
@@ -1836,22 +1842,22 @@ fn load_component(
                 ),
             )
         })?;
-        let resolved = resolver.resolve(registry_ref)?;
+        let resolved_component = resolver.resolve(registry_ref)?;
         ensure_registry_component_reference_matches(
             reference,
             &component,
-            &resolved,
+            &resolved_component,
             &manifest_path,
         )?;
-        ensure_resolved_contract_matches(&resolved.contract, &component, &manifest_path)?;
+        ensure_resolved_contract_matches(&resolved_component.contract, &component, &manifest_path)?;
         return Ok(ApplicationComponent {
             reference: reference.clone(),
             manifest_path,
             manifest: to_component_manifest(component, execution_mode),
-            contract_path: resolved.contract_path,
-            contract: resolved.contract,
-            wasm_binary_path: Some(resolved.wasm_binary_path),
-            verified_wasm_digest: Some(resolved.wasm_digest),
+            contract_path: resolved_component.contract_path,
+            contract: resolved_component.contract,
+            wasm_binary_path: Some(resolved_component.wasm_binary_path),
+            verified_wasm_digest: Some(resolved_component.wasm_digest),
         });
     }
 
