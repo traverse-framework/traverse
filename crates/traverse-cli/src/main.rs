@@ -58,6 +58,7 @@ enum Command {
     },
     AppValidate {
         manifest_path: PathBuf,
+        workspace_id: Option<String>,
         json_output: bool,
     },
     AppRegister {
@@ -249,8 +250,9 @@ fn run_command(command: Command) -> Result<String, CliError> {
         } => app_new(&app_id, register, workspace_id.as_deref()),
         Command::AppValidate {
             manifest_path,
+            workspace_id,
             json_output,
-        } => app_validate(&manifest_path, json_output),
+        } => app_validate(&manifest_path, workspace_id.as_deref(), json_output),
         Command::AppRegister {
             manifest_path,
             workspace_id,
@@ -1010,6 +1012,7 @@ fn parse_app_validate_command(args: &[String]) -> Result<Command, String> {
     }
     Ok(Command::AppValidate {
         manifest_path: PathBuf::from(manifest_path),
+        workspace_id: parse_string_flag(args, "--workspace"),
         json_output: true,
     })
 }
@@ -1698,7 +1701,11 @@ fn register_generated_app_bundle(
     ))
 }
 
-fn app_validate(manifest_path: &Path, json_output: bool) -> Result<String, CliError> {
+fn app_validate(
+    manifest_path: &Path,
+    workspace_id: Option<&str>,
+    json_output: bool,
+) -> Result<String, CliError> {
     if !json_output {
         return Err(CliError::UsageError(
             "app validate requires --json for stable setup evidence".to_string(),
@@ -1709,7 +1716,19 @@ fn app_validate(manifest_path: &Path, json_output: bool) -> Result<String, CliEr
         return render_app_validation_failure(manifest_path, vec![error]);
     }
 
-    match load_application_bundle_manifest(manifest_path) {
+    let manifest = if let Some(workspace_id) = workspace_id {
+        let base_dir = std::env::current_dir().map_err(|error| {
+            CliError::IoError(format!("failed to resolve current directory: {error}"))
+        })?;
+        let resolver = SyncedRegistryComponentResolver {
+            workspace_root: &base_dir,
+            workspace_id,
+        };
+        load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver))
+    } else {
+        load_application_bundle_manifest(manifest_path)
+    };
+    match manifest {
         Ok(manifest) => render_app_validation_success(manifest_path, &manifest),
         Err(failure) => Ok(render_app_validation_failure(
             manifest_path,
@@ -5303,6 +5322,7 @@ mod tests {
             Command::AppValidate {
                 manifest_path,
                 json_output,
+                ..
             } => {
                 assert_eq!(
                     manifest_path,
@@ -5588,7 +5608,8 @@ mod tests {
         let manifest_path =
             repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
 
-        let output = app_validate(&manifest_path, true).expect("app validation should succeed");
+        let output =
+            app_validate(&manifest_path, None, true).expect("app validation should succeed");
         let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
 
         assert_eq!(json["status"], "validated");
@@ -5619,7 +5640,7 @@ mod tests {
         );
 
         let output =
-            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -5648,7 +5669,7 @@ mod tests {
         .expect("manifest must write");
 
         let output =
-            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -5679,7 +5700,7 @@ mod tests {
         .expect("manifest must write");
 
         let output =
-            app_validate(&manifest_path, true).expect("validation failure is JSON evidence");
+            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -5709,7 +5730,8 @@ mod tests {
             })),
         );
 
-        let output = app_validate(&manifest_path, true).expect("app validation should succeed");
+        let output =
+            app_validate(&manifest_path, None, true).expect("app validation should succeed");
         let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
 
         assert_eq!(json["status"], "validated");
@@ -7686,6 +7708,7 @@ mod tests {
             },
             Command::AppValidate {
                 manifest_path: missing.clone(),
+                workspace_id: None,
                 json_output: false,
             },
             Command::AppRegister {
