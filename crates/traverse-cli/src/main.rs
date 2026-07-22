@@ -5511,8 +5511,8 @@ mod tests {
         let temp_dir = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
             &temp_dir,
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
             None,
         );
         let mut manifest: Value =
@@ -5542,8 +5542,8 @@ mod tests {
         let temp_dir = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
             &temp_dir,
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
             None,
         );
         let mut manifest: Value =
@@ -5576,8 +5576,8 @@ mod tests {
         let temp_dir = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
             &temp_dir,
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
             Some(serde_json::json!({
                 "overrides": {
                     "readiness_mode": "deterministic"
@@ -5697,8 +5697,8 @@ mod tests {
         let fixture_root = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
             &fixture_root,
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
-            "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
+            "sha256:59b6ef4faecd7c07da8eeccb10556d411f1e5eb8b03871fb81f3250eb9bfed1e",
             Some(serde_json::json!({
                 "overrides": {
                     "readiness_mode": "deterministic"
