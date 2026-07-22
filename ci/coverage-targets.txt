@@ -11,3 +11,5 @@ traverse-runtime 100
 traverse-cli-rs 87
 traverse-embedder 100
 traverse-mcp 98
+# Audited production C-ABI boundary; ADR-0018 records the measured ratchet.
+traverse-swift-host 78
