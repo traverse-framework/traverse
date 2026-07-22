@@ -19,7 +19,7 @@ if [[ ${#targets[@]} -eq 0 ]]; then
   exit 0
 fi
 
-if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "cargo-llvm-cov is required for the coverage gate." >&2
   exit 1
 fi
