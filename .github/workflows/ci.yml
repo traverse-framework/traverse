@@ -159,6 +159,9 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Install WASM test target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Run coverage gate
         run: bash scripts/ci/coverage_gate.sh
 
