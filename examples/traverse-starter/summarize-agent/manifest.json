@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/summarize-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "expected_digest": "fnv1a64:9748a084572b5b1a",
     "abi_version": "1.0.0"
   },
   "constraints": {
