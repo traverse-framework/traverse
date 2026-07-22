@@ -925,3 +925,83 @@ ADR-0016, and its own artifacts. The `embedded-trace-api` implementation ticket
 may move from Blocked to Ready. Its first delivery must prove that a
 Trace Explorer-equivalent Web consumer can browse local traces without HTTP
 and that baseline embedder conformance remains compatible.
+
+## Decision 33: Land Two Orphaned Governing Specs to Fix a Pre-Existing Stale-Spec-ID Bug
+
+- **Date**: 2026-07-21
+- **Status**: Accepted
+- **Governing specs**: `077-metadata-graph`, `078-federation-registry-routing`
+- **Related pull request**: (this change)
+- **Related repo**: flagged from `traverse-framework/registry`'s
+  `specs/014-extraction-compatibility` decision-log entry 33, which found
+  this bug while auditing `traverse-registry` ahead of extraction but left
+  it unfixed as out of that repo's scope (registry-scope-only).
+
+### Context
+
+Two literal spec-ID strings embedded in `crates/traverse-registry/src/`
+did not correspond to any spec in `specs/governance/approved-specs.json`:
+`"015-metadata-graph"` (a `const` in `graph.rs`, used as every projected
+metadata-graph snapshot's `governing_spec`) and
+`"026-federation-registry-routing"` (used only in `federation.rs` and
+`federation_operator.rs` test fixtures, as sample `TrustRecord.
+approved_spec_refs` / `ApprovalChainEntry.spec_ref` values). Both slots
+(`015`, `026`) were reassigned to unrelated specs (`015-capability-
+discovery-mcp`, `026-event-broker`) during the v0.2.0 governance batch
+(issue #209, issue #207), so `approved_spec_registry_contains()` has
+returned `false` for both original strings since that batch landed —
+independent of the registry-extraction work that surfaced it.
+
+Investigation (issue #37 comment history, git history of `graph.rs` via
+issue #62, and the abandoned `origin/022-mcp-wasm-server` branch at commit
+`b81a17b`) found that in both cases a real, complete spec document had been
+written and, in the federation case, even self-marked "Status: Approved" —
+but neither was ever merged into `approved-specs.json` before its numeric
+slot was taken by different work. The implementations (`graph.rs` via PR
+#97, `federation.rs` via PR #240 and follow-ons) shipped anyway, each
+assuming its governing spec had been formally approved when it had not.
+
+### Decision
+
+Rather than point the two stale constants at an existing-but-unrelated
+approved spec (which would repeat the same category of error in a new
+form), land the two already-written spec documents under fresh IDs:
+`077-metadata-graph` (written retroactively against the shipped
+`graph.rs` behavior, since no committed draft of the original
+`015-metadata-graph` could be found in any branch) and
+`078-federation-registry-routing` (the original `026-federation-registry-
+routing` document, recovered from `b81a17b`, reviewed against the shipped
+`federation.rs`/`federation_operator.rs` behavior and found still
+accurate, with its own stale cross-references to two other still-
+unapproved draft specs removed rather than carried forward). Both new
+`approved-specs.json` entries govern the specific source files their spec
+actually describes (`graph.rs`; `federation.rs` and
+`federation_operator.rs`) rather than the whole crate. `graph.rs`'s
+`METADATA_GRAPH_GOVERNING_SPEC` constant and all `federation.rs`/
+`federation_operator.rs` test-fixture literals are updated to the new IDs.
+
+### Alternatives Considered
+
+- Point the constants at `015-capability-discovery-mcp` /
+  `026-event-broker` (today's real owners of those numeric slots) —
+  rejected, since neither actually governs metadata-graph projection or
+  federation routing; this would fabricate a false governance claim
+  identical in kind to the bug being fixed.
+- Point the constants at the closest broad existing spec that already
+  governs `traverse-registry/` (e.g. `007-workflow-registry-traversal`) —
+  rejected; `007` explicitly excludes "full metadata graph query model"
+  from its own scope, and no approved spec describes federation routing.
+- Leave the constants unfixed, matching `traverse-framework/registry`'s
+  deliberate choice not to paper over this with passthrough entries —
+  appropriate for that repo (out of its scope, and a passthrough there
+  would mask rather than fix), but this repo owns the actual bug and can
+  close it properly instead of leaving it permanently broken.
+
+### Outcome
+
+`077-metadata-graph` and `078-federation-registry-routing` are approved and
+immutable, each governing exactly the source file(s) it describes.
+`approved_spec_registry_contains()` now returns `true` for the spec IDs
+actually embedded in `traverse-registry`'s shipped code. All existing
+`traverse-registry` and `traverse-cli` tests pass unchanged in behavior —
+only the literal spec-ID strings changed.

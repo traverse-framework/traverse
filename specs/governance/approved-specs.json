@@ -920,6 +920,30 @@
       ]
     },
     {
+      "id": "077-metadata-graph",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/077-metadata-graph/spec.md",
+      "governs": [
+        "crates/traverse-registry/src/graph.rs",
+        "specs/077-metadata-graph/",
+        "specs/governance/"
+      ]
+    },
+    {
+      "id": "078-federation-registry-routing",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/078-federation-registry-routing/spec.md",
+      "governs": [
+        "crates/traverse-registry/src/federation.rs",
+        "crates/traverse-cli/src/federation_operator.rs",
+        "specs/078-federation-registry-routing/"
+      ]
+    },
+    {
       "id": "188-codex-agent-coordination",
       "version": "1.0.0",
       "status": "approved",

@@ -8,7 +8,7 @@ use traverse_contracts::Lifecycle;
 
 const METADATA_GRAPH_KIND: &str = "metadata_graph_snapshot";
 const METADATA_GRAPH_SCHEMA_VERSION: &str = "1.0.0";
-const METADATA_GRAPH_GOVERNING_SPEC: &str = "015-metadata-graph";
+const METADATA_GRAPH_GOVERNING_SPEC: &str = "077-metadata-graph";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataGraphSnapshot {
