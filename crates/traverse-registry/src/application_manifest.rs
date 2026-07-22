@@ -451,6 +451,24 @@ pub struct RegistryReference {
     pub version_range: String,
 }
 
+/// Locally verified material for a public component selected from synced state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRegistryComponent {
+    pub contract_path: PathBuf,
+    pub contract: CapabilityContract,
+    pub wasm_binary_path: PathBuf,
+    pub wasm_digest: String,
+}
+
+/// Resolves a registry reference without granting application loading network access.
+pub trait RegistryComponentResolver {
+    /// Returns a digest-verified cached component selected from local synced state.
+    fn resolve(
+        &self,
+        reference: &RegistryReference,
+    ) -> Result<ResolvedRegistryComponent, ApplicationManifestFailure>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentExecutionMode {
     Wasm,
@@ -677,6 +695,22 @@ struct ModelCandidateSerde {
 pub fn load_application_bundle_manifest(
     manifest_path: &Path,
 ) -> Result<ApplicationBundleManifest, ApplicationManifestFailure> {
+    load_application_bundle_manifest_with_resolver(manifest_path, None)
+}
+
+/// Loads an application manifest using a caller-provided public-component resolver.
+///
+/// The resolver must use already-synced local registry state and verified cache
+/// material; this function never performs network I/O.
+///
+/// # Errors
+///
+/// Returns [`ApplicationManifestFailure`] when the manifest is invalid or a
+/// referenced public component cannot be resolved by the supplied resolver.
+pub fn load_application_bundle_manifest_with_resolver(
+    manifest_path: &Path,
+    resolver: Option<&dyn RegistryComponentResolver>,
+) -> Result<ApplicationBundleManifest, ApplicationManifestFailure> {
     let manifest_dir = manifest_path.parent().ok_or_else(|| {
         single_error(
             ApplicationManifestErrorCode::ManifestParentMissing,
@@ -718,7 +752,7 @@ pub fn load_application_bundle_manifest(
     let components = manifest
         .components
         .iter()
-        .map(|component| load_component(manifest_dir, component))
+        .map(|component| load_component(manifest_dir, component, resolver))
         .collect::<Result<Vec<_>, _>>()?;
     let state_machine = validate_state_machine(&manifest, &components)?;
 
@@ -1748,6 +1782,7 @@ fn looks_like_placeholder(value: &str) -> bool {
 fn load_component(
     manifest_dir: &Path,
     reference: &ApplicationComponentRef,
+    resolver: Option<&dyn RegistryComponentResolver>,
 ) -> Result<ApplicationComponent, ApplicationManifestFailure> {
     let manifest_path = manifest_dir.join(&reference.manifest_path);
     if !manifest_path.is_file() {
@@ -1787,20 +1822,41 @@ fn load_component(
 
     let execution_mode = parse_component_execution_mode(&component, &manifest_path)?;
     validate_component_source(&component, &manifest_path)?;
-    if component.registry_ref.is_some() {
-        return Err(single_error(
-            ApplicationManifestErrorCode::RegistryReferenceRequiresResolution,
-            manifest_path.display().to_string(),
-            format!(
-                "component {}@{} uses registry_ref and must be resolved during app registration",
-                component.component_id, component.version
-            ),
-        ));
-    }
-    let expected_component_digest =
-        ensure_component_reference_matches(reference, &component, execution_mode, &manifest_path)?;
     validate_component_execution_mode(&component, execution_mode, &manifest_path)?;
     ensure_concrete_component_dependencies(&component.dependencies, &manifest_path)?;
+
+    if let Some(registry_ref) = component.registry_ref.as_ref() {
+        let resolver = resolver.ok_or_else(|| {
+            single_error(
+                ApplicationManifestErrorCode::RegistryReferenceRequiresResolution,
+                manifest_path.display().to_string(),
+                format!(
+                    "component {}@{} uses registry_ref and must be resolved during app registration",
+                    component.component_id, component.version
+                ),
+            )
+        })?;
+        let resolved = resolver.resolve(registry_ref)?;
+        ensure_registry_component_reference_matches(
+            reference,
+            &component,
+            &resolved,
+            &manifest_path,
+        )?;
+        ensure_resolved_contract_matches(&resolved.contract, &component, &manifest_path)?;
+        return Ok(ApplicationComponent {
+            reference: reference.clone(),
+            manifest_path,
+            manifest: to_component_manifest(component, execution_mode),
+            contract_path: resolved.contract_path,
+            contract: resolved.contract,
+            wasm_binary_path: Some(resolved.wasm_binary_path),
+            verified_wasm_digest: Some(resolved.wasm_digest),
+        });
+    }
+
+    let expected_component_digest =
+        ensure_component_reference_matches(reference, &component, execution_mode, &manifest_path)?;
 
     let component_dir = manifest_path.parent().unwrap_or(manifest_dir);
     let contract_path = component_dir.join(component.contract_path.as_deref().unwrap_or_default());
@@ -1838,6 +1894,58 @@ fn load_component(
         wasm_binary_path,
         verified_wasm_digest,
     })
+}
+
+fn ensure_registry_component_reference_matches(
+    reference: &ApplicationComponentRef,
+    component: &WasmComponentManifestSerde,
+    resolved: &ResolvedRegistryComponent,
+    manifest_path: &Path,
+) -> Result<(), ApplicationManifestFailure> {
+    if reference.component_id != component.component_id || reference.version != component.version {
+        return Err(single_error(
+            ApplicationManifestErrorCode::ComponentReferenceMismatch,
+            manifest_path.display().to_string(),
+            "component reference does not match registry-ref component metadata".to_string(),
+        ));
+    }
+    let expected = normalize_sha256_digest(&reference.digest).ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::InvalidDigestMetadata,
+            "$.components[].digest".to_string(),
+            "component reference declares invalid digest metadata".to_string(),
+        )
+    })?;
+    let actual = normalize_sha256_digest(&resolved.wasm_digest).ok_or_else(|| {
+        single_error(
+            ApplicationManifestErrorCode::InvalidDigestMetadata,
+            manifest_path.display().to_string(),
+            "resolved registry component declares invalid digest metadata".to_string(),
+        )
+    })?;
+    if expected != actual {
+        return Err(single_error(
+            ApplicationManifestErrorCode::ComponentDigestMismatch,
+            manifest_path.display().to_string(),
+            "registry component digest does not match the application reference".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_resolved_contract_matches(
+    contract: &CapabilityContract,
+    component: &WasmComponentManifestSerde,
+    manifest_path: &Path,
+) -> Result<(), ApplicationManifestFailure> {
+    if contract.id != component.capability_id || contract.version != component.capability_version {
+        return Err(single_error(
+            ApplicationManifestErrorCode::ComponentContractMismatch,
+            manifest_path.display().to_string(),
+            "resolved registry contract does not match component capability metadata".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_component_source(

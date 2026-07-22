@@ -7,14 +7,28 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use traverse_contracts::{ExecutionTarget, parse_event_contract};
+use traverse_contracts::{ExecutionTarget, parse_contract, parse_event_contract};
 use traverse_registry::{
     ApplicationManifestErrorCode, ApplicationRegistrationErrorCode, ApplicationRegistrationRequest,
     ApplicationRegistrationStatus, ApplicationRegistry, ApplicationStateTransitionConditionOp,
     CapabilityRegistry, EventRegistration, EventRegistry, LookupScope, ModelCandidateRejectionCode,
-    ModelResolutionEvidence, ModelResolutionPhase, RegistryScope, SelectedModelCandidate,
-    WorkflowRegistry, load_application_bundle_manifest,
+    ModelResolutionEvidence, ModelResolutionPhase, RegistryComponentResolver, RegistryReference,
+    RegistryScope, ResolvedRegistryComponent, SelectedModelCandidate, WorkflowRegistry,
+    load_application_bundle_manifest, load_application_bundle_manifest_with_resolver,
 };
+
+struct StaticRegistryResolver {
+    component: ResolvedRegistryComponent,
+}
+
+impl RegistryComponentResolver for StaticRegistryResolver {
+    fn resolve(
+        &self,
+        _reference: &RegistryReference,
+    ) -> Result<ResolvedRegistryComponent, traverse_registry::ApplicationManifestFailure> {
+        Ok(self.component.clone())
+    }
+}
 
 #[test]
 fn loads_checked_in_application_manifest_with_real_wasm_component() {
@@ -176,6 +190,48 @@ fn registry_reference_requires_registration_resolution() {
     assert_eq!(
         failure.errors[0].code,
         ApplicationManifestErrorCode::RegistryReferenceRequiresResolution
+    );
+}
+
+#[test]
+fn loads_registry_reference_from_caller_verified_material() {
+    let fixture = AppFixture::new("resolved-registry-reference");
+    let wasm_digest = fixture.write_wasm("registry component bytes");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        "expedition.readiness.validate-team-readiness-component",
+        "1.0.0",
+        &format!("sha256:{wasm_digest}"),
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+    let contract_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+    );
+    let contract =
+        parse_contract(&fs::read_to_string(&contract_path).expect("contract fixture should read"))
+            .expect("contract fixture should parse");
+    let resolver = StaticRegistryResolver {
+        component: ResolvedRegistryComponent {
+            contract_path,
+            contract,
+            wasm_binary_path: fixture.wasm_path(),
+            wasm_digest: format!("sha256:{wasm_digest}"),
+        },
+    };
+
+    let bundle = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect("caller-verified registry material should load");
+    assert_eq!(
+        bundle.components[0].verified_wasm_digest,
+        Some(format!("sha256:{wasm_digest}"))
     );
 }
 
