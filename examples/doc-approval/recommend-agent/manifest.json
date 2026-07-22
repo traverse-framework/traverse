@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/recommend-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "expected_digest": "fnv1a64:e2ab461fe9dc917f",
     "abi_version": "1.0.0"
   },
   "constraints": {
