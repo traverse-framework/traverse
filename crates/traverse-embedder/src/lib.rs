@@ -86,18 +86,19 @@ mod test_double;
 pub use test_double::EmbedderTestDouble;
 
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use traverse_registry::{
     ApplicationRegistrationFailure, ApplicationRegistrationRequest, ApplicationRegistry,
     CapabilityRegistry, ComponentExecutionMode, EventRegistry, RegistryScope, WorkflowRegistry,
     load_application_bundle_manifest,
 };
 use traverse_runtime::{
-    ArtifactRouter, PlacementTarget, Runtime, RuntimeContext, RuntimeError, RuntimeErrorCode,
-    RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeRequest, RuntimeResultStatus,
-    WorkflowExecutionRequest, WorkflowLookupScope, WorkflowTraversalStatus,
-    WorkflowTraversalStepStatus,
+    ArtifactRouter, ExecutionFailureReason, PlacementTarget, Runtime, RuntimeContext, RuntimeError,
+    RuntimeErrorCode, RuntimeExecutionOutcome, RuntimeIntent, RuntimeLookup, RuntimeLookupScope,
+    RuntimeRequest, RuntimeResultStatus, WorkflowExecutionOutcome, WorkflowExecutionRequest,
+    WorkflowLookupScope, WorkflowTraversalStatus, WorkflowTraversalStepStatus,
 };
 
 /// Implemented embedder API version (spec 057 IDL `$id` suffix).
@@ -106,11 +107,189 @@ pub const EMBEDDER_API_VERSION: &str = "1.0.0";
 /// Conformance suite revision this package certifies against (spec 057).
 pub const EMBEDDER_CONFORMANCE_VERSION: &str = "1.0.0";
 
+/// Implemented companion Trace API version (spec 517).
+pub const EMBEDDED_TRACE_API_VERSION: &str = "1.0.0";
+
+/// Maximum number of public trace records retained by one embedded session.
+pub const EMBEDDED_TRACE_RETENTION_LIMIT: usize = 100;
+
+/// Largest page the public embedded Trace API returns in one call.
+pub const EMBEDDED_TRACE_MAX_PAGE_SIZE: usize = 100;
+
 /// Application bundle manifest `schema_version` values this package accepts.
 pub const SUPPORTED_BUNDLE_SCHEMA_VERSIONS: &[&str] = &["1.0.0"];
 
 const EVENT_SCHEMA_VERSION: &str = "1.0.0";
 const DEFAULT_WORKSPACE_ID: &str = "local-default";
+static NEXT_EMBEDDED_TRACE_SESSION: AtomicU64 = AtomicU64::new(1);
+
+/// Stable machine-readable public Trace API failure codes (spec 517 FR-010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddedTraceApiErrorCode {
+    /// The cursor is malformed, stale, or belongs to another embedder session.
+    InvalidCursor,
+    /// The requested trace is no longer retained by this session.
+    TraceNotFound,
+    /// The embedder has been stopped and cannot serve local diagnostics.
+    TraceApiUnavailable,
+    /// The caller requested a companion API version this package does not support.
+    IncompatibleVersion,
+}
+
+impl EmbeddedTraceApiErrorCode {
+    /// Returns the stable wire representation of this code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidCursor => "invalid_cursor",
+            Self::TraceNotFound => "trace_not_found",
+            Self::TraceApiUnavailable => "trace_api_unavailable",
+            Self::IncompatibleVersion => "incompatible_version",
+        }
+    }
+}
+
+/// A public Trace API failure with a stable code and deliberately generic text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTraceApiError {
+    /// Machine-readable failure classification.
+    pub code: EmbeddedTraceApiErrorCode,
+    /// Safe explanatory text. It never contains runtime error details.
+    pub message: &'static str,
+}
+
+impl EmbeddedTraceApiError {
+    fn new(code: EmbeddedTraceApiErrorCode) -> Self {
+        let message = match code {
+            EmbeddedTraceApiErrorCode::InvalidCursor => {
+                "the trace cursor is invalid for this embedded session"
+            }
+            EmbeddedTraceApiErrorCode::TraceNotFound => {
+                "the requested trace is not retained by this embedded session"
+            }
+            EmbeddedTraceApiErrorCode::TraceApiUnavailable => {
+                "the embedded Trace API is unavailable because the host is stopped"
+            }
+            EmbeddedTraceApiErrorCode::IncompatibleVersion => {
+                "the requested embedded Trace API version is not supported"
+            }
+        };
+        Self { code, message }
+    }
+}
+
+/// The safe terminal outcome exposed by the public embedded Trace API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddedTraceOutcome {
+    /// Runtime execution completed successfully.
+    Completed,
+    /// Runtime execution produced a stable failure classification.
+    Error,
+}
+
+/// One public phase code in a safe trace projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTracePhase {
+    /// Stable phase classification; no phase payload or telemetry is exposed.
+    pub code: String,
+}
+
+/// Safe selected-target evidence for a public trace detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTraceSelectedTarget {
+    /// Runtime-selected capability or workflow identity.
+    pub target_id: String,
+    /// Selected target version when runtime evidence has one.
+    pub target_version: Option<String>,
+}
+
+/// Safe placement evidence for a public trace detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTracePlacement {
+    /// Placement selected by the runtime, rendered as a stable code.
+    pub target: String,
+}
+
+/// Safe list-oriented record for one completed local execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTraceSummary {
+    /// Opaque public identifier scoped to this embedded session.
+    pub trace_id: String,
+    /// Runtime execution identifier, or a derived workflow execution identifier.
+    pub execution_id: String,
+    /// Submitted bundled target identity.
+    pub target_id: String,
+    /// Deterministic session-local completion time in UTC representation.
+    pub completed_at: String,
+    /// Monotonic completion evidence used for deterministic ordering.
+    pub completion_sequence: u64,
+    /// Safe terminal outcome.
+    pub outcome: EmbeddedTraceOutcome,
+}
+
+/// Safe public diagnostic detail for one retained local trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTraceDetail {
+    /// The corresponding list summary.
+    pub summary: EmbeddedTraceSummary,
+    /// Safe runtime or workflow phase classifications.
+    pub phases: Vec<EmbeddedTracePhase>,
+    /// Selected target evidence when runtime evidence reached selection.
+    pub selected_target: Option<EmbeddedTraceSelectedTarget>,
+    /// Selected placement evidence when available.
+    pub placement: Option<EmbeddedTracePlacement>,
+    /// Stable runtime or traversal failure classification, never error text.
+    pub failure_code: Option<String>,
+    /// Whether runtime state-machine evidence has no recorded violations.
+    pub state_machine_valid: Option<bool>,
+}
+
+/// A bounded, cursor-paged public Trace API response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTracePage {
+    /// Newest-first public trace summaries.
+    pub summaries: Vec<EmbeddedTraceSummary>,
+    /// Opaque cursor for the following page, if retained results remain.
+    pub next_cursor: Option<String>,
+    /// Fixed process-local retention capacity advertised to consumers.
+    pub retention_limit: usize,
+}
+
+/// The additive `embedded-trace-api/1.0.0` companion surface (spec 517).
+///
+/// This trait intentionally does not alter [`TraverseEmbedderApi`]. A host
+/// that implements it provides `trace.list` and `trace.get` over a bounded,
+/// process-local safe projection; callers must request the advertised version.
+pub trait EmbeddedTraceApi {
+    /// Returns the companion API version advertised by this host.
+    fn embedded_trace_api_version(&self) -> &'static str;
+
+    /// `trace.list`: returns a deterministic page of safe local summaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable API error when the requested version is unsupported,
+    /// the page size is invalid, or the opaque cursor is malformed or belongs
+    /// to another host session.
+    fn trace_list(
+        &self,
+        requested_version: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<EmbeddedTracePage, EmbeddedTraceApiError>;
+
+    /// `trace.get`: returns one safe retained local trace detail.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable API error when the requested version is unsupported,
+    /// the trace identifier is malformed, or the retained trace is absent.
+    fn trace_get(
+        &self,
+        requested_version: &str,
+        trace_id: &str,
+    ) -> Result<EmbeddedTraceDetail, EmbeddedTraceApiError>;
+}
 
 /// Runtime artifact verification posture for the embedded runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -348,6 +527,23 @@ struct CompatibleInstance {
     state: InstanceState,
 }
 
+struct EmbeddedTraceRecordInput {
+    execution_id: String,
+    target_id: String,
+    outcome: EmbeddedTraceOutcome,
+    phases: Vec<EmbeddedTracePhase>,
+    selected_target: Option<EmbeddedTraceSelectedTarget>,
+    placement: Option<EmbeddedTracePlacement>,
+    failure_code: Option<String>,
+    state_machine_valid: Option<bool>,
+}
+
+fn logical_completion_time(sequence: u64) -> String {
+    let minute = (sequence / 60) % 60;
+    let second = sequence % 60;
+    format!("1970-01-01T00:{minute:02}:{second:02}Z")
+}
+
 /// Shared deterministic embedder state: identity, counters, subscribers,
 /// event history, and the compatible-capability lifecycle table. Both the
 /// production embedder and the test double delegate here so their public
@@ -365,6 +561,9 @@ pub(crate) struct EmbedderCore {
     next_session: u64,
     next_request: u64,
     next_instance: u64,
+    trace_session: u64,
+    next_trace: u64,
+    traces: VecDeque<EmbeddedTraceDetail>,
     stopped: bool,
 }
 
@@ -389,6 +588,9 @@ impl EmbedderCore {
             next_session: 0,
             next_request: 0,
             next_instance: 0,
+            trace_session: NEXT_EMBEDDED_TRACE_SESSION.fetch_add(1, Ordering::Relaxed),
+            next_trace: 0,
+            traces: VecDeque::new(),
             stopped: false,
         }
     }
@@ -406,6 +608,126 @@ impl EmbedderCore {
     fn next_instance_id(&mut self) -> String {
         self.next_instance += 1;
         format!("inst-{:08}", self.next_instance)
+    }
+
+    fn record_trace(&mut self, input: EmbeddedTraceRecordInput) {
+        self.next_trace += 1;
+        let sequence = self.next_trace;
+        let summary = EmbeddedTraceSummary {
+            trace_id: format!("embedded-trace-{:08}-{:08}", self.trace_session, sequence),
+            execution_id: input.execution_id,
+            target_id: input.target_id,
+            completed_at: logical_completion_time(sequence),
+            completion_sequence: sequence,
+            outcome: input.outcome,
+        };
+        self.traces.push_back(EmbeddedTraceDetail {
+            summary,
+            phases: input.phases,
+            selected_target: input.selected_target,
+            placement: input.placement,
+            failure_code: input.failure_code,
+            state_machine_valid: input.state_machine_valid,
+        });
+        if self.traces.len() > EMBEDDED_TRACE_RETENTION_LIMIT {
+            let _ = self.traces.pop_front();
+        }
+    }
+
+    fn trace_list(
+        &self,
+        requested_version: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<EmbeddedTracePage, EmbeddedTraceApiError> {
+        self.ensure_trace_api_available(requested_version)?;
+        let traces = self.newest_traces();
+        let start = match cursor {
+            None => 0,
+            Some(cursor) => self.cursor_start(cursor, &traces)?,
+        };
+        let page_size = page_size.clamp(1, EMBEDDED_TRACE_MAX_PAGE_SIZE);
+        let end = start.saturating_add(page_size).min(traces.len());
+        let summaries = traces[start..end]
+            .iter()
+            .map(|detail| detail.summary.clone())
+            .collect::<Vec<_>>();
+        let next_cursor =
+            (end < traces.len()).then(|| self.cursor_for(&traces[end - 1].summary.trace_id));
+        Ok(EmbeddedTracePage {
+            summaries,
+            next_cursor,
+            retention_limit: EMBEDDED_TRACE_RETENTION_LIMIT,
+        })
+    }
+
+    fn trace_get(
+        &self,
+        requested_version: &str,
+        trace_id: &str,
+    ) -> Result<EmbeddedTraceDetail, EmbeddedTraceApiError> {
+        self.ensure_trace_api_available(requested_version)?;
+        self.traces
+            .iter()
+            .find(|detail| detail.summary.trace_id == trace_id)
+            .cloned()
+            .ok_or_else(|| EmbeddedTraceApiError::new(EmbeddedTraceApiErrorCode::TraceNotFound))
+    }
+
+    fn ensure_trace_api_available(
+        &self,
+        requested_version: &str,
+    ) -> Result<(), EmbeddedTraceApiError> {
+        if self.stopped {
+            return Err(EmbeddedTraceApiError::new(
+                EmbeddedTraceApiErrorCode::TraceApiUnavailable,
+            ));
+        }
+        if requested_version != EMBEDDED_TRACE_API_VERSION {
+            return Err(EmbeddedTraceApiError::new(
+                EmbeddedTraceApiErrorCode::IncompatibleVersion,
+            ));
+        }
+        Ok(())
+    }
+
+    fn newest_traces(&self) -> Vec<&EmbeddedTraceDetail> {
+        let mut traces = self.traces.iter().collect::<Vec<_>>();
+        traces.sort_by(|left, right| {
+            right
+                .summary
+                .completion_sequence
+                .cmp(&left.summary.completion_sequence)
+                .then_with(|| left.summary.trace_id.cmp(&right.summary.trace_id))
+        });
+        traces
+    }
+
+    fn cursor_for(&self, trace_id: &str) -> String {
+        format!("embedded-trace-cursor:{}:{trace_id}", self.trace_session)
+    }
+
+    fn cursor_start(
+        &self,
+        cursor: &str,
+        traces: &[&EmbeddedTraceDetail],
+    ) -> Result<usize, EmbeddedTraceApiError> {
+        let Some((prefix, trace_id)) = cursor.rsplit_once(':') else {
+            return Err(EmbeddedTraceApiError::new(
+                EmbeddedTraceApiErrorCode::InvalidCursor,
+            ));
+        };
+        let expected_prefix = format!("embedded-trace-cursor:{}", self.trace_session);
+        if prefix != expected_prefix {
+            return Err(EmbeddedTraceApiError::new(
+                EmbeddedTraceApiErrorCode::InvalidCursor,
+            ));
+        }
+        traces
+            .iter()
+            .position(|detail| detail.summary.trace_id == trace_id)
+            .map(|position| position + 1)
+            .ok_or_else(|| EmbeddedTraceApiError::new(EmbeddedTraceApiErrorCode::InvalidCursor))
     }
 
     fn emit(&mut self, event_type: &str, session_id: Option<&str>, data: Value) {
@@ -636,6 +958,7 @@ impl EmbedderCore {
             self.set_instance_state(&id, InstanceState::Killed);
         }
         self.stopped = true;
+        self.traces.clear();
         ShutdownOutcome { killed_instances }
     }
 
@@ -648,6 +971,9 @@ impl EmbedderCore {
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "embedder_api_version": EMBEDDER_API_VERSION,
+            "companion_apis": {
+                "embedded-trace-api": EMBEDDED_TRACE_API_VERSION,
+            },
             "conformance_version": EMBEDDER_CONFORMANCE_VERSION,
             "runtime": {
                 "implementation": runtime_implementation,
@@ -844,6 +1170,9 @@ impl BundleEmbedder {
             governing_spec: "007-workflow-registry-traversal".to_string(),
         });
 
+        self.core
+            .record_trace(workflow_trace_input(&outcome, target_id, &workflow_version));
+
         for step in &outcome.evidence.visited_nodes {
             self.core.emit(
                 "capability_invoked",
@@ -926,6 +1255,9 @@ impl BundleEmbedder {
             governing_spec: "006-runtime-request-execution".to_string(),
         });
 
+        self.core
+            .record_trace(runtime_trace_input(&outcome, target_id));
+
         let execution_id = outcome.result.execution_id.clone();
         self.core.emit(
             "capability_invoked",
@@ -967,6 +1299,29 @@ impl BundleEmbedder {
             status: SubmitStatus::Accepted,
             error: None,
         }
+    }
+}
+
+impl EmbeddedTraceApi for BundleEmbedder {
+    fn embedded_trace_api_version(&self) -> &'static str {
+        EMBEDDED_TRACE_API_VERSION
+    }
+
+    fn trace_list(
+        &self,
+        requested_version: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<EmbeddedTracePage, EmbeddedTraceApiError> {
+        self.core.trace_list(requested_version, page_size, cursor)
+    }
+
+    fn trace_get(
+        &self,
+        requested_version: &str,
+        trace_id: &str,
+    ) -> Result<EmbeddedTraceDetail, EmbeddedTraceApiError> {
+        self.core.trace_get(requested_version, trace_id)
     }
 }
 
@@ -1031,6 +1386,136 @@ impl TraverseEmbedderApi for BundleEmbedder {
     fn release_evidence(&self) -> Value {
         self.core
             .evidence("traverse-runtime", self.wasm_component_evidence.clone())
+    }
+}
+
+fn runtime_trace_input(
+    outcome: &RuntimeExecutionOutcome,
+    target_id: &str,
+) -> EmbeddedTraceRecordInput {
+    let phases = outcome
+        .trace
+        .state_progression
+        .transitions
+        .iter()
+        .map(|transition| EmbeddedTracePhase {
+            code: runtime_state_code(transition.to_state).to_string(),
+        })
+        .collect();
+    let selected_target =
+        outcome
+            .trace
+            .selection
+            .selected_capability_id
+            .as_ref()
+            .map(|target_id| EmbeddedTraceSelectedTarget {
+                target_id: target_id.clone(),
+                target_version: outcome.trace.selection.selected_capability_version.clone(),
+            });
+    let placement = outcome
+        .trace
+        .execution
+        .placement
+        .selected_target
+        .map(|target| EmbeddedTracePlacement {
+            target: placement_target_code(target).to_string(),
+        });
+    let failure_code = outcome
+        .result
+        .error
+        .as_ref()
+        .map(|error| runtime_error_code_str(error.code).to_string())
+        .or_else(|| {
+            outcome
+                .trace
+                .execution
+                .failure_reason
+                .map(|reason| execution_failure_code(reason).to_string())
+        });
+    EmbeddedTraceRecordInput {
+        execution_id: outcome.result.execution_id.clone(),
+        target_id: target_id.to_string(),
+        outcome: match outcome.result.status {
+            RuntimeResultStatus::Completed => EmbeddedTraceOutcome::Completed,
+            RuntimeResultStatus::Error => EmbeddedTraceOutcome::Error,
+        },
+        phases,
+        selected_target,
+        placement,
+        failure_code,
+        state_machine_valid: Some(outcome.trace.state_machine_validation.violations.is_empty()),
+    }
+}
+
+fn workflow_trace_input(
+    outcome: &WorkflowExecutionOutcome,
+    target_id: &str,
+    workflow_version: &str,
+) -> EmbeddedTraceRecordInput {
+    let phases = outcome
+        .evidence
+        .visited_nodes
+        .iter()
+        .map(|step| EmbeddedTracePhase {
+            code: format!("workflow_{}", workflow_step_status_str(step.status)),
+        })
+        .collect();
+    EmbeddedTraceRecordInput {
+        execution_id: format!("workflow-{}", outcome.result.request_id),
+        target_id: target_id.to_string(),
+        outcome: match outcome.result.status {
+            WorkflowTraversalStatus::Completed => EmbeddedTraceOutcome::Completed,
+            WorkflowTraversalStatus::Error => EmbeddedTraceOutcome::Error,
+        },
+        phases,
+        selected_target: Some(EmbeddedTraceSelectedTarget {
+            target_id: target_id.to_string(),
+            target_version: Some(workflow_version.to_string()),
+        }),
+        placement: None,
+        failure_code: outcome
+            .result
+            .error
+            .as_ref()
+            .map(|error| runtime_error_code_str(error.code).to_string()),
+        state_machine_valid: None,
+    }
+}
+
+fn runtime_state_code(state: traverse_runtime::RuntimeState) -> &'static str {
+    match state {
+        traverse_runtime::RuntimeState::Idle => "idle",
+        traverse_runtime::RuntimeState::LoadingRegistry => "loading_registry",
+        traverse_runtime::RuntimeState::Ready => "ready",
+        traverse_runtime::RuntimeState::Discovering => "discovering",
+        traverse_runtime::RuntimeState::EvaluatingConstraints => "evaluating_constraints",
+        traverse_runtime::RuntimeState::Selecting => "selecting",
+        traverse_runtime::RuntimeState::Executing => "executing",
+        traverse_runtime::RuntimeState::EmittingEvents => "emitting_events",
+        traverse_runtime::RuntimeState::Completed => "completed",
+        traverse_runtime::RuntimeState::Error => "error",
+    }
+}
+
+fn placement_target_code(target: PlacementTarget) -> &'static str {
+    match target {
+        PlacementTarget::Local => "local",
+        PlacementTarget::Browser => "browser",
+        PlacementTarget::Edge => "edge",
+        PlacementTarget::Cloud => "cloud",
+        PlacementTarget::Worker => "worker",
+        PlacementTarget::Device => "device",
+    }
+}
+
+fn execution_failure_code(reason: ExecutionFailureReason) -> &'static str {
+    match reason {
+        ExecutionFailureReason::ContractInputInvalid => "contract_input_invalid",
+        ExecutionFailureReason::ArtifactMissing => "artifact_missing",
+        ExecutionFailureReason::ArtifactNotRunnable => "artifact_not_runnable",
+        ExecutionFailureReason::PlacementUnsupported => "placement_unsupported",
+        ExecutionFailureReason::ExecutionFailed => "execution_failed",
+        ExecutionFailureReason::ContractOutputInvalid => "contract_output_invalid",
     }
 }
 
@@ -1260,5 +1745,223 @@ mod tests {
         );
         core.set_instance_state("inst-missing", InstanceState::Killed);
         assert!(core.history.is_empty());
+    }
+
+    #[test]
+    fn embedded_trace_api_pages_safe_test_double_records() -> Result<(), String> {
+        let secret_input = "input-secret-never-public";
+        let secret_output = "output-secret-never-public";
+        let secret_error = "error-secret-never-public";
+        let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
+            .with_target_output("demo.success", json!({ "secret": secret_output }))
+            .with_target_error("demo.failure", "execution_failed", secret_error);
+        assert_eq!(
+            embedder.embedded_trace_api_version(),
+            EMBEDDED_TRACE_API_VERSION
+        );
+
+        let accepted = embedder.submit("demo.success", &json!({ "secret": secret_input }));
+        assert_eq!(accepted.status, SubmitStatus::Accepted);
+        let accepted = embedder.submit("demo.failure", &json!({ "secret": secret_input }));
+        assert_eq!(accepted.status, SubmitStatus::Accepted);
+
+        let first_page = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)
+            .map_err(|error| error.message.to_string())?;
+        assert_eq!(first_page.retention_limit, EMBEDDED_TRACE_RETENTION_LIMIT);
+        assert_eq!(first_page.summaries.len(), 1);
+        assert_eq!(first_page.summaries[0].target_id, "demo.failure");
+        assert_eq!(first_page.summaries[0].outcome, EmbeddedTraceOutcome::Error);
+        let cursor = first_page
+            .next_cursor
+            .ok_or("the first page should have a continuation cursor")?;
+        let failure = embedder
+            .trace_get(
+                EMBEDDED_TRACE_API_VERSION,
+                &first_page.summaries[0].trace_id,
+            )
+            .map_err(|error| error.message.to_string())?;
+        assert_eq!(failure.failure_code.as_deref(), Some("execution_failed"));
+        assert_eq!(failure.phases[0].code, "error");
+        let safe_debug = format!("{failure:?}");
+        assert!(!safe_debug.contains(secret_input));
+        assert!(!safe_debug.contains(secret_output));
+        assert!(!safe_debug.contains(secret_error));
+
+        let second_page = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 1, Some(&cursor))
+            .map_err(|error| error.message.to_string())?;
+        assert_eq!(second_page.summaries.len(), 1);
+        assert_eq!(second_page.summaries[0].target_id, "demo.success");
+        assert!(second_page.next_cursor.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_trace_api_rejects_stale_versions_cursors_and_stopped_hosts() -> Result<(), String> {
+        let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
+            .with_target_output("demo.success", json!({ "value": "safe" }));
+        let _ = embedder.submit("demo.success", &json!({}));
+        let _ = embedder.submit("demo.success", &json!({}));
+        let cursor = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)
+            .map_err(|error| error.message.to_string())?
+            .next_cursor
+            .ok_or("two retained traces should produce a cursor")?;
+
+        let version_error = embedder
+            .trace_list("2.0.0", 10, None)
+            .err()
+            .ok_or("an incompatible version should fail")?;
+        assert_eq!(
+            version_error.code,
+            EmbeddedTraceApiErrorCode::IncompatibleVersion
+        );
+        let cursor_error = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 10, Some("not-a-cursor"))
+            .err()
+            .ok_or("a malformed cursor should fail")?;
+        assert_eq!(cursor_error.code, EmbeddedTraceApiErrorCode::InvalidCursor);
+
+        let mut other_session = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
+            .with_target_output("demo.success", json!({ "value": "safe" }));
+        let _ = other_session.submit("demo.success", &json!({}));
+        let foreign_cursor_error = other_session
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 10, Some(&cursor))
+            .err()
+            .ok_or("a cursor from another session should fail")?;
+        assert_eq!(
+            foreign_cursor_error.code,
+            EmbeddedTraceApiErrorCode::InvalidCursor
+        );
+
+        let _ = embedder.shutdown();
+        let stopped_error = embedder
+            .trace_list(EMBEDDED_TRACE_API_VERSION, 10, None)
+            .err()
+            .ok_or("a stopped host should be unavailable")?;
+        assert_eq!(
+            stopped_error.code,
+            EmbeddedTraceApiErrorCode::TraceApiUnavailable
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_trace_api_evicts_oldest_records_deterministically() -> Result<(), String> {
+        let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
+            .with_target_output("demo.success", json!({ "value": "safe" }));
+        let mut first_trace_id = None;
+        for index in 0..=EMBEDDED_TRACE_RETENTION_LIMIT {
+            let _ = embedder.submit("demo.success", &json!({ "index": index }));
+            if index == 0 {
+                first_trace_id = embedder
+                    .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)
+                    .map_err(|error| error.message.to_string())?
+                    .summaries
+                    .first()
+                    .map(|summary| summary.trace_id.clone());
+            }
+        }
+        let first_trace_id =
+            first_trace_id.ok_or("the first trace should be retained initially")?;
+        let retained = embedder
+            .trace_list(
+                EMBEDDED_TRACE_API_VERSION,
+                EMBEDDED_TRACE_RETENTION_LIMIT,
+                None,
+            )
+            .map_err(|error| error.message.to_string())?;
+        assert_eq!(retained.summaries.len(), EMBEDDED_TRACE_RETENTION_LIMIT);
+        assert_eq!(retained.summaries[0].completion_sequence, 101);
+        let evicted = embedder
+            .trace_get(EMBEDDED_TRACE_API_VERSION, &first_trace_id)
+            .err()
+            .ok_or("the oldest record should have been evicted")?;
+        assert_eq!(evicted.code, EmbeddedTraceApiErrorCode::TraceNotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_trace_error_codes_render_stably() {
+        let codes = [
+            (EmbeddedTraceApiErrorCode::InvalidCursor, "invalid_cursor"),
+            (EmbeddedTraceApiErrorCode::TraceNotFound, "trace_not_found"),
+            (
+                EmbeddedTraceApiErrorCode::TraceApiUnavailable,
+                "trace_api_unavailable",
+            ),
+            (
+                EmbeddedTraceApiErrorCode::IncompatibleVersion,
+                "incompatible_version",
+            ),
+        ];
+        for (code, expected) in codes {
+            assert_eq!(code.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn trace_projection_codes_cover_public_runtime_enums() {
+        let states = [
+            (traverse_runtime::RuntimeState::Idle, "idle"),
+            (
+                traverse_runtime::RuntimeState::LoadingRegistry,
+                "loading_registry",
+            ),
+            (traverse_runtime::RuntimeState::Ready, "ready"),
+            (traverse_runtime::RuntimeState::Discovering, "discovering"),
+            (
+                traverse_runtime::RuntimeState::EvaluatingConstraints,
+                "evaluating_constraints",
+            ),
+            (traverse_runtime::RuntimeState::Selecting, "selecting"),
+            (traverse_runtime::RuntimeState::Executing, "executing"),
+            (
+                traverse_runtime::RuntimeState::EmittingEvents,
+                "emitting_events",
+            ),
+            (traverse_runtime::RuntimeState::Completed, "completed"),
+            (traverse_runtime::RuntimeState::Error, "error"),
+        ];
+        for (state, expected) in states {
+            assert_eq!(runtime_state_code(state), expected);
+        }
+
+        let placements = [
+            (PlacementTarget::Local, "local"),
+            (PlacementTarget::Browser, "browser"),
+            (PlacementTarget::Edge, "edge"),
+            (PlacementTarget::Cloud, "cloud"),
+            (PlacementTarget::Worker, "worker"),
+            (PlacementTarget::Device, "device"),
+        ];
+        for (target, expected) in placements {
+            assert_eq!(placement_target_code(target), expected);
+        }
+
+        let failures = [
+            (
+                ExecutionFailureReason::ContractInputInvalid,
+                "contract_input_invalid",
+            ),
+            (ExecutionFailureReason::ArtifactMissing, "artifact_missing"),
+            (
+                ExecutionFailureReason::ArtifactNotRunnable,
+                "artifact_not_runnable",
+            ),
+            (
+                ExecutionFailureReason::PlacementUnsupported,
+                "placement_unsupported",
+            ),
+            (ExecutionFailureReason::ExecutionFailed, "execution_failed"),
+            (
+                ExecutionFailureReason::ContractOutputInvalid,
+                "contract_output_invalid",
+            ),
+        ];
+        for (reason, expected) in failures {
+            assert_eq!(execution_failure_code(reason), expected);
+        }
     }
 }

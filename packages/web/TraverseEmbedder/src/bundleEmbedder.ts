@@ -33,10 +33,14 @@ import type { BundleLoader } from "./bundleLoader.js";
 import { findUnauthorizedImport } from "./hostAbi.js";
 import { WasiExit, WasiPipes, createWasiPreview1Imports } from "./wasi.js";
 import type { WasiMemoryRef } from "./wasi.js";
-import { embedderError, runtimeStoppedError } from "./types.js";
+import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
+  EmbeddedTraceApi,
+  EmbeddedTraceApiError,
+  EmbeddedTraceDetail,
+  EmbeddedTracePage,
   EventCallback,
   JsonValue,
   ShutdownOutcome,
@@ -178,7 +182,7 @@ function projectWorkflowOutput(
   return projected;
 }
 
-export class BundleEmbedder implements TraverseEmbedderApi {
+export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly core: EmbedderCore;
   private readonly wasmTargets: ReadonlyMap<string, WasmTarget>;
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
@@ -441,6 +445,16 @@ export class BundleEmbedder implements TraverseEmbedderApi {
       capability_version: target.capabilityVersion,
     });
     const result = executeWasmModule(target, input);
+    this.core.recordTrace({
+      executionId,
+      targetId,
+      outcome: result.ok ? "completed" : "error",
+      phases: [{ code: result.ok ? "completed" : "error" }],
+      selectedTarget: { targetId, targetVersion: target.capabilityVersion },
+      placement: { target: "browser" },
+      failureCode: result.ok ? null : result.code,
+      stateMachineValid: null,
+    });
     if (result.ok) {
       this.core.emit("capability_result", sessionId, {
         execution_id: executionId,
@@ -525,6 +539,17 @@ export class BundleEmbedder implements TraverseEmbedderApi {
       currentNodeId = workflow.nextByFrom.get(node.nodeId);
     }
 
+    this.core.recordTrace({
+      executionId: `workflow-${requestId}`,
+      targetId,
+      outcome: failure === null ? "completed" : "error",
+      phases: steps.map((step) => ({ code: `workflow_${step.status}` })),
+      selectedTarget: { targetId, targetVersion: workflow.version },
+      placement: { target: "browser" },
+      failureCode: failure?.code ?? null,
+      stateMachineValid: null,
+    });
+
     for (const step of steps) {
       this.core.emit("capability_invoked", sessionId, {
         request_id: requestId,
@@ -559,6 +584,25 @@ export class BundleEmbedder implements TraverseEmbedderApi {
 
   subscribe(callback: EventCallback): void {
     this.core.subscribe(callback);
+  }
+
+  embeddedTraceApiVersion(): string {
+    return EMBEDDED_TRACE_API_VERSION;
+  }
+
+  traceList(
+    requestedVersion: string,
+    pageSize: number,
+    cursor: string | null = null,
+  ): EmbeddedTracePage | EmbeddedTraceApiError {
+    return this.core.traceList(requestedVersion, pageSize, cursor);
+  }
+
+  traceGet(
+    requestedVersion: string,
+    traceId: string,
+  ): EmbeddedTraceDetail | EmbeddedTraceApiError {
+    return this.core.traceGet(requestedVersion, traceId);
   }
 
   startCompatible(capabilityId: string, input: JsonValue): CompatibleStartOutcome {

@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import {
   EMBEDDER_API_VERSION,
   EMBEDDER_CONFORMANCE_VERSION,
+  EMBEDDED_TRACE_API_VERSION,
+  EMBEDDED_TRACE_RETENTION_LIMIT,
   BundleRejectedError,
   EmbedderTestDouble,
   validateBundleCompatibility,
@@ -79,6 +81,52 @@ test("scripted runtime-shaped errors surface as error events", () => {
   assert.equal(events[1].event_type, "error");
   assert.equal(events[1].data.error.code, "execution_failed");
   assert.equal(events[1].data.error.message, "scripted failure");
+});
+
+test("embedded Trace API pages only safe local diagnostic records", () => {
+  const secretInput = "input-secret-never-public";
+  const secretOutput = "output-secret-never-public";
+  const secretError = "error-secret-never-public";
+  const embedder = new EmbedderTestDouble()
+    .withTargetOutput("fixture.success", { secret: secretOutput })
+    .withTargetError("fixture.failure", "execution_failed", secretError);
+
+  embedder.submit("fixture.success", { secret: secretInput });
+  embedder.submit("fixture.failure", { secret: secretInput });
+  const firstPage = embedder.traceList(EMBEDDED_TRACE_API_VERSION, 1);
+
+  assert.equal(firstPage.summaries.length, 1);
+  assert.equal(firstPage.summaries[0].targetId, "fixture.failure");
+  assert.equal(firstPage.summaries[0].outcome, "error");
+  assert.equal(firstPage.retentionLimit, EMBEDDED_TRACE_RETENTION_LIMIT);
+  assert.ok(firstPage.nextCursor);
+
+  const detail = embedder.traceGet(EMBEDDED_TRACE_API_VERSION, firstPage.summaries[0].traceId);
+  assert.equal(detail.failureCode, "execution_failed");
+  assert.equal(detail.phases[0].code, "error");
+  const publicJson = JSON.stringify(detail);
+  assert.equal(publicJson.includes(secretInput), false);
+  assert.equal(publicJson.includes(secretOutput), false);
+  assert.equal(publicJson.includes(secretError), false);
+
+  const secondPage = embedder.traceList(EMBEDDED_TRACE_API_VERSION, 1, firstPage.nextCursor);
+  assert.equal(secondPage.summaries[0].targetId, "fixture.success");
+  assert.equal(secondPage.nextCursor, null);
+});
+
+test("embedded Trace API reports stable version cursor eviction and stopped-host failures", () => {
+  const embedder = new EmbedderTestDouble().withTargetOutput("fixture.success", { ok: true });
+  embedder.submit("fixture.success", {});
+  assert.equal(embedder.traceList("2.0.0", 10).code, "incompatible_version");
+  assert.equal(embedder.traceList(EMBEDDED_TRACE_API_VERSION, 10, "bad").code, "invalid_cursor");
+
+  const firstId = embedder.traceList(EMBEDDED_TRACE_API_VERSION, 1).summaries[0].traceId;
+  for (let index = 0; index < EMBEDDED_TRACE_RETENTION_LIMIT; index += 1) {
+    embedder.submit("fixture.success", { index });
+  }
+  assert.equal(embedder.traceGet(EMBEDDED_TRACE_API_VERSION, firstId).code, "trace_not_found");
+  embedder.shutdown();
+  assert.equal(embedder.traceList(EMBEDDED_TRACE_API_VERSION, 10).code, "trace_api_unavailable");
 });
 
 test("unknown targets are rejected with an error event", () => {
@@ -215,6 +263,7 @@ test("release evidence records package, versions, and bundle identity", () => {
   assert.equal(evidence.kind, "embedder_release_evidence");
   assert.equal(evidence.package.name, "traverse-embedder-web");
   assert.equal(evidence.embedder_api_version, EMBEDDER_API_VERSION);
+  assert.equal(evidence.companion_apis["embedded-trace-api"], EMBEDDED_TRACE_API_VERSION);
   assert.equal(evidence.conformance_version, EMBEDDER_CONFORMANCE_VERSION);
   assert.equal(evidence.runtime.implementation, "test-double");
   assert.equal(evidence.bundle.app_id, "fixture-app");

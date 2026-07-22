@@ -10,8 +10,9 @@ use common::{
 };
 use serde_json::{Value, json};
 use traverse_embedder::{
-    BundleEmbedder, CompatibleLifecycleStatus, EmbedderConfig, EmbedderErrorCode, SecurityPosture,
-    SubmitStatus, TraverseEmbedderApi,
+    BundleEmbedder, CompatibleLifecycleStatus, EMBEDDED_TRACE_API_VERSION, EmbeddedTraceApi,
+    EmbeddedTraceOutcome, EmbedderConfig, EmbedderErrorCode, SecurityPosture, SubmitStatus,
+    TraverseEmbedderApi,
 };
 
 fn development_embedder(fixture: &BundleFixture, platform: &str) -> BundleEmbedder {
@@ -59,6 +60,53 @@ fn wasm_capability_submit_scenario_emits_capability_result() {
     let expected: Value =
         serde_json::from_str(PROCESS_OUTPUT).expect("expected output should parse");
     assert_eq!(events[1]["data"]["output"], expected);
+}
+
+#[test]
+fn embedded_trace_companion_projects_production_capability_and_workflow_evidence() {
+    let fixture = BundleFixture::new("embedded-trace-production");
+    let mut embedder = development_embedder(&fixture, "linux");
+    assert_eq!(
+        embedder.embedded_trace_api_version(),
+        EMBEDDED_TRACE_API_VERSION
+    );
+
+    let _ = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "secret": "input-secret" }));
+    let _ = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "workflow-secret" }));
+
+    let page = embedder
+        .trace_list(EMBEDDED_TRACE_API_VERSION, 10, None)
+        .expect("production trace list should succeed");
+    assert_eq!(page.summaries.len(), 2);
+    assert_eq!(page.summaries[0].target_id, PIPELINE_WORKFLOW_ID);
+    assert_eq!(page.summaries[0].outcome, EmbeddedTraceOutcome::Completed);
+    let capability = page
+        .summaries
+        .iter()
+        .find(|summary| summary.target_id == PROCESS_CAPABILITY_ID)
+        .expect("capability submission should have a retained trace");
+    let detail = embedder
+        .trace_get(EMBEDDED_TRACE_API_VERSION, &capability.trace_id)
+        .expect("production trace detail should succeed");
+    assert_eq!(detail.summary.execution_id, capability.execution_id);
+    assert_eq!(
+        detail
+            .selected_target
+            .as_ref()
+            .map(|target| target.target_id.as_str()),
+        Some(PROCESS_CAPABILITY_ID)
+    );
+    assert_eq!(
+        detail
+            .placement
+            .as_ref()
+            .map(|placement| placement.target.as_str()),
+        Some("local")
+    );
+    assert!(detail.state_machine_valid.is_some());
+    let public_detail = format!("{detail:?}");
+    assert!(!public_detail.contains("input-secret"));
+    assert!(!public_detail.contains("workflow-secret"));
 }
 
 #[test]

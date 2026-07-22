@@ -2,9 +2,11 @@
 //! (spec 068 FR-006).
 
 use crate::{
-    CompatibleLifecycleOutcome, CompatibleStartOutcome, EmbedderCore, EmbedderError,
-    EmbedderErrorCode, EventCallback, InstanceState, ShutdownOutcome, SubmitOutcome, SubmitStatus,
-    TraverseEmbedderApi,
+    CompatibleLifecycleOutcome, CompatibleStartOutcome, EMBEDDED_TRACE_API_VERSION,
+    EmbeddedTraceApi, EmbeddedTraceApiError, EmbeddedTraceDetail, EmbeddedTraceOutcome,
+    EmbeddedTracePage, EmbeddedTracePhase, EmbeddedTraceRecordInput, EmbeddedTraceSelectedTarget,
+    EmbedderCore, EmbedderError, EmbedderErrorCode, EventCallback, InstanceState, ShutdownOutcome,
+    SubmitOutcome, SubmitStatus, TraverseEmbedderApi,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -108,6 +110,39 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
         let session_id = self.core.next_session_id();
         let request_id = self.core.next_request_id();
         let execution_id = format!("exec_{request_id}");
+        let trace_input = match &result {
+            ScriptedResult::Output(_) => EmbeddedTraceRecordInput {
+                execution_id: execution_id.clone(),
+                target_id: target_id.to_string(),
+                outcome: EmbeddedTraceOutcome::Completed,
+                phases: vec![EmbeddedTracePhase {
+                    code: "completed".to_string(),
+                }],
+                selected_target: Some(EmbeddedTraceSelectedTarget {
+                    target_id: target_id.to_string(),
+                    target_version: Some("1.0.0".to_string()),
+                }),
+                placement: None,
+                failure_code: None,
+                state_machine_valid: Some(true),
+            },
+            ScriptedResult::Error { code, .. } => EmbeddedTraceRecordInput {
+                execution_id: execution_id.clone(),
+                target_id: target_id.to_string(),
+                outcome: EmbeddedTraceOutcome::Error,
+                phases: vec![EmbeddedTracePhase {
+                    code: "error".to_string(),
+                }],
+                selected_target: Some(EmbeddedTraceSelectedTarget {
+                    target_id: target_id.to_string(),
+                    target_version: Some("1.0.0".to_string()),
+                }),
+                placement: None,
+                failure_code: Some(code.clone()),
+                state_machine_valid: Some(true),
+            },
+        };
+        self.core.record_trace(trace_input);
         self.core.emit(
             "capability_invoked",
             Some(&session_id),
@@ -182,5 +217,28 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
 
     fn release_evidence(&self) -> Value {
         self.core.evidence("test-double", json!([]))
+    }
+}
+
+impl EmbeddedTraceApi for EmbedderTestDouble {
+    fn embedded_trace_api_version(&self) -> &'static str {
+        EMBEDDED_TRACE_API_VERSION
+    }
+
+    fn trace_list(
+        &self,
+        requested_version: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<EmbeddedTracePage, EmbeddedTraceApiError> {
+        self.core.trace_list(requested_version, page_size, cursor)
+    }
+
+    fn trace_get(
+        &self,
+        requested_version: &str,
+        trace_id: &str,
+    ) -> Result<EmbeddedTraceDetail, EmbeddedTraceApiError> {
+        self.core.trace_get(requested_version, trace_id)
     }
 }

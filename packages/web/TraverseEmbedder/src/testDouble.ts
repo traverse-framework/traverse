@@ -6,10 +6,14 @@
  * no business logic.
  */
 import { EmbedderCore } from "./core.js";
-import { embedderError, runtimeStoppedError } from "./types.js";
+import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
+  EmbeddedTraceApi,
+  EmbeddedTraceApiError,
+  EmbeddedTraceDetail,
+  EmbeddedTracePage,
   EventCallback,
   JsonValue,
   ShutdownOutcome,
@@ -29,7 +33,7 @@ type ScriptedResult =
   | { readonly kind: "output"; readonly output: JsonValue }
   | { readonly kind: "error"; readonly code: string; readonly message: string };
 
-export class EmbedderTestDouble implements TraverseEmbedderApi {
+export class EmbedderTestDouble implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly core: EmbedderCore;
   private readonly scripted = new Map<string, ScriptedResult>();
 
@@ -80,6 +84,16 @@ export class EmbedderTestDouble implements TraverseEmbedderApi {
     const sessionId = this.core.nextSessionId();
     const requestId = this.core.nextRequestId();
     const executionId = `exec_${requestId}`;
+    this.core.recordTrace({
+      executionId,
+      targetId,
+      outcome: result.kind === "output" ? "completed" : "error",
+      phases: [{ code: result.kind === "output" ? "completed" : "error" }],
+      selectedTarget: { targetId, targetVersion: "1.0.0" },
+      placement: null,
+      failureCode: result.kind === "error" ? result.code : null,
+      stateMachineValid: true,
+    });
     this.core.emit("capability_invoked", sessionId, {
       execution_id: executionId,
       capability_id: targetId,
@@ -105,6 +119,25 @@ export class EmbedderTestDouble implements TraverseEmbedderApi {
 
   subscribe(callback: EventCallback): void {
     this.core.subscribe(callback);
+  }
+
+  embeddedTraceApiVersion(): string {
+    return EMBEDDED_TRACE_API_VERSION;
+  }
+
+  traceList(
+    requestedVersion: string,
+    pageSize: number,
+    cursor: string | null = null,
+  ): EmbeddedTracePage | EmbeddedTraceApiError {
+    return this.core.traceList(requestedVersion, pageSize, cursor);
+  }
+
+  traceGet(
+    requestedVersion: string,
+    traceId: string,
+  ): EmbeddedTraceDetail | EmbeddedTraceApiError {
+    return this.core.traceGet(requestedVersion, traceId);
   }
 
   startCompatible(capabilityId: string, input: JsonValue): CompatibleStartOutcome {
