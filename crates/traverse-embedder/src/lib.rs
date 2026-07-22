@@ -265,6 +265,12 @@ pub trait EmbeddedTraceApi {
     fn embedded_trace_api_version(&self) -> &'static str;
 
     /// `trace.list`: returns a deterministic page of safe local summaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable API error when the requested version is unsupported,
+    /// the page size is invalid, or the opaque cursor is malformed or belongs
+    /// to another host session.
     fn trace_list(
         &self,
         requested_version: &str,
@@ -273,6 +279,11 @@ pub trait EmbeddedTraceApi {
     ) -> Result<EmbeddedTracePage, EmbeddedTraceApiError>;
 
     /// `trace.get`: returns one safe retained local trace detail.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable API error when the requested version is unsupported,
+    /// the trace identifier is malformed, or the retained trace is absent.
     fn trace_get(
         &self,
         requested_version: &str,
