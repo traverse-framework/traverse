@@ -236,6 +236,162 @@ fn loads_registry_reference_from_caller_verified_material() {
 }
 
 #[test]
+fn rejects_resolved_registry_component_with_mismatched_reference_identity() {
+    let fixture = AppFixture::new("registry-reference-identity-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "other.component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve application component identity");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentReferenceMismatch
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_invalid_application_digest() {
+    let fixture = AppFixture::new("registry-reference-invalid-application-digest");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "not-a-digest",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must require a valid application digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::InvalidDigestMetadata
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_invalid_resolved_digest() {
+    let fixture = AppFixture::new("registry-reference-invalid-resolved-digest");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "not-a-digest",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must require a valid resolved digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::InvalidDigestMetadata
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_digest_mismatch() {
+    let fixture = AppFixture::new("registry-reference-digest-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        readiness_contract_path(),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve the application digest");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentDigestMismatch
+    );
+}
+
+#[test]
+fn rejects_resolved_registry_component_with_contract_identity_mismatch() {
+    let fixture = AppFixture::new("registry-reference-contract-mismatch");
+    let resolver = resolved_registry_reference_fixture(
+        &fixture,
+        "expedition.readiness.validate-team-readiness-component",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../contracts/examples/expedition/capabilities/interpret-expedition-intent/contract.json",
+        ),
+    );
+
+    let failure = load_application_bundle_manifest_with_resolver(
+        &fixture.app_manifest_path(),
+        Some(&resolver),
+    )
+    .expect_err("registry resolution must preserve the component capability identity");
+
+    assert_eq!(
+        failure.errors[0].code,
+        ApplicationManifestErrorCode::ComponentContractMismatch
+    );
+}
+
+fn resolved_registry_reference_fixture(
+    fixture: &AppFixture,
+    reference_component_id: &str,
+    reference_digest: &str,
+    resolved_digest: &str,
+    contract_path: PathBuf,
+) -> StaticRegistryResolver {
+    fixture.write_wasm("registry component bytes");
+    fixture.write_component_manifest(&json!({
+        "contract_path": null,
+        "wasm_binary_path": null,
+        "wasm_digest": null,
+        "registry_ref": { "namespace": "traverse-starter", "id": "traverse-starter.process", "version_range": "^1.0.0" }
+    }));
+    fixture.write_app_manifest(&json!([component_ref(
+        reference_component_id,
+        "1.0.0",
+        reference_digest,
+        "components/validate-team-readiness/component.manifest.json",
+    )]));
+    let contract =
+        parse_contract(&fs::read_to_string(&contract_path).expect("contract fixture should read"))
+            .expect("contract fixture should parse");
+    StaticRegistryResolver {
+        component: ResolvedRegistryComponent {
+            contract_path,
+            contract,
+            wasm_binary_path: fixture.wasm_path(),
+            wasm_digest: resolved_digest.to_string(),
+        },
+    }
+}
+
+fn readiness_contract_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+    )
+}
+
+#[test]
 fn component_execution_mode_renders_manifest_values() {
     assert_eq!(
         traverse_registry::ComponentExecutionMode::Wasm.as_str(),

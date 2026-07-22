@@ -31,8 +31,9 @@ use traverse_registry::{
     PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle, RegistryComponentResolver,
     RegistryProvenance, RegistryReference, RegistryScope, ResolvedRegistryComponent, SourceKind,
     SourceReference, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    load_application_bundle_manifest, load_application_bundle_manifest_with_resolver,
-    load_registry_bundle, write_synced_public_registry_state,
+    cache_verified_public_registry_bytes, load_application_bundle_manifest,
+    load_application_bundle_manifest_with_resolver, load_registry_bundle,
+    public_registry_cache_path, write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -426,7 +427,7 @@ fn help_app_new() -> String {
 }
 
 fn help_app_validate() -> String {
-    "traverse-cli app validate --manifest <path> --json
+    "traverse-cli app validate --manifest <path> [--workspace <workspace-id>] --json
 
   Purpose:
     Validate a downstream application manifest, component manifests,
@@ -440,6 +441,7 @@ fn help_app_validate() -> String {
     --json              Emit machine-readable validation evidence.
 
   Optional flags:
+    --workspace <id>    Resolve registry-ref components from this locally synced workspace.
     --help              Print this help text.
 
   Example:
@@ -1010,9 +1012,13 @@ fn parse_app_validate_command(args: &[String]) -> Result<Command, String> {
     if !args.iter().any(|a| a == "--json") {
         return Err("app validate requires --json for stable setup evidence".to_string());
     }
+    let workspace_id = parse_string_flag(args, "--workspace");
+    if args.iter().any(|arg| arg == "--workspace") && workspace_id.is_none() {
+        return Err("--workspace requires a value".to_string());
+    }
     Ok(Command::AppValidate {
         manifest_path: PathBuf::from(manifest_path),
-        workspace_id: parse_string_flag(args, "--workspace"),
+        workspace_id,
         json_output: true,
     })
 }
@@ -1706,6 +1712,18 @@ fn app_validate(
     workspace_id: Option<&str>,
     json_output: bool,
 ) -> Result<String, CliError> {
+    let base_dir = std::env::current_dir().map_err(|error| {
+        CliError::IoError(format!("failed to resolve current directory: {error}"))
+    })?;
+    app_validate_at(&base_dir, manifest_path, workspace_id, json_output)
+}
+
+fn app_validate_at(
+    base_dir: &Path,
+    manifest_path: &Path,
+    workspace_id: Option<&str>,
+    json_output: bool,
+) -> Result<String, CliError> {
     if !json_output {
         return Err(CliError::UsageError(
             "app validate requires --json for stable setup evidence".to_string(),
@@ -1717,11 +1735,8 @@ fn app_validate(
     }
 
     let manifest = if let Some(workspace_id) = workspace_id {
-        let base_dir = std::env::current_dir().map_err(|error| {
-            CliError::IoError(format!("failed to resolve current directory: {error}"))
-        })?;
         let resolver = SyncedRegistryComponentResolver {
-            workspace_root: &base_dir,
+            workspace_root: base_dir,
             workspace_id,
         };
         load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver))
@@ -1817,25 +1832,14 @@ fn cache_registry_asset(
     url: &str,
     expected_digest: &str,
 ) -> Result<PathBuf, ApplicationManifestFailure> {
-    let digest = expected_digest
-        .strip_prefix("sha256:")
-        .unwrap_or(expected_digest);
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(registry_resolution_failure(
-            "registry asset has invalid SHA-256 digest".to_string(),
-        ));
-    }
-    let cache_path = workspace_root.join(".traverse/cache/sha256").join(digest);
-    if cache_path.exists() {
-        let bytes = fs::read(&cache_path).map_err(|error| {
+    if let Some(cache_path) = public_registry_cache_path(workspace_root, expected_digest)
+        && cache_path.exists()
+    {
+        let cached = fs::read(&cache_path).map_err(|error| {
             registry_resolution_failure(format!("failed to read cached registry asset: {error}"))
         })?;
-        if sha256_hex(&bytes) == digest.to_ascii_lowercase() {
-            return Ok(cache_path);
-        }
-        return Err(registry_resolution_failure(
-            "cached registry asset digest mismatch".to_string(),
-        ));
+        return cache_verified_public_registry_bytes(workspace_root, expected_digest, &cached)
+            .map_err(|failure| registry_resolution_failure(failure.message));
     }
     let output = std::process::Command::new("curl")
         .args(["-fsSL", url])
@@ -1843,25 +1847,13 @@ fn cache_registry_asset(
         .map_err(|error| {
             registry_resolution_failure(format!("failed to fetch registry asset: {error}"))
         })?;
-    if !output.status.success() || sha256_hex(&output.stdout) != digest.to_ascii_lowercase() {
+    if !output.status.success() {
         return Err(registry_resolution_failure(
-            "registry asset download or digest verification failed".to_string(),
+            "registry asset download failed".to_string(),
         ));
     }
-    let parent = cache_path.parent().ok_or_else(|| {
-        registry_resolution_failure("registry cache path has no parent".to_string())
-    })?;
-    fs::create_dir_all(parent).map_err(|error| {
-        registry_resolution_failure(format!("failed to create registry cache: {error}"))
-    })?;
-    let temporary = cache_path.with_extension("tmp");
-    fs::write(&temporary, output.stdout).map_err(|error| {
-        registry_resolution_failure(format!("failed to write registry cache: {error}"))
-    })?;
-    fs::rename(&temporary, &cache_path).map_err(|error| {
-        registry_resolution_failure(format!("failed to commit registry cache: {error}"))
-    })?;
-    Ok(cache_path)
+    cache_verified_public_registry_bytes(workspace_root, expected_digest, &output.stdout)
+        .map_err(|failure| registry_resolution_failure(failure.message))
 }
 
 fn app_register_at(
@@ -5153,15 +5145,16 @@ mod tests {
         CapabilityPublishRequest, CliError, Command, ExpeditionExampleExecutor,
         FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RealPublishProcessRunner,
         RegistryIndexFetcher, RegistrySyncError, app_new_at, app_register_at,
-        app_registration_state_path, app_validate, canonical_expedition_bundle_path,
-        capability_publish_at, component_new_at, curl_text, ensure_clean_registry_checkout,
-        execute_agent, execute_expedition, execute_traverse_starter_process,
-        execute_traverse_starter_summarize, execute_traverse_starter_validate, inspect_agent,
-        inspect_bundle, inspect_event, inspect_trace, latest_index_release_asset,
-        load_registered_bundle, load_registered_bundle_with_public_records, load_runtime_request,
-        parse_command, publish_file_sha256_digest, register_bundle, register_generated_app_bundle,
+        app_registration_state_path, app_validate, app_validate_at,
+        canonical_expedition_bundle_path, capability_publish_at, component_new_at, curl_text,
+        ensure_clean_registry_checkout, execute_agent, execute_expedition,
+        execute_traverse_starter_process, execute_traverse_starter_summarize,
+        execute_traverse_starter_validate, inspect_agent, inspect_bundle, inspect_event,
+        inspect_trace, latest_index_release_asset, load_registered_bundle,
+        load_registered_bundle_with_public_records, load_runtime_request, parse_command,
+        publish_file_sha256_digest, register_bundle, register_generated_app_bundle,
         registry_sync_at, registry_sync_failure_json, reject_private_contract_scope, run_command,
-        validate_registry_path_segment,
+        sha256_hex, validate_registry_path_segment,
     };
     use crate::agent_packages::fnv1a64;
     use serde_json::Value;
@@ -5174,7 +5167,7 @@ mod tests {
     use traverse_contracts::parse_contract;
     use traverse_registry::{
         PublicRegistryCapabilityRecord, PublicRegistryIndex, load_application_bundle_manifest,
-        load_synced_public_registry_state,
+        load_synced_public_registry_state, write_synced_public_registry_state,
     };
 
     #[test]
@@ -5790,6 +5783,124 @@ mod tests {
         assert_eq!(
             first_json["registration_fingerprint"],
             second_json["registration_fingerprint"]
+        );
+    }
+
+    #[test]
+    fn synced_registry_reference_validates_registers_and_reuses_verified_cache() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let repo = repo_root();
+        let contract_path = repo.join(
+            "contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+        );
+        let artifact_path = repo.join(
+            "examples/agents/team-readiness-agent/artifacts/validate-team-readiness-agent.wasm",
+        );
+        let contract_digest = format!(
+            "sha256:{}",
+            sha256_hex(&fs::read(&contract_path).expect("contract artifact should read"))
+        );
+        let artifact_digest = format!(
+            "sha256:{}",
+            sha256_hex(&fs::read(&artifact_path).expect("wasm artifact should read"))
+        );
+        let manifest_path =
+            write_app_validate_fixture(&fixture_root, &artifact_digest, &artifact_digest, None);
+        let component_path = fixture_root.join("component.manifest.json");
+        let mut component: Value = serde_json::from_str(
+            &fs::read_to_string(&component_path).expect("component manifest should read"),
+        )
+        .expect("component manifest should parse");
+        let component_object = component
+            .as_object_mut()
+            .expect("component manifest should be an object");
+        component_object.remove("contract_path");
+        component_object.remove("wasm_binary_path");
+        component_object.remove("wasm_digest");
+        component_object.insert(
+            "registry_ref".to_string(),
+            serde_json::json!({
+                "namespace": "fixture",
+                "id": "expedition.planning.validate-team-readiness",
+                "version_range": "^1.0.0"
+            }),
+        );
+        fs::write(
+            &component_path,
+            serde_json::to_string_pretty(&component).expect("component manifest should serialize"),
+        )
+        .expect("component manifest should write");
+        write_synced_public_registry_state(
+            &state_root,
+            "local",
+            "fixture-registry",
+            "fixture-v1",
+            "2026-07-22T00:00:00Z",
+            PublicRegistryIndex {
+                index_version: 1,
+                generated_at: "2026-07-22T00:00:00Z".to_string(),
+                source_commit: None,
+                capabilities: vec![PublicRegistryCapabilityRecord {
+                    namespace: "fixture".to_string(),
+                    id: "expedition.planning.validate-team-readiness".to_string(),
+                    version: "1.0.0".to_string(),
+                    digest: artifact_digest.clone(),
+                    artifact_url: format!("file://{}", artifact_path.display()),
+                    contract_digest: contract_digest.clone(),
+                    contract_url: format!("file://{}", contract_path.display()),
+                    deprecated: false,
+                }],
+            },
+        )
+        .expect("synced fixture state should persist");
+
+        let validation = app_validate_at(&state_root, &manifest_path, Some("local"), true)
+            .expect("synced registry component should validate");
+        let validation_json: Value =
+            serde_json::from_str(&validation).expect("validation output must be JSON");
+        assert_eq!(validation_json["status"], "validated");
+
+        let registration = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("synced registry component should register");
+        let registration_json: Value =
+            serde_json::from_str(&registration).expect("registration output must be JSON");
+        let cache_root = state_root.join(".traverse/cache/sha256");
+        assert_eq!(registration_json["status"], "registered");
+        assert_eq!(
+            registration_json["components"][0]["artifact_ref"],
+            Value::String(
+                cache_root
+                    .join(artifact_digest.trim_start_matches("sha256:"))
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(
+            cache_root
+                .join(contract_digest.trim_start_matches("sha256:"))
+                .exists()
+        );
+        assert!(
+            cache_root
+                .join(artifact_digest.trim_start_matches("sha256:"))
+                .exists()
+        );
+
+        let unsynced_root = unique_temp_dir();
+        let unsynced = app_register_at(&unsynced_root, &manifest_path, "local", true)
+            .expect("missing sync should render stable JSON evidence");
+        let unsynced_json: Value =
+            serde_json::from_str(&unsynced).expect("registration output must be JSON");
+        assert_eq!(unsynced_json["status"], "failed");
+        assert_eq!(
+            unsynced_json["errors"][0]["code"],
+            "registry_reference_requires_resolution"
+        );
+        assert!(
+            unsynced_json["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("registry sync"))
         );
     }
 
