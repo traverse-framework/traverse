@@ -5029,6 +5029,7 @@ mod tests {
     use std::cell::RefCell;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command as ProcessCommand;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     use traverse_contracts::parse_contract;
@@ -6535,13 +6536,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_governed_ai_agent_request() {
-        let fixture = create_interpret_expedition_intent_agent_fixture();
+        let manifest_path = repo_root().join("examples/agents/expedition-intent-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/agents/runtime-requests/interpret-expedition-intent.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("agent execution should succeed");
 
         assert!(
@@ -6565,13 +6566,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_second_governed_ai_agent_request() {
-        let fixture = create_validate_team_readiness_agent_fixture();
+        let manifest_path = repo_root().join("examples/agents/team-readiness-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/agents/runtime-requests/validate-team-readiness.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("agent execution should succeed");
 
         assert!(output.contains("package_id: expedition.planning.validate-team-readiness-agent"));
@@ -6593,12 +6594,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_hello_world_request() {
-        let fixture = create_hello_world_agent_fixture();
+        let manifest_path = repo_root().join("examples/hello-world/say-hello-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path = repo_root().join("examples/hello-world/runtime-requests/say-hello.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("hello-world agent execution should succeed");
 
         assert!(output.contains("package_id: hello.world.say-hello-agent"));
@@ -6609,13 +6610,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_traverse_starter_process_request() {
-        let fixture = create_traverse_starter_agent_fixture();
+        let manifest_path = repo_root().join("examples/traverse-starter/process-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/process.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("traverse-starter agent execution should succeed");
 
         assert!(output.contains("package_id: traverse-starter.process-agent"));
@@ -6629,13 +6630,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_traverse_starter_validate_request() {
-        let fixture = create_traverse_starter_validate_agent_fixture();
+        let manifest_path = repo_root().join("examples/traverse-starter/validate-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/validate.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("traverse-starter validate agent execution should succeed");
 
         assert!(output.contains("package_id: traverse-starter.validate-agent"));
@@ -6646,13 +6647,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_traverse_starter_summarize_request() {
-        let fixture = create_traverse_starter_summarize_agent_fixture();
+        let manifest_path = repo_root().join("examples/traverse-starter/summarize-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path =
             repo_root().join("examples/traverse-starter/runtime-requests/summarize.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("traverse-starter summarize agent execution should succeed");
 
         assert!(output.contains("package_id: traverse-starter.summarize-agent"));
@@ -6809,12 +6810,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture uses a no-op WASM module; tracked separately from real artifact execution"]
     fn execute_agent_runs_meeting_notes_process_request() {
-        let fixture = create_meeting_notes_agent_fixture();
+        let manifest_path = repo_root().join("examples/meeting-notes/process-agent/manifest.json");
+        build_real_agent_artifact(&manifest_path);
         let request_path = repo_root().join("examples/meeting-notes/runtime-requests/process.json");
 
-        let output = execute_agent(&fixture.manifest_path, &request_path)
+        let output = execute_agent(&manifest_path, &request_path)
             .expect("meeting-notes agent execution should succeed");
 
         assert!(output.contains("package_id: meeting-notes.process-agent"));
@@ -7281,6 +7282,17 @@ mod tests {
         manifest_path: PathBuf,
     }
 
+    fn build_real_agent_artifact(manifest_path: &Path) {
+        let package_dir = manifest_path
+            .parent()
+            .expect("real agent manifest must have a package directory");
+        let status = ProcessCommand::new("bash")
+            .arg(package_dir.join("build-fixture.sh"))
+            .status()
+            .expect("real agent fixture builder should start");
+        assert!(status.success(), "real agent fixture builder should succeed");
+    }
+
     fn create_interpret_expedition_intent_agent_fixture() -> AgentFixture {
         create_agent_package_fixture(&AgentPackageFixtureSpec {
             package_id: "expedition.planning.interpret-expedition-intent-agent",
@@ -7317,58 +7329,6 @@ mod tests {
             model_interface: "hello-world-greeting-v1",
             model_purpose: "Produce a simple deterministic greeting string for onboarding validation.",
             workflow_id: "hello.world.say-hello",
-        })
-    }
-
-    fn create_traverse_starter_agent_fixture() -> AgentFixture {
-        create_agent_package_fixture(&AgentPackageFixtureSpec {
-            package_id: "traverse-starter.process-agent",
-            capability_id: "traverse-starter.process",
-            binary_name: "process-agent.wasm",
-            summary: "Governed WASM agent package for the traverse-starter reference app.",
-            contract_path: "contracts/examples/traverse-starter/capabilities/process/contract.json",
-            model_interface: "traverse-starter-deterministic-v1",
-            model_purpose: "Process one starter note into deterministic structured metadata without model inference.",
-            workflow_id: "traverse-starter.process",
-        })
-    }
-
-    fn create_traverse_starter_validate_agent_fixture() -> AgentFixture {
-        create_agent_package_fixture(&AgentPackageFixtureSpec {
-            package_id: "traverse-starter.validate-agent",
-            capability_id: "traverse-starter.validate",
-            binary_name: "validate-agent.wasm",
-            summary: "Governed WASM agent package for the traverse-starter pipeline showcase.",
-            contract_path: "contracts/examples/traverse-starter/capabilities/validate/contract.json",
-            model_interface: "traverse-starter-deterministic-v1",
-            model_purpose: "Validate one starter note deterministically without model inference.",
-            workflow_id: "traverse-starter.validate",
-        })
-    }
-
-    fn create_traverse_starter_summarize_agent_fixture() -> AgentFixture {
-        create_agent_package_fixture(&AgentPackageFixtureSpec {
-            package_id: "traverse-starter.summarize-agent",
-            capability_id: "traverse-starter.summarize",
-            binary_name: "summarize-agent.wasm",
-            summary: "Governed WASM agent package for the traverse-starter pipeline showcase.",
-            contract_path: "contracts/examples/traverse-starter/capabilities/summarize/contract.json",
-            model_interface: "traverse-starter-deterministic-v1",
-            model_purpose: "Summarize processed starter note metadata deterministically without model inference.",
-            workflow_id: "traverse-starter.summarize",
-        })
-    }
-
-    fn create_meeting_notes_agent_fixture() -> AgentFixture {
-        create_agent_package_fixture(&AgentPackageFixtureSpec {
-            package_id: "meeting-notes.process-agent",
-            capability_id: "meeting-notes.process",
-            binary_name: "process-agent.wasm",
-            summary: "Governed WASM agent package for the meeting-notes reference app.",
-            contract_path: "contracts/examples/meeting-notes/capabilities/process/contract.json",
-            model_interface: "meeting-notes-deterministic-v1",
-            model_purpose: "Extract meeting summary, action items, decisions, and follow-ups without model inference.",
-            workflow_id: "meeting-notes.process",
         })
     }
 

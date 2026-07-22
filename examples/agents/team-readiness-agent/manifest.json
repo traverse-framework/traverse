@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/validate-team-readiness-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:dffc31d6401c84d6",
+    "expected_digest": "fnv1a64:18bbf768c4cbf7ee",
     "abi_version": "1.0.0"
   },
   "constraints": {
