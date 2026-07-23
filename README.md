@@ -67,6 +67,10 @@ browser, edge, or cloud — under the same contract.
 
 → [docs/wasm-agent-authoring-guide.md](docs/wasm-agent-authoring-guide.md)
 
+### An app with an AI coding agent
+
+Building with Claude or another coding agent? [traverse-framework/claude-skills](https://github.com/traverse-framework/claude-skills) hosts Claude Skills that walk through checking the registry, authoring and composing capabilities, and validating them against the real `traverse-cli` — including this platform's current honest limitations.
+
 ### Workflow-backed business logic
 
 Model multi-step business behavior as a workflow. The runtime traverses it
