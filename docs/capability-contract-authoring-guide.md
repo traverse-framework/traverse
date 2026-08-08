@@ -174,9 +174,25 @@ cargo run -p traverse-cli-rs -- bundle inspect <path-to-manifest.json>
 cargo run -p traverse-cli-rs -- bundle register <path-to-manifest.json>
 ```
 
+## Contract surface coverage (honesty)
+
+Treat `use_cases` as the executable promise. If `inputs.schema` declares a
+discriminator enum (especially `action`), every enum value MUST appear in at
+least one `use_cases[].input_example`, and package smoke SHOULD exercise that
+set. Do not list actions the artifact only rejects with a generic
+`unsupported_action` unless that failure is itself a documented use case.
+
+Description prose that mentions behavior beyond the use-case matrix MUST either
+be removed or called out under an explicit **Known limitations** section.
+
+Governed by Draft Spec `102-contract-surface-coverage` / ADR-0038 (Proposed).
+Publish tooling will enforce enum ⊆ use_cases after that spec is Approved
+(issue #1016).
+
 ## Common Mistakes
 
 - Leaving schemas permissive (for example, `additionalProperties: true`) and then expecting deterministic validation and stable tool behavior.
+- Advertising enum values or description features that have no covering use case (see Contract surface coverage above; incident: `core.process-comment@1.0.0`).
 - Declaring side effects implicitly but forgetting to declare `side_effects` and event edges (`emits` / `consumes`).
 - Using `host_api_access: exception_required` without adding an exception reference in `provenance.exception_refs`.
 - Treating `preconditions` / `postconditions` as executable policy. They are documentation, not runtime code.

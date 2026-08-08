@@ -3,7 +3,7 @@
   "schema_version": "1.0.0",
   "id": "core.process-comment",
   "name": "process-comment",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "lifecycle": "active",
   "owner": {
     "team": "traverse-core",
@@ -41,7 +41,7 @@
     {
       "node_id": "process",
       "capability_id": "core.process-comment",
-      "capability_version": "1.0.0",
+      "capability_version": "1.0.1",
       "input": {
         "from_workflow_input": [
           "action",

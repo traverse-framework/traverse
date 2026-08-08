@@ -2,17 +2,17 @@
   "kind": "capability_package",
   "schema_version": "1.0.0",
   "package_id": "core.process-comment-agent",
-  "version": "1.0.0",
-  "summary": "Capability package for core.process-comment@1.0.0 (8 use-case comment processor).",
+  "version": "1.0.1",
+  "summary": "Capability package for core.process-comment@1.0.1 (honesty-aligned tested matrix).",
   "capability_ref": {
     "id": "core.process-comment",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "contract_path": "./contract.json"
   },
   "workflow_refs": [
     {
       "workflow_id": "core.process-comment",
-      "workflow_version": "1.0.0"
+      "workflow_version": "1.0.1"
     }
   ],
   "source": {
@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/core-process-comment.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:e3a572cb5380650a",
+    "expected_digest": "fnv1a64:752b9a237c97d6bb",
     "abi_version": "1.0.0"
   },
   "constraints": {

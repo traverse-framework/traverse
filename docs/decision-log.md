@@ -2103,3 +2103,30 @@ verifiable release signature.
 end-to-end: `bash scripts/ci/supply_chain_check.sh` now reports
 `overall_status: passed` with zero warnings. Tracked as `#985`, no new spec
 or ADR required.
+
+## Decision 57: Contract Surface Coverage — Schema ⊆ Use Cases ⊆ Smoke
+
+- **Date**: 2026-08-08
+- **Status**: Accepted (honesty path); Spec 102 remains Draft until owner registers it
+- **Governing spec**: `102-contract-surface-coverage` (Draft), ADR-0038 (Proposed)
+- **Related issues**: `#1014`, `#1015`, `#1016`; registry `#192`, `#193`
+- **Origin**: Post-ship review of `core.process-comment@1.0.0` overclaim (enum/description beyond use-case matrix).
+
+### Context
+
+Publish and registry validation treated `description` and broad `action` enums as unchecked claims. Only use cases and package smoke were executable promises, so an overclaiming contract could merge.
+
+### Decision
+
+1. **Process**: Govern discriminator-enum coverage (start with `action`) via Spec 102 / ADR-0038; implement publish dry-run failure and a registry mirror check after approval.
+2. **Capability honesty**: Ship `core.process-comment@1.0.1` that narrows the declared surface to the tested 8-case matrix; deprecate `1.0.0` with an explicit overclaim reason. Full resolve/pin/markup/allow-list mention work is a separate product enhancement, not required to restore honesty.
+
+### Alternatives Considered
+
+- Block all capability publishes until NLP description linting exists — rejected (too heavy; use cases are the right boundary).
+- Implement the entire original marketing surface before any honesty bump — rejected as the default; narrowing is a valid fix.
+
+### Outcome
+
+Tickets filed on Project 1 (`#1014`–`#1016`) and Project 3 (`#192`–`#193`). Spec/ADR drafted. Honesty bump proceeds under existing `516` while Spec 102 awaits approval.
+

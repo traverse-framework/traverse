@@ -4,14 +4,14 @@
   "id": "core.process-comment",
   "namespace": "core",
   "name": "process-comment",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "lifecycle": "active",
   "owner": {
     "team": "traverse-core",
     "contact": "capability-authors@traverse-framework.com"
   },
-  "summary": "Configurable comment action processor: create/edit/reply/delete/react with policy, mentions, and moderation.",
-  "description": "core.process-comment is an enterprise-grade, pure, deterministic capability that implements the business logic layer of a modern commenting system (Slack / Teams / Linear / Notion / GitHub quality).\n\nIt is deliberately configuration-driven. The same WASM binary can power:\n- Public product feedback widgets\n- Internal enterprise collaboration\n- Code-review and document annotation\n- Customer support threads\n- Multi-tenant SaaS commenting\n\nThe capability never persists data and never sends notifications. It only decides, validates, normalizes and enriches. Persistence, notification delivery, search indexing and real-time fan-out remain the responsibility of the calling system.\n\nSupported actions (via the `action` discriminator):\n- create\n- edit\n- reply\n- delete (soft or hard according to policy)\n- react (add / remove emoji reaction)\n- resolve / unresolve\n- pin / unpin\n\nKey enterprise features (Persona-Council reviewed):\n- Full lifecycle coverage in one capability\n- First-class mention extraction and validation against allowed principals\n- Configurable thread depth, parent existence checks and cycle prevention\n- Soft-delete with immutable audit fields\n- Multi-tenant isolation via attributes\n- Visibility models (public, private, restricted, resource-acl, channel)\n- Rich-text sanitisation with configurable allowed marks\n- Structured obligations (notify, audit, quarantine, rate-limit, moderate)\n- Complete evaluation trace + policy hash for eDiscovery and compliance\n- Fail-closed on malformed input or policy violations\n\nThe capability is pure: identical inputs always produce identical outputs. No host, network or filesystem access is required or permitted.",
+  "summary": "Policy-driven comment processor for create/edit/reply/delete/react with mentions, quarantine, soft-delete, and tenant isolation.",
+  "description": "core.process-comment evaluates create, edit, reply, delete, and react actions against a caller-supplied comment_policy and returns allow/deny with a normalized comment object, obligations, and an evaluation trace.\n\nImplemented and smoke-tested matrix (use_cases):\n- create with @mention and https link extraction + notify obligations\n- edit denied when policy own_only and actor is not creator\n- reply denied when parent_depth+1 >= max_thread_depth\n- create allowed with quarantine when body matches moderation.blocklist\n- react add normalized to a reaction set\n- soft-delete retains body and records deleted_by when soft_delete=true\n- create denied on tenant mismatch when enforce_tenant_isolation=true\n- create/edit/reply denied for empty/whitespace body\n\nKnown limitations (intentional in 1.0.1):\n- resolve / unresolve / pin / unpin are not part of the schema surface (removed from action.enum vs overclaiming 1.0.0)\n- allowed_markups is accepted in policy but body markup is not sanitized (pass-through)\n- mention_resolution \"strict\" extracts @ids and marks them valid; it does not validate against an allow-list of principals\n- The capability never persists data or sends notifications; callers must honor obligations\n\nIdentical inputs produce identical outputs. No host, network, or filesystem access.",
   "use_cases": [
     {
       "scenario": "As a collaboration platform engineer, I want a user to create a top-level comment with mentions so that the system receives a fully validated, sanitized comment object ready for persistence and notification.",
@@ -765,12 +765,9 @@
             "edit",
             "reply",
             "delete",
-            "react",
-            "resolve",
-            "unresolve",
-            "pin",
-            "unpin"
-          ]
+            "react"
+          ],
+          "description": "Comment action. v1.0.1 retains only actions covered by published use_cases (create, edit, reply, delete, react)."
         },
         "actor": {
           "type": "object",
@@ -1152,7 +1149,7 @@
   "provenance": {
     "source": "ai-assisted",
     "author": "traverse-capability-author + persona-council",
-    "created_at": "2026-08-08T05:55:00Z",
+    "created_at": "2026-08-08T06:40:00Z",
     "spec_ref": "516-agent-artifact-execution@1.0.0",
     "adr_refs": [
       "0001-rust-wasm-foundation"
@@ -1161,7 +1158,7 @@
   },
   "evidence": [
     {
-      "evidence_id": "core-process-comment-1.0.0-contract-validation",
+      "evidence_id": "core-process-comment-1.0.1-contract-validation",
       "type": "contract_validation",
       "status": "passed"
     }

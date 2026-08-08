@@ -138,17 +138,6 @@ unsafe fn process(input: &[u8], out: &mut [u8]) -> usize {
         }
         b"react" => process_react(out, actor_id, comment, policy),
         b"delete" => process_delete(out, actor_id, comment, policy),
-        b"resolve" | b"unresolve" | b"pin" | b"unpin" => {
-            // Not covered by published use cases; fail closed.
-            deny(
-                out,
-                b"action not implemented in this binary matrix",
-                b"unsupported_action",
-                br#"[{"type":"audit_log","severity":"required"}]"#,
-                br#"["unsupported action"]"#,
-                policy,
-            )
-        }
         _ => deny(
             out,
             b"unknown action",

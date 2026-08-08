@@ -28,7 +28,7 @@ echo "==> capability inspect"
 contract_out="$("${cli[@]}" capability inspect "$pkg/contract.json")"
 printf '%s\n' "$contract_out"
 require_match "$contract_out" "id: core.process-comment" "contract inspect id"
-require_match "$contract_out" "version: 1.0.0" "contract inspect version"
+require_match "$contract_out" "version: 1.0.1" "contract inspect version"
 
 echo "==> wasm abi verify"
 abi_out="$("${cli[@]}" wasm abi verify "$pkg/artifacts/core-process-comment.wasm")"
@@ -39,7 +39,7 @@ echo "==> capability-package inspect"
 pkg_out="$("${cli[@]}" capability-package inspect "$pkg/manifest.json")"
 printf '%s\n' "$pkg_out"
 require_match "$pkg_out" "package_id: core.process-comment-agent" "package_id"
-require_match "$pkg_out" "capability_version: 1.0.0" "capability_version"
+require_match "$pkg_out" "capability_version: 1.0.1" "capability_version"
 
 assert_execute() {
   local request="$1"
@@ -53,7 +53,7 @@ assert_execute() {
   out="$("${cli[@]}" capability-package execute "$pkg/manifest.json" "$request")"
   printf '%s\n' "$out"
   require_match "$out" "status: completed" "$label status"
-  require_match "$out" "capability_version: 1.0.0" "$label capability_version"
+  require_match "$out" "capability_version: 1.0.1" "$label capability_version"
   require_match "$out" "\"decision\": \"$decision\"" "$label decision"
   require_match "$out" "\"reason_code\": \"$code\"" "$label reason_code"
   if [[ -n "$extra" ]]; then
@@ -70,4 +70,4 @@ assert_execute "$pkg/runtime-requests/uc06-soft-delete-allow.json" "allow" "ok" 
 assert_execute "$pkg/runtime-requests/uc07-tenant-isolation-deny.json" "deny" "tenant_isolation_violation" "UC-07"
 assert_execute "$pkg/runtime-requests/uc08-empty-body-deny.json" "deny" "empty_body" "UC-08"
 
-echo "OK: core.process-comment 1.0.0 E2E smoke passed"
+echo "OK: core.process-comment 1.0.1 E2E smoke passed"
