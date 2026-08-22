@@ -2,16 +2,20 @@ use std::{fs, path::Path};
 
 use traverse_contracts::{
     BinaryFormat, CapabilityContract, CapabilityReference, Condition, ConnectorRequirement,
-    DependencyArtifactType, DependencyReference, Entrypoint, EntrypointKind, EventClassification,
+    DataClassification, DataFlowPolicy, DependencyArtifactType, DependencyReference,
+    DeterminismClass, EffectClass, EgressPolicy, Entrypoint, EntrypointKind, EventClassification,
     EventContract, EventPayload, EventProvenance, EventProvenanceSource, EventReference, EventType,
     EventValidationContext, EventValidationEvidence, EvidenceStatus, EvidenceType, Execution,
-    ExecutionConstraints, ExecutionTarget, FilesystemAccess, HostApiAccess, IdReference, Lifecycle,
-    NetworkAccess, Owner, PayloadCompatibility, ProducedValidationEvidence, Provenance,
-    ProvenanceSource, PublishedContractRecord, PublishedEventRecord, SchemaContainer, ServiceType,
-    SideEffect, SideEffectKind, ValidationContext, ValidationErrorCode, ValidationEvidence,
-    ValidationFailure, ValidationResult, governed_content_digest, governed_event_content_digest,
-    parse_connector_contract, parse_contract, parse_event_contract, reference_connector_contracts,
-    validate_connector_contract, validate_contract, validate_event_contract,
+    ExecutionConstraints, ExecutionTarget, FieldDataClassification, FilesystemAccess,
+    HostApiAccess, IdReference, Lifecycle, ManifestRiskPolicy, NetworkAccess, Owner,
+    PayloadCompatibility, ProducedValidationEvidence, Provenance, ProvenanceSource,
+    PublishedContractRecord, PublishedEventRecord, ReliabilityMetadata, RiskMetadata,
+    SchemaContainer, ServiceType, SideEffect, SideEffectKind, ValidationContext,
+    ValidationErrorCode, ValidationEvidence, ValidationFailure, ValidationResult,
+    default_risk_metadata, governed_content_digest, governed_event_content_digest,
+    is_automatic_eligible, parse_connector_contract, parse_contract, parse_event_contract,
+    reference_connector_contracts, validate_connector_contract, validate_contract,
+    validate_event_contract, validate_manifest_risk_policy,
 };
 
 const GOVERNING_SPEC: &str = "002-capability-contracts@0.1.0";
@@ -827,6 +831,16 @@ fn valid_contract() -> CapabilityContract {
         connector_requirements: Vec::new(),
         state_schema: None,
         use_cases: Vec::new(),
+        risk: RiskMetadata {
+            effect_class: EffectClass::StateWrite,
+            determinism_class: DeterminismClass::Deterministic,
+            data_flow: DataFlowPolicy::default(),
+            reliability: ReliabilityMetadata {
+                idempotency_required: false,
+                retryable: true,
+                compensation_available: false,
+            },
+        },
     }
 }
 
@@ -851,6 +865,224 @@ fn stateless_contract_defaults_parse_from_json_without_new_fields() -> Result<()
         "permitted_targets defaults to all targets"
     );
     assert_eq!(parsed.event_trigger, None);
+    Ok(())
+}
+
+#[test]
+fn contract_without_risk_field_migrates_to_the_most_conservative_classification()
+-> Result<(), String> {
+    // Contracts published before spec 109 have no `risk` field at all. They must
+    // still parse, and must default to the strictest classification so they are
+    // never silently treated as automatic-eligible.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&valid_contract()).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if let Some(m) = v.as_object_mut() {
+        m.remove("risk");
+    }
+    let json = serde_json::to_string(&v).map_err(|e| e.to_string())?;
+
+    let parsed = parse_contract(&json).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(parsed.risk, default_risk_metadata());
+    assert_eq!(parsed.risk.effect_class, EffectClass::IrreversibleEffect);
+    assert_eq!(
+        parsed.risk.determinism_class,
+        DeterminismClass::ModelDerived
+    );
+    assert_eq!(parsed.risk.data_flow.egress_policy, EgressPolicy::Denied);
+    assert!(!is_automatic_eligible(&parsed.risk));
+    Ok(())
+}
+
+#[test]
+fn risk_metadata_round_trips_through_json() -> Result<(), String> {
+    let mut contract = valid_contract();
+    contract.risk = RiskMetadata {
+        effect_class: EffectClass::PureRead,
+        determinism_class: DeterminismClass::Deterministic,
+        data_flow: DataFlowPolicy {
+            accepted_data_classifications: vec![FieldDataClassification {
+                field_path: "/subject".to_string(),
+                classification: DataClassification::Internal,
+            }],
+            produced_data_classifications: vec![FieldDataClassification {
+                field_path: "/draft_id".to_string(),
+                classification: DataClassification::Public,
+            }],
+            egress_policy: EgressPolicy::Denied,
+        },
+        reliability: ReliabilityMetadata {
+            idempotency_required: false,
+            retryable: true,
+            compensation_available: false,
+        },
+    };
+
+    let json = serde_json::to_string(&contract).map_err(|e| e.to_string())?;
+    let parsed = parse_contract(&json).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(parsed.risk, contract.risk);
+    assert!(is_automatic_eligible(&parsed.risk));
+    Ok(())
+}
+
+#[test]
+fn is_automatic_eligible_is_false_when_any_dimension_disqualifies() {
+    let base = RiskMetadata {
+        effect_class: EffectClass::PureRead,
+        determinism_class: DeterminismClass::Deterministic,
+        data_flow: DataFlowPolicy::default(),
+        reliability: ReliabilityMetadata {
+            idempotency_required: false,
+            retryable: true,
+            compensation_available: false,
+        },
+    };
+    assert!(is_automatic_eligible(&base));
+
+    let mut state_write = base.clone();
+    state_write.effect_class = EffectClass::StateWrite;
+    assert!(!is_automatic_eligible(&state_write));
+
+    let mut externally_variable = base.clone();
+    externally_variable.determinism_class = DeterminismClass::ExternallyVariable;
+    assert!(!is_automatic_eligible(&externally_variable));
+
+    let mut allows_egress = base.clone();
+    allows_egress.data_flow.egress_policy = EgressPolicy::AllowedConnectors(vec![]);
+    assert!(!is_automatic_eligible(&allows_egress));
+
+    let mut requires_idempotency = base;
+    requires_idempotency.reliability.idempotency_required = true;
+    assert!(!is_automatic_eligible(&requires_idempotency));
+}
+
+#[test]
+fn rejects_duplicate_and_empty_field_data_classification_paths() -> Result<(), String> {
+    let mut contract = valid_contract();
+    contract.risk.data_flow.accepted_data_classifications = vec![
+        FieldDataClassification {
+            field_path: "/subject".to_string(),
+            classification: DataClassification::Internal,
+        },
+        FieldDataClassification {
+            field_path: "/subject".to_string(),
+            classification: DataClassification::Confidential,
+        },
+        FieldDataClassification {
+            field_path: String::new(),
+            classification: DataClassification::Public,
+        },
+    ];
+
+    let failure = expect_validation_failure(validate_contract(
+        contract,
+        &ValidationContext {
+            governing_spec: GOVERNING_SPEC,
+            validator_version: VALIDATOR_VERSION,
+            existing_published: None,
+        },
+    ))?;
+
+    let codes: Vec<_> = failure.errors.iter().map(|e| &e.code).collect();
+    assert!(
+        codes.contains(&&ValidationErrorCode::DuplicateItem),
+        "expected DuplicateItem for repeated field_path, got {codes:?}"
+    );
+    assert!(
+        codes.contains(&&ValidationErrorCode::MissingRequiredField),
+        "expected MissingRequiredField for empty field_path, got {codes:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn validate_manifest_risk_policy_allows_tightening_to_a_subset() -> Result<(), String> {
+    let risk = RiskMetadata {
+        effect_class: EffectClass::ExternalEffect,
+        determinism_class: DeterminismClass::ExternallyVariable,
+        data_flow: DataFlowPolicy {
+            egress_policy: EgressPolicy::AllowedConnectors(vec![
+                "traverse.http".to_string(),
+                "traverse.object-store".to_string(),
+            ]),
+            ..DataFlowPolicy::default()
+        },
+        reliability: ReliabilityMetadata {
+            idempotency_required: true,
+            retryable: false,
+            compensation_available: false,
+        },
+    };
+
+    let narrower = ManifestRiskPolicy {
+        egress_allowed_connectors: Some(vec!["traverse.http".to_string()]),
+    };
+    validate_manifest_risk_policy(&risk, &narrower).map_err(|e| format!("{e:?}"))?;
+
+    let tightened_to_nothing = ManifestRiskPolicy {
+        egress_allowed_connectors: Some(vec![]),
+    };
+    validate_manifest_risk_policy(&risk, &tightened_to_nothing).map_err(|e| format!("{e:?}"))?;
+
+    let unset = ManifestRiskPolicy::default();
+    validate_manifest_risk_policy(&risk, &unset).map_err(|e| format!("{e:?}"))?;
+    Ok(())
+}
+
+#[test]
+fn validate_manifest_risk_policy_rejects_a_connector_beyond_the_contract_allowlist()
+-> Result<(), String> {
+    let risk = RiskMetadata {
+        effect_class: EffectClass::ExternalEffect,
+        determinism_class: DeterminismClass::ExternallyVariable,
+        data_flow: DataFlowPolicy {
+            egress_policy: EgressPolicy::AllowedConnectors(vec!["traverse.http".to_string()]),
+            ..DataFlowPolicy::default()
+        },
+        reliability: ReliabilityMetadata {
+            idempotency_required: true,
+            retryable: false,
+            compensation_available: false,
+        },
+    };
+
+    let widened = ManifestRiskPolicy {
+        egress_allowed_connectors: Some(vec![
+            "traverse.http".to_string(),
+            "traverse.object-store".to_string(),
+        ]),
+    };
+
+    let failure = expect_validation_failure(validate_manifest_risk_policy(&risk, &widened))?;
+    assert!(
+        failure
+            .errors
+            .iter()
+            .any(|e| e.code == ValidationErrorCode::RiskPolicyWeakened),
+        "expected RiskPolicyWeakened, got {:?}",
+        failure.errors
+    );
+    Ok(())
+}
+
+#[test]
+fn validate_manifest_risk_policy_rejects_any_egress_when_contract_denies_all() -> Result<(), String>
+{
+    let risk = default_risk_metadata();
+    assert_eq!(risk.data_flow.egress_policy, EgressPolicy::Denied);
+
+    let attempted_override = ManifestRiskPolicy {
+        egress_allowed_connectors: Some(vec!["traverse.http".to_string()]),
+    };
+
+    let failure =
+        expect_validation_failure(validate_manifest_risk_policy(&risk, &attempted_override))?;
+    assert!(
+        failure
+            .errors
+            .iter()
+            .any(|e| e.code == ValidationErrorCode::RiskPolicyWeakened)
+    );
     Ok(())
 }
 

@@ -535,6 +535,7 @@ mod tests {
             connector_requirements: Vec::new(),
             state_schema: None,
             use_cases: Vec::new(),
+            risk: traverse_contracts::default_risk_metadata(),
         };
         let record = CapabilityRegistryRecord {
             scope: RegistryScope::Private,

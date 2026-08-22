@@ -4907,9 +4907,57 @@ fn validate_app_manifest_metadata_for_cli(
         {
             return Ok(Some(error));
         }
+
+        if let Some(error) =
+            validate_component_risk_policy_for_cli(&component_path, &component_manifest)
+        {
+            return Ok(Some(error));
+        }
     }
 
     Ok(None)
+}
+
+/// Spec 109 FR-005: a component manifest may declare `risk_policy` to narrow
+/// (never widen) the egress connectors its capability's immutable, contract-
+/// declared `risk` metadata allows. Silently skips the check when either the
+/// contract or an override is absent/unreadable — a missing/invalid contract
+/// reference is reported by other manifest validation, not this one.
+fn validate_component_risk_policy_for_cli(
+    component_path: &Path,
+    component_manifest: &Value,
+) -> Option<AppValidationError> {
+    let egress_allowed_connectors = component_manifest
+        .get("risk_policy")
+        .and_then(|policy| policy.get("egress_allowed_connectors"))
+        .and_then(Value::as_array)?;
+    let egress_allowed_connectors: Vec<String> = egress_allowed_connectors
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+
+    let contract_path = component_manifest
+        .get("contract_path")
+        .and_then(Value::as_str)?;
+    let component_dir = component_path.parent().unwrap_or_else(|| Path::new(""));
+    let resolved_contract_path = component_dir.join(contract_path);
+    if !resolved_contract_path.is_file() {
+        return None;
+    }
+    let contract_json = fs::read_to_string(&resolved_contract_path).ok()?;
+    let contract = traverse_contracts::parse_contract(&contract_json).ok()?;
+
+    let policy = traverse_contracts::ManifestRiskPolicy {
+        egress_allowed_connectors: Some(egress_allowed_connectors),
+    };
+    let failure =
+        traverse_contracts::validate_manifest_risk_policy(&contract.risk, &policy).err()?;
+    let error = failure.errors.into_iter().next()?;
+    Some(AppValidationError {
+        code: "risk_policy_weakened".to_string(),
+        path: format!("{}:{}", component_path.display(), error.path),
+        message: error.message,
+    })
 }
 
 fn find_private_manifest_field(value: &Value, path: &str) -> Option<AppValidationError> {
@@ -6893,8 +6941,8 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        ArtifactRouter, CapabilityPublishRequest, CapabilityRegistry, CliError, Command,
-        DEFAULT_PUBLIC_REGISTRY_SOURCE, ExpeditionExampleExecutor, FetchedRegistryIndex,
+        AppValidationError, ArtifactRouter, CapabilityPublishRequest, CapabilityRegistry, CliError,
+        Command, DEFAULT_PUBLIC_REGISTRY_SOURCE, ExpeditionExampleExecutor, FetchedRegistryIndex,
         PublishCommandOutput, PublishProcessRunner, RealPublishProcessRunner, RegistryIndexFetcher,
         RegistrySyncError, Runtime, RuntimeResultStatus, SUPPORTED_HOST_ABI_VERSION,
         app_activate_at, app_activation_state_path, app_new_at, app_register_at,
@@ -6913,7 +6961,8 @@ mod tests {
         registry_sync_failure_json, reject_private_contract_scope, run_command, sha256_hex,
         surface_coverage_gap_messages, telemetry, uncovered_action_enum_values,
         unresolved_persona_refs, use_case_smoke_coverage_gaps,
-        use_case_smoke_coverage_gaps_for_package, validate_registry_path_segment,
+        use_case_smoke_coverage_gaps_for_package, validate_component_risk_policy_for_cli,
+        validate_registry_path_segment,
     };
     use crate::capability_packages::fnv1a64;
     use serde_json::Value;
@@ -10449,6 +10498,125 @@ mod tests {
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn minimal_contract_json(egress_policy: traverse_contracts::EgressPolicy) -> Value {
+        let risk = traverse_contracts::RiskMetadata {
+            effect_class: traverse_contracts::EffectClass::ExternalEffect,
+            determinism_class: traverse_contracts::DeterminismClass::ExternallyVariable,
+            data_flow: traverse_contracts::DataFlowPolicy {
+                egress_policy,
+                ..Default::default()
+            },
+            reliability: traverse_contracts::ReliabilityMetadata {
+                idempotency_required: true,
+                retryable: false,
+                compensation_available: false,
+            },
+        };
+        serde_json::json!({
+            "kind": "capability_contract",
+            "schema_version": "1.0.0",
+            "id": "risk.policy.example",
+            "namespace": "risk.policy",
+            "name": "example",
+            "version": "0.1.0",
+            "lifecycle": "active",
+            "owner": {"team": "traverse-core", "contact": "enrico.piovesan10@gmail.com"},
+            "summary": "Send a validated payload to an external system for processing.",
+            "description": "Sends validated request data to an external connector for processing.",
+            "inputs": {"schema": {"type": "object"}},
+            "outputs": {"schema": {"type": "object"}},
+            "preconditions": [],
+            "postconditions": [],
+            "side_effects": [{"kind": "external_call", "description": "Calls an external system."}],
+            "emits": [],
+            "consumes": [],
+            "permissions": [],
+            "execution": {
+                "binary_format": "wasm",
+                "entrypoint": {"kind": "wasi-command", "command": "run"},
+                "preferred_targets": ["local"],
+                "constraints": {
+                    "host_api_access": "none",
+                    "network_access": "required",
+                    "filesystem_access": "none"
+                }
+            },
+            "policies": [],
+            "dependencies": [],
+            "provenance": {"source": "greenfield", "author": "enricopiovesan", "created_at": "2026-08-21T00:00:00Z"},
+            "evidence": [],
+            "risk": risk,
+        })
+    }
+
+    #[test]
+    fn component_risk_policy_allows_a_subset_of_the_contract_allowlist() {
+        let dir = unique_temp_dir();
+        let contract_path = dir.join("contract.json");
+        fs::write(
+            &contract_path,
+            serde_json::to_string(&minimal_contract_json(
+                traverse_contracts::EgressPolicy::AllowedConnectors(vec![
+                    "traverse.http".to_string(),
+                ]),
+            ))
+            .expect("contract json should serialize"),
+        )
+        .expect("contract json should write");
+
+        let component_manifest = serde_json::json!({
+            "contract_path": "contract.json",
+            "risk_policy": {"egress_allowed_connectors": ["traverse.http"]}
+        });
+        let component_path = dir.join("component.manifest.json");
+
+        let result = validate_component_risk_policy_for_cli(&component_path, &component_manifest);
+        assert_eq!(result, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn component_risk_policy_rejects_a_connector_beyond_the_contract_allowlist() {
+        let dir = unique_temp_dir();
+        let contract_path = dir.join("contract.json");
+        fs::write(
+            &contract_path,
+            serde_json::to_string(&minimal_contract_json(
+                traverse_contracts::EgressPolicy::AllowedConnectors(vec![
+                    "traverse.http".to_string(),
+                ]),
+            ))
+            .expect("contract json should serialize"),
+        )
+        .expect("contract json should write");
+
+        let component_manifest = serde_json::json!({
+            "contract_path": "contract.json",
+            "risk_policy": {
+                "egress_allowed_connectors": ["traverse.http", "traverse.object-store"]
+            }
+        });
+        let component_path = dir.join("component.manifest.json");
+
+        let result = validate_component_risk_policy_for_cli(&component_path, &component_manifest);
+        assert_eq!(
+            result,
+            Some(AppValidationError {
+                code: "risk_policy_weakened".to_string(),
+                path: format!(
+                    "{}:$.risk_policy.egress_allowed_connectors",
+                    component_path.display()
+                ),
+                message: "manifest allows connector 'traverse.object-store' the contract's \
+                          egress policy does not permit"
+                    .to_string(),
+            })
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn unique_temp_dir() -> PathBuf {

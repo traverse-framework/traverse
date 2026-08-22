@@ -3,7 +3,10 @@
 //! Governed by spec 015-capability-discovery-mcp
 
 use serde::{Deserialize, Serialize};
-use traverse_contracts::{ExecutionTarget, ServiceType};
+use traverse_contracts::{
+    DeterminismClass, EffectClass, EgressPolicy, ExecutionTarget, ReliabilityMetadata, ServiceType,
+    is_automatic_eligible,
+};
 use traverse_registry::{
     CapabilityArtifactRecord, CapabilityRegistry, DiscoveryQuery, LookupScope, WorkflowReference,
 };
@@ -41,6 +44,18 @@ pub struct CapabilitySummary {
     pub activation_eligibility: String,
     /// Stable reason explaining why eligibility requires activation evidence.
     pub activation_eligibility_reason: String,
+    /// Immutable effect classification (spec 109 FR-005).
+    pub effect_class: EffectClass,
+    /// Immutable determinism classification (spec 109 FR-005).
+    pub determinism_class: DeterminismClass,
+    /// Declared egress surface — connector ids only, never private connector
+    /// configuration or secrets.
+    pub egress_policy: EgressPolicy,
+    /// Declared reliability semantics (spec 109 FR-005).
+    pub reliability: ReliabilityMetadata,
+    /// Spec 109 FR-006: whether a proposal using only this capability's
+    /// declared risk classes may run without an authorization token.
+    pub automatic_eligible: bool,
 }
 
 /// List all capabilities, optionally filtered by `service_type` or `permitted_targets`.
@@ -83,6 +98,11 @@ pub fn list_capabilities(
             advisory_compositions: advisory_compositions(cap.artifact.workflow_ref.as_ref()),
             activation_eligibility: "unknown".to_string(),
             activation_eligibility_reason: "requires_host_activation_resolution".to_string(),
+            effect_class: cap.contract.risk.effect_class,
+            determinism_class: cap.contract.risk.determinism_class,
+            egress_policy: cap.contract.risk.data_flow.egress_policy.clone(),
+            reliability: cap.contract.risk.reliability,
+            automatic_eligible: is_automatic_eligible(&cap.contract.risk),
         })
         .collect()
 }

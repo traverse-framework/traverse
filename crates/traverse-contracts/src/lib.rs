@@ -59,6 +59,202 @@ pub struct CapabilityContract {
     /// Executable surface examples (spec 102). Preserved through publish; not cleared by validate.
     #[serde(default)]
     pub use_cases: Vec<UseCase>,
+    /// Immutable capability risk classification (spec 109 FR-005). Contracts published
+    /// before this field existed default to the most conservative classification so
+    /// they are never silently treated as automatic-eligible.
+    #[serde(default = "default_risk_metadata")]
+    pub risk: RiskMetadata,
+}
+
+/// Portable, immutable capability authority metadata across four independent
+/// dimensions (ADR-0041). A capability's own contract is the only place these
+/// values may be declared; an application manifest may narrow how a capability
+/// is actually wired (for example connector selection) but can never override
+/// or weaken these classifications.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RiskMetadata {
+    pub effect_class: EffectClass,
+    pub determinism_class: DeterminismClass,
+    #[serde(default)]
+    pub data_flow: DataFlowPolicy,
+    pub reliability: ReliabilityMetadata,
+}
+
+/// What kind of effect invoking this capability has on the world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectClass {
+    /// Reads only; no observable effect on any state.
+    PureRead,
+    /// Writes to Traverse-owned state (`DataStore`, trace).
+    StateWrite,
+    /// Calls an external system that is not owned/reversible by Traverse.
+    ExternalEffect,
+    /// An external effect that cannot be undone or compensated.
+    IrreversibleEffect,
+}
+
+/// Whether repeated invocation with the same inputs is guaranteed to agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeterminismClass {
+    Deterministic,
+    ExternallyVariable,
+    ModelDerived,
+}
+
+/// Field-level data classification and egress policy for this capability's
+/// declared inputs/outputs (spec 109 FR-005, FR-011). Schema compatibility
+/// alone never authorizes disclosure of a classified field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataFlowPolicy {
+    #[serde(default)]
+    pub accepted_data_classifications: Vec<FieldDataClassification>,
+    #[serde(default)]
+    pub produced_data_classifications: Vec<FieldDataClassification>,
+    #[serde(default = "default_egress_policy")]
+    pub egress_policy: EgressPolicy,
+}
+
+impl Default for DataFlowPolicy {
+    fn default() -> Self {
+        Self {
+            accepted_data_classifications: Vec::new(),
+            produced_data_classifications: Vec::new(),
+            egress_policy: default_egress_policy(),
+        }
+    }
+}
+
+/// Declares the classification of one field, addressed by a JSON Pointer
+/// (RFC 6901) into the capability's `inputs.schema` or `outputs.schema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldDataClassification {
+    pub field_path: String,
+    pub classification: DataClassification,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataClassification {
+    Public,
+    Internal,
+    Confidential,
+    Restricted,
+}
+
+/// Which connectors classified data produced/accepted by this capability may
+/// legally flow to. `Denied` means no external connector egress is permitted
+/// regardless of what connectors the capability is otherwise wired to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressPolicy {
+    Denied,
+    AllowedConnectors(Vec<String>),
+}
+
+fn default_egress_policy() -> EgressPolicy {
+    EgressPolicy::Denied
+}
+
+/// Reliability semantics a caller MUST honor when invoking this capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReliabilityMetadata {
+    pub idempotency_required: bool,
+    pub retryable: bool,
+    pub compensation_available: bool,
+}
+
+/// Conservative migration default for contracts published before spec 109:
+/// the most restrictive classification on every dimension, so a capability
+/// never becomes silently automatic-eligible just because it predates risk
+/// metadata.
+#[must_use]
+pub fn default_risk_metadata() -> RiskMetadata {
+    RiskMetadata {
+        effect_class: EffectClass::IrreversibleEffect,
+        determinism_class: DeterminismClass::ModelDerived,
+        data_flow: DataFlowPolicy::default(),
+        reliability: ReliabilityMetadata {
+            idempotency_required: true,
+            retryable: false,
+            compensation_available: false,
+        },
+    }
+}
+
+/// Spec 109 FR-006: whether a proposal using only this capability's declared
+/// risk classes is eligible to run without an authorization token. Every
+/// caller that gates automatic execution MUST consume this single function
+/// rather than re-deriving the rule from individual fields.
+#[must_use]
+pub fn is_automatic_eligible(risk: &RiskMetadata) -> bool {
+    risk.effect_class == EffectClass::PureRead
+        && risk.determinism_class == DeterminismClass::Deterministic
+        && risk.data_flow.egress_policy == EgressPolicy::Denied
+        && !risk.reliability.idempotency_required
+}
+
+/// An application manifest's declared narrowing of a capability's egress
+/// surface (spec 109 FR-005: "a manifest may only tighten these
+/// requirements"). Every other risk dimension is an immutable fact about the
+/// capability's own behavior and has no manifest-side override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ManifestRiskPolicy {
+    /// When present, the manifest restricts egress to this connector id
+    /// subset. `Some(vec![])` tightens an `AllowedConnectors` capability down
+    /// to no egress for this deployment.
+    #[serde(default)]
+    pub egress_allowed_connectors: Option<Vec<String>>,
+}
+
+/// Validates that a manifest's declared risk policy only narrows the
+/// capability's immutable, contract-declared egress surface — it MUST NOT
+/// permit a connector the contract does not already allow.
+///
+/// # Errors
+///
+/// Returns [`ValidationFailure`] when the manifest policy would widen egress
+/// beyond what the capability's `RiskMetadata` allows.
+pub fn validate_manifest_risk_policy(
+    risk: &RiskMetadata,
+    policy: &ManifestRiskPolicy,
+) -> Result<(), ValidationFailure> {
+    let mut errors = Vec::new();
+
+    if let Some(declared) = &policy.egress_allowed_connectors {
+        match &risk.data_flow.egress_policy {
+            EgressPolicy::Denied => {
+                if !declared.is_empty() {
+                    errors.push(error(
+                        ValidationErrorCode::RiskPolicyWeakened,
+                        "$.risk_policy.egress_allowed_connectors",
+                        "manifest cannot allow egress for a capability whose contract denies all egress",
+                    ));
+                }
+            }
+            EgressPolicy::AllowedConnectors(allowed) => {
+                for connector_id in declared {
+                    if !allowed.contains(connector_id) {
+                        errors.push(error(
+                            ValidationErrorCode::RiskPolicyWeakened,
+                            "$.risk_policy.egress_allowed_connectors",
+                            &format!(
+                                "manifest allows connector '{connector_id}' the contract's \
+                                 egress policy does not permit"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationFailure { errors })
+    }
 }
 
 /// One authored use case that demonstrates a concrete input/output path for a capability.
@@ -790,6 +986,9 @@ pub enum ValidationErrorCode {
     MissingEventTrigger,
     InvalidConnectorContract,
     InvalidConnectorRequirement,
+    /// A manifest-declared risk policy would widen egress beyond what the
+    /// capability's immutable `RiskMetadata` allows.
+    RiskPolicyWeakened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -882,6 +1081,7 @@ pub fn validate_contract(
     validate_evidence(&contract.evidence, &mut errors);
     validate_boundary(&contract, &mut errors);
     validate_placement_constraints(&contract, &mut errors);
+    validate_risk_metadata(&contract.risk, &mut errors);
     validate_published_record(&contract, context.existing_published, &mut errors);
 
     if !errors.is_empty() {
@@ -1642,6 +1842,38 @@ fn validate_placement_constraints(
             path: "$.event_trigger".to_string(),
             severity: ErrorSeverity::Error,
         });
+    }
+}
+
+fn validate_risk_metadata(risk: &RiskMetadata, errors: &mut Vec<ValidationError>) {
+    validate_field_classifications(
+        &risk.data_flow.accepted_data_classifications,
+        "$.risk.data_flow.accepted_data_classifications",
+        errors,
+    );
+    validate_field_classifications(
+        &risk.data_flow.produced_data_classifications,
+        "$.risk.data_flow.produced_data_classifications",
+        errors,
+    );
+}
+
+fn validate_field_classifications(
+    classifications: &[FieldDataClassification],
+    path: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut seen = HashSet::new();
+    for (index, item) in classifications.iter().enumerate() {
+        let field_path = format!("{path}[{index}].field_path");
+        validate_non_empty(&item.field_path, &field_path, errors);
+        if !seen.insert(item.field_path.clone()) {
+            errors.push(error(
+                ValidationErrorCode::DuplicateItem,
+                &field_path,
+                "field_path values must be unique",
+            ));
+        }
     }
 }
 

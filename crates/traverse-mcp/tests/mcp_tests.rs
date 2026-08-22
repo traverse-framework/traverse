@@ -129,6 +129,7 @@ fn capability_contract() -> traverse_contracts::CapabilityContract {
         connector_requirements: Vec::new(),
         state_schema: None,
         use_cases: Vec::new(),
+        risk: traverse_contracts::default_risk_metadata(),
     }
 }
 
@@ -371,6 +372,20 @@ fn list_capabilities_returns_expected_fields() -> Result<(), String> {
         s.activation_eligibility_reason,
         "requires_host_activation_resolution"
     );
+    // The fixture contract predates spec 109 and declares no `risk` field, so
+    // discovery must expose the conservative migration default rather than
+    // silently treating it as automatic-eligible.
+    assert_eq!(
+        s.effect_class,
+        traverse_contracts::EffectClass::IrreversibleEffect
+    );
+    assert_eq!(
+        s.determinism_class,
+        traverse_contracts::DeterminismClass::ModelDerived
+    );
+    assert_eq!(s.egress_policy, traverse_contracts::EgressPolicy::Denied);
+    assert!(s.reliability.idempotency_required);
+    assert!(!s.automatic_eligible);
     Ok(())
 }
 

@@ -390,6 +390,82 @@ Use `"stateful"` only for capabilities that explicitly manage a persistent resou
 
 ---
 
+## `risk` Reference (spec 109)
+
+Every contract carries an immutable `risk` classification across four
+independent dimensions (spec `109-runtime-workflow-proposals` FR-005, ADR-0041).
+A single field never implies another dimension — declare each one deliberately.
+
+```json
+"risk": {
+  "effect_class": "pure_read",
+  "determinism_class": "deterministic",
+  "data_flow": {
+    "accepted_data_classifications": [
+      { "field_path": "/comment_text", "classification": "internal" }
+    ],
+    "produced_data_classifications": [
+      { "field_path": "/draft_id", "classification": "public" }
+    ],
+    "egress_policy": "denied"
+  },
+  "reliability": {
+    "idempotency_required": false,
+    "retryable": true,
+    "compensation_available": false
+  }
+}
+```
+
+| Dimension | Values | Meaning |
+|---|---|---|
+| `effect_class` | `pure_read`, `state_write`, `external_effect`, `irreversible_effect` | What kind of effect invoking this capability has on the world. |
+| `determinism_class` | `deterministic`, `externally_variable`, `model_derived` | Whether repeated invocation with the same inputs is guaranteed to agree. |
+| `data_flow` | `accepted_data_classifications`, `produced_data_classifications` (JSON-Pointer `field_path` + `classification`: `public`/`internal`/`confidential`/`restricted`), `egress_policy` (`"denied"` or `{"allowed_connectors": [...]}`) | Field-level data classification and which connectors classified data may flow to. Schema compatibility alone never authorizes disclosure. |
+| `reliability` | `idempotency_required`, `retryable`, `compensation_available` (booleans) | Reliability semantics a caller must honor. |
+
+**Migration behavior.** Contracts published before spec 109 have no `risk`
+field at all. `traverse-contracts` treats a missing `risk` as present but set
+to the most conservative value on every dimension
+(`irreversible_effect`/`model_derived`/all egress denied/idempotency
+required) — see `traverse_contracts::default_risk_metadata()`. A pre-109
+contract is therefore never silently treated as safe to run without
+authorization; author it explicitly once you know the capability's real
+classification. Because the field is additive with a safe default, adding
+`risk` to an existing contract is a backward-compatible change under this
+repo's [compatibility policy](compatibility-policy.md), the same as
+`service_type` or `permitted_targets` before it. Within one contract version,
+`risk` is covered by the existing immutable-publish digest check — it cannot
+change without republishing under a new version.
+
+**Automatic-eligible gate.** `traverse_contracts::is_automatic_eligible(&risk)`
+is the single, canonical decision of whether a proposal built only from this
+capability's declared risk classes may run without an approval token (spec 109
+FR-006). Every caller that gates automatic execution — including the future
+P1 proposal runtime (issue #1090) — must consume this function rather than
+re-deriving the rule from individual fields.
+
+**Manifest tightening, never weakening.** An application manifest may narrow
+a component's egress surface below what its contract allows, but can never
+grant egress the contract's `risk` forbids. Declare the narrower set on the
+component manifest:
+
+```json
+"risk_policy": {
+  "egress_allowed_connectors": ["traverse.http"]
+}
+```
+
+`traverse-cli` validates this at `app register`/`app validate` time via
+`traverse_contracts::validate_manifest_risk_policy`: an `egress_allowed_connectors`
+entry not present in the contract's `egress_policy` allowlist (or any entry at
+all when the contract's `egress_policy` is `"denied"`) fails with the stable
+`risk_policy_weakened` code. `effect_class`, `determinism_class`, and
+`reliability` are immutable facts about the capability's own behavior — a
+manifest has no override for them at all.
+
+---
+
 ## Validate Before Registering (#298)
 
 Before opening a PR or registering a contract, run the spec-alignment gate against your contract:
