@@ -79,6 +79,28 @@ jobs:
 
           echo "Cargo.toml workspace version ${workspace_version} matches ${tag_name}."
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Cargo.lock is in sync with Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `scripts/ci/bump_version.sh` rewrites the workspace path-crate
+          # versions in both Cargo.toml and Cargo.lock. A desynced lockfile
+          # (e.g. a hand bump that misses Cargo.lock) still passes branch/PR
+          # CI today because nothing runs with --locked. Fail it here — on
+          # every push, PR, and release tag — so it can never reach the
+          # tag-only publish job's `cargo publish`.
+          cargo metadata --locked --format-version 1 > /dev/null
+          echo "Cargo.lock resolves cleanly under --locked; lockfile is in sync."
+
   repository-checks:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'

@@ -2,7 +2,9 @@
 
 **Feature Branch**: `048-semver-publishing-pipeline`
 **Created**: 2026-07-03
+**Amended**: 2026-09-05
 **Status**: Approved
+**Version**: 1.1.0
 **Input**: Cargo.toml workspace version has drifted from the git tag (0.5.0 in Cargo.toml, v0.7.0 tagged). No crates.io publishing is configured. No automated version bump exists. `repository` field still points to old org URL. This spec closes all three gaps.
 
 ## Purpose
@@ -64,8 +66,10 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
 - **FR-004**: CI MUST include a `publish` job triggered only on `push` of a `v*` tag, publishing crates in dependency order.
 - **FR-005**: `scripts/ci/bump_version.sh <semver>` MUST validate input is a valid semver string before making any changes.
 - **FR-006**: `bump_version.sh` MUST refuse to run on a dirty working tree.
-- **FR-007**: `bump_version.sh` MUST update only `[workspace.package] version` in `Cargo.toml` — no other files.
-- **FR-008**: After `bump_version.sh`, running `cargo build` MUST succeed without manual intervention.
+- **FR-007**: `bump_version.sh` MUST restrict its edits to `Cargo.toml` and `Cargo.lock` — no other files. In `Cargo.toml` it updates `[workspace.package] version` and the matching `[workspace.dependencies]` path-crate `version =` pins; in `Cargo.lock` it updates the `version = "…"` line of each workspace path crate only (`[[package]]` entries named `traverse-*` that carry no `source` line). If any other file shows as changed, the script MUST abort without committing.
+- **FR-008**: After `bump_version.sh`, running `cargo build` MUST succeed without manual intervention, and `cargo metadata --locked` (equivalently `cargo build --locked`) MUST succeed with no further change to `Cargo.lock`.
+- **FR-009**: `bump_version.sh` MUST stage `Cargo.toml` and `Cargo.lock` together in the single `chore: bump version to v<version>` commit, so the tree is tag-ready in one step with no follow-up lockfile-sync commit.
+- **FR-010**: CI MUST fail a `Cargo.toml`/`Cargo.lock` version drift before the `publish` job runs. The `version-guard` job MUST run `cargo metadata --locked` on every `push`, `pull_request`, and `v*` tag, and `publish` MUST depend on `version-guard`.
 
 ## Non-Functional Requirements
 
@@ -76,6 +80,29 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
 ## Files Governed
 
 - `Cargo.toml` (repository URL, version)
+- `Cargo.lock` (workspace path-crate `version` entries only, kept in step with
+  `Cargo.toml` by `bump_version.sh`; not registered as a spec-alignment
+  `governs` prefix, since routine dependency updates touch this file
+  independently of the release pipeline)
 - `scripts/ci/bump_version.sh` (new)
 - `.github/workflows/ci.yml` (version-guard job, publish job)
 - `docs/release-process.md` (new — documents the full release sequence)
+
+## Amendment History
+
+### 1.1.0 — 2026-09-05
+
+**Owner**: Traverse maintainers (issue #1236). **Rationale**: the v0.10.0 release
+shipped `Cargo.toml` at `0.10.0` while `Cargo.lock` still pinned the workspace
+crates at `0.9.1`, breaking every `--locked` build on `main` and forcing a
+follow-up sync PR (#1233). Branch/PR CI never ran `--locked`, so the drift was
+invisible until tag time.
+
+**Changes**: FR-007 widened from "only `Cargo.toml`" to "`Cargo.toml` and
+`Cargo.lock` only", with `Cargo.lock` edits scoped to workspace path-crate
+version lines. FR-008 now also requires `cargo metadata --locked` to succeed
+with no lockfile change. New FR-009 (single tag-ready commit contains both
+files) and FR-010 (`version-guard` runs `cargo metadata --locked` on every
+push, PR, and tag; `publish` depends on it). `Cargo.lock` documented under
+Files Governed but deliberately left out of the `governs` prefix list. No
+change to the publish flow, crate list, or version-bump interface.
