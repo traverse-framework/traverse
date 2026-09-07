@@ -1229,8 +1229,8 @@ fn help_app_new() -> String {
 
   Purpose:
     Create a governed Traverse app bundle directory under apps/<app-id>.
-    The scaffold contains a schema-valid application manifest, workspace-local
-    config template, component reference directory, workflow directory, and
+    The scaffold contains app.manifest.json, a schema-valid application manifest,
+    workspace-local config template, component reference directory, workflow directory, and
     bundle README. It contains no executable product behavior.
 
   Required arguments:
@@ -2578,7 +2578,7 @@ fn app_new_at(
         ))
     })?;
 
-    let manifest_path = app_dir.join("manifest.json");
+    let manifest_path = app_dir.join("app.manifest.json");
     write_pretty_json(
         &manifest_path,
         &serde_json::json!({
@@ -9920,13 +9920,14 @@ mod tests {
 
         let app_dir = temp_dir.join("apps/youaskm3");
         assert!(output.contains("created_app: youaskm3"));
-        assert!(app_dir.join("manifest.json").is_file());
+        assert!(app_dir.join("app.manifest.json").is_file());
+        assert!(!app_dir.join("manifest.json").exists());
         assert!(app_dir.join("workspace.config.json").is_file());
         assert!(app_dir.join("components/README.md").is_file());
         assert!(app_dir.join("workflows/README.md").is_file());
         assert!(app_dir.join("README.md").is_file());
 
-        let manifest = load_application_bundle_manifest(&app_dir.join("manifest.json"))
+        let manifest = load_application_bundle_manifest(&app_dir.join("app.manifest.json"))
             .expect("empty app manifest should be schema-valid");
         assert_eq!(manifest.app_id, "youaskm3");
         assert!(manifest.components.is_empty());
@@ -9946,7 +9947,7 @@ mod tests {
                 .message()
                 .contains("app bundle youaskm3 is incomplete")
         );
-        assert!(temp_dir.join("apps/youaskm3/manifest.json").is_file());
+        assert!(temp_dir.join("apps/youaskm3/app.manifest.json").is_file());
     }
 
     #[test]
@@ -9966,7 +9967,7 @@ mod tests {
                 .message()
                 .contains("app scaffold target already exists")
         );
-        assert!(temp_dir.join("apps/youaskm3/manifest.json").is_file());
+        assert!(temp_dir.join("apps/youaskm3/app.manifest.json").is_file());
     }
 
     #[test]
