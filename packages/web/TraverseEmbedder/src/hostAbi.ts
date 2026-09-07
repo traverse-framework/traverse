@@ -25,6 +25,8 @@ export const HOST_ABI_V1_WHITELIST: readonly HostAbiImport[] = [
   { module: "traverse_host", name: "runtime_config" },
   { module: "traverse_host", name: "trace_context" },
   { module: "traverse_host", name: "execution_id" },
+  { module: "traverse_host", name: "emit_event" },
+  { module: "traverse_host", name: "connector_invoke" },
 ];
 
 /**

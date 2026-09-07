@@ -644,6 +644,14 @@ function executeWasmModule(target: WasmTarget, input: JsonValue): WasmExecutionR
   const memoryRef: WasiMemoryRef = { memory: null };
   const importObject: WebAssembly.Imports = {
     wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef),
+    // The browser does not receive ambient connector authority.  Supplying
+    // this explicit host namespace keeps ABI-valid modules loadable while
+    // returning a deterministic denial until an activated binding adapter is
+    // provided by a later host integration.
+    traverse_host: {
+      emit_event: (_ptr: number, _len: number): number => -1,
+      connector_invoke: (_requestPtr: number, _requestLen: number, _responsePtr: number, _responseLen: number): number => -1,
+    },
   };
 
   let instance: WebAssembly.Instance;
