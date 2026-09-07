@@ -697,13 +697,22 @@ impl WasmExecutor {
             .module(&mut store, "", &cached_module.module)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("module link: {e}")))?;
 
-        linker
+        let invocation = linker
             .get_default(&mut store, "")
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("get_default: {e}")))?
             .typed::<(), ()>(&store)
             .map_err(|e| ExecutorError::RuntimeSetupFailed(format!("typed: {e}")))?
-            .call(&mut store, ())
-            .map_err(|error| classify_wasm_execution_error(&error))?;
+            .call(&mut store, ());
+
+        if let Err(error) = invocation {
+            // WASI preview1 implements `proc_exit` by returning `I32Exit` from
+            // the guest invocation. A zero status is the command's successful
+            // completion signal, so stdout remains the capability result.
+            if !matches!(error.downcast_ref::<wasmtime_wasi::I32Exit>(), Some(exit) if exit.0 == 0)
+            {
+                return Err(classify_wasm_execution_error(&error));
+            }
+        }
 
         // Extract captured stdout — contents() reads the buffer without consuming it
         let raw_output = stdout_ref.contents();

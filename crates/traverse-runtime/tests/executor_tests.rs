@@ -231,6 +231,58 @@ fn wasm_executor_runs_echo_module() -> Result<(), String> {
 }
 
 #[test]
+fn wasm_executor_accepts_proc_exit_zero_after_json_stdout() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (import "wasi_snapshot_preview1" "fd_write"
+                (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (import "wasi_snapshot_preview1" "proc_exit"
+                (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 8) "{\"status\":\"ok\"}")
+            (func $_start (export "_start")
+                (i32.store (i32.const 0) (i32.const 8))
+                (i32.store (i32.const 4) (i32.const 15))
+                (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 32)))
+                (call $proc_exit (i32.const 0))
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let result = executor
+        .run_bytes(&wasm_bytes, &json!({}))
+        .map_err(|e| format!("{e:?}"))?;
+
+    assert_eq!(result, json!({ "status": "ok" }));
+    Ok(())
+}
+
+#[test]
+fn wasm_executor_rejects_nonzero_proc_exit() -> Result<(), String> {
+    let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
+    let wat_src = r#"
+        (module
+            (import "wasi_snapshot_preview1" "proc_exit"
+                (func $proc_exit (param i32)))
+            (func $_start (export "_start")
+                (call $proc_exit (i32.const 1))
+            )
+        )
+    "#;
+    let wasm_bytes = wat::parse_str(wat_src).map_err(|e| format!("WAT parse: {e}"))?;
+
+    let error = expect_err(
+        executor.run_bytes(&wasm_bytes, &json!({})),
+        "nonzero proc_exit must fail closed",
+    )?;
+
+    assert!(matches!(error, ExecutorError::ExecutionFailed(_)));
+    Ok(())
+}
+
+#[test]
 fn wasm_executor_rejects_invalid_json_output() -> Result<(), String> {
     let executor = WasmExecutor::new().map_err(|e| format!("{e:?}"))?;
 
