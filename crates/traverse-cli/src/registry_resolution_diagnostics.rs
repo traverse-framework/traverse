@@ -473,4 +473,237 @@ mod tests {
             );
         }
     }
+
+    /// Shared cross-host projection matrix (issue #1300). The Web host asserts
+    /// the *same* fixture in
+    /// `packages/web/TraverseEmbedder/tests/registryCacheCrossHostProjection.test.mjs`,
+    /// so an inequality on either side is a cross-host conformance failure.
+    const CROSS_HOST_PROJECTION_MATRIX: &str = include_str!(
+        "../../../fixtures/cross-host/registry-cache-projections/projection-matrix.json"
+    );
+
+    const CROSS_HOST_CATEGORIES: [&str; 6] = [
+        "missing",
+        "altered",
+        "lifecycle-rejected",
+        "signature-invalid",
+        "abi-incompatible",
+        "target-incompatible",
+    ];
+
+    fn projection_matrix() -> serde_json::Value {
+        serde_json::from_str(CROSS_HOST_PROJECTION_MATRIX).expect("projection matrix parses")
+    }
+
+    fn allowed_evidence_fields(matrix: &serde_json::Value) -> BTreeSet<String> {
+        matrix["allowed_evidence_fields"]
+            .as_array()
+            .expect("allowed_evidence_fields is an array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("allowed field is a string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cross_host_matrix_declares_the_spec_1258_evidence_contract() {
+        let matrix = projection_matrix();
+        assert_eq!(matrix["governing_spec"], "1258-offline-cache-activation");
+        assert_eq!(
+            matrix["conformance_matrix_spec"],
+            "107-cross-host-embedded-registry-cache"
+        );
+        assert_eq!(matrix["implementation_issue"], 1272);
+        assert_eq!(matrix["evidence_issue"], 1300);
+
+        let listed: Vec<&str> = matrix["categories"]
+            .as_array()
+            .expect("categories is an array")
+            .iter()
+            .map(|entry| entry["category"].as_str().expect("category is a string"))
+            .collect();
+        assert_eq!(
+            listed, CROSS_HOST_CATEGORIES,
+            "the matrix must list every spec 1258 FR-004 failure category once, in order"
+        );
+
+        // The spec 107 FR-009 native equivalence set is recorded, not widened.
+        let native = &matrix["native_matrix"];
+        let equivalence_set: BTreeSet<&str> = native["spec_107_fr_009_equivalence_set"]
+            .as_array()
+            .expect("equivalence set is an array")
+            .iter()
+            .map(|value| value.as_str().expect("equivalence entry is a string"))
+            .collect();
+        assert_eq!(
+            equivalence_set,
+            BTreeSet::from([
+                "preparation_success",
+                "missing_cache",
+                "yanked_dependency",
+                "artifact_digest_mismatch",
+            ]),
+            "spec 107 FR-009 fixes the native equivalence set"
+        );
+        for category in ["missing", "altered", "lifecycle-rejected"] {
+            assert!(
+                native["coverage"][category]["native_code"].is_string(),
+                "{category} must record an observable native code"
+            );
+        }
+        for category in [
+            "signature-invalid",
+            "abi-incompatible",
+            "target-incompatible",
+        ] {
+            assert_eq!(
+                native["coverage"][category]["status"], "rust_web_projection_only",
+                "{category} is outside the spec 107 FR-009 native set"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_host_matrix_projections_are_redacted_and_key_sorted() {
+        let matrix = projection_matrix();
+        let allowed = allowed_evidence_fields(&matrix);
+
+        for entry in matrix["categories"]
+            .as_array()
+            .expect("categories is an array")
+        {
+            let category = entry["category"].as_str().expect("category is a string");
+            let code = entry["code"].as_str().expect("code is a string");
+            let stage_slug = entry["stage"].as_str().expect("stage is a string");
+            let evidence = entry["redacted_evidence"]
+                .as_object()
+                .expect("redacted_evidence is an object");
+
+            assert_eq!(
+                evidence.get("code").and_then(serde_json::Value::as_str),
+                Some(code),
+                "{category}: redacted_evidence.code must equal the category code"
+            );
+            assert_eq!(
+                evidence.get("stage").and_then(serde_json::Value::as_str),
+                Some(stage_slug),
+                "{category}: redacted_evidence.stage must equal the category stage"
+            );
+
+            let keys: Vec<&str> = evidence.keys().map(String::as_str).collect();
+            for key in &keys {
+                assert!(
+                    allowed.contains(*key),
+                    "{category}: evidence field {key} is not in allowed_evidence_fields"
+                );
+            }
+            let mut sorted_keys = keys.clone();
+            sorted_keys.sort_unstable();
+            assert_eq!(
+                keys, sorted_keys,
+                "{category}: redacted_evidence keys must be sorted for cross-host comparison"
+            );
+
+            let lower = serde_json::to_string(&entry["redacted_evidence"])
+                .expect("redacted_evidence serializes")
+                .to_ascii_lowercase();
+            for probe in [
+                "/",
+                "\\",
+                "://",
+                "authorization",
+                "bearer ",
+                "secret",
+                "token=",
+            ] {
+                assert!(
+                    !lower.contains(probe),
+                    "{category}: canonical projection leaked {probe:?}: {lower}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cross_host_matrix_matches_the_rust_resolution_projection() {
+        let matrix = projection_matrix();
+        let allowed = allowed_evidence_fields(&matrix);
+
+        for entry in matrix["categories"]
+            .as_array()
+            .expect("categories is an array")
+        {
+            let category = entry["category"].as_str().expect("category is a string");
+            let code = entry["code"].as_str().expect("code is a string");
+            let stage_slug = entry["stage"].as_str().expect("stage is a string");
+            let evidence = &entry["redacted_evidence"];
+
+            // Categories 2..6 are resolution boundaries with a Rust projection in
+            // this module; `missing` is the offline-activation outcome and has no
+            // resolution stage.
+            let Some(stage) = RegistryResolutionStage::ALL
+                .into_iter()
+                .find(|stage| stage.slug() == stage_slug)
+            else {
+                assert_eq!(
+                    category, "missing",
+                    "only the missing category has no resolution stage"
+                );
+                assert_eq!(
+                    code, "registry_cache_entry_missing",
+                    "missing must project the stable offline-activation code"
+                );
+                continue;
+            };
+
+            let facts = RegistryReferenceFacts {
+                namespace: evidence["namespace"]
+                    .as_str()
+                    .expect("namespace present")
+                    .to_string(),
+                id: evidence["id"].as_str().expect("id present").to_string(),
+                requested_range: evidence["requested_range"]
+                    .as_str()
+                    .expect("requested_range present")
+                    .to_string(),
+                selected_version: evidence["selected_version"].as_str().map(str::to_string),
+                contract_digest: None,
+                artifact_digest: evidence["artifact_digest"].as_str().map(str::to_string),
+                target: evidence["target"].as_str().map(str::to_string),
+            };
+            let observation = RegistryResolutionObservation::all_passed(facts)
+                .with(stage, BoundaryOutcome::Failed);
+            let diagnostic = classify(&observation).expect("a failed boundary yields a diagnostic");
+
+            assert_eq!(
+                diagnostic.code, code,
+                "{category}: Rust projection code must match the matrix"
+            );
+            assert_eq!(
+                diagnostic.stage.slug(),
+                stage_slug,
+                "{category}: Rust projection stage must match the matrix"
+            );
+            assert_eq!(
+                diagnostic.summary,
+                evidence["summary"].as_str().expect("summary present"),
+                "{category}: Rust projection summary must match the matrix"
+            );
+            for key in diagnostic
+                .redacted_evidence()
+                .as_object()
+                .expect("projection is an object")
+                .keys()
+            {
+                assert!(
+                    allowed.contains(key.as_str()),
+                    "{category}: Rust projection field {key} is not permitted"
+                );
+            }
+        }
+    }
 }
