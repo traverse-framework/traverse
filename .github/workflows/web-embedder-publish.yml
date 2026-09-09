@@ -23,6 +23,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for OIDC trusted publishing
+        # Node 22 ships npm 10.x; OIDC trusted publishing (credential-less
+        # `npm publish`) requires npm >= 11.5.1. Without this the publish PUT
+        # is unauthenticated and the registry returns a misleading E404.
+        run: npm install -g npm@11
       - name: Install locked dependencies
         run: npm ci
       - name: Verify release tag matches package version
