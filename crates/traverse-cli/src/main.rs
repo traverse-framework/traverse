@@ -10141,7 +10141,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)] // The release fixture makes each trust and offline lifecycle boundary explicit.
     fn signed_release_fixture_validates_registers_and_activates_offline() {
-        // This fixture is an immutable snapshot of Registry index-v260's active
+        // This fixture is an immutable snapshot of Registry index-v263's active
         // inference.evidence-normalize@1.0.1 release.  The URLs below are
         // provenance only: after these bytes enter the prepared cache, none of
         // validation, registration, or activation may use the network.
@@ -10213,12 +10213,12 @@ mod tests {
             &state_root,
             "callweave-proof",
             "traverse-framework/registry",
-            "index-v260",
-            "2026-09-09T05:38:43Z",
+            "index-v263",
+            "2026-09-09T05:49:40Z",
             PublicRegistryIndex {
                 index_version: 1,
-                generated_at: "2026-09-09T05:38:43Z".to_string(),
-                source_commit: Some("dcc15a4d8312eb01857eabf7f2a16fe472126a0c".to_string()),
+                generated_at: "2026-09-09T05:49:40Z".to_string(),
+                source_commit: Some("72c86528f3a1eb0ab66d1f16cf1754b1c27cb9bb".to_string()),
                 capabilities: vec![PublicRegistryCapabilityRecord {
                     namespace: NAMESPACE.to_string(),
                     id: ID.to_string(),
