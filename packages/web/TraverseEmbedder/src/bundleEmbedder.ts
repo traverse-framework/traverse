@@ -31,6 +31,8 @@ import {
 } from "./bundleValidation.js";
 import type { BundleLoader } from "./bundleLoader.js";
 import { findUnauthorizedImport } from "./hostAbi.js";
+import { IndexedDbDataStore } from "./indexedDbDataStore.js";
+import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
 import { WasiExit, WasiPipes, createWasiPreview1Imports } from "./wasi.js";
 import type { WasiMemoryRef } from "./wasi.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
@@ -64,6 +66,8 @@ interface WasmTarget {
   readonly capabilityVersion: string;
   readonly digest: string;
   readonly module: WebAssembly.Module;
+  /** Optional contract `service_type` from the component manifest (Spec 132). */
+  readonly serviceType: string | null;
 }
 
 interface WorkflowNodeSpec {
@@ -187,6 +191,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly wasmTargets: ReadonlyMap<string, WasmTarget>;
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
   private readonly wasmComponentEvidence: readonly JsonValue[];
+  private indexedDbDataStore: IndexedDbDataStore | null = null;
 
   private constructor(
     core: EmbedderCore,
@@ -198,6 +203,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     this.wasmTargets = wasmTargets;
     this.workflowTargets = workflowTargets;
     this.wasmComponentEvidence = wasmComponentEvidence;
+  }
+
+  /**
+   * Binds a Spec `085` IndexedDB DataStore for Stateful Browser activation
+   * (Spec `132`). Pass `null` to clear. Attestation inspects this handle —
+   * an honor-system flag is not accepted.
+   */
+  bindIndexedDbDataStore(store: IndexedDbDataStore | null): void {
+    this.indexedDbDataStore = store;
   }
 
   /**
@@ -292,7 +306,12 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         );
       }
 
-      wasmTargets.set(capabilityId, { capabilityVersion, digest: wasmDigest, module });
+      wasmTargets.set(capabilityId, {
+        capabilityVersion,
+        digest: wasmDigest,
+        module,
+        serviceType: optionalString(record, "service_type"),
+      });
       wasmComponentEvidence.push({
         component_id: component.componentId,
         capability_id: capabilityId,
@@ -444,6 +463,38 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       capability_id: targetId,
       capability_version: target.capabilityVersion,
     });
+
+    if (target.serviceType === "stateful") {
+      const attestation = attestStatefulBrowserActivation(this.indexedDbDataStore);
+      if (!attestation.ok) {
+        this.core.recordTrace({
+          executionId,
+          targetId,
+          outcome: "error",
+          phases: [{ code: "error" }],
+          selectedTarget: { targetId, targetVersion: target.capabilityVersion },
+          placement: { target: "browser" },
+          failureCode: attestation.error.code,
+          stateMachineValid: null,
+        });
+        this.core.emit("error", sessionId, {
+          execution_id: executionId,
+          capability_id: targetId,
+          status: "error",
+          error: {
+            code: attestation.error.code,
+            message: "Stateful Browser activation requires an open Spec 085 IndexedDB DataStore",
+            details: {
+              governing_spec: attestation.error.governing_spec,
+              outcome: attestation.error.outcome,
+              reason: attestation.error.reason,
+            },
+          },
+        });
+        return { sessionId, status: "accepted", error: null };
+      }
+    }
+
     const result = executeWasmModule(target, input);
     this.core.recordTrace({
       executionId,
@@ -515,6 +566,24 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         break;
       }
       const nodeInput = buildNodeInput(state, node.fromWorkflowInput);
+      if (target.serviceType === "stateful") {
+        const attestation = attestStatefulBrowserActivation(this.indexedDbDataStore);
+        if (!attestation.ok) {
+          steps.push({
+            stepIndex,
+            nodeId: node.nodeId,
+            capabilityId: node.capabilityId,
+            capabilityVersion: node.capabilityVersion,
+            status: "failed",
+          });
+          failure = {
+            code: attestation.error.code,
+            message:
+              "Stateful Browser activation requires an open Spec 085 IndexedDB DataStore",
+          };
+          break;
+        }
+      }
       const result = executeWasmModule(target, nodeInput);
       if (!result.ok) {
         steps.push({

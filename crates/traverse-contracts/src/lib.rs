@@ -990,7 +990,8 @@ pub enum ValidationErrorCode {
     PortabilityExceptionRequired,
     ImmutableVersionConflict,
     InvalidDependencyRef,
-    /// `service_type: stateful` combined with `Browser` in `permitted_targets`.
+    /// Reserved for placement-constraint violations other than Stateful+Browser
+    /// (Stateful+Browser is allowed under Spec `132-stateful-browser-placement`).
     InvalidPlacementConstraint,
     /// `service_type: subscribable` without a non-empty `event_trigger`.
     MissingEventTrigger,
@@ -1827,20 +1828,9 @@ fn validate_placement_constraints(
     contract: &CapabilityContract,
     errors: &mut Vec<ValidationError>,
 ) {
-    if contract.service_type == ServiceType::Stateful
-        && contract
-            .permitted_targets
-            .contains(&ExecutionTarget::Browser)
-    {
-        errors.push(ValidationError {
-            code: ValidationErrorCode::InvalidPlacementConstraint,
-            message: "Stateful capabilities cannot target Browser environments; browsers cannot \
-                      provide managed persistence guarantees."
-                .to_string(),
-            path: "$.permitted_targets".to_string(),
-            severity: ErrorSeverity::Error,
-        });
-    }
+    // Spec `132-stateful-browser-placement` FR-001 supersedes `014`/`208` FR-005:
+    // Stateful + Browser is valid at contract time; durable-store proof is an
+    // activation concern (`stateful_browser_store_unavailable`).
     if contract.service_type == ServiceType::Stateful {
         let properties_empty = contract
             .state_schema

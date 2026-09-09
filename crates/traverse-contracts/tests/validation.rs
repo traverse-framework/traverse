@@ -1087,7 +1087,7 @@ fn validate_manifest_risk_policy_rejects_any_egress_when_contract_denies_all() -
 }
 
 #[test]
-fn stateful_with_browser_target_is_rejected() -> Result<(), String> {
+fn stateful_with_browser_target_is_accepted() -> Result<(), String> {
     let mut contract = valid_contract();
     contract.service_type = ServiceType::Stateful;
     contract.state_schema = Some(serde_json::json!({
@@ -1098,19 +1098,22 @@ fn stateful_with_browser_target_is_rejected() -> Result<(), String> {
     }));
     contract.permitted_targets = vec![ExecutionTarget::Browser, ExecutionTarget::Cloud];
 
-    let failure = expect_validation_failure(validate_contract(
+    let result = validate_contract(
         contract,
         &ValidationContext {
             governing_spec: GOVERNING_SPEC,
             validator_version: VALIDATOR_VERSION,
             existing_published: None,
         },
-    ))?;
+    )
+    .map_err(|failure| format!("expected Stateful+Browser to validate: {failure:?}"))?;
 
-    let codes: Vec<_> = failure.errors.iter().map(|e| &e.code).collect();
+    assert_eq!(result.evidence.status, EvidenceStatus::Passed);
     assert!(
-        codes.contains(&&ValidationErrorCode::InvalidPlacementConstraint),
-        "expected InvalidPlacementConstraint, got {codes:?}"
+        result
+            .normalized
+            .permitted_targets
+            .contains(&ExecutionTarget::Browser)
     );
     Ok(())
 }

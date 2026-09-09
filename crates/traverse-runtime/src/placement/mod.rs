@@ -4,12 +4,12 @@
 //!
 //! Applies three tiers in order:
 //! 1. Caller hint — accept if provided and in permitted targets
-//! 2. Contract constraints — filter by permitted targets and service-type rules
+//! 2. Contract constraints — filter by permitted targets
 //! 3. Heuristics — select lowest-load eligible target from runtime snapshot
 
 use std::collections::HashMap;
 
-use traverse_contracts::{CapabilityContract, ExecutionTarget, ServiceType};
+use traverse_contracts::{CapabilityContract, ExecutionTarget};
 
 /// A snapshot of runtime target load at a point in time.
 pub struct RuntimeSnapshot {
@@ -93,16 +93,9 @@ impl PlacementConstraintEvaluator {
         }
 
         // --- Tier 2: Contract constraints ---
-        // Start from the contract's permitted targets, then enforce service-type rules.
-        let mut eligible: Vec<ExecutionTarget> = contract
-            .permitted_targets
-            .iter()
-            .filter(|t| {
-                // Stateful services cannot run in Browser.
-                !(contract.service_type == ServiceType::Stateful && **t == ExecutionTarget::Browser)
-            })
-            .cloned()
-            .collect();
+        // Start from the contract's permitted targets. Spec `132` allows
+        // Stateful+Browser here; IndexedDB attestation is an activation gate.
+        let mut eligible: Vec<ExecutionTarget> = contract.permitted_targets.clone();
 
         // --- Tier 3: Heuristics ---
         // Remove overloaded targets (load > 0.9).

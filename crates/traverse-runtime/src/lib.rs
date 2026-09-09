@@ -19,6 +19,8 @@ pub mod placement;
 pub mod proposal;
 pub mod router;
 pub mod security;
+/// Spec `132` Stateful Browser activation attestation.
+pub mod stateful_browser;
 pub mod trace;
 
 use chrono::Utc;

@@ -25,7 +25,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs"
+    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/statefulBrowserActivation.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
