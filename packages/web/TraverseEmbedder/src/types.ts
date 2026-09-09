@@ -25,7 +25,7 @@ export const SUPPORTED_BUNDLE_SCHEMA_VERSIONS: readonly string[] = ["1.0.0"];
 
 export const EVENT_SCHEMA_VERSION = "1.0.0";
 export const PACKAGE_NAME = "traverse-embedder-web";
-export const PACKAGE_VERSION = "0.7.0";
+export const PACKAGE_VERSION = "0.9.0";
 
 /** Stable embedder-boundary error codes (wire-identical to the Rust SDK). */
 export type EmbedderErrorCode =

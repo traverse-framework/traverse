@@ -63,6 +63,29 @@ export type { BundleCompatibility, BundleComponentSummary, BundleWorkflowSummary
 export { BundleEmbedder } from "./bundleEmbedder.js";
 export type { BundleEmbedderConfig } from "./bundleEmbedder.js";
 
+export {
+  BROWSER_PLAN_MAX_CANDIDATES,
+  BROWSER_PLAN_MAX_DEPENDENCIES,
+  BROWSER_PLAN_MAX_FACT_BYTES,
+  BROWSER_PLAN_MAX_NODES,
+  BROWSER_WORKFLOW_PROPOSAL_SCHEMA_VERSION,
+  BrowserPlanError,
+  browserLocalPlan,
+  SUPPORTED_BROWSER_PLAN_CONTRACT_SCHEMA_VERSION,
+} from "./browserLocalPlan.js";
+
+export { COMPOSED_WORKFLOW_MAX_NODES, COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES, ComposedWorkflowError, executeBrowserComposedWorkflow } from "./composedWorkflow.js";
+export type { ComposedWorkflowErrorCode, ComposedWorkflowNodeOutcome, ComposedWorkflowTrace } from "./composedWorkflow.js";
+export type {
+  BrowserPlanErrorCode,
+  BrowserPlanResponse,
+  BrowserPlanTarget,
+  BrowserProposalMapping,
+  BrowserProposalNode,
+  BrowserSnapshotIdentity,
+  BrowserWorkflowProposal,
+} from "./browserLocalPlan.js";
+
 export { FetchBundleLoader, NodeFsBundleLoader } from "./bundleLoader.js";
 export type { BundleLoader } from "./bundleLoader.js";
 

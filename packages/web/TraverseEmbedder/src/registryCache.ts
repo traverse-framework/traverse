@@ -122,6 +122,18 @@ function textDecoder(): TextDecoder {
   return new TextDecoder();
 }
 
+/** Canonical snapshot bytes bind preparation to the same identity as planning. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const copy: Uint8Array<ArrayBuffer> = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
@@ -288,9 +300,7 @@ export async function prepareRegistryDependency(
     );
   }
   const record = selectHighestActive(snapshot, reference);
-  const indexDigest = await digestFor(
-    textEncoder().encode(JSON.stringify(snapshot)),
-  );
+  const indexDigest = await digestFor(textEncoder().encode(canonicalJson(snapshot)));
   let artifactBytes: Uint8Array;
   let contractBytes: Uint8Array;
   try {
