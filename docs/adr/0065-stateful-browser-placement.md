@@ -1,8 +1,8 @@
 # ADR-0065: Stateful Browser Placement via IndexedDB Host Attestation
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-09
-- Governing spec: `132-stateful-browser-placement` (Proposed)
+- Governing spec: `132-stateful-browser-placement` (Approved)
 - Extends / supersedes placement rule in: `014-service-type-taxonomy` (`208`) FR-005
 - Depends on: `085-datastore-indexeddb`, `131-stateful-persistence-host-abi`
 - Related issues: #1305 (specification), #1289 (implementation)
@@ -63,6 +63,6 @@ opened #1305 as the governing vehicle.
 
 ## Approval evidence
 
-Pending maintainer approval of Spec `132-stateful-browser-placement` and
-acceptance of this ADR. Proposed artifacts and a merged PR without approval
-evidence do not count as approved.
+Maintainer approved Spec `132-stateful-browser-placement` and accepted this ADR
+on 2026-09-09 during the `/brainstorm` session that produced Decision 72/73
+(issue #1305, PR #1307). Registry entry added the same day.

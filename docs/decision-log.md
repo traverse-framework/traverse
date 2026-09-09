@@ -3221,7 +3221,34 @@ governing package.
 
 ### Outcome
 
-#1305 is In Progress with Proposed Spec `132` + ADR-0065. #1289 carries
-`needs-spec`. Encryption (#1294), maintenance (#1295), ABI extensions, and
-#1291 remain `future`. Maintainer approval is required before registry entry,
-#1305 Done, and #1289 `spec-complete` / Ready.
+#1305 owned Proposed Spec `132` + ADR-0065 on PR #1307. Decision 73 approved
+the package the same day; #1289 then moved to `spec-complete` / Ready.
+Encryption (#1294), maintenance (#1295), ABI extensions, and #1291 remain
+`future`.
+
+## Decision 73: Approve Spec 132 and ADR-0065 (Stateful Browser Placement)
+
+- **Date**: 2026-09-09
+- **Status**: Accepted
+- **Governing specs**: `132-stateful-browser-placement` (Proposed → Approved 0.1.0);
+  `014-service-type-taxonomy` (FR-005 superseded for placement only);
+  `085-datastore-indexeddb`; `131-stateful-persistence-host-abi`; `004-spec-alignment-gate`
+- **ADR**: `0065-stateful-browser-placement` (Proposed → Accepted)
+- **Related issues**: `#1305` (specification), `#1289` (implementation)
+- **Origin**: Maintainer `/brainstorm` approval (Option A) after Decision 72 locked the design and PR #1307 landed Proposed artifacts.
+
+### Context
+
+Decision 72 produced Proposed Spec `132` + ADR-0065. #1289 remained
+`needs-spec` until approval evidence existed.
+
+### Decision
+
+Approve Spec `132-stateful-browser-placement` v0.1.0 as written and accept
+ADR-0065. Register the immutable entry in `approved-specs.json`. Mark #1305
+Done and move #1289 to `spec-complete` / Ready for implementation.
+
+### Outcome
+
+Contract-time Stateful+Browser ban is superseded; activation attestation under
+Spec `085` is the governed fail-closed rule. Implementation proceeds on #1289.

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `codex/issue-1305-stateful-browser-placement`
 **Created**: 2026-09-09
-**Status**: Proposed
+**Status**: Approved (2026-09-09)
 **Canonical governing ID**: `132-stateful-browser-placement`
 **Version**: 0.1.0
 **Supersedes**: `014-service-type-taxonomy` / `208-service-type-taxonomy` **FR-005**, User Story 2, SC-002, and the assumption that Browser cannot provide managed persistence (only those placement rules; all other `014`/`208` requirements remain in force)
@@ -121,5 +121,5 @@ cargo test -p traverse-contracts
 cargo test -p traverse-runtime
 ```
 
-Approval of this Proposed spec requires maintainer sign-off and an
-`approved-specs.json` entry; merging a Draft/Proposed PR alone is not approval.
+Approved by maintainer decision on 2026-09-09 (brainstorm Option A on
+#1305 / PR #1307). Recorded in `specs/governance/approved-specs.json`.
