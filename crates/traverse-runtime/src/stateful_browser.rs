@@ -1,7 +1,7 @@
 //! Stateful Browser activation attestation (Spec `132-stateful-browser-placement`).
 //!
 //! Contract validation may permit `Stateful` + `Browser`. Before guest
-//! execution on Browser, the host must prove a Spec `085` IndexedDB DataStore
+//! execution on Browser, the host must prove a Spec `085` `IndexedDB` DataStore
 //! is bound and open under its exclusive-lock and public-integrity guarantees.
 //! Failures use the stable code `stateful_browser_store_unavailable`.
 //!
@@ -30,9 +30,9 @@ pub struct IndexedDbOpenAttestation {
 pub enum StatefulBrowserBoundStore {
     /// No DataStore is bound to the activation.
     Missing,
-    /// A non-IndexedDB DataStore backend is bound.
+    /// A non-`IndexedDB` DataStore backend is bound.
     NonIndexedDb,
-    /// IndexedDB backend with open-guarantee facts.
+    /// `IndexedDB` backend with open-guarantee facts.
     IndexedDb(IndexedDbOpenAttestation),
 }
 
@@ -64,7 +64,7 @@ pub struct StatefulBrowserActivationError {
 ///
 /// Returns [`StatefulBrowserActivationError`] with
 /// [`STATEFUL_BROWSER_STORE_UNAVAILABLE`] when Browser Stateful activation
-/// lacks a qualifying open IndexedDB store.
+/// lacks a qualifying open `IndexedDB` store.
 pub fn attest_stateful_browser_activation(
     service_type: &ServiceType,
     target: &ExecutionTarget,
@@ -140,83 +140,106 @@ mod tests {
 
     #[test]
     fn qualifying_indexeddb_attests() {
-        let evidence = attest_stateful_browser_activation(
+        let result = attest_stateful_browser_activation(
             &ServiceType::Stateful,
             &ExecutionTarget::Browser,
             qualifying(),
-        )
-        .expect("qualifying store must attest")
-        .expect("evidence required");
-        assert_eq!(evidence.backend, "indexeddb");
-        assert_eq!(evidence.outcome, "attested");
-        let value = to_value(&evidence).expect("serialize");
-        let text = value.to_string();
-        assert!(!text.contains("database"));
-        assert!(!text.contains('/'));
-        assert!(!text.contains("payload"));
+        );
+        assert!(matches!(
+            result,
+            Ok(Some(StatefulBrowserActivationEvidence {
+                backend: "indexeddb",
+                outcome: "attested",
+                exclusive_lock_held: true,
+                public_integrity_available: true,
+                ..
+            }))
+        ));
+        if let Ok(Some(evidence)) = result {
+            let serialized = to_value(&evidence);
+            assert!(serialized.is_ok());
+            if let Ok(value) = serialized {
+                let text = value.to_string();
+                assert!(!text.contains("database"));
+                assert!(!text.contains('/'));
+                assert!(!text.contains("payload"));
+            }
+        }
     }
 
     #[test]
     fn missing_store_fails_closed() {
-        let error = attest_stateful_browser_activation(
+        let result = attest_stateful_browser_activation(
             &ServiceType::Stateful,
             &ExecutionTarget::Browser,
             StatefulBrowserBoundStore::Missing,
-        )
-        .expect_err("missing store must fail");
-        assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
-        assert_eq!(error.reason, "missing_bound_store");
+        );
+        assert!(result.is_err());
+        if let Err(error) = result {
+            assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
+            assert_eq!(error.reason, "missing_bound_store");
+        }
     }
 
     #[test]
     fn non_indexeddb_fails_closed() {
-        let error = attest_stateful_browser_activation(
+        let result = attest_stateful_browser_activation(
             &ServiceType::Stateful,
             &ExecutionTarget::Browser,
             StatefulBrowserBoundStore::NonIndexedDb,
-        )
-        .expect_err("non-indexeddb must fail");
-        assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
-        assert_eq!(error.reason, "non_indexeddb_backend");
+        );
+        assert!(result.is_err());
+        if let Err(error) = result {
+            assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
+            assert_eq!(error.reason, "non_indexeddb_backend");
+        }
     }
 
     #[test]
     fn open_without_lock_fails_closed() {
-        let error = attest_stateful_browser_activation(
+        let result = attest_stateful_browser_activation(
             &ServiceType::Stateful,
             &ExecutionTarget::Browser,
             StatefulBrowserBoundStore::IndexedDb(IndexedDbOpenAttestation {
                 exclusive_lock_held: false,
                 public_integrity_available: true,
             }),
-        )
-        .expect_err("lock required");
-        assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
-        assert_eq!(error.reason, "exclusive_lock_not_held");
+        );
+        assert!(result.is_err());
+        if let Err(error) = result {
+            assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
+            assert_eq!(error.reason, "exclusive_lock_not_held");
+        }
     }
 
     #[test]
     fn open_without_public_integrity_fails_closed() {
-        let error = attest_stateful_browser_activation(
+        let result = attest_stateful_browser_activation(
             &ServiceType::Stateful,
             &ExecutionTarget::Browser,
             StatefulBrowserBoundStore::IndexedDb(IndexedDbOpenAttestation {
                 exclusive_lock_held: true,
                 public_integrity_available: false,
             }),
-        )
-        .expect_err("public integrity required");
-        assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
-        assert_eq!(error.reason, "public_integrity_unavailable");
+        );
+        assert!(result.is_err());
+        if let Err(error) = result {
+            assert_eq!(error.code, STATEFUL_BROWSER_STORE_UNAVAILABLE);
+            assert_eq!(error.reason, "public_integrity_unavailable");
+        }
     }
 
     #[test]
     fn denial_evidence_is_secret_free() {
         let error = activation_error("missing_bound_store");
-        let text = to_value(&error).expect("serialize").to_string();
-        assert!(!text.contains("payload"));
-        assert!(!text.contains("databaseName"));
-        assert!(!text.contains("/var/"));
-        assert!(!text.contains("indexeddb://"));
+        let serialized = to_value(&error);
+        assert!(serialized.is_ok());
+        if let Ok(value) = serialized {
+            let text = value.to_string();
+            assert!(!text.contains("payload"));
+            assert!(!text.contains("databaseName"));
+            assert!(!text.contains("/var/"));
+            assert!(!text.contains("indexeddb://"));
+        }
     }
 }
