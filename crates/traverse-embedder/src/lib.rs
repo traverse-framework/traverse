@@ -97,9 +97,8 @@ pub use composed_workflow::{
 pub use registry_cache::{
     HostRegistryCache, PublicCapabilityMetadata, PublicMetadataRead, RegistryArtifactFetcher,
     RegistryCacheError, RegistryCacheErrorCode, RegistryPrepareEvidence,
-    VerifiedRegistryDependency, prepare as prepare_registry_dependency,
-    prepare_application_references, publish_public_metadata, read_public_metadata,
-    resolve_component as resolve_registry_component,
+    VerifiedRegistryDependency, prepare as prepare_registry_dependency, publish_public_metadata,
+    read_public_metadata, resolve_component as resolve_registry_component,
     resolve_offline as resolve_registry_dependency_offline,
 };
 pub use test_double::EmbedderTestDouble;

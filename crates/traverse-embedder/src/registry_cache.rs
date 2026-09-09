@@ -13,38 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use traverse_contracts::parse_contract;
 use traverse_registry::{
-    ApplicationBundleManifest, ArtifactRetrievalAdapter, BatchApplicationPreparation,
-    BatchPreparationParams, ContractRetrievalAdapter, PublicRegistryCapabilityRecord,
-    RegistryReference, ResolvedRegistryComponent, SignatureVerifier, SyncedPublicRegistryState,
-    VerifiedCacheWriter, application_selected_references, prepare_application_selected_references,
+    PublicRegistryCapabilityRecord, RegistryReference, ResolvedRegistryComponent,
+    SyncedPublicRegistryState,
 };
-
-/// Prepare exactly the Registry references declared by an application manifest.
-///
-/// This is the host-run network boundary for applications. The caller supplies
-/// retrieval, trust, and immutable-cache adapters; validation and activation
-/// remain offline consumers of the resulting cache entries.
-#[must_use]
-pub fn prepare_application_references(
-    manifest: &ApplicationBundleManifest,
-    synced_state: &SyncedPublicRegistryState,
-    params: &BatchPreparationParams,
-    contract_adapter: &dyn ContractRetrievalAdapter,
-    artifact_adapter: &dyn ArtifactRetrievalAdapter,
-    signature_verifier: &dyn SignatureVerifier,
-    cache: &mut dyn VerifiedCacheWriter,
-) -> BatchApplicationPreparation {
-    let selected = application_selected_references(manifest);
-    prepare_application_selected_references(
-        &selected,
-        synced_state,
-        params,
-        contract_adapter,
-        artifact_adapter,
-        signature_verifier,
-        cache,
-    )
-}
 
 /// Stable, secret-free registry-cache failure codes (Spec 080 FR-007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
