@@ -3252,3 +3252,134 @@ Done and move #1289 to `spec-complete` / Ready for implementation.
 
 Contract-time Stateful+Browser ban is superseded; activation attestation under
 Spec `085` is the governed fail-closed rule. Implementation proceeds on #1289.
+
+## Decision 74: npm publish path for `traverse-embedder-web` (issue #1314)
+
+**Date**: 2026-09-09  
+**Issue**: #1314 (parent #1308; downstream traverse-framework/website#68)  
+**Spec**: `048-semver-publishing-pipeline` (amended → v1.2.0 by PR #1317)
+
+### Context
+
+`traverse-embedder-web` is at `0.8.0` in `main` (PR #1312, `5181f1b`) but npm
+still serves `0.7.0`; `npm whoami` in the release environment returns E401. It
+is the repo's only npm artifact, published under the sole personal maintainer
+account `enricopiovesan`, with no CI automation — publishing had always been a
+manual, undocumented step. Spec 048 governed "the complete semver lifecycle" but
+was entirely crates.io/Cargo. #1314 asked not just to ship `0.8.0` but to make
+the path durable so `0.9.0` (#1313) does not hit E401 again.
+
+### Decisions (owner `/brainstorm`, recommended option taken each time)
+
+1. **Go-forward mechanism: npm Trusted Publishing (OIDC).** A GitHub Actions
+   workflow publishes via a short-lived OIDC token; npmjs.com is configured to
+   trust the repo + workflow. No stored secret, nothing to expire — structurally
+   removes the E401 failure mode; provenance automatic.
+   - Rejected: *CI + stored npm automation token* — standard, but a long-lived
+     secret to own/rotate; only a never-expiring classic token fully avoids
+     repeat E401.
+   - Rejected: *documented manual publish with a granular token* — zero CI work,
+     but bus-factor of one, no provenance, and granular tokens expire (≤1yr) →
+     the same trap #1314 exists to kill, just written down.
+
+2. **`0.8.0` bridge: one-time manual publish now.** *(Superseded by Decision 75
+   — `0.8.0` instead ships as the first OIDC run.)*
+   - Rejected: *wait, make `0.8.0` the first OIDC release* — later adopted.
+   - Rejected: *publish `0.8.0` and `0.9.0` manually* — two more chances to
+     re-hit E401.
+
+3. **Workflow trigger: dedicated `web-v<version>` tag.** Push `web-v0.9.0` from
+   `main` → workflow publishes that version. Matches the existing "push a tag to
+   release" model; stays clear of the `v*` crates namespace and its
+   `version-guard` job.
+   - Rejected: *`workflow_dispatch` with a version input* — simplest and easy to
+     rerun, but no git artifact marking the release.
+   - Rejected: *auto-publish on version bump merged to `main`* — most moving
+     parts; publish timing tied to PR merge, not choice.
+
+4. **Pre-publish checks: version-guard + build + `npm test`.** Assert the
+   `web-v<version>` tag matches `packages/web/TraverseEmbedder/package.json`, run
+   the build, run the package's own suite, then publish. A mis-cut tag or a tag
+   on a non-green commit cannot publish.
+   - Rejected: *version-guard + build only* — nothing catches a tag on a commit
+     whose web tests were never green.
+   - Rejected: *reuse `web_package.sh` as the gate* — more than a release needs.
+
+5. **Governance: amend spec `048-semver-publishing-pipeline` → v1.2.0.** Add npm
+   publishing of `traverse-embedder-web` as a second governed target alongside
+   crates, with acceptance scenarios for the `web-v<version>` tag, version-guard,
+   OIDC + provenance, and idempotent rerun. Amendment rides in the
+   implementation PR per standing spec-approval policy.
+   - Rejected: *new dedicated JS-publishing spec* — spec sprawl for one package.
+   - Rejected: *ADR only* — a release gate belongs in a spec per constitution III.
+
+6. **Ticketing: two tickets.** #1314 = release execution; a new ticket (#1316) =
+   spec 048 v1.2.0 amendment + `web-v*` workflow + docs.
+   - Rejected: *one re-scoped #1314 on Project 1* — `needs-enrico` vs
+     `agent:claude` on one ticket, which the ticket standard warns against.
+   - Rejected: *three tickets* — the spec amendment rides in the impl PR.
+
+### Outcome
+
+#1316 was implemented by **PR #1317** (merged 2026-09-09): spec 048 → v1.2.0,
+`.github/workflows/web-embedder-publish.yml` (trigger `web-v*`, `id-token: write`,
+`npm ci` → tag/version guard → `npm run build` → `npm test` →
+`npm publish --provenance --access public`, idempotent skip when the version is
+already on npm), `packages/web/TraverseEmbedder/.npmrc` with
+`tag-version-prefix=web-v`, and the rewritten
+`docs/web-embedder-npm-publish-runbook.md`. #1316 closed.
+
+Remaining, one-time, on the maintainer: on npmjs.com, add
+`traverse-framework/traverse` + `web-embedder-publish.yml` as a trusted publisher
+for `traverse-embedder-web`. No tokens anywhere.
+
+## Decision 75: Make #1314 ops-loop-workable — `0.8.0` ships via the OIDC workflow
+
+**Date**: 2026-09-09  
+**Issue**: #1314 (and #1316 / PR #1317)  
+**Supersedes**: Decision 74 §2 (manual `0.8.0` bridge); refines Decision 74 §6
+
+### Context
+
+Decision 74 left #1314 as human-only npm-account work (mint token,
+`npm publish` `0.8.0`, configure trusted publisher). The maintainer needs #1314
+to be executable by the ops-loop, not a manual task. npm Trusted Publishing
+works for personal-account packages too, so `0.8.0` can be the workflow's first
+run rather than a hand publish.
+
+### Decisions (owner `/brainstorm`, recommended option taken each time)
+
+1. **`0.8.0` ships as the first OIDC run**, not a manual bridge publish. With
+   #1317 merged, configure the npmjs.com trusted publisher once (no token), then
+   cut `web-v0.8.0` and let the workflow publish with provenance. Reverses
+   Decision 74 §2.
+   - Rejected: *move the package to a `traverse-framework` npm org first* — fixes
+     the personal-account root cause but is the largest one-time human effort
+     (org creation, package transfer, possibly a paid org) and the slowest path
+     to `0.8.0`. Can still happen later as its own ticket.
+   - Rejected: *keep #1314 human-only, tighten to a checklist* — smallest change
+     but does not deliver a workable #1314.
+
+2. **Re-slice: #1316 = infra, #1314 = release execution blocked-by #1316.** #1316
+   (now merged via #1317) is spec 048 v1.2.0 + workflow + docs, self-contained
+   and PR-verifiable. #1314 becomes agent-workable — cut `web-v0.8.0`, verify npm
+   + provenance, attach evidence to #1308, close #1308 — blocked only by the
+   one-time npmjs.com trusted-publisher config (`needs-enrico`).
+   - Rejected: *#1316 owns everything, #1314 shrinks to the config* — #1316's DoD
+     would span a mergeable workflow plus a release gated on an external human
+     step; two-phase, not PR-verifiable.
+   - Rejected: *merge #1314 into #1316* — mixed-owner DoD; `needs-enrico` +
+     `agent:claude` on one ticket.
+
+### Outcome
+
+- Decision 74 §2 no longer applies: no manual `npm publish` of `0.8.0`.
+- Infra (#1316) landed via PR #1317; #1314's `#1316-merged` blocker is cleared.
+- #1314's only remaining gate is the npmjs.com trusted-publisher config
+  (`needs-enrico`, ~5 min, no token). Once live, #1314 flips to Project 1
+  **Ready** and the ops-loop cuts `web-v0.8.0`; the workflow publishes `0.8.0`
+  with provenance, and #1314 attaches evidence to #1308 and closes it.
+- Follow-up nit: `docs/web-embedder-npm-publish-runbook.md` (from #1317) still
+  describes `0.8.0` as a "manual exception that predates Trusted Publishing";
+  per this decision `0.8.0` goes through the OIDC workflow like every other
+  release. Correct the wording opportunistically.
