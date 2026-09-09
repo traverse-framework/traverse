@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.10.1 — Release candidate
+## v0.10.1 — 2026-09-09
 
 ### Fixes
 
