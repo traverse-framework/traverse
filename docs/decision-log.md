@@ -3192,3 +3192,63 @@ capability namespacing. v1 guest envelopes use relative keys only (resource ids
 inside values); an explicit `partition` parameter from Decision 68 remains a
 follow-up if multi-tenant key fan-out needs it at the ABI layer. Unblocks
 registry Wave 2 Stateful publishes.
+
+## Decision 72: Stateful Browser Placement — Contract Allow, Activation Attest (Spec 132)
+
+**Date**: 2026-09-09  
+**Issues**: #1305 (specification), #1289 (implementation)  
+**Governing artifacts**: Spec `132-stateful-browser-placement` (Proposed), ADR-0065 (Proposed)  
+**Related**: Decision 68 (deferred Browser placement); Specs `014`/`208`, `085`, `131`
+
+### Context
+
+Future tickets from Decision 68 included relaxing `Stateful` + `Browser` now
+that Spec `085` IndexedDB exists. A `/brainstorm` drained that cluster's first
+governing package.
+
+### Decisions (owner `/brainstorm`, recommended option each time)
+
+1. Prioritize the Stateful/Browser future cluster over Mode B MCP, #1150
+   children, or waiting only on the #1272 registry proof.
+2. Open #1289's governing package before taxonomy (#1291) or ABI extensions
+   (#1287/#1288/#1290).
+3. Allow Stateful+Browser at contract validation; enforce durable-store proof
+   only at activation (`stateful_browser_store_unavailable` on failure).
+4. Attestation = runtime-verifiable open Spec `085` IndexedDB DataStore (not
+   an embedder flag; not a per-activation conformance certificate).
+5. File dedicated specification issue #1305; keep #1289 as implementation with
+   `needs-spec` until approval.
+
+### Outcome
+
+#1305 owned Proposed Spec `132` + ADR-0065 on PR #1307. Decision 73 approved
+the package the same day; #1289 then moved to `spec-complete` / Ready.
+Encryption (#1294), maintenance (#1295), ABI extensions, and #1291 remain
+`future`.
+
+## Decision 73: Approve Spec 132 and ADR-0065 (Stateful Browser Placement)
+
+- **Date**: 2026-09-09
+- **Status**: Accepted
+- **Governing specs**: `132-stateful-browser-placement` (Proposed → Approved 0.1.0);
+  `014-service-type-taxonomy` (FR-005 superseded for placement only);
+  `085-datastore-indexeddb`; `131-stateful-persistence-host-abi`; `004-spec-alignment-gate`
+- **ADR**: `0065-stateful-browser-placement` (Proposed → Accepted)
+- **Related issues**: `#1305` (specification), `#1289` (implementation)
+- **Origin**: Maintainer `/brainstorm` approval (Option A) after Decision 72 locked the design and PR #1307 landed Proposed artifacts.
+
+### Context
+
+Decision 72 produced Proposed Spec `132` + ADR-0065. #1289 remained
+`needs-spec` until approval evidence existed.
+
+### Decision
+
+Approve Spec `132-stateful-browser-placement` v0.1.0 as written and accept
+ADR-0065. Register the immutable entry in `approved-specs.json`. Mark #1305
+Done and move #1289 to `spec-complete` / Ready for implementation.
+
+### Outcome
+
+Contract-time Stateful+Browser ban is superseded; activation attestation under
+Spec `085` is the governed fail-closed rule. Implementation proceeds on #1289.

@@ -1795,6 +1795,20 @@
         "specs/131-stateful-persistence-host-abi/",
         "docs/adr/0063-stateful-persistence-host-abi.md"
       ]
+    },
+    {
+      "id": "132-stateful-browser-placement",
+      "version": "0.1.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/132-stateful-browser-placement/spec.md",
+      "governs": [
+        "crates/traverse-contracts/",
+        "crates/traverse-runtime/",
+        "packages/web/TraverseEmbedder/",
+        "specs/132-stateful-browser-placement/",
+        "docs/adr/0065-stateful-browser-placement.md"
+      ]
     }
   ]
 }
