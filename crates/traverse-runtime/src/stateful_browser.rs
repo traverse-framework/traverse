@@ -4,6 +4,8 @@
 //! execution on Browser, the host must prove a Spec `085` IndexedDB DataStore
 //! is bound and open under its exclusive-lock and public-integrity guarantees.
 //! Failures use the stable code `stateful_browser_store_unavailable`.
+//!
+//! Spec `132` activation attestation.
 
 use serde::Serialize;
 use traverse_contracts::{ExecutionTarget, ServiceType};
