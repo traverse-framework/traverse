@@ -3461,3 +3461,81 @@ execution:
 2. Registry `#412` reopened; a registry-ops session pushes `v0.20.0`.
 3. `#1319` Blocked until `traverse-registry 0.20.0` is on crates.io, then the
    CLI/embedder/runtime upgrade to the batch preparation API proceeds.
+
+## Decision 77: Final Unblock Path for `#1314` / `#1308` — Config, Then Ops Cuts `web-v0.9.0`
+
+- **Date**: 2026-09-09
+- **Status**: Accepted
+- **Refines**: Decisions 74, 75, 76 (no reversal — confirms the standing path
+  after a third `/brainstorm` pass triggered by the multi-day stall)
+- **Related issues**: `#1314`, `#1308`; `traverse-framework/website#68`, `#1150`
+- **Origin**: `/brainstorm all you need to unblock the tickets`. Live re-check:
+  `packages/web/TraverseEmbedder/package.json` on `main` is already `0.9.0`; no
+  `web-v*` tag exists; `#1308`'s TS surface shipped via PR #1312 + #1315; the
+  chain is down to one human action.
+
+### Context
+
+`#1308`'s code scope (Spec 1277 browser-local planning + composed execution in
+`traverse-embedder-web`) is fully merged — PR #1312 (planner), PR #1315
+(composed execution). Its only open scope item is "cut a release", which is
+`#1314`. `#1314` needs exactly one thing: the npmjs.com trusted-publisher
+config. `package.json` is already at `0.9.0`, so `web-v0.9.0` passes the
+workflow's tag/version guard with no bump PR.
+
+### Decision
+
+1. **Unblock via the trusted-publisher config, not a hand publish or an org
+   move.** Confirms Decisions 74–76 §1. The circumstances that could have
+   justified a shortcut (`0.8.0` dropped, `0.9.0` already on `main`) do not
+   change the calculus: the config is unavoidable for `0.10.0+` regardless, and
+   a manual `npm publish` would add work, not remove it.
+   - Rejected again: *Enrico hand-publishes `0.9.0` once now* — ~2 min faster to
+     close `#1308` today, but no provenance on that release and the config still
+     has to happen after; net more work.
+   - Rejected again: *move the package to a `traverse-framework` npm org first* —
+     fixes the sole-personal-maintainer bus factor but is the slowest unblock;
+     belongs in its own follow-up ticket, not the critical path.
+
+2. **After the config is live, Enrico signals a Claude ops session, which runs
+   the release.** The tag cut is a deliberate, logged ops action (matches "the
+   ops-loop then cuts `web-v0.9.0`" in Decisions 75/76). That session flips
+   `#1314` to Ready, cuts `web-v0.9.0` from `main`, watches the `Publish web
+   embedder` run, verifies `npm view traverse-embedder-web version` → `0.9.0`
+   with a provenance attestation, runs a throwaway-dir `npm install`
+   plan→execute smoke, posts evidence to `#1308`, closes `#1308` and `#1314`,
+   sets both Project 1 items to Done.
+   - Rejected: *Enrico cuts the tag himself right after configuring* — saves one
+     round-trip but splits a hands-off release across two actors.
+   - Rejected: *a scheduled ops loop polls and auto-cuts* — burns cycles and can
+     fire the release before intended; over-engineered for a one-off.
+
+3. **`#1308` closes on the release plus a scratch-dir smoke, per its written
+   acceptance criteria** — `0.9.0` on npm as `latest` with evidence, and a fresh
+   `npm install traverse-embedder-web` in a throwaway directory running
+   plan→execute locally (CI conformance fixtures already prove Rust-parity).
+   Proving the flow in a real page is `traverse-framework/website#68` / the
+   `#1150` umbrella, not a `#1308` close gate.
+   - Rejected: *hold `#1308` open until `website#68` renders a working
+     `/discover`* — contradicts `#1308`'s own release-scoped acceptance criteria
+     and couples two repos' tickets on another team's timeline.
+
+4. **The stale `docs/web-embedder-npm-publish-runbook.md` wording is corrected in
+   this brainstorm's decision-log PR** — the "one-time manual `0.8.0` exception"
+   paragraph is replaced (per Decision 76, `0.8.0` never publishes; `0.9.0` is
+   the first release and goes through the OIDC workflow like every later one).
+   - Rejected: *separate tiny docs PR at release time* — an extra PR + CI run for
+     a wording fix already covered by this PR.
+
+### Outcome
+
+Enrico's queue is unchanged and still one item: on npmjs.com, add
+`traverse-framework/traverse` + `web-embedder-publish.yml` as a trusted publisher
+for `traverse-embedder-web`, then ping a Claude session. Everything after that is
+ops-loop execution ending in `#1308` + `#1314` closed and a browser-consumable
+`traverse-embedder-web@0.9.0` on npm as `latest` with provenance.
+
+Not in scope of this brainstorm (tracked elsewhere, not blocking
+`#1314`/`#1308`): registry `#412` close-out once `v0.20.0` propagation is
+confirmed; relabeling `specs/1285-capability-state-host-abi/spec.md` from `Draft`
+now that Decision 71 shipped it.

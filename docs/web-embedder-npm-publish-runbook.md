@@ -14,8 +14,9 @@ no `NPM_TOKEN` or `NODE_AUTH_TOKEN` is stored in this repository.
    `npm ci`, verifies the tag matches `package.json`, builds, tests, and
    publishes with provenance.
 
-The one-time manual 0.8.0 exception described in issue #1316 predates Trusted
-Publishing. All later releases use the OIDC workflow.
+Every release goes through this OIDC workflow. `0.9.0` is the first published
+version (the earlier `0.8.0` bump was superseded on `main` before any npm
+release — see `docs/decision-log.md` Decisions 76 and 77).
 
 ## Verification and recovery
 
