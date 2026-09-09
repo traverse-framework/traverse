@@ -1,6 +1,6 @@
 {
   "name": "traverse-embedder-web",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Public Traverse platform embedder SDK for Web/TypeScript clients, implementing embedder-api/1.0.0 (spec 068)",
   "license": "Apache-2.0",
   "repository": {
@@ -25,7 +25,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/browserLocalPlan.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/statefulBrowserActivation.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs"
+    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/browserLocalPlan.test.mjs tests/composedWorkflow.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/statefulBrowserActivation.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
