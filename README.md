@@ -282,7 +282,7 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 
 ### Releases
 
-- [docs/releases/v0.10.0.md](docs/releases/v0.10.0.md) — current release notes
+- [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — current release notes
 - [docs/releases/v0.9.1.md](docs/releases/v0.9.1.md) — prior release notes
 - [docs/releases/v0.8.1.md](docs/releases/v0.8.1.md) — prior release notes
 

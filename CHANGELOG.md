@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## v0.10.1 — Release candidate
+
+### Fixes
+
+- Runtime: treat WASI preview1 `proc_exit(0)` as successful completion, while
+  retaining fail-closed handling for nonzero exit codes.
+- Web embedder: provide deterministic denied implementations for the approved
+  `emit_event` and `connector_invoke` Host ABI imports so ABI-valid modules
+  load without ambient connector authority.
+- CLI: `app new` now writes the documented `app.manifest.json` filename.
+
 ## v0.10.0 — 2026-09-05
 
 ### Governed runtime workflow composition
