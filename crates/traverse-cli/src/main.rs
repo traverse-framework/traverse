@@ -10139,6 +10139,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // The release fixture makes each trust and offline lifecycle boundary explicit.
     fn signed_release_fixture_validates_registers_and_activates_offline() {
         // This fixture is an immutable snapshot of Registry index-v260's active
         // inference.evidence-normalize@1.0.1 release.  The URLs below are
