@@ -342,7 +342,7 @@
     },
     {
       "id": "033-http-json-api",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/033-http-json-api/spec.md",
@@ -540,7 +540,10 @@
         "scripts/ci/bump_version.sh",
         "scripts/ci/publish_crates.sh",
         ".github/workflows/ci.yml",
-        "docs/release-process.md"
+        ".github/workflows/web-embedder-publish.yml",
+        "packages/web/TraverseEmbedder/",
+        "docs/release-process.md",
+        "docs/web-embedder-npm-publish-runbook.md"
       ]
     },
     {

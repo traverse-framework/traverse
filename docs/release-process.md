@@ -40,3 +40,11 @@ coverage pass. It runs `bash scripts/ci/publish_crates.sh` with
 crate immediately before publishing it, publishes crates in dependency order,
 and treats an already-uploaded crate version as success so reruns are
 idempotent.
+
+## Web embedder (npm)
+
+The web SDK has an independent release version and tag. From a clean, merged
+checkout, run `cd packages/web/TraverseEmbedder && npm version <version>`;
+this creates `web-v<version>`. Push that tag to trigger the credential-free npm
+Trusted Publishing workflow. See [the web embedder npm publish runbook](web-embedder-npm-publish-runbook.md)
+for setup assumptions and verification.
