@@ -73,6 +73,9 @@ export {
   browserLocalPlan,
   SUPPORTED_BROWSER_PLAN_CONTRACT_SCHEMA_VERSION,
 } from "./browserLocalPlan.js";
+
+export { COMPOSED_WORKFLOW_MAX_NODES, COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES, ComposedWorkflowError, executeBrowserComposedWorkflow } from "./composedWorkflow.js";
+export type { ComposedWorkflowErrorCode, ComposedWorkflowNodeOutcome, ComposedWorkflowTrace } from "./composedWorkflow.js";
 export type {
   BrowserPlanErrorCode,
   BrowserPlanResponse,
