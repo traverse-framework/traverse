@@ -1,0 +1,301 @@
+{
+  "kind": "capability_contract",
+  "schema_version": "1.0.0",
+  "id": "inference.evidence-normalize",
+  "namespace": "inference",
+  "name": "evidence-normalize",
+  "version": "1.0.1",
+  "lifecycle": "active",
+  "owner": {
+    "team": "callweave",
+    "contact": "maintainers@callweave.local"
+  },
+  "authoring": {
+    "method": "llm-assisted",
+    "source_revision": "publish/inference-evidence-normalize-1.0.0",
+    "test_evidence": "Callweave pure fixtures, Wasmtime runtime requests, and Registry CI",
+    "review": {
+      "decision": "pending-qualified-review",
+      "reviewer": "qualified-rust-security-reviewer"
+    }
+  },
+  "summary": "Normalize opaque inference detections into deterministic evidence records.",
+  "description": "Taxonomy-neutral pure normalization of model outputs. It preserves source, model, interval, confidence, and policy provenance; it does not identify animals, access hosts, persist state, or call a model.",
+  "use_cases": [
+    {
+      "scenario": "As an evidence consumer, I want detections sorted by capture time and given stable evidence identifiers so that downstream policies can compare results across targets.",
+      "input_example": {
+        "source_ref": "artifact:window-01",
+        "policy": {
+          "version": "evidence-policy-1"
+        },
+        "detections": [
+          {
+            "id": "d1",
+            "label": "class-a",
+            "score_millis": 900,
+            "start_ms": 0,
+            "end_ms": 1000,
+            "model_ref": "model:demo"
+          }
+        ]
+      },
+      "output_example": {
+        "source_ref": "artifact:window-01",
+        "policy_version": "evidence-policy-1",
+        "evidence": [
+          {
+            "detection_id": "d1",
+            "confidence_millis": 900,
+            "start_ms": 0,
+            "end_ms": 1000,
+            "model_ref": "model:demo"
+          }
+        ]
+      },
+      "happy": true,
+      "persona_ref": "inference-operator"
+    },
+    {
+      "scenario": "As an evidence consumer, I want malformed confidence or intervals rejected before persistence so that invalid model output cannot enter the evidence store.",
+      "input_example": {
+        "source_ref": "artifact:window-01",
+        "policy": {
+          "version": "evidence-policy-1"
+        },
+        "detections": [
+          {
+            "id": "d1",
+            "label": "class-a",
+            "score_millis": 1001,
+            "start_ms": 0,
+            "end_ms": 1,
+            "model_ref": "model:demo"
+          }
+        ]
+      },
+      "output_example": {
+        "result_class": "invalid_request"
+      },
+      "happy": false,
+      "persona_ref": "inference-operator"
+    }
+  ],
+  "inputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "source_ref",
+        "policy",
+        "detections"
+      ],
+      "properties": {
+        "source_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy": {
+          "type": "object",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "detections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "score_millis",
+              "start_ms",
+              "end_ms",
+              "model_ref"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "score_millis": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "start_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end_ms": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "model_ref": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "outputs": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "source_ref",
+        "policy_version",
+        "evidence"
+      ],
+      "properties": {
+        "source_ref": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "source_ref",
+              "detection_id",
+              "label",
+              "confidence_millis",
+              "start_ms",
+              "end_ms",
+              "model_ref",
+              "policy_version"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source_ref": {
+                "type": "string"
+              },
+              "detection_id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "confidence_millis": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "start_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end_ms": {
+                "type": "integer"
+              },
+              "model_ref": {
+                "type": "string"
+              },
+              "policy_version": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "preconditions": [
+    {
+      "id": "facts-supplied",
+      "description": "A source reference, policy version, and at least one opaque detection are supplied."
+    }
+  ],
+  "postconditions": [
+    {
+      "id": "provenance-preserved",
+      "description": "Every normalized record retains source, model, interval, confidence, and policy provenance."
+    },
+    {
+      "id": "deterministic-order",
+      "description": "Evidence is sorted by start time and detection identifier."
+    }
+  ],
+  "side_effects": [
+    {
+      "kind": "memory_only",
+      "description": "Pure deterministic normalization."
+    }
+  ],
+  "emits": [],
+  "consumes": [],
+  "permissions": [
+    {
+      "id": "inference.evidence-normalize.execute"
+    }
+  ],
+  "execution": {
+    "binary_format": "wasm",
+    "entrypoint": {
+      "kind": "wasi-command",
+      "command": "run"
+    },
+    "preferred_targets": [
+      "local",
+      "browser",
+      "edge",
+      "device"
+    ],
+    "constraints": {
+      "host_api_access": "none",
+      "network_access": "forbidden",
+      "filesystem_access": "none"
+    }
+  },
+  "policies": [
+    {
+      "id": "evidence-provenance-preservation"
+    }
+  ],
+  "dependencies": [],
+  "provenance": {
+    "source": "greenfield",
+    "author": "Callweave",
+    "created_at": "2026-09-07T00:00:00Z",
+    "spec_ref": "100-capability-package-authoring@1.0.0",
+    "adr_refs": [],
+    "exception_refs": []
+  },
+  "evidence": [],
+  "state_schema": null,
+  "service_type": "stateless",
+  "permitted_targets": [
+    "local",
+    "browser",
+    "edge",
+    "device"
+  ],
+  "artifact_type": "native",
+  "artifact": {
+    "digest": "sha256:233490558e65c15d6b11ed316b13106e64c1dc129b1ef743a685ac4d1492aa1b",
+    "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/inference.evidence-normalize-1.0.1/evidence-normalize.wasm"
+  }
+}

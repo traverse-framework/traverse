@@ -10139,6 +10139,166 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // The release fixture makes each trust and offline lifecycle boundary explicit.
+    fn signed_release_fixture_validates_registers_and_activates_offline() {
+        // This fixture is an immutable snapshot of Registry index-v260's active
+        // inference.evidence-normalize@1.0.1 release.  The URLs below are
+        // provenance only: after these bytes enter the prepared cache, none of
+        // validation, registration, or activation may use the network.
+        const NAMESPACE: &str = "inference";
+        const ID: &str = "inference.evidence-normalize";
+        const VERSION: &str = "1.0.1";
+        const ARTIFACT_DIGEST: &str =
+            "sha256:233490558e65c15d6b11ed316b13106e64c1dc129b1ef743a685ac4d1492aa1b";
+        const CONTRACT_DIGEST: &str =
+            "sha256:0c211650bc69cdde725c2d8a6aea01a24c4521f1db902572df02c614e481977c";
+        const CONTRACT_URL: &str = "https://raw.githubusercontent.com/traverse-framework/registry/dcc15a4d8312eb01857eabf7f2a16fe472126a0c/capabilities/inference/inference.evidence-normalize/1.0.1/contract.json";
+        const ARTIFACT_URL: &str = "https://github.com/traverse-framework/registry/releases/download/artifacts/inference.evidence-normalize-1.0.1/evidence-normalize.wasm";
+
+        let release_fixture = repo_root().join(
+            "crates/traverse-cli/tests/fixtures/registry-release/inference.evidence-normalize-1.0.1",
+        );
+        let contract_bytes = fs::read(release_fixture.join("contract.json"))
+            .expect("pinned Registry contract fixture should read");
+        let artifact_bytes = fs::read(release_fixture.join("evidence-normalize.wasm"))
+            .expect("pinned Registry WASM fixture should read");
+        assert_eq!(
+            format!("sha256:{}", sha256_hex(&contract_bytes)),
+            CONTRACT_DIGEST
+        );
+        assert_eq!(
+            format!("sha256:{}", sha256_hex(&artifact_bytes)),
+            ARTIFACT_DIGEST
+        );
+        materialize_ed25519_signature(
+            &release_fixture.join("contract.json"),
+            &artifact_bytes,
+            ID,
+            VERSION,
+        )
+        .expect("pinned release signature must verify its exact WASM bytes");
+
+        let state_root = unique_temp_dir();
+        let app_root = unique_temp_dir();
+        let manifest_path = write_registry_ref_app_fixture(&app_root, ARTIFACT_DIGEST, "=1.0.1");
+        let component_path = app_root.join("component.manifest.json");
+        let mut component: Value = serde_json::from_str(
+            &fs::read_to_string(&component_path).expect("component fixture should read"),
+        )
+        .expect("component fixture should parse");
+        component["capability_id"] = Value::String(ID.to_string());
+        component["capability_version"] = Value::String(VERSION.to_string());
+        component["registry_ref"] = serde_json::json!({
+            "namespace": NAMESPACE,
+            "id": ID,
+            "version_range": "=1.0.1"
+        });
+        fs::write(
+            &component_path,
+            serde_json::to_string_pretty(&component).expect("component fixture should serialize"),
+        )
+        .expect("component fixture should write");
+        let mut app_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("app fixture should read"),
+        )
+        .expect("app fixture should parse");
+        app_manifest["state_machine"]["states"][1]["invoke"]["capability_id"] =
+            Value::String(ID.to_string());
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&app_manifest).expect("app fixture should serialize"),
+        )
+        .expect("app fixture should write");
+        write_synced_public_registry_state(
+            &state_root,
+            "callweave-proof",
+            "traverse-framework/registry",
+            "index-v260",
+            "2026-09-09T05:38:43Z",
+            PublicRegistryIndex {
+                index_version: 1,
+                generated_at: "2026-09-09T05:38:43Z".to_string(),
+                source_commit: Some("dcc15a4d8312eb01857eabf7f2a16fe472126a0c".to_string()),
+                capabilities: vec![PublicRegistryCapabilityRecord {
+                    namespace: NAMESPACE.to_string(),
+                    id: ID.to_string(),
+                    version: VERSION.to_string(),
+                    digest: ARTIFACT_DIGEST.to_string(),
+                    artifact_url: ARTIFACT_URL.to_string(),
+                    contract_digest: CONTRACT_DIGEST.to_string(),
+                    contract_url: CONTRACT_URL.to_string(),
+                    deprecated: false,
+                    summary: "Pinned signed release fixture".to_string(),
+                    description: String::new(),
+                    use_cases: Vec::new(),
+                    service_type: "stateless".to_string(),
+                    permitted_targets: vec!["local".to_string(), "browser".to_string()],
+                    lifecycle: "active".to_string(),
+                    provenance: None,
+                }],
+                events: Vec::new(),
+            },
+        )
+        .expect("pinned Registry index should persist");
+        cache_verified_public_registry_bytes(&state_root, CONTRACT_DIGEST, &contract_bytes)
+            .expect("contract should enter prepared cache");
+        cache_verified_public_registry_bytes(&state_root, ARTIFACT_DIGEST, &artifact_bytes)
+            .expect("artifact should enter prepared cache");
+
+        let validation =
+            app_validate_at(&state_root, &manifest_path, Some("callweave-proof"), true)
+                .expect("offline validation should render evidence");
+        assert_eq!(
+            serde_json::from_str::<Value>(&validation).expect("validation JSON")["status"],
+            "validated",
+            "offline validation failed: {validation}"
+        );
+        let registration = app_register_at(&state_root, &manifest_path, "callweave-proof", true)
+            .expect("offline registration should render evidence");
+        assert_eq!(
+            serde_json::from_str::<Value>(&registration).expect("registration JSON")["status"],
+            "registered"
+        );
+
+        let host_activation_path = app_root.join("host-activation.json");
+        fs::write(
+            &host_activation_path,
+            serde_json::to_string(&serde_json::json!({
+                "connectors": [],
+                "artifacts": [{
+                    "contract_reference": format!("{ID}@{VERSION}"),
+                    "placement_target": "local",
+                    "candidates": [{
+                        "package_id": ID,
+                        "package_version": VERSION,
+                        "digest": ARTIFACT_DIGEST,
+                        "abi": "wasi-preview1",
+                        "lifecycle": "active",
+                        "placement": ["local", "browser"],
+                        "execution_constraints": "network-forbidden"
+                    }]
+                }]
+            }))
+            .expect("host activation fixture should serialize"),
+        )
+        .expect("host activation fixture should write");
+        let activation = app_activate_at(
+            &state_root,
+            &manifest_path,
+            "callweave-proof",
+            &host_activation_path,
+            true,
+        )
+        .expect("offline activation should render evidence");
+        let activation: Value = serde_json::from_str(&activation).expect("activation JSON");
+        assert_eq!(activation["status"], "activated");
+        assert_eq!(
+            activation["artifacts"][0]["selected_digest"],
+            ARTIFACT_DIGEST
+        );
+    }
+
+    #[test]
     fn exact_version_registry_ref_never_falls_back_to_another_version() {
         // Spec 1258 FR-002 / #1272 AC5: an exact `=1.0.1` request must not
         // resolve `1.0.0`.
