@@ -28,9 +28,9 @@ pub struct IndexedDbOpenAttestation {
 /// Bound store presented for Browser Stateful activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatefulBrowserBoundStore {
-    /// No DataStore is bound to the activation.
+    /// No `DataStore` is bound to the activation.
     Missing,
-    /// A non-`IndexedDB` DataStore backend is bound.
+    /// A non-`IndexedDB` `DataStore` backend is bound.
     NonIndexedDb,
     /// `IndexedDB` backend with open-guarantee facts.
     IndexedDb(IndexedDbOpenAttestation),
@@ -241,5 +241,41 @@ mod tests {
             assert!(!text.contains("/var/"));
             assert!(!text.contains("indexeddb://"));
         }
+    }
+
+    #[test]
+    fn public_types_round_trip_debug_clone_and_equality() {
+        let facts = IndexedDbOpenAttestation {
+            exclusive_lock_held: true,
+            public_integrity_available: true,
+        };
+        let copied = facts;
+        assert_eq!(facts, copied);
+        assert_eq!(
+            StatefulBrowserBoundStore::IndexedDb(facts),
+            StatefulBrowserBoundStore::IndexedDb(copied)
+        );
+        assert_ne!(
+            StatefulBrowserBoundStore::Missing,
+            StatefulBrowserBoundStore::NonIndexedDb
+        );
+
+        let evidence = StatefulBrowserActivationEvidence {
+            governing_spec: "132-stateful-browser-placement",
+            backend: "indexeddb",
+            exclusive_lock_held: true,
+            public_integrity_available: true,
+            outcome: "attested",
+        };
+        let cloned = evidence.clone();
+        assert_eq!(evidence, cloned);
+        assert!(format!("{evidence:?}").contains("attested"));
+        assert!(to_value(&evidence).is_ok());
+
+        let error = activation_error("missing_bound_store");
+        let cloned_error = error.clone();
+        assert_eq!(error, cloned_error);
+        assert!(format!("{error:?}").contains(STATEFUL_BROWSER_STORE_UNAVAILABLE));
+        assert!(to_value(&error).is_ok());
     }
 }
