@@ -3383,3 +3383,81 @@ run rather than a hand publish.
   describes `0.8.0` as a "manual exception that predates Trusted Publishing";
   per this decision `0.8.0` goes through the OIDC workflow like every other
   release. Correct the wording opportunistically.
+
+## Decision 76: Blocked-Ticket Triage (2026-09-09) — Ship `web-v0.9.0` Not `0.8.0`; Reopen Registry #412 for the Missing `v0.20.0` Publish
+
+- **Date**: 2026-09-09
+- **Status**: Accepted
+- **Supersedes**: Decision 75 §1's version choice (`0.8.0` → `0.9.0`); everything else in Decisions 74/75 stands (Trusted Publishing, ops-loop cuts the tag, `needs-enrico` limited to the one-time npmjs.com config)
+- **Related issues**: `#1314`, `#1308`, `#1319`; `traverse-framework/registry#412`
+- **Origin**: `/brainstorm blocked tickets`. A live re-check found the Decision 70
+  registry-reference cluster fully resolved overnight and three tickets now
+  blocked: `#1314` (`needs-enrico`), `#1308` (blocked by `#1314`), and `#1319`
+  (board says In Progress, actually cannot compile).
+
+### Context
+
+- `#1314` — release `traverse-embedder-web` through the `web-embedder-publish.yml`
+  OIDC workflow. Its body and Decision 75 both target `0.8.0`, but `main` is
+  already at `0.9.0`: PR #1312 added the browser-local planner (`0.8.0`), PR #1315
+  added composed execution (`0.9.0`), PR #1317 merged the publish pipeline, and
+  `#1313` (the `0.9.0` composed-execution binding) is merged and closed. `#1308`'s
+  acceptance requires the composed-execution half, which only exists at `0.9.0`.
+- `#1308` — parent; all Spec 1277 code merged; blocked purely by `#1314`.
+- `#1319` — "Consume `traverse-registry 0.20.0`". Registry `#412` ("publish
+  `0.20.0`") is **closed**, but the registry repo has no `v0.20.0` tag (tags stop
+  at `v0.19.0`) and `#1319`'s 16:03 comment reports `cargo update -p
+  traverse-registry --precise 0.20.0` cannot resolve. `#412` was closed with its
+  release DoD unmet.
+
+### Decision
+
+1. **Release `web-v0.9.0` directly; skip a `0.8.0` npm publish.** `0.9.0` is the
+   first version that contains the Spec 1277 composed-execution code `#1308`
+   needs; a `0.8.0` npm release would be a throwaway. Retarget `#1314`'s title,
+   body, DoD, and validation commands from `0.8.0` to `0.9.0`. This changes only
+   the version in Decision 75 §1 — the Trusted-Publishing path, the ops-loop
+   cutting the tag, and the single `needs-enrico` gate are unchanged.
+2. **Reopen registry `#412`** with a comment that it was closed without the
+   `v0.20.0` tag or crates.io release; its DoD is objectively unmet. Move
+   traverse `#1319` from In Progress to **Blocked** with a pointer to `#412`.
+3. **The `v0.20.0` tag push is a registry ops-loop task, not `needs-enrico`.**
+   `010-crate-publish-pipeline` publishes on `v*` tag push and the crates.io
+   token is already a CI secret, exactly as `v0.19.0` and prior shipped. A
+   registry-ops session verifies `cargo test`/`clippy` green at the bumped
+   version and pushes `v0.20.0`; escalate to Enrico only if tag/branch
+   protection blocks the push.
+
+### What is on Enrico
+
+- **One item only**: on npmjs.com, add `traverse-framework/traverse` + workflow
+  `web-embedder-publish.yml` as a trusted publisher for `traverse-embedder-web`
+  (one-time, no token, ~5 min). `#1314` flips to Ready the moment this is done;
+  the ops-loop then cuts `web-v0.9.0`.
+
+### Alternatives Considered
+
+- **Ship `0.8.0` then `0.9.0` as two workflow runs** — rejected; `#1313` (the
+  intended second run) is already closed, `0.8.0` cannot satisfy `#1308`, and it
+  doubles the trusted-publisher runs Enrico has to watch.
+- **File a fresh registry issue instead of reopening `#412`** — rejected; same
+  work, DoD never met, reopening is the honest signal and avoids two issues for
+  one release.
+- **Traverse-side note only for the missing `v0.20.0`** — rejected; nothing on
+  the registry board would track the missing release and it could fall through
+  again.
+- **Treat the `v0.20.0` publish as a human release gate (`needs-enrico`)** —
+  rejected; it is an automated-on-tag pipeline with the token already in CI;
+  adding it to Enrico's list for no safety gain slows the whole `#1319` chain.
+
+### Outcome
+
+Enrico's queue is one ~5-minute npmjs.com config. Everything else is ops-loop
+execution:
+
+1. `#1314` retargeted to `0.9.0`; once the trusted publisher is live, cut
+   `web-v0.9.0`, verify npm `latest` + provenance, attach evidence to `#1308`,
+   close `#1308`.
+2. Registry `#412` reopened; a registry-ops session pushes `v0.20.0`.
+3. `#1319` Blocked until `traverse-registry 0.20.0` is on crates.io, then the
+   CLI/embedder/runtime upgrade to the batch preparation API proceeds.
