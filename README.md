@@ -131,7 +131,7 @@ Scaffolds a governed app bundle. Add your capability contracts, workflows, and W
 
 ### Consumer and release surfaces
 
-- [docs/releases/v0.10.0.md](docs/releases/v0.10.0.md) — current release notes
+- [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — current release notes
 - [docs/releases/v0.9.1.md](docs/releases/v0.9.1.md) — prior release notes
 - [docs/releases/v0.8.1.md](docs/releases/v0.8.1.md) — prior release notes
 - [docs/app-consumable-consumer-bundle.md](docs/app-consumable-consumer-bundle.md) — versioned consumer bundle
