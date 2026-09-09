@@ -95,6 +95,17 @@ export type {
 } from "./indexedDbDataStore.js";
 
 export {
+  STATEFUL_BROWSER_STORE_UNAVAILABLE,
+  attestStatefulBrowserActivation,
+} from "./statefulBrowserActivation.js";
+export type {
+  StatefulBrowserActivationDenial,
+  StatefulBrowserActivationEvidence,
+  StatefulBrowserActivationReason,
+  StatefulBrowserActivationResult,
+} from "./statefulBrowserActivation.js";
+
+export {
   HOST_ABI_V1_WHITELIST,
   SUPPORTED_HOST_ABI_VERSION,
   findUnauthorizedImport,

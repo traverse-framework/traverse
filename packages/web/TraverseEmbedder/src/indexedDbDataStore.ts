@@ -501,6 +501,26 @@ export class IndexedDbDataStore {
     this.lockRequest = undefined;
   }
 
+  /**
+   * Runtime-verifiable open facts for Spec `132` Stateful Browser activation.
+   * Never includes the database name, payloads, or host-private paths.
+   */
+  openAttestation(): {
+    readonly backend: "indexeddb";
+    readonly closed: boolean;
+    readonly exclusive_lock_held: boolean;
+    readonly public_integrity_available: boolean;
+  } {
+    return {
+      backend: "indexeddb",
+      closed: this.closed,
+      exclusive_lock_held: !this.closed && this.releaseLock !== undefined,
+      // Spec 085 public integrity envelopes are available on every open handle;
+      // private CRUD remains fail-closed until #1294.
+      public_integrity_available: !this.closed,
+    };
+  }
+
   private ensureOpen(operation: "read" | "write" | "delete"): void {
     if (this.closed) {
       throw dataStoreError("backend_failed", operation, "store_closed");

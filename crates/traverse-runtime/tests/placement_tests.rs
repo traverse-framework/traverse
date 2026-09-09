@@ -166,7 +166,7 @@ fn tier1_hint_rejected_falls_through_to_tier3() -> Result<(), PlacementError> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tier2_filters_browser_for_stateful_service() -> Result<(), PlacementError> {
+fn tier2_allows_browser_for_stateful_service_when_lowest_load() -> Result<(), PlacementError> {
     let mut contract = base_contract();
     contract.service_type = ServiceType::Stateful;
     contract.permitted_targets = vec![
@@ -179,7 +179,7 @@ fn tier2_filters_browser_for_stateful_service() -> Result<(), PlacementError> {
         capability_id: "placement.tests.evaluator-subject".to_string(),
         target_hint: None,
         runtime_snapshot: snapshot_with(&[
-            (ExecutionTarget::Browser, 0.1), // lowest load but must be filtered
+            (ExecutionTarget::Browser, 0.1), // lowest load; Spec 132 allows selection
             (ExecutionTarget::Local, 0.4),
             (ExecutionTarget::Cloud, 0.6),
         ]),
@@ -188,12 +188,8 @@ fn tier2_filters_browser_for_stateful_service() -> Result<(), PlacementError> {
     let decision = evaluator().evaluate(&request, &contract)?;
 
     assert!(
-        !matches!(decision.target, ExecutionTarget::Browser),
-        "Browser must be excluded for Stateful services"
-    );
-    assert!(
-        matches!(decision.target, ExecutionTarget::Local),
-        "Local should win after Browser exclusion (lower load than Cloud)"
+        matches!(decision.target, ExecutionTarget::Browser),
+        "Browser must remain eligible for Stateful under Spec 132"
     );
     Ok(())
 }
