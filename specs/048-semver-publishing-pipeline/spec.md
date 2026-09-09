@@ -2,9 +2,9 @@
 
 **Feature Branch**: `048-semver-publishing-pipeline`
 **Created**: 2026-07-03
-**Amended**: 2026-09-05
+**Amended**: 2026-09-09
 **Status**: Approved
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Input**: Cargo.toml workspace version has drifted from the git tag (0.5.0 in Cargo.toml, v0.7.0 tagged). No crates.io publishing is configured. No automated version bump exists. `repository` field still points to old org URL. This spec closes all three gaps.
 
 ## Purpose
@@ -58,6 +58,23 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
 1. **Given** `Cargo.toml` workspace package, **When** `grep repository Cargo.toml` runs, **Then** it prints `https://github.com/traverse-framework/Traverse`.
 2. **Given** a published crate on crates.io, **When** the metadata is inspected, **Then** `repository` resolves to `https://github.com/traverse-framework/Traverse`.
 
+### User Story 5 — Web embedder publication uses npm Trusted Publishing (Priority: P0)
+
+As a web consumer, I want `traverse-embedder-web` releases published from a
+reviewed `web-v<version>` tag using GitHub OIDC, so that publication is
+reproducible and never depends on a long-lived npm token.
+
+**Acceptance Scenarios**:
+
+1. **Given** `web-v0.9.0` is pushed and the package version is `0.9.0`, **When**
+   the web publish workflow runs, **Then** it publishes exactly `0.9.0` with a
+   provenance attestation.
+2. **Given** a `web-v*` tag whose version differs from `package.json`, **When**
+   the workflow runs, **Then** its version guard fails before any publication.
+3. **Given** the same web tag is rerun after publication, **When** npm reports
+   that version already exists, **Then** the workflow succeeds without replacing
+   the published artifact.
+
 ## Functional Requirements
 
 - **FR-001**: `[workspace.package]` in `Cargo.toml` MUST have `repository = "https://github.com/traverse-framework/Traverse"`.
@@ -70,6 +87,9 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
 - **FR-008**: After `bump_version.sh`, running `cargo build` MUST succeed without manual intervention, and `cargo metadata --locked` (equivalently `cargo build --locked`) MUST succeed with no further change to `Cargo.lock`.
 - **FR-009**: `bump_version.sh` MUST stage `Cargo.toml` and `Cargo.lock` together in the single `chore: bump version to v<version>` commit, so the tree is tag-ready in one step with no follow-up lockfile-sync commit.
 - **FR-010**: CI MUST fail a `Cargo.toml`/`Cargo.lock` version drift before the `publish` job runs. The `version-guard` job MUST run `cargo metadata --locked` on every `push`, `pull_request`, and `v*` tag, and `publish` MUST depend on `version-guard`.
+- **FR-011**: A dedicated workflow MUST trigger only for `web-v*` tags and publish `packages/web/TraverseEmbedder` through npm Trusted Publishing with `id-token: write` and `contents: read`; it MUST NOT reference `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
+- **FR-012**: The web workflow MUST use a committed npm lockfile, run `npm ci`, validate that `web-v<version>` exactly matches `package.json`, build, test, and publish with `npm publish --provenance --access public`.
+- **FR-013**: Web publication reruns MUST be idempotent: an already-published exact version is a successful no-op. The release runbook MUST document the OIDC model, `web-v<version>` tag creation, and post-publish verification.
 
 ## Non-Functional Requirements
 
@@ -86,7 +106,10 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
   independently of the release pipeline)
 - `scripts/ci/bump_version.sh` (new)
 - `.github/workflows/ci.yml` (version-guard job, publish job)
-- `docs/release-process.md` (new — documents the full release sequence)
+- `.github/workflows/web-embedder-publish.yml` (web tag publication)
+- `packages/web/TraverseEmbedder/package.json` and `package-lock.json` (web release identity and locked dependencies)
+- `packages/web/TraverseEmbedder/.npmrc` (web tag prefix)
+- `docs/release-process.md` and `docs/web-embedder-npm-publish-runbook.md` (release documentation)
 
 ## Amendment History
 
@@ -106,3 +129,14 @@ files) and FR-010 (`version-guard` runs `cargo metadata --locked` on every
 push, PR, and tag; `publish` depends on it). `Cargo.lock` documented under
 Files Governed but deliberately left out of the `governs` prefix list. No
 change to the publish flow, crate list, or version-bump interface.
+
+### 1.2.0 — 2026-09-09
+
+**Owner**: Traverse maintainers (issue #1316). **Rationale**: the public web
+embedder needs a governed release path that does not rely on an expiring
+personal npm credential.
+
+**Changes**: adds npm Trusted Publishing as a second, independent publication
+target. `web-v<version>` tags bind an exact package version, a committed lockfile
+makes installation reproducible, and provenance is attached by npm. This is
+additive: the crate publishing interface and `v<version>` tags are unchanged.

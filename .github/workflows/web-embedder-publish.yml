@@ -1,0 +1,51 @@
+name: Publish web embedder
+
+on:
+  push:
+    tags:
+      - "web-v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/web/TraverseEmbedder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify release tag matches package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          expected="web-v${version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
+            exit 1
+          fi
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Publish with provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if npm view "traverse-embedder-web@${version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "traverse-embedder-web@${version} is already published; skipping."
+            exit 0
+          fi
+          npm publish --provenance --access public
