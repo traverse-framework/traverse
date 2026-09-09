@@ -1,0 +1,176 @@
+{
+  "fixture_version": "1.0.0",
+  "governing_spec": "1258-offline-cache-activation",
+  "conformance_matrix_spec": "107-cross-host-embedded-registry-cache",
+  "implementation_issue": 1272,
+  "evidence_issue": 1300,
+  "description": "Canonical redacted error/evidence projection for each verified-registry-cache failure category required by spec 1258 FR-004 and FR-006. The Rust (`traverse-embedder`) and Web (`packages/web/TraverseEmbedder`) cache paths each produce these exact key-sorted projections for the same category; native adapter coverage is recorded against the spec 107 FR-009 equivalence set. This fixture is evidence data only: it does not add or change cache ownership, network policy, or resolver behavior.",
+  "reference": {
+    "namespace": "inference",
+    "id": "inference.evidence-normalize",
+    "requested_range": "==1.0.1",
+    "selected_version": "1.0.1",
+    "contract_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "allowed_evidence_fields": [
+    "stage",
+    "code",
+    "summary",
+    "namespace",
+    "id",
+    "requested_range",
+    "selected_version",
+    "contract_digest",
+    "artifact_digest",
+    "trust_lifecycle",
+    "abi",
+    "target",
+    "placement"
+  ],
+  "forbidden_evidence": [
+    "local cache or filesystem paths",
+    "artifact or contract URLs",
+    "registry endpoints",
+    "authorization headers or tokens",
+    "connector configuration values",
+    "artifact or contract bytes"
+  ],
+  "categories": [
+    {
+      "category": "missing",
+      "code": "registry_cache_entry_missing",
+      "stage": "offline_activation",
+      "redacted_evidence": {
+        "code": "registry_cache_entry_missing",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "requested_range": "==1.0.1",
+        "stage": "offline_activation",
+        "summary": "no verified registry cache entry exists for the requested reference"
+      }
+    },
+    {
+      "category": "altered",
+      "code": "registry_artifact_digest_mismatch",
+      "stage": "artifact_digest",
+      "redacted_evidence": {
+        "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "code": "registry_artifact_digest_mismatch",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "requested_range": "==1.0.1",
+        "selected_version": "1.0.1",
+        "stage": "artifact_digest",
+        "summary": "retrieved artifact bytes do not match the expected artifact digest"
+      }
+    },
+    {
+      "category": "lifecycle-rejected",
+      "code": "registry_lifecycle_rejected",
+      "stage": "lifecycle",
+      "redacted_evidence": {
+        "code": "registry_lifecycle_rejected",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "requested_range": "==1.0.1",
+        "selected_version": "1.0.1",
+        "stage": "lifecycle",
+        "summary": "the selected version is not in an activatable lifecycle state",
+        "trust_lifecycle": "inactive"
+      }
+    },
+    {
+      "category": "signature-invalid",
+      "code": "registry_signature_unverified",
+      "stage": "signature",
+      "redacted_evidence": {
+        "code": "registry_signature_unverified",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "requested_range": "==1.0.1",
+        "selected_version": "1.0.1",
+        "stage": "signature",
+        "summary": "the signed trust bundle for the artifact did not verify",
+        "trust_lifecycle": "unverified"
+      }
+    },
+    {
+      "category": "abi-incompatible",
+      "code": "registry_abi_incompatible",
+      "stage": "abi",
+      "redacted_evidence": {
+        "abi": "2",
+        "code": "registry_abi_incompatible",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "requested_range": "==1.0.1",
+        "selected_version": "1.0.1",
+        "stage": "abi",
+        "summary": "the artifact Host ABI major version is not supported by this build"
+      }
+    },
+    {
+      "category": "target-incompatible",
+      "code": "registry_target_incompatible",
+      "stage": "target",
+      "redacted_evidence": {
+        "code": "registry_target_incompatible",
+        "id": "inference.evidence-normalize",
+        "namespace": "inference",
+        "placement": "local",
+        "requested_range": "==1.0.1",
+        "selected_version": "1.0.1",
+        "stage": "target",
+        "summary": "the selected version does not permit the requested placement target",
+        "target": "browser"
+      }
+    }
+  ],
+  "native_matrix": {
+    "spec_107_fr_009_equivalence_set": [
+      "preparation_success",
+      "missing_cache",
+      "yanked_dependency",
+      "artifact_digest_mismatch"
+    ],
+    "adapters": [
+      "swift",
+      "kotlin",
+      "dotnet"
+    ],
+    "coverage": {
+      "missing": {
+        "in_spec_107_set": true,
+        "native_code": "registry_cache_entry_missing",
+        "status": "equivalent"
+      },
+      "altered": {
+        "in_spec_107_set": true,
+        "native_code": "registry_artifact_digest_mismatch",
+        "status": "equivalent"
+      },
+      "lifecycle-rejected": {
+        "in_spec_107_set": "partial",
+        "native_code": "registry_dependency_yanked",
+        "status": "equivalent_for_yanked",
+        "note": "Inactive or draft lifecycle rejection surfaces registry_lifecycle_rejected on the Rust and Web resolution paths. Spec 107 FR-009 native equivalence is scoped to yanked dependencies."
+      },
+      "signature-invalid": {
+        "in_spec_107_set": false,
+        "native_code": null,
+        "status": "rust_web_projection_only"
+      },
+      "abi-incompatible": {
+        "in_spec_107_set": false,
+        "native_code": null,
+        "status": "rust_web_projection_only"
+      },
+      "target-incompatible": {
+        "in_spec_107_set": false,
+        "native_code": null,
+        "status": "rust_web_projection_only"
+      }
+    }
+  }
+}

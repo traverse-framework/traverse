@@ -45,3 +45,29 @@ The CLI activation record contains selected artifact and connector evidence but
 omits host-private paths and configuration values. A failed activation is safe
 to share when it includes only its stable code, public capability identity, and
 requested version range.
+
+## Cross-host projection conformance
+
+Spec `1258-offline-cache-activation` FR-006 requires the Rust and Web cache
+paths to expose equivalent evidence and errors, with native coverage following
+the Spec-107 conformance matrix.
+`fixtures/cross-host/registry-cache-projections/projection-matrix.json` is the
+single canonical, key-sorted redacted projection for each FR-004 failure
+category (missing, altered, lifecycle-rejected, signature-invalid,
+ABI-incompatible, target-incompatible). It is evidence data only and changes no
+cache ownership, network policy, or resolver behavior.
+
+Both hosts assert that fixture:
+
+- Rust: `crates/traverse-cli/src/registry_resolution_diagnostics.rs`
+  (`cross_host_projection_matrix_matches_rust_projection`).
+- Web:
+  `packages/web/TraverseEmbedder/tests/registryCacheCrossHostProjection.test.mjs`.
+
+Each canonical projection carries only the permitted identity fields and no
+path, URL, endpoint, header, or credential-shaped value. Native adapters
+(`swift`, `kotlin`, `dotnet`) are equivalent for the Spec-107 FR-009 set
+(`preparation_success`, `missing_cache`, `yanked_dependency`,
+`artifact_digest_mismatch`); `signature-invalid`, `abi-incompatible`, and
+`target-incompatible` are recorded as Rust/Web resolution-path projections
+outside that native set.
