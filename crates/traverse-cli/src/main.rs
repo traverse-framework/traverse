@@ -17,7 +17,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use federation_operator::{
     render_federation_peers, render_federation_status, render_federation_sync,
 };
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -36,19 +36,21 @@ use traverse_contracts::{Lifecycle, ViolationRecord, reference_connector_contrac
 use traverse_registry::{
     ApplicationManifestError, ApplicationManifestErrorCode, ApplicationManifestFailure,
     ApplicationRegistrationRequest, ApplicationRegistry, ArtifactDigests,
-    ArtifactResolutionRequest, ArtifactSignature, ArtifactSignatureScheme, BinaryFormat,
-    BinaryReference, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
+    ArtifactResolutionRequest, ArtifactRetrievalAdapter, ArtifactSignature,
+    ArtifactSignatureScheme, BatchPreparationParams, BinaryFormat, BinaryReference,
+    CacheCommitRejected, CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry,
     ComposabilityMetadata, CompositionKind, CompositionPattern, ConnectorActivationRequest,
-    ConnectorRegistration, DiscoveryQuery, EventProductDescriptor, EventRegistration,
-    EventRegistry, ExecutableArtifactCandidate, ImplementationKind, InstalledConnector,
-    LookupScope, PublicRegistryCapabilityRecord, PublicRegistryIndex, RegistryBundle,
-    RegistryComponentResolver, RegistryProvenance, RegistryReference, RegistryScope,
-    ResolvedRegistryComponent, SourceKind, SourceReference, SyncedPublicRegistryState,
-    WorkflowReference, WorkflowRegistration, WorkflowRegistry,
-    cache_verified_public_registry_bytes, load_application_bundle_manifest,
+    ConnectorRegistration, ContractRetrievalAdapter, DiscoveryQuery, EventProductDescriptor,
+    EventRegistration, EventRegistry, ExecutableArtifactCandidate, HostPolicyDecision,
+    ImplementationKind, InstalledConnector, LookupScope, PublicRegistryCapabilityRecord,
+    PublicRegistryIndex, RegistryBundle, RegistryComponentResolver, RegistryProvenance,
+    RegistryReference, RegistryScope, ResolvedRegistryComponent, RetrievalUnavailable,
+    SelectedComponentReference, SelectedRecordRef, SignatureVerifier, SourceKind, SourceReference,
+    SyncedPublicRegistryState, VerifiedCacheWriter, WorkflowReference, WorkflowRegistration,
+    WorkflowRegistry, cache_verified_public_registry_bytes, load_application_bundle_manifest,
     load_application_bundle_manifest_with_resolver, load_registry_bundle,
-    public_registry_cache_path, resolve_executable_artifact, validate_connector_activation,
-    write_synced_public_registry_state,
+    prepare_application_selected_references, public_registry_cache_path,
+    resolve_executable_artifact, validate_connector_activation, write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::{
@@ -84,6 +86,11 @@ enum Command {
     AppValidate {
         manifest_path: PathBuf,
         workspace_id: Option<String>,
+        json_output: bool,
+    },
+    AppPrepare {
+        manifest_path: PathBuf,
+        workspace_id: String,
         json_output: bool,
     },
     AppRegister {
@@ -357,6 +364,11 @@ fn run_command(command: Command) -> Result<String, CliError> {
             workspace_id,
             json_output,
         } => app_validate(&manifest_path, workspace_id.as_deref(), json_output),
+        Command::AppPrepare {
+            manifest_path,
+            workspace_id,
+            json_output,
+        } => app_prepare(&manifest_path, &workspace_id, json_output),
         Command::AppRegister {
             manifest_path,
             workspace_id,
@@ -1109,6 +1121,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         (Some("serve"), _) => parse_serve_command(args),
         (Some("app"), Some("new")) => parse_app_new_command(args),
         (Some("app"), Some("validate")) => parse_app_validate_command(args),
+        (Some("app"), Some("prepare")) => parse_app_prepare_command(args),
         (Some("app"), Some("register")) => parse_app_register_command(args),
         (Some("app"), Some("activate")) => parse_app_activate_command(args),
         (Some("registry"), Some("sync")) => parse_registry_sync_command(args),
@@ -1145,6 +1158,7 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("bundle"), _) => help_bundle(),
         (Some("app"), Some("new")) => help_app_new(),
         (Some("app"), Some("validate")) => help_app_validate(),
+        (Some("app"), Some("prepare")) => help_app_prepare(),
         (Some("app"), Some("register")) => help_app_register(),
         (Some("app"), Some("activate")) => help_app_activate(),
         (Some("app"), _) => help_app(),
@@ -1285,6 +1299,11 @@ fn help_app_validate() -> String {
         .to_string()
 }
 
+fn help_app_prepare() -> String {
+    "traverse-cli app prepare --manifest <path> --workspace <workspace-id> --json\n\n  Prepare only registry_ref dependencies declared by the application into the\n  verified local cache. Validation, registration, and activation then consume\n  that cache offline. Defaults to local placement and wasm/wasi-command ABI."
+        .to_string()
+}
+
 fn help_app_register() -> String {
     "traverse-cli app register --manifest <path> --workspace <workspace-id> --json
 
@@ -1340,6 +1359,7 @@ fn help_app() -> String {
   Subcommands:
     new <app-id>                 Create a governed Traverse app bundle scaffold.
     validate --manifest <path>   Validate an app bundle and emit JSON evidence.
+    prepare --manifest <path>    Prepare manifest-scoped Registry dependencies.
     register --manifest <path>   Validate and persist local app registration.
     activate --manifest <path>   Validate host connectors and artifacts, then persist evidence.
 
@@ -1998,6 +2018,21 @@ fn parse_app_validate_command(args: &[String]) -> Result<Command, String> {
         return Err("--workspace requires a value".to_string());
     }
     Ok(Command::AppValidate {
+        manifest_path: PathBuf::from(manifest_path),
+        workspace_id,
+        json_output: true,
+    })
+}
+
+fn parse_app_prepare_command(args: &[String]) -> Result<Command, String> {
+    let manifest_path = parse_string_flag(args, "--manifest")
+        .ok_or_else(|| "app prepare requires --manifest <path>".to_string())?;
+    let workspace_id = parse_string_flag(args, "--workspace")
+        .ok_or_else(|| "app prepare requires --workspace <workspace-id>".to_string())?;
+    if !args.iter().any(|arg| arg == "--json") {
+        return Err("app prepare requires --json for stable preparation evidence".to_string());
+    }
+    Ok(Command::AppPrepare {
         manifest_path: PathBuf::from(manifest_path),
         workspace_id,
         json_output: true,
@@ -3074,6 +3109,44 @@ fn app_validate(
     app_validate_at(&base_dir, manifest_path, workspace_id, json_output)
 }
 
+fn app_prepare(
+    manifest_path: &Path,
+    workspace_id: &str,
+    json_output: bool,
+) -> Result<String, CliError> {
+    if !json_output {
+        return Err(CliError::UsageError(
+            "app prepare requires --json".to_string(),
+        ));
+    }
+    let root = std::env::current_dir().map_err(|error| CliError::IoError(error.to_string()))?;
+    let state_path = traverse_registry::synced_public_registry_state_path(&root, workspace_id);
+    let state: SyncedPublicRegistryState = serde_json::from_slice(
+        &fs::read(state_path)
+            .map_err(|_| CliError::ValidationFailed("registry_sync_missing".to_string()))?,
+    )
+    .map_err(|_| CliError::ValidationFailed("registry_sync_invalid".to_string()))?;
+    let selected = manifest_selected_registry_references(manifest_path)?;
+    let host = CliPreparationHost {
+        state: &state,
+        root: &root,
+    };
+    let mut cache = CliPreparationHost {
+        state: &state,
+        root: &root,
+    };
+    let params = BatchPreparationParams {
+        policy: HostPolicyDecision::Permitted,
+        requested_target: traverse_contracts::ExecutionTarget::Local,
+        requested_placement: "local".to_string(),
+        supported_abi: "wasm/wasi-command".to_string(),
+    };
+    let outcome = prepare_application_selected_references(
+        &selected, &state, &params, &host, &host, &host, &mut cache,
+    );
+    serde_json::to_string_pretty(&outcome).map_err(|error| CliError::IoError(error.to_string()))
+}
+
 fn app_validate_at(
     base_dir: &Path,
     manifest_path: &Path,
@@ -3173,6 +3246,164 @@ fn registry_resolution_failure(message: String) -> ApplicationManifestFailure {
             path: "$.registry_ref".to_string(),
             message,
         }],
+    }
+}
+
+#[derive(Deserialize)]
+struct UnresolvedAppManifest {
+    components: Vec<UnresolvedAppComponent>,
+}
+
+#[derive(Deserialize)]
+struct UnresolvedAppComponent {
+    manifest_path: String,
+}
+
+/// Temporary Spec 997 projection, removed when registry#415 exposes the
+/// equivalent resolution-free Registry API.
+fn manifest_selected_registry_references(
+    manifest_path: &Path,
+) -> Result<Vec<SelectedComponentReference>, CliError> {
+    let app: UnresolvedAppManifest = serde_json::from_value(read_json_file(manifest_path)?)
+        .map_err(|_| {
+            CliError::ValidationFailed("registry_manifest_components_invalid".to_string())
+        })?;
+    let parent = manifest_path
+        .parent()
+        .ok_or_else(|| CliError::ValidationFailed("registry_manifest_path_invalid".to_string()))?;
+    let mut selected = Vec::new();
+    for component in app.components {
+        let path = parent.join(component.manifest_path);
+        let value = read_json_file(&path)?;
+        let has_contract = value.get("contract_path").is_some();
+        let reference = value.get("registry_ref");
+        if has_contract == reference.is_some() {
+            return Err(CliError::ValidationFailed(
+                "registry_component_source_invalid".to_string(),
+            ));
+        }
+        let Some(reference) = reference else { continue };
+        if value.get("wasm_binary_path").is_some() || value.get("wasm_digest").is_some() {
+            return Err(CliError::ValidationFailed(
+                "registry_component_source_invalid".to_string(),
+            ));
+        }
+        let reference: RegistryReference = serde_json::from_value(reference.clone())
+            .map_err(|_| CliError::ValidationFailed("registry_reference_invalid".to_string()))?;
+        if reference.namespace.is_empty()
+            || reference.id.is_empty()
+            || reference.version_range.is_empty()
+            || !reference.version_range.starts_with('=')
+            || VersionReq::parse(&reference.version_range).is_err()
+        {
+            return Err(CliError::ValidationFailed(
+                "registry_reference_invalid".to_string(),
+            ));
+        }
+        let permitted_targets = value
+            .get("permitted_targets")
+            .map(|targets| serde_json::from_value(targets.clone()))
+            .transpose()
+            .map_err(|_| {
+                CliError::ValidationFailed("registry_permitted_targets_invalid".to_string())
+            })?
+            .unwrap_or_default();
+        let entry = SelectedComponentReference {
+            reference,
+            permitted_targets,
+        };
+        if !selected.contains(&entry) {
+            selected.push(entry);
+        }
+    }
+    Ok(selected)
+}
+
+struct CliPreparationHost<'a> {
+    state: &'a SyncedPublicRegistryState,
+    root: &'a Path,
+}
+
+impl CliPreparationHost<'_> {
+    fn record(&self, selected: &SelectedRecordRef<'_>) -> Option<&PublicRegistryCapabilityRecord> {
+        self.state.capabilities.iter().find(|record| {
+            record.namespace == selected.namespace
+                && record.id == selected.id
+                && record.version == selected.version
+                && record.contract_digest == selected.contract_digest
+                && record.digest == selected.artifact_digest
+        })
+    }
+}
+
+impl ContractRetrievalAdapter for CliPreparationHost<'_> {
+    fn fetch_contract(
+        &self,
+        selected: &SelectedRecordRef<'_>,
+    ) -> Result<Vec<u8>, RetrievalUnavailable> {
+        self.record(selected)
+            .and_then(|record| curl_bytes(&record.contract_url).ok())
+            .ok_or(RetrievalUnavailable)
+    }
+}
+
+impl ArtifactRetrievalAdapter for CliPreparationHost<'_> {
+    fn fetch_artifact(
+        &self,
+        selected: &SelectedRecordRef<'_>,
+    ) -> Result<Vec<u8>, RetrievalUnavailable> {
+        self.record(selected)
+            .and_then(|record| curl_bytes(&record.artifact_url).ok())
+            .ok_or(RetrievalUnavailable)
+    }
+}
+
+impl SignatureVerifier for CliPreparationHost<'_> {
+    fn verify_artifact_signature(&self, selected: &SelectedRecordRef<'_>, bytes: &[u8]) -> bool {
+        let Some(record) = self.record(selected) else {
+            return false;
+        };
+        let Some(url) = signature_sibling_url(&record.contract_url) else {
+            return false;
+        };
+        let Ok(value) = fetch_signature_with_head_fallback(&url) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&value) else {
+            return false;
+        };
+        let Some(key) = value
+            .get("public_key_hex")
+            .and_then(Value::as_str)
+            .and_then(decode_hex)
+        else {
+            return false;
+        };
+        let Some(signature) = value
+            .get("signature_hex")
+            .and_then(Value::as_str)
+            .and_then(decode_hex)
+        else {
+            return false;
+        };
+        let (Ok(key), Ok(signature)) = (<[u8; 32]>::try_from(key), <[u8; 64]>::try_from(signature))
+        else {
+            return false;
+        };
+        VerifyingKey::from_bytes(&key)
+            .map(|key| {
+                key.verify(bytes, &Signature::from_bytes(&signature))
+                    .is_ok()
+            })
+            .unwrap_or(false)
+    }
+}
+
+impl VerifiedCacheWriter for CliPreparationHost<'_> {
+    fn commit(&mut self, digest_key: &str, bytes: &[u8]) -> Result<(), CacheCommitRejected> {
+        cache_verified_public_registry_bytes(self.root, digest_key, bytes)
+            .map(|_| ())
+            .map_err(|_| CacheCommitRejected)
     }
 }
 
