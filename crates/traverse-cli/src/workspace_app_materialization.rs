@@ -4,6 +4,7 @@
 //! `registration.json` written by `app register`. They do not reopen or
 //! re-resolve the source application manifest.
 
+use crate::app_availability::REASON_DECLARATION_UNMATERIALIZABLE;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -30,15 +31,17 @@ pub(crate) struct AppLoadFailure {
     pub(crate) status: u16,
     pub(crate) reason: &'static str,
     pub(crate) code: &'static str,
+    pub(crate) availability_reason: &'static str,
     pub(crate) message: String,
 }
 
 impl AppLoadFailure {
     fn requires_refresh() -> Self {
         Self {
-            status: 409,
-            reason: "Conflict",
-            code: APP_REGISTRATION_REQUIRES_REFRESH,
+            status: 503,
+            reason: "Service Unavailable",
+            code: APP_UNAVAILABLE,
+            availability_reason: APP_REGISTRATION_REQUIRES_REFRESH,
             message: REFRESH_MESSAGE.to_string(),
         }
     }
@@ -48,6 +51,7 @@ impl AppLoadFailure {
             status: 503,
             reason: "Service Unavailable",
             code: APP_UNAVAILABLE,
+            availability_reason: REASON_DECLARATION_UNMATERIALIZABLE,
             message: UNAVAILABLE_MESSAGE.to_string(),
         }
     }
@@ -461,8 +465,12 @@ mod tests {
 
         let loaded = materialize_workspace_app(&app_for(&state_path));
         let failure = loaded.failure.expect("missing declaration must fail");
-        assert_eq!(failure.code, APP_REGISTRATION_REQUIRES_REFRESH);
-        assert_eq!(failure.status, 409);
+        assert_eq!(failure.code, APP_UNAVAILABLE);
+        assert_eq!(failure.status, 503);
+        assert_eq!(
+            failure.availability_reason,
+            APP_REGISTRATION_REQUIRES_REFRESH
+        );
         assert!(loaded.machine.is_none());
         assert!(
             !failure
@@ -486,6 +494,10 @@ mod tests {
         assert_eq!(failure.status, 503);
         assert!(loaded.machine.is_none());
         assert_eq!(failure.message, UNAVAILABLE_MESSAGE);
+        assert_eq!(
+            failure.availability_reason,
+            REASON_DECLARATION_UNMATERIALIZABLE
+        );
     }
 
     #[test]

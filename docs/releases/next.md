@@ -1,5 +1,14 @@
 # Next Release Notes
 
+## Server-owned app availability
+
+`GET /v1/workspaces/{workspace}/apps/status` reports whether each registered
+app is `ready` or `failed` after `serve` materializes persisted registration
+state. Transition evidence stays in process memory for that load attempt.
+Registered apps that cannot materialize remain visible as `failed` and return
+`503 app_unavailable` on command routes, with a stable secret-free
+`reason_code`.
+
 ## Persist resolved app state machines for `serve`
 
 `traverse-cli serve` now dispatches Registry-backed app commands from the

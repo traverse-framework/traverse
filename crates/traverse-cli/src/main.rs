@@ -1,5 +1,6 @@
 #![allow(clippy::default_trait_access, clippy::doc_markdown)]
 
+mod app_availability;
 mod app_events_websocket;
 mod app_runtime_events;
 pub mod authoring_telemetry;

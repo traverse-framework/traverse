@@ -149,7 +149,7 @@ cargo run -p traverse-cli-rs -- app register \
 
 Re-registering unchanged state is idempotent and returns `status: already_registered` with the same stable app, workspace, and digest evidence.
 
-`serve` loads that persisted `state_machine` for command dispatch. A registration written before this field existed, or one whose persisted declaration cannot be materialized, does not fall back to the source manifest. Re-run `app register` to refresh durable state. Command routes then return `app_registration_requires_refresh` or `503 app_unavailable` instead of a silent `404 app_not_registered`.
+`serve` loads that persisted `state_machine` for command dispatch. A registration written before this field existed, or one whose persisted declaration cannot be materialized, does not fall back to the source manifest. Re-run `app register` to refresh durable state. Command routes then return `503 app_unavailable` with a stable `reason_code` instead of a silent `404 app_not_registered`. `GET /v1/workspaces/{workspace}/apps/status` reports `ready` or `failed` for every registered app, with ordered process-lifetime transition evidence.
 
 `app activate` is the complementary host-only step governed by
 `103-application-connector-binding` and `106-activation-artifact-resolution`.

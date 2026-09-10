@@ -122,6 +122,29 @@ paths:
           $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
+  /v1/workspaces/{workspace_id}/apps/status:
+    get:
+      summary: List workspace app availability
+      description: >-
+        Returns server-owned application availability and ordered in-memory
+        transition evidence for every registered app (spec
+        133-app-availability-lifecycle). Authorization matches protected
+        workspace read endpoints. Failed registered apps remain visible;
+        absent apps are omitted.
+      operationId: getWorkspaceAppAvailability
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: App availability envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppAvailabilityStatusEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
   /v1/workspaces/{workspace_id}/apps/{app_id}/events:
     get:
       summary: Subscribe to app state events
@@ -236,6 +259,8 @@ paths:
         "409":
           $ref: "#/components/responses/Problem"
         "422":
+          $ref: "#/components/responses/Problem"
+        "503":
           $ref: "#/components/responses/Problem"
   /v1/workspaces/{workspace_id}/capabilities:
     post:
@@ -562,6 +587,85 @@ components:
             - string
             - "null"
       additionalProperties: true
+    AppAvailabilityStatusEnvelope:
+      type: object
+      required:
+        - api_version
+        - workspace_id
+        - apps
+      properties:
+        api_version:
+          type: string
+        workspace_id:
+          type: string
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/AppAvailabilityStatus"
+      additionalProperties: false
+    AppAvailabilityStatus:
+      type: object
+      required:
+        - app_id
+        - availability
+        - load_attempt_id
+        - reason_code
+        - transitions
+      properties:
+        app_id:
+          type: string
+        availability:
+          type: string
+          enum:
+            - loading
+            - ready
+            - failed
+        load_attempt_id:
+          type: string
+        reason_code:
+          type: string
+        transitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AppAvailabilityTransition"
+      additionalProperties: false
+    AppAvailabilityTransition:
+      type: object
+      required:
+        - schema_version
+        - workspace_id
+        - app_id
+        - load_attempt_id
+        - from
+        - to
+        - timestamp
+        - reason_code
+      properties:
+        schema_version:
+          type: string
+        workspace_id:
+          type: string
+        app_id:
+          type: string
+        load_attempt_id:
+          type: string
+        from:
+          type: string
+          enum:
+            - loading
+            - ready
+            - failed
+        to:
+          type: string
+          enum:
+            - loading
+            - ready
+            - failed
+        timestamp:
+          type: string
+        reason_code:
+          type: string
+      additionalProperties: false
     AppSession:
       type: object
       required:
