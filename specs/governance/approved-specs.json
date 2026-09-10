@@ -1824,6 +1824,19 @@
         "specs/133-app-availability-lifecycle/",
         "docs/adr/0066-server-owned-application-availability.md"
       ]
+    },
+    {
+      "id": "134-lazy-capability-registry-reconstruction",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/134-lazy-capability-registry-reconstruction/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/src/http_api.rs",
+        "specs/134-lazy-capability-registry-reconstruction/",
+        "docs/adr/0067-lazy-capability-registry-reconstruction.md"
+      ]
     }
   ]
 }
