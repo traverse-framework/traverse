@@ -8,6 +8,7 @@
 - `POST /v1/workspaces/{workspace_id}/execute`.
 - `GET /v1/workspaces/{workspace_id}/executions/{execution_id}`.
 - `GET /v1/workspaces/{workspace_id}/traces/{execution_id}`.
+- `GET /v1/workspaces/{workspace_id}/apps/status`.
 - JSON envelopes, links, API versioning, CORS, idempotency key behavior, Problem Details shape, and OpenAPI structure.
 
 ## Does Not Own

@@ -1,3 +1,8 @@
+use crate::app_availability::{
+    AvailabilityState, REASON_DECLARATION_UNMATERIALIZABLE, REASON_PERSISTED_APP_STATE_LOADED,
+    REASON_REGISTRATION_REQUIRES_REFRESH, WorkspaceAppAvailability, availability_status_envelope,
+    emit_availability_diagnostic,
+};
 use crate::app_events_websocket::{
     handle_app_events_websocket, is_websocket_upgrade, write_sse_retired_response,
 };
@@ -218,6 +223,7 @@ pub(crate) struct WorkspaceState<E> {
     app_state_machines: HashMap<String, ApplicationStateMachine>,
     app_load_failures: HashMap<String, AppLoadFailure>,
     app_proposal_manifests: HashMap<String, ApplicationBundleManifest>,
+    app_availability: WorkspaceAppAvailability,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -285,6 +291,7 @@ fn new_workspace_state<E: LocalExecutor + Clone>(
         app_state_machines: HashMap::new(),
         app_load_failures: HashMap::new(),
         app_proposal_manifests: HashMap::new(),
+        app_availability: WorkspaceAppAvailability::default(),
         runtime_grants: Vec::new(),
     })
 }
@@ -438,6 +445,7 @@ enum WorkspaceOperation {
     AppSessions(String, String),
     AppCommands(String, String),
     AppProposals(String, String),
+    AppStatus(String),
 }
 
 /// Start the HTTP/JSON API server, blocking until the listener fails.
@@ -3085,7 +3093,33 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
             let mut failures = HashMap::new();
             let mut proposal_manifests = HashMap::new();
             let mut list_context_fields = HashMap::new();
+            let mut availability = WorkspaceAppAvailability::default();
             for loaded in materialized {
+                availability.begin_load_attempt(&loaded.app_id);
+                let (next, reason) = if loaded.machine.is_some() {
+                    (AvailabilityState::Ready, REASON_PERSISTED_APP_STATE_LOADED)
+                } else if loaded.failure.as_ref().is_some_and(|failure| {
+                    failure.availability_reason == REASON_REGISTRATION_REQUIRES_REFRESH
+                }) {
+                    (
+                        AvailabilityState::Failed,
+                        REASON_REGISTRATION_REQUIRES_REFRESH,
+                    )
+                } else {
+                    (
+                        AvailabilityState::Failed,
+                        REASON_DECLARATION_UNMATERIALIZABLE,
+                    )
+                };
+                match availability.transition(workspace_id, &loaded.app_id, next, reason) {
+                    Ok(record) => emit_availability_diagnostic(&record),
+                    Err(error) => {
+                        return Err(format!(
+                            "invalid application availability transition: {}",
+                            error.message
+                        ));
+                    }
+                }
                 if let Some(machine) = loaded.machine {
                     list_context_fields
                         .insert(loaded.app_id.clone(), machine.list_context_fields.clone());
@@ -3102,6 +3136,7 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
             ws.app_state_machines = machines;
             ws.app_load_failures = failures;
             ws.app_proposal_manifests = proposal_manifests;
+            ws.app_availability = availability;
             ws.runtime = runtime;
             Ok(())
         }
@@ -3126,11 +3161,14 @@ fn app_command_surface_error<E>(
     app_id: &str,
 ) -> (u16, &'static str, Value) {
     if let Some(failure) = ws.app_load_failures.get(app_id) {
-        return (
-            failure.status,
-            failure.reason,
-            error_envelope(failure.code, &failure.message),
-        );
+        let mut body = error_envelope(failure.code, &failure.message);
+        if let Value::Object(root) = &mut body {
+            root.insert(
+                "reason_code".to_string(),
+                Value::String(failure.availability_reason.to_string()),
+            );
+        }
+        return (failure.status, failure.reason, body);
     }
     let registered = ws
         .runtime
@@ -3960,6 +3998,9 @@ fn handle_workspace_operation<W: Write, E: LocalExecutor + Clone>(
         }
         WorkspaceOperation::AppProposals(workspace_id, app_id) => {
             handle_app_proposals(w, request, state, loopback, &workspace_id, &app_id)
+        }
+        WorkspaceOperation::AppStatus(workspace_id) => {
+            handle_app_status(w, request, state, loopback, &workspace_id)
         }
     }
 }
@@ -5516,7 +5557,8 @@ fn workspace_operation_path(method: &str, path: &str) -> Option<WorkspaceOperati
                 workspace_app_sessions_path(path).map(|(workspace_id, app_id)| {
                     WorkspaceOperation::AppSessions(workspace_id, app_id)
                 })
-            }),
+            })
+            .or_else(|| workspace_apps_status_path(path).map(WorkspaceOperation::AppStatus)),
         _ => None,
     }
 }
@@ -5593,6 +5635,15 @@ fn workspace_app_sessions_path(path: &str) -> Option<(String, String)> {
         return None;
     }
     Some((workspace_id.to_string(), app_id.to_string()))
+}
+
+fn workspace_apps_status_path(path: &str) -> Option<String> {
+    let suffix = path.strip_prefix("/v1/workspaces/")?;
+    let workspace_id = suffix.strip_suffix("/apps/status")?;
+    if workspace_id.trim().is_empty() || workspace_id.contains('/') {
+        return None;
+    }
+    Some(workspace_id.to_string())
 }
 
 fn request_prefers_async(request: &HttpRequest) -> bool {
@@ -5748,6 +5799,48 @@ fn handle_app_sessions<W: Write, E: LocalExecutor + Clone>(
     })?;
 
     write_json(w, 200, "OK", &response)
+}
+
+fn handle_app_status<W: Write, E: LocalExecutor + Clone>(
+    w: &mut W,
+    request: &HttpRequest,
+    state: &ApiState<E>,
+    loopback: bool,
+    workspace_id: &str,
+) -> Result<(), String> {
+    let identity = match subject_from_state(&request.headers, state, loopback) {
+        Ok(identity) => identity,
+        Err(err) => {
+            return write_json(
+                w,
+                err.status,
+                err.reason,
+                &error_envelope(err.code, &err.message),
+            );
+        }
+    };
+    if let Err(err) = ensure_workspace_authorized(
+        &state.registry_root,
+        workspace_id,
+        &identity,
+        SCOPE_REGISTRY_READ,
+        scopes_optional_for_request(state.allow_unauthenticated, loopback, &identity),
+    ) {
+        return write_json(
+            w,
+            err.status,
+            err.reason,
+            &error_envelope(err.code, &err.message),
+        );
+    }
+
+    let body = state.with_workspace_mut(workspace_id, |ws| {
+        Ok(availability_status_envelope(
+            workspace_id,
+            &ws.app_availability.snapshot(),
+        ))
+    })?;
+    write_json(w, 200, "OK", &body)
 }
 
 fn handle_app_commands<W: Write, E: LocalExecutor + Clone>(
@@ -7810,6 +7903,12 @@ mod tests {
     impl TestExecutor {
         fn ok(value: Value) -> Self {
             Self { result: Ok(value) }
+        }
+
+        fn fail(message: &str) -> Self {
+            Self {
+                result: Err(message.to_string()),
+            }
         }
     }
 
@@ -10647,6 +10746,16 @@ mod tests {
     }
 
     fn disk_loaded_workspace_state(workspace_root: &Path) -> ApiState<TestExecutor> {
+        disk_loaded_workspace_state_with_executor(
+            workspace_root,
+            TestExecutor::ok(json!({"result": "ok"})),
+        )
+    }
+
+    fn disk_loaded_workspace_state_with_executor(
+        workspace_root: &Path,
+        executor: TestExecutor,
+    ) -> ApiState<TestExecutor> {
         let registry_root = workspace_root.join(".traverse/registry");
         std::fs::create_dir_all(&registry_root).expect("registry root must create");
         persist_local_test_workspace(&registry_root, "ws-test");
@@ -10655,7 +10764,7 @@ mod tests {
             allow_unauthenticated: true,
             allowed_origins: Vec::new(),
             registry_root,
-            executor: TestExecutor::ok(json!({"result": "ok"})),
+            executor,
             workspaces: Mutex::new(HashMap::new()),
             idempotency_records: Mutex::new(HashMap::new()),
             idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
@@ -10689,6 +10798,20 @@ mod tests {
             workspace_app_proposals_path("/v1/workspaces/ws-test/apps/traverse-starter/commands")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn app_status_path_parses_workspace_id() {
+        assert_eq!(
+            workspace_apps_status_path("/v1/workspaces/ws-test/apps/status"),
+            Some("ws-test".to_string())
+        );
+        assert!(workspace_apps_status_path("/v1/workspaces/ws-test/apps/status/extra").is_none());
+        assert!(
+            workspace_apps_status_path("/v1/workspaces/ws-test/apps/expedition.readiness/status")
+                .is_none()
+        );
+        assert!(workspace_apps_status_path("/v1/workspaces/ws-test/apps/status/events").is_none());
     }
 
     #[test]
@@ -10825,9 +10948,10 @@ mod tests {
         handle_workspace_operation(&mut out, &req, &state, true)
             .expect("command dispatch must write a response");
 
-        assert_eq!(response_status(&out), 409);
+        assert_eq!(response_status(&out), 503);
         let resp = parse_response_body(&out);
-        assert_eq!(resp["traverse_code"], "app_registration_requires_refresh");
+        assert_eq!(resp["traverse_code"], "app_unavailable");
+        assert_eq!(resp["reason_code"], "app_registration_requires_refresh");
         let detail = resp["detail"].as_str().unwrap_or_default();
         assert!(!detail.contains("/nonexistent"));
         assert!(!detail.contains("registration.json"));
@@ -10855,9 +10979,275 @@ mod tests {
         assert_eq!(response_status(&out), 503);
         let resp = parse_response_body(&out);
         assert_eq!(resp["traverse_code"], "app_unavailable");
+        assert_eq!(
+            resp["reason_code"],
+            "persisted_declaration_unmaterializable"
+        );
         let detail = resp["detail"].as_str().unwrap_or_default();
         assert!(!detail.contains("not.a.registered.capability"));
         assert!(!detail.contains("/nonexistent"));
+    }
+
+    fn registration_bytes(workspace_root: &Path, workspace_id: &str) -> Vec<u8> {
+        let path = workspace_root
+            .join(".traverse/workspaces")
+            .join(workspace_id)
+            .join("apps/expedition.readiness/1.0.0/registration.json");
+        std::fs::read(&path).expect("registration must exist")
+    }
+
+    fn request_app_status(
+        state: &ApiState<TestExecutor>,
+        loopback: bool,
+        request: &HttpRequest,
+    ) -> (u16, Value) {
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, request, state, loopback)
+            .expect("app status must write a response");
+        (response_status(&out), parse_response_body(&out))
+    }
+
+    fn status_has_no_app_evidence(body: &Value) {
+        assert!(body.get("apps").is_none(), "unauthorized body leaked apps");
+        let rendered = body.to_string();
+        assert!(!rendered.contains("expedition.readiness"));
+        assert!(!rendered.contains("load_attempt_id"));
+        assert!(!rendered.contains("persisted_app_state_loaded"));
+    }
+
+    fn app_entry<'a>(body: &'a Value, app_id: &str) -> &'a Value {
+        body["apps"]
+            .as_array()
+            .expect("apps array")
+            .iter()
+            .find(|app| app["app_id"] == app_id)
+            .unwrap_or_else(|| panic!("app {app_id} must be listed"))
+    }
+
+    #[test]
+    fn app_status_reports_ready_transition_matching_load_evidence() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        let before = registration_bytes(&workspace_root, "ws-test");
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let (status, body) = request_app_status(
+            &state,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["api_version"], "v1");
+        assert_eq!(body["workspace_id"], "ws-test");
+        let app = app_entry(&body, "expedition.readiness");
+        assert_eq!(app["availability"], "ready");
+        assert_eq!(app["reason_code"], "persisted_app_state_loaded");
+        let transitions = app["transitions"].as_array().expect("transitions");
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0]["schema_version"], "1.0.0");
+        assert_eq!(transitions[0]["workspace_id"], "ws-test");
+        assert_eq!(transitions[0]["app_id"], "expedition.readiness");
+        assert_eq!(transitions[0]["from"], "loading");
+        assert_eq!(transitions[0]["to"], "ready");
+        assert_eq!(transitions[0]["reason_code"], "persisted_app_state_loaded");
+        assert_eq!(transitions[0]["load_attempt_id"], app["load_attempt_id"]);
+        assert!(
+            transitions[0]["timestamp"]
+                .as_str()
+                .is_some_and(|ts| ts.starts_with("unix:"))
+        );
+        let rendered = body.to_string();
+        assert!(!rendered.contains("/nonexistent"));
+        assert!(!rendered.contains("registration.json"));
+        assert_eq!(registration_bytes(&workspace_root, "ws-test"), before);
+        assert!(
+            !body["apps"]
+                .as_array()
+                .expect("apps")
+                .iter()
+                .any(|app| app["app_id"] == "missing.app")
+        );
+    }
+
+    #[test]
+    fn app_status_lists_failed_registered_app_and_commands_return_503() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(&workspace_root, "ws-test", None);
+        let before = registration_bytes(&workspace_root, "ws-test");
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let (status, body) = request_app_status(
+            &state,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        assert_eq!(status, 200, "{body}");
+        let app = app_entry(&body, "expedition.readiness");
+        assert_eq!(app["availability"], "failed");
+        assert_eq!(app["reason_code"], "app_registration_requires_refresh");
+        let transitions = app["transitions"].as_array().expect("transitions");
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0]["from"], "loading");
+        assert_eq!(transitions[0]["to"], "failed");
+        let rendered = body.to_string();
+        assert!(!rendered.contains("/nonexistent"));
+        assert!(!rendered.contains("file://"));
+
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+        assert_eq!(response_status(&out), 503);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "app_unavailable");
+        assert_eq!(resp["reason_code"], "app_registration_requires_refresh");
+        assert_eq!(registration_bytes(&workspace_root, "ws-test"), before);
+    }
+
+    #[test]
+    fn app_status_restart_creates_new_load_attempt_without_prior_history() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        let first = disk_loaded_workspace_state(&workspace_root);
+        let (_, first_body) = request_app_status(
+            &first,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        let first_app = app_entry(&first_body, "expedition.readiness");
+        let first_id = first_app["load_attempt_id"]
+            .as_str()
+            .expect("load attempt")
+            .to_string();
+
+        let restarted = disk_loaded_workspace_state(&workspace_root);
+        let (_, second_body) = request_app_status(
+            &restarted,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        let second_app = app_entry(&second_body, "expedition.readiness");
+        assert_ne!(second_app["load_attempt_id"], first_id);
+        assert_eq!(
+            second_app["transitions"].as_array().expect("history").len(),
+            1
+        );
+        assert_eq!(second_app["availability"], "ready");
+    }
+
+    #[test]
+    fn command_time_capability_failure_does_not_change_availability() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        let before = registration_bytes(&workspace_root, "ws-test");
+        let state = disk_loaded_workspace_state_with_executor(
+            &workspace_root,
+            TestExecutor::fail("capability artifact missing"),
+        );
+        let (_, ready) = request_app_status(
+            &state,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        let load_attempt = app_entry(&ready, "expedition.readiness")["load_attempt_id"].clone();
+        assert_eq!(
+            app_entry(&ready, "expedition.readiness")["availability"],
+            "ready"
+        );
+
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+        let command = parse_response_body(&out);
+        assert_ne!(command["traverse_code"], "app_unavailable");
+        assert_ne!(response_status(&out), 404);
+
+        let (_, after) = request_app_status(
+            &state,
+            true,
+            &make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+        );
+        let app = app_entry(&after, "expedition.readiness");
+        assert_eq!(app["availability"], "ready");
+        assert_eq!(app["load_attempt_id"], load_attempt);
+        assert_eq!(app["transitions"].as_array().expect("history").len(), 1);
+        assert_eq!(registration_bytes(&workspace_root, "ws-test"), before);
+    }
+
+    #[test]
+    fn app_status_unauthorized_callers_receive_no_app_evidence() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        let mut state = disk_loaded_workspace_state(&workspace_root);
+        persist_test_workspace(&state.registry_root, "ws-test", "alice");
+        state.jwt_verification_key = Some(
+            parse_ed25519_verifying_key(&test_jwt_verifying_key_hex())
+                .expect("test verifying key must parse"),
+        );
+
+        let missing_token =
+            make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new());
+        let (status, body) = request_app_status(&state, false, &missing_token);
+        assert_eq!(status, 401);
+        status_has_no_app_evidence(&body);
+
+        let wrong_scope = with_bearer(
+            make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+            &make_scoped_jwt("alice", future_exp(), &["runtime:execute"]),
+        );
+        let (status, body) = request_app_status(&state, false, &wrong_scope);
+        assert_eq!(status, 403);
+        status_has_no_app_evidence(&body);
+
+        let outsider = with_bearer(
+            make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+            &make_scoped_jwt("bob", future_exp(), &["registry:read"]),
+        );
+        let (status, body) = request_app_status(&state, false, &outsider);
+        assert_eq!(status, 403);
+        status_has_no_app_evidence(&body);
+
+        let allowed = with_bearer(
+            make_http_request("GET", "/v1/workspaces/ws-test/apps/status", Vec::new()),
+            &make_scoped_jwt("alice", future_exp(), &["registry:read"]),
+        );
+        let (status, body) = request_app_status(&state, false, &allowed);
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            app_entry(&body, "expedition.readiness")["availability"],
+            "ready"
+        );
     }
 
     #[test]

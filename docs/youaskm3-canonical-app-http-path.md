@@ -69,7 +69,7 @@ cargo run -p traverse-cli-rs -- app register \
   --json
 ```
 
-`app validate` emits read-only JSON setup evidence. `app register` writes durable local state at `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json` so Traverse runtime code can load the registered app capability, workflow, and state machine from workspace state. `serve` does not reopen the source manifest for command dispatch. If a command returns `app_registration_requires_refresh`, re-run `app register`; there is no source-manifest fallback.
+`app validate` emits read-only JSON setup evidence. `app register` writes durable local state at `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json` so Traverse runtime code can load the registered app capability, workflow, and state machine from workspace state. `serve` does not reopen the source manifest for command dispatch. `GET /v1/workspaces/{workspace}/apps/status` reports whether each registered app is `ready` or `failed`. If a command returns `503 app_unavailable` with `reason_code` `app_registration_requires_refresh`, re-run `app register`; there is no source-manifest fallback.
 
 This slice deliberately does not provide HTTP app registration, runtime-owned downstream UI deployment, deployment orchestration, or a service registry. `youaskm3` owns its browser-hosted UI and deployment. Traverse owns validation, registration evidence, runtime loading, execution, traces, and eventing-oriented contracts used for runtime communication.
 
