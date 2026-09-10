@@ -1812,6 +1812,18 @@
         "specs/132-stateful-browser-placement/",
         "docs/adr/0065-stateful-browser-placement.md"
       ]
+    },
+    {
+      "id": "133-app-availability-lifecycle",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/133-app-availability-lifecycle/spec.md",
+      "governs": [
+        "crates/traverse-cli/src/http_api.rs",
+        "specs/133-app-availability-lifecycle/",
+        "docs/adr/0066-server-owned-application-availability.md"
+      ]
     }
   ]
 }
