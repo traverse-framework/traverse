@@ -3,9 +3,11 @@
 ## Lazy capability metadata index
 
 `serve` now builds an immutable persisted capability metadata index at workspace
-load without parsing every component contract. Verified contracts hydrate on
-demand into a host-configured process-local LRU with single-flight coalescing.
-Command and workflow integration remains a follow-up.
+load without parsing every component contract. Command routing and reached
+workflow steps hydrate digest-verified contracts on demand into a host-configured
+process-local LRU with single-flight coalescing. Unreached workflow branches stay
+unparsed. Hydration faults fail only the dependent command or workflow with
+secret-free diagnostics.
 
 ## Server-owned app availability
 

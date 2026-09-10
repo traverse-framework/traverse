@@ -296,11 +296,23 @@ where
         }
 
         let lookup_scope = map_workflow_lookup_scope(request.scope);
-        let Some(workflow) = self.workflow_registry.find_exact(
-            lookup_scope,
-            &request.workflow_id,
-            &request.workflow_version,
-        ) else {
+        let Some(workflow) = self
+            .workflow_registry
+            .find_exact(
+                lookup_scope,
+                &request.workflow_id,
+                &request.workflow_version,
+            )
+            .or_else(|| {
+                crate::workspace_lazy::lookup_indexed_workflow(
+                    &self.indexed_workflows,
+                    lookup_scope,
+                    &request.workflow_id,
+                    &request.workflow_version,
+                )
+                .cloned()
+            })
+        else {
             return workflow_failure(
                 &request,
                 WorkflowTraversalFailureReason::WorkflowNotFound,
@@ -472,11 +484,17 @@ where
             });
 
             let lookup_scope = map_workflow_lookup_scope(request.scope);
-            let Some(capability) = self.registry.find_exact(
+            let capability = if let Some(capability) = self.registry.find_exact(
                 lookup_scope,
                 &node.capability_id,
                 &node.capability_version,
-            ) else {
+            ) {
+                capability
+            } else if self
+                .capability_metadata
+                .get(&node.capability_id, &node.capability_version)
+                .is_none()
+            {
                 return Err(workflow_failure(
                     request,
                     WorkflowTraversalFailureReason::WorkflowInvalid,
@@ -491,6 +509,28 @@ where
                     event_evidence,
                     warnings,
                 ));
+            } else {
+                match self
+                    .hydrate_resolved_capability(&node.capability_id, &node.capability_version)
+                {
+                    Ok(capability) => capability,
+                    Err(error) => {
+                        let mut failed = visited;
+                        if let Some(last) = failed.last_mut() {
+                            last.status = WorkflowTraversalStepStatus::Failed;
+                        }
+                        return Err(workflow_failure(
+                            request,
+                            WorkflowTraversalFailureReason::StepExecutionFailed,
+                            crate::hydration_runtime_error(&error),
+                            failed,
+                            traversed,
+                            emitted,
+                            event_evidence,
+                            warnings,
+                        ));
+                    }
+                }
             };
 
             // Artifact security gate (spec 030-security-identity-model FR-013):

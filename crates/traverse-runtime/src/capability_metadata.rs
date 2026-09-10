@@ -46,10 +46,17 @@ pub struct IndexedWorkflowRef {
     pub workflow_digest: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct IndexedSource {
+    pub contract: PathBuf,
+    pub artifact: PathBuf,
+    pub manifest: PathBuf,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CapabilityMetadataIndex {
     entries: BTreeMap<String, IndexedCapability>,
-    sources: BTreeMap<String, PathBuf>,
+    sources: BTreeMap<String, IndexedSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -151,8 +158,14 @@ impl CapabilityMetadataIndex {
                 },
             );
             if !component.contract_path.is_empty() {
-                self.sources
-                    .insert(lookup_key, PathBuf::from(component.contract_path));
+                self.sources.insert(
+                    lookup_key,
+                    IndexedSource {
+                        contract: PathBuf::from(component.contract_path),
+                        artifact: PathBuf::from(component.artifact_ref),
+                        manifest: PathBuf::from(component.manifest_path),
+                    },
+                );
             }
         }
     }
@@ -178,9 +191,17 @@ impl CapabilityMetadataIndex {
     }
 
     fn source_path(&self, capability_id: &str, capability_version: &str) -> Option<&Path> {
+        self.source(capability_id, capability_version)
+            .map(|source| source.contract.as_path())
+    }
+
+    pub(crate) fn source(
+        &self,
+        capability_id: &str,
+        capability_version: &str,
+    ) -> Option<&IndexedSource> {
         self.sources
             .get(&lookup_key(capability_id, capability_version))
-            .map(PathBuf::as_path)
     }
 }
 
@@ -463,6 +484,10 @@ struct PersistedComponent {
     #[serde(default)]
     contract_path: String,
     #[serde(default)]
+    artifact_ref: String,
+    #[serde(default)]
+    manifest_path: String,
+    #[serde(default)]
     execution_mode: Option<String>,
     #[serde(default)]
     platforms: Vec<String>,
@@ -477,6 +502,9 @@ struct PersistedWorkflow {
     workflow_version: String,
     #[serde(default)]
     workflow_digest: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    path: String,
 }
 
 #[must_use]
