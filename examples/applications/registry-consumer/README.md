@@ -22,3 +22,17 @@ cargo run -p traverse-cli-rs -- app register \
 
 The component versions and digests are pinned to the active `1.1.0` public
 records. Deprecated `1.0.x` records are intentionally excluded.
+
+`traverse-cli serve` dispatches app commands from the persisted
+`registration.json` written by `app register`. It does not reopen the source
+manifest or re-resolve `registry_ref` at startup. After register, prepare, and
+optional activate:
+
+```bash
+cargo run -p traverse-cli-rs -- serve
+```
+
+If a command returns `app_registration_requires_refresh`, the workspace has a
+legacy registration without a persisted state-machine declaration. Re-run
+`app register` against the current manifest. There is no source-manifest
+fallback or automatic migration.

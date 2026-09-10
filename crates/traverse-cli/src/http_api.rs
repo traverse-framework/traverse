@@ -2,9 +2,10 @@ use crate::app_events_websocket::{
     handle_app_events_websocket, is_websocket_upgrade, write_sse_retired_response,
 };
 use crate::app_runtime_events::{
-    APP_EVENT_TYPES, AppEventLogEntry, AppSessionEvent, collect_app_runtime_events,
-    publish_app_runtime_event, runtime_with_app_event_broker,
+    APP_EVENT_TYPES, AppEventLogEntry, AppSessionEvent, build_app_event_broker,
+    collect_app_runtime_events, publish_app_runtime_event, runtime_with_app_event_broker,
 };
+use crate::workspace_app_materialization::{AppLoadFailure, materialize_workspace_apps};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -24,13 +25,13 @@ use traverse_mcp::tools::proposals::{
     execute_proposal_via_mcp, submit_proposal, validate_proposal,
 };
 use traverse_registry::{
-    ApplicationStateMachine, ApplicationStateTransition, ApplicationStateTransitionCondition,
-    ApplicationStateTransitionConditionOp, ArtifactDigests, BinaryFormat, BinaryReference,
-    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
-    CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry,
-    ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
-    SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
-    WorkspaceAppStateErrorCode, load_application_bundle_manifest,
+    ApplicationBundleManifest, ApplicationStateMachine, ApplicationStateTransition,
+    ApplicationStateTransitionCondition, ApplicationStateTransitionConditionOp, ArtifactDigests,
+    BinaryFormat, BinaryReference, CapabilityArtifactRecord, CapabilityRegistration,
+    CapabilityRegistry, ComposabilityMetadata, CompositionKind, CompositionPattern, DiscoveryQuery,
+    EventRegistration, EventRegistry, ImplementationKind, LookupScope, RegistryProvenance,
+    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowRegistration,
+    WorkflowRegistry, WorkspaceAppStateErrorCode,
 };
 use traverse_runtime::proposal::{ApprovalTokenStore, QuotaLimits, QuotaTracker};
 use traverse_runtime::security::RuntimeSecurityConfig;
@@ -215,6 +216,8 @@ pub(crate) struct WorkspaceState<E> {
     pub(crate) app_event_log: Vec<AppEventLogEntry>,
     app_list_context_fields: HashMap<String, Vec<String>>,
     app_state_machines: HashMap<String, ApplicationStateMachine>,
+    app_load_failures: HashMap<String, AppLoadFailure>,
+    app_proposal_manifests: HashMap<String, ApplicationBundleManifest>,
     runtime_grants: Vec<RuntimeGrantRecord>,
 }
 
@@ -280,6 +283,8 @@ fn new_workspace_state<E: LocalExecutor + Clone>(
         app_event_log: Vec::new(),
         app_list_context_fields: HashMap::new(),
         app_state_machines: HashMap::new(),
+        app_load_failures: HashMap::new(),
+        app_proposal_manifests: HashMap::new(),
         runtime_grants: Vec::new(),
     })
 }
@@ -3069,15 +3074,34 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
         env!("CARGO_PKG_VERSION"),
     ) {
         Ok(runtime) => {
-            let runtime = runtime.with_usage_telemetry_sink(std::sync::Arc::from(
-                crate::telemetry::wire_usage_telemetry_sink(),
-            ));
-            let machines = load_workspace_app_state_machines(workspace_root, &runtime);
-            ws.app_list_context_fields = machines
-                .iter()
-                .map(|(app_id, machine)| (app_id.clone(), machine.list_context_fields.clone()))
-                .collect();
+            let runtime = runtime
+                .with_security_config(runtime_security_for_auth_mode(&state.auth_mode))
+                .with_event_broker(build_app_event_broker()?)
+                .with_usage_telemetry_sink(std::sync::Arc::from(
+                    crate::telemetry::wire_usage_telemetry_sink(),
+                ));
+            let materialized = materialize_workspace_apps(runtime.workspace_applications());
+            let mut machines = HashMap::new();
+            let mut failures = HashMap::new();
+            let mut proposal_manifests = HashMap::new();
+            let mut list_context_fields = HashMap::new();
+            for loaded in materialized {
+                if let Some(machine) = loaded.machine {
+                    list_context_fields
+                        .insert(loaded.app_id.clone(), machine.list_context_fields.clone());
+                    machines.insert(loaded.app_id.clone(), machine);
+                }
+                if let Some(failure) = loaded.failure {
+                    failures.insert(loaded.app_id.clone(), failure);
+                }
+                if let Some(manifest) = loaded.proposal_manifest {
+                    proposal_manifests.insert(loaded.app_id.clone(), manifest);
+                }
+            }
+            ws.app_list_context_fields = list_context_fields;
             ws.app_state_machines = machines;
+            ws.app_load_failures = failures;
+            ws.app_proposal_manifests = proposal_manifests;
             ws.runtime = runtime;
             Ok(())
         }
@@ -3096,27 +3120,41 @@ fn load_workspace_app_runtime<E: LocalExecutor + Clone>(
     }
 }
 
-fn load_workspace_app_state_machines<E: LocalExecutor>(
-    workspace_root: &Path,
-    runtime: &Runtime<E>,
-) -> HashMap<String, ApplicationStateMachine> {
-    let mut machines = HashMap::new();
-    for app in runtime.workspace_applications() {
-        let manifest_path = PathBuf::from(&app.manifest_path);
-        let manifest_path = if manifest_path.is_absolute() {
-            manifest_path
-        } else {
-            workspace_root.join(manifest_path)
-        };
-        let Ok(manifest) = load_application_bundle_manifest(&manifest_path) else {
-            continue;
-        };
-        let Some(state_machine) = manifest.state_machine else {
-            continue;
-        };
-        machines.insert(app.app_id.clone(), state_machine);
+fn app_command_surface_error<E>(
+    ws: &WorkspaceState<E>,
+    workspace_id: &str,
+    app_id: &str,
+) -> (u16, &'static str, Value) {
+    if let Some(failure) = ws.app_load_failures.get(app_id) {
+        return (
+            failure.status,
+            failure.reason,
+            error_envelope(failure.code, &failure.message),
+        );
     }
-    machines
+    let registered = ws
+        .runtime
+        .workspace_applications()
+        .iter()
+        .any(|app| app.app_id == app_id);
+    if registered {
+        return (
+            503,
+            "Service Unavailable",
+            error_envelope(
+                "app_unavailable",
+                "registered app is unavailable for command dispatch",
+            ),
+        );
+    }
+    (
+        404,
+        "Not Found",
+        error_envelope(
+            "app_not_registered",
+            &format!("app '{app_id}' is not registered in workspace '{workspace_id}'"),
+        ),
+    )
 }
 
 fn render_workspace_app_state_failure(
@@ -5838,37 +5876,31 @@ fn handle_app_proposals<W: Write, E: LocalExecutor + Clone>(
     };
 
     let result = state.with_workspace_mut(workspace_id, |ws| {
-        let Some(app) = ws
+        let Some(state_path) = ws
             .runtime
             .workspace_applications()
             .iter()
             .find(|app| app.app_id == app_id)
+            .map(|app| app.state_path.clone())
         else {
+            return Ok(app_command_surface_error(ws, workspace_id, app_id));
+        };
+        if !ws.app_state_machines.contains_key(app_id) {
+            return Ok(app_command_surface_error(ws, workspace_id, app_id));
+        }
+        let Some(manifest) = ws.app_proposal_manifests.get(app_id).cloned() else {
             return Ok((
-                404,
-                "Not Found",
+                503,
+                "Service Unavailable",
                 error_envelope(
-                    "app_not_registered",
-                    "app is not registered in this workspace",
+                    "app_unavailable",
+                    "persisted application declaration cannot be materialized",
                 ),
             ));
         };
-        let manifest_path = PathBuf::from(&app.manifest_path);
-        let workspace_root = state
-            .registry_root
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or_else(|| Path::new("."));
-        let manifest_path = if manifest_path.is_absolute() {
-            manifest_path
-        } else {
-            workspace_root.join(manifest_path)
-        };
-        let manifest = load_application_bundle_manifest(&manifest_path)
-            .map_err(|_| "registered application manifest is unavailable".to_string())?;
         let proposal_json = parsed.proposal.to_string();
         let limits = ProposalLimits::default();
-        let snapshots = proposal_snapshots(&manifest_path, ws.runtime.capability_registry());
+        let snapshots = proposal_snapshots(&state_path, ws.runtime.capability_registry());
         let body = match parsed.action.as_str() {
             "validate" => serde_json::to_value(
                 validate_proposal(
@@ -6002,8 +6034,8 @@ fn parse_app_proposal_request(body: &[u8]) -> Result<AppProposalRequest, String>
     })
 }
 
-fn proposal_snapshots(manifest_path: &Path, registry: &CapabilityRegistry) -> SnapshotDigests {
-    let manifest_bytes = std::fs::read(manifest_path).unwrap_or_default();
+fn proposal_snapshots(registration_path: &Path, registry: &CapabilityRegistry) -> SnapshotDigests {
+    let manifest_bytes = std::fs::read(registration_path).unwrap_or_default();
     let digest = |bytes: &[u8]| {
         let digest = Sha256::digest(bytes);
         let mut hex = String::with_capacity(digest.len() * 2);
@@ -6071,17 +6103,7 @@ fn dispatch_app_command<E: LocalExecutor + Clone>(
     request: &AppCommandRequest,
 ) -> Result<(u16, &'static str, Value), String> {
     let Some(machine) = ws.app_state_machines.get(app_id).cloned() else {
-        return Ok((
-            404,
-            "Not Found",
-            error_envelope(
-                "app_not_registered",
-                &format!(
-                    "app '{app_id}' is not registered with a state machine \
-                     in workspace '{workspace_id}'"
-                ),
-            ),
-        ));
+        return Ok(app_command_surface_error(ws, workspace_id, app_id));
     };
 
     let (session_id, current_state) = match &request.session_id {
@@ -10535,6 +10557,114 @@ mod tests {
         body.to_string().into_bytes()
     }
 
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn persisted_state_machine(capability_id: &str) -> Value {
+        json!({
+            "initial_state": "idle",
+            "list_context_fields": [],
+            "states": [
+                {
+                    "id": "idle",
+                    "transitions": [{ "on": "submit", "to": "processing" }]
+                },
+                {
+                    "id": "processing",
+                    "invoke": {
+                        "capability_id": capability_id,
+                        "input_from": "command.payload"
+                    },
+                    "transitions": [
+                        { "on": "capability_succeeded", "to": "results" },
+                        { "on": "capability_failed", "to": "error" }
+                    ]
+                },
+                { "id": "results", "transitions": [{ "on": "reset", "to": "idle" }] },
+                { "id": "error", "transitions": [{ "on": "reset", "to": "idle" }] }
+            ]
+        })
+    }
+
+    fn write_registry_backed_registration(
+        workspace_root: &Path,
+        workspace_id: &str,
+        state_machine: Option<Value>,
+    ) -> PathBuf {
+        let repo = repo_root();
+        let component_manifest = repo.join(
+            "examples/applications/expedition-readiness/components/validate-team-readiness/component.manifest.json",
+        );
+        let contract_path = repo.join(
+            "contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+        );
+        let artifact_path = repo.join(
+            "examples/capabilities/team-readiness-agent/artifacts/validate-team-readiness-agent.wasm",
+        );
+        let state_path = workspace_root
+            .join(".traverse/workspaces")
+            .join(workspace_id)
+            .join("apps/expedition.readiness/1.0.0/registration.json");
+        std::fs::create_dir_all(state_path.parent().expect("registration parent"))
+            .expect("registration parent must create");
+        let mut body = json!({
+            "status": "registered",
+            "workspace_id": workspace_id,
+            "app_id": "expedition.readiness",
+            "app_version": "1.0.0",
+            "schema_version": "1.0.0",
+            "manifest_path": "/nonexistent/registry-backed/app.manifest.json",
+            "manifest_digest": "sha256:test-manifest",
+            "bundle_digest": "sha256:test-bundle",
+            "components": [{
+                "component_id": "expedition.readiness.validate-team-readiness-component",
+                "component_version": "1.0.0",
+                "capability_id": "expedition.planning.validate-team-readiness",
+                "capability_version": "1.0.0",
+                "wasm_digest": "sha256:5647c39a1d25d8728350f9619025292a62e78a602068a2ad9b6f075751c93d99",
+                "manifest_path": component_manifest.display().to_string(),
+                "contract_path": contract_path.display().to_string(),
+                "artifact_ref": artifact_path.display().to_string()
+            }],
+            "workflows": [],
+            "state_scope": "workspace_persisted",
+            "registration_fingerprint": {
+                "app_id": "expedition.readiness",
+                "app_version": "1.0.0",
+                "manifest_digest": "sha256:test-manifest"
+            }
+        });
+        if let Some(state_machine) = state_machine {
+            body["state_machine"] = state_machine;
+        }
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&body).expect("registration must serialize"),
+        )
+        .expect("registration must write");
+        state_path
+    }
+
+    fn disk_loaded_workspace_state(workspace_root: &Path) -> ApiState<TestExecutor> {
+        let registry_root = workspace_root.join(".traverse/registry");
+        std::fs::create_dir_all(&registry_root).expect("registry root must create");
+        persist_local_test_workspace(&registry_root, "ws-test");
+        ApiState {
+            auth_mode: "dev-loopback".to_string(),
+            allow_unauthenticated: true,
+            allowed_origins: Vec::new(),
+            registry_root,
+            executor: TestExecutor::ok(json!({"result": "ok"})),
+            workspaces: Mutex::new(HashMap::new()),
+            idempotency_records: Mutex::new(HashMap::new()),
+            idempotency_retention_seconds: DEFAULT_IDEMPOTENCY_RETENTION_SECONDS,
+            jwt_verification_key: None,
+            proposal_token_store: ApprovalTokenStore::new(),
+            proposal_quota_tracker: QuotaTracker::new(),
+        }
+    }
+
     #[test]
     fn app_commands_path_parses_workspace_and_app_id() {
         assert_eq!(
@@ -10646,6 +10776,117 @@ mod tests {
         assert_eq!(response_content_type(&out), "application/problem+json");
         let resp = parse_response_body(&out);
         assert_eq!(resp["traverse_code"], "app_not_registered");
+    }
+
+    #[test]
+    fn app_command_dispatches_from_persisted_registration_without_source_manifest() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        assert!(
+            !PathBuf::from("/nonexistent/registry-backed/app.manifest.json").exists(),
+            "source manifest must stay absent so serve cannot reopen it"
+        );
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 202, "{}", parse_response_body(&out));
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["status"], "accepted");
+        assert_eq!(resp["app_id"], "expedition.readiness");
+        assert_eq!(resp["state"], "processing");
+    }
+
+    #[test]
+    fn app_command_requires_refresh_when_persisted_state_machine_is_missing() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(&workspace_root, "ws-test", None);
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 409);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "app_registration_requires_refresh");
+        let detail = resp["detail"].as_str().unwrap_or_default();
+        assert!(!detail.contains("/nonexistent"));
+        assert!(!detail.contains("registration.json"));
+    }
+
+    #[test]
+    fn app_command_returns_503_when_persisted_state_machine_cannot_materialize() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine("not.a.registered.capability")),
+        );
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/commands",
+            make_app_command_body("submit", &json!({}), None),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true)
+            .expect("command dispatch must write a response");
+
+        assert_eq!(response_status(&out), 503);
+        let resp = parse_response_body(&out);
+        assert_eq!(resp["traverse_code"], "app_unavailable");
+        let detail = resp["detail"].as_str().unwrap_or_default();
+        assert!(!detail.contains("not.a.registered.capability"));
+        assert!(!detail.contains("/nonexistent"));
+    }
+
+    #[test]
+    fn app_proposals_consume_persisted_registration_instead_of_source_manifest() {
+        let workspace_root = test_registry_root();
+        write_registry_backed_registration(
+            &workspace_root,
+            "ws-test",
+            Some(persisted_state_machine(
+                "expedition.planning.validate-team-readiness",
+            )),
+        );
+        let state = disk_loaded_workspace_state(&workspace_root);
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/expedition.readiness/proposals",
+            br#"{"action":"validate","proposal":{"nodes":[]}}"#.to_vec(),
+        );
+
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true).expect("response");
+
+        let status = response_status(&out);
+        let body = parse_response_body(&out);
+        assert_ne!(body["traverse_code"], "app_not_registered");
+        assert!(
+            status == 200 || status == 400,
+            "proposal path must use durable state, got {status}: {body}"
+        );
     }
 
     #[test]

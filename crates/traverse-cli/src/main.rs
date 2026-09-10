@@ -11,6 +11,7 @@ mod http_api;
 mod registry_resolution_diagnostics;
 mod supply_chain;
 mod telemetry;
+mod workspace_app_materialization;
 
 use capability_packages::load_capability_package;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -3390,12 +3391,10 @@ impl SignatureVerifier for CliPreparationHost<'_> {
         else {
             return false;
         };
-        VerifyingKey::from_bytes(&key)
-            .map(|key| {
-                key.verify(bytes, &Signature::from_bytes(&signature))
-                    .is_ok()
-            })
-            .unwrap_or(false)
+        VerifyingKey::from_bytes(&key).is_ok_and(|key| {
+            key.verify(bytes, &Signature::from_bytes(&signature))
+                .is_ok()
+        })
     }
 }
 
@@ -10138,6 +10137,41 @@ mod tests {
             cache_root
                 .join(artifact_digest.trim_start_matches("sha256:"))
                 .exists()
+        );
+
+        assert!(
+            registration_json["state_machine"].is_object(),
+            "register must persist the resolved state machine for serve"
+        );
+        let state_path =
+            app_registration_state_path(&state_root, "local", "expedition.readiness", "1.0.0");
+        let loaded = crate::workspace_app_materialization::materialize_workspace_apps(&[
+            traverse_registry::WorkspaceApplicationRegistration {
+                app_id: "expedition.readiness".to_string(),
+                app_version: "1.0.0".to_string(),
+                manifest_path: "/nonexistent/app.manifest.json".to_string(),
+                manifest_digest: "sha256:test".to_string(),
+                bundle_digest: "sha256:test".to_string(),
+                model_dependencies: Vec::new(),
+                state_path,
+            },
+        ]);
+        assert!(
+            loaded[0].failure.is_none(),
+            "serve must materialize the persisted Registry-backed state machine"
+        );
+        let machine = loaded[0]
+            .machine
+            .as_ref()
+            .expect("persisted state machine must load");
+        assert_eq!(machine.initial_state, "idle");
+        assert_eq!(
+            machine.states[1]
+                .invoke
+                .as_ref()
+                .expect("processing invoke")
+                .capability_id,
+            "expedition.planning.validate-team-readiness"
         );
     }
 

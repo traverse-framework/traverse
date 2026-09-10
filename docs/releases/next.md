@@ -1,5 +1,14 @@
 # Next Release Notes
 
+## Persist resolved app state machines for `serve`
+
+`traverse-cli serve` now dispatches Registry-backed app commands from the
+persisted `state_machine` in workspace registration state. It does not reopen
+or re-resolve the source application manifest. Legacy registrations without
+that declaration require an explicit `app register` refresh;
+`app_registration_requires_refresh` and `503 app_unavailable` replace silent
+`404 app_not_registered` for registered apps that cannot materialize.
+
 ## Verified Registry application references
 
 The next Traverse release after `v0.10.0` includes the verified Registry
