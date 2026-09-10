@@ -35,7 +35,15 @@ pub const SUPPORTED_HOST_ABI_VERSION: &str = "1.0.0";
 
 const HOST_ABI_V1_WHITELIST: &str = include_str!("host_abi_v1.json");
 const DEFAULT_FUEL_BUDGET: u64 = 5_000_000;
-const DEFAULT_MEMORY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+/// Default linear-memory ceiling for registered `wasi-command` artifacts.
+///
+/// Released registry planners (for example
+/// `core.create-audio-capture-request-plan@1.0.0`) declare ~273 pages
+/// (~17 MiB) of initial memory. The previous 8 MiB default trapped during
+/// instantiation and collapsed into an opaque registered-artifact failure
+/// (issue #1336). 32 MiB keeps a finite sandbox while admitting those
+/// modules.
+const DEFAULT_MEMORY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_TABLE_ELEMENT_LIMIT: usize = 1_024;
 const DEFAULT_INSTANCE_LIMIT: usize = 1;
 const DEFAULT_TABLE_LIMIT: usize = 8;

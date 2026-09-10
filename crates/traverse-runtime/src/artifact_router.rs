@@ -134,9 +134,13 @@ fn map_executor_error(error: &ExecutorError) -> LocalExecutionFailure {
             LocalExecutionFailureCode::ExecutionFailed
         }
     };
+    // Keep stable LocalExecutionFailureCode classification (spec 064 FR-006)
+    // while surfacing the concrete executor cause — trap text, guest exit,
+    // instantiation/missing-export detail, or resource-limit message — so
+    // registered `wasi-command` failures are diagnosable (issue #1336).
     LocalExecutionFailure {
         code,
-        message: "registered artifact execution failed".to_string(),
+        message: error.to_string(),
     }
 }
 
@@ -250,7 +254,12 @@ mod tests {
             .execute(&capability, &serde_json::json!({}))
             .expect_err("missing registered binary should fail");
         assert_eq!(failure.code, LocalExecutionFailureCode::ConstraintViolated);
-        assert_eq!(failure.message, "registered artifact execution failed");
+        assert!(
+            failure.message.contains("binary load failed")
+                && failure.message.contains("missing-test-module.wasm"),
+            "missing binary should surface the concrete load failure, got {}",
+            failure.message
+        );
     }
 
     #[cfg(feature = "wasmtime-executor")]
@@ -382,7 +391,11 @@ mod tests {
         for (error, expected) in errors {
             let failure = map_executor_error(&error);
             assert_eq!(failure.code, expected);
-            assert_eq!(failure.message, "registered artifact execution failed");
+            assert_eq!(failure.message, error.to_string());
+            assert!(
+                !failure.message.is_empty(),
+                "executor failure message must not be collapsed to an empty string"
+            );
         }
     }
 }
