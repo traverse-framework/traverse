@@ -97,16 +97,30 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
     return { id: found.id, version: found.version, digest: found.digest, inputs, outputs, emits };
   }).sort((a,b) => a.id.localeCompare(b.id) || a.version.localeCompare(b.version));
   // Starting facts are values, unlike contract schemas; their own keys form
-  // the initial structural output set.
+  // the initial structural output set. Chain search MUST match Rust
+  // `build_chains` in `browser_local_plan.rs`: the base case is against
+  // starting facts only, predecessor coverage uses the predecessor's outputs
+  // alone, and starting facts are never accumulated with a node's own outputs
+  // (issue #1338).
   const facts = Object.keys(record(startingFacts) ?? {}).sort();
   const targets = declared.filter(c => (target.capability_id !== undefined && target.capability_version !== undefined && c.id === target.capability_id && c.version === target.capability_version) || (target.emits_event !== undefined && c.emits.includes(target.emits_event)));
   const chains: Declared[][] = [];
-  const visit = (node: Declared, chain: Declared[], available: readonly string[]): void => {
+  const visit = (node: Declared, chain: Declared[]): void => {
     if (chains.length >= BROWSER_PLAN_MAX_CANDIDATES || chain.length >= BROWSER_PLAN_MAX_NODES) return;
-    if (node.inputs.every(field => available.includes(field))) { chains.push([...chain, node]); return; }
-    for (const predecessor of declared) if (!chain.includes(predecessor) && node.inputs.every(field => available.includes(field) || predecessor.outputs.includes(field))) visit(predecessor, [...chain, node], [...available, ...predecessor.outputs]);
+    // Base case: covered by starting facts only — never by this node's outputs.
+    if (node.inputs.every(field => facts.includes(field))) {
+      chains.push([...chain, node]);
+    }
+    // Empty required inputs never gain predecessors (vacuous cover would invent edges).
+    if (node.inputs.length === 0) return;
+    for (const predecessor of declared) {
+      if (predecessor === node || chain.includes(predecessor)) continue;
+      // Predecessor outputs alone must cover this node's required inputs.
+      if (!node.inputs.every(field => predecessor.outputs.includes(field))) continue;
+      visit(predecessor, [...chain, node]);
+    }
   };
-  for (const candidate of targets) visit(candidate, [], facts);
+  for (const candidate of targets) visit(candidate, []);
   const proposals = chains.slice(0, BROWSER_PLAN_MAX_CANDIDATES).map((chain, index) => {
     const ordered = [...chain].reverse(); const nodes = ordered.map((c, n) => ({ node_id: `node-${n + 1}`, capability_id: c.id, capability_version: c.version, artifact_digest: c.digest }));
     const mappings: BrowserProposalMapping[] = [];
