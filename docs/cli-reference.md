@@ -132,7 +132,7 @@ cargo run -p traverse-cli-rs -- app register \
 }
 ```
 
-`app register` performs the same validation and writes durable local workspace state under `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json`. A concise success response includes:
+`app register` performs the same validation and writes durable local workspace state under `.traverse/workspaces/<workspace-id>/apps/<app-id>/<version>/registration.json`, including the resolved `state_machine` declaration. `serve` command dispatch consumes that persisted registration; it does not reopen the source app manifest. A concise success response includes:
 
 ```json
 {
@@ -148,6 +148,8 @@ cargo run -p traverse-cli-rs -- app register \
 ```
 
 Re-registering unchanged state is idempotent and returns `status: already_registered` with the same stable app, workspace, and digest evidence.
+
+`serve` loads that persisted `state_machine` for command dispatch. A registration written before this field existed, or one whose persisted declaration cannot be materialized, does not fall back to the source manifest. Re-run `app register` to refresh durable state. Command routes then return `app_registration_requires_refresh` or `503 app_unavailable` instead of a silent `404 app_not_registered`.
 
 `app activate` is the complementary host-only step governed by
 `103-application-connector-binding` and `106-activation-artifact-resolution`.

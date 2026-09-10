@@ -136,6 +136,10 @@ cargo run -p traverse-cli-rs -- app register \
   --json
 ```
 
+`serve` then consumes the persisted registration, including the resolved
+`state_machine`. Re-run `app register` if a command returns
+`app_registration_requires_refresh`; do not expect a source-manifest fallback.
+
 The development/CI HTTP server discovery file remains backward-compatible with the
 `v0.3.0` schema. `cargo run -p traverse-cli-rs -- serve` writes
 `.traverse/server.json` with `schema_version: "1.0.0"`, `base_url`,
