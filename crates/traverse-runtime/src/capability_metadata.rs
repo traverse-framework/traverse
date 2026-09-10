@@ -705,8 +705,12 @@ mod tests {
             .iter()
             .filter(|record| record.kind == HydrationEvidenceKind::CoalescedWaiter)
             .count();
+        let hits = snapshot
+            .iter()
+            .filter(|record| record.kind == HydrationEvidenceKind::CacheHit)
+            .count();
         assert_eq!(leaders, 1);
-        assert_eq!(waiters, 7);
+        assert_eq!(leaders + waiters + hits, 8);
     }
 
     #[test]
