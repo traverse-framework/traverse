@@ -1,9 +1,7 @@
 use serde_json::{Value, json};
 use std::env;
 use std::path::Path;
-use traverse_registry::{
-    DiscoveryQuery, LookupScope, ResolvedCapability, WorkspaceAppStateErrorCode,
-};
+use traverse_registry::{ResolvedCapability, WorkspaceAppStateErrorCode};
 use traverse_runtime::{LocalExecutionFailure, LocalExecutionOutput, LocalExecutor, Runtime};
 
 #[derive(Debug)]
@@ -41,21 +39,24 @@ fn main() {
         "downstream-app-conformance",
     ) {
         Ok(runtime) => {
-            let capabilities = runtime
-                .capability_registry()
-                .discover(LookupScope::PreferPrivate, &DiscoveryQuery::default());
-            let workflows = runtime
-                .workflow_registry()
-                .discover(LookupScope::PreferPrivate);
+            let capabilities = runtime.capability_metadata_index().len();
+            let workflows = runtime.indexed_workflows().count();
             println!(
                 "{}",
                 json!({
                     "status": "loaded",
                     "workspace_id": workspace_id,
-                    "capability_count": capabilities.len(),
-                    "workflow_count": workflows.len(),
-                    "capability_ids": capabilities.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(),
-                    "workflow_ids": workflows.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>()
+                    "capability_count": capabilities,
+                    "workflow_count": workflows,
+                    "capability_ids": runtime
+                        .capability_metadata_index()
+                        .entries()
+                        .map(|entry| entry.capability_id.clone())
+                        .collect::<Vec<_>>(),
+                    "workflow_ids": runtime
+                        .indexed_workflows()
+                        .map(|workflow| workflow.definition.id.clone())
+                        .collect::<Vec<_>>()
                 })
             );
         }

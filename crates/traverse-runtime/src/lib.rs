@@ -27,6 +27,7 @@ pub mod security;
 /// Spec `132` Stateful Browser activation attestation.
 pub mod stateful_browser;
 pub mod trace;
+mod workspace_lazy;
 
 use chrono::Utc;
 use events::{
@@ -45,6 +46,7 @@ use security::{
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -59,8 +61,7 @@ use traverse_registry::{
     ModelResolutionEvidence, RegistrationOutcome, RegistryFailure, RegistryScope, ResolutionError,
     ResolveTelemetry, ResolvedCapability, WorkflowFailure, WorkflowRegistration,
     WorkflowRegistrationOutcome, WorkflowRegistry, WorkspaceAppStateFailure,
-    WorkspaceApplicationRegistration, load_workspace_application_registries, resolve_dependencies,
-    resolve_version_range,
+    WorkspaceApplicationRegistration, resolve_dependencies, resolve_version_range,
 };
 use uuid::Uuid;
 
@@ -96,6 +97,8 @@ pub struct Runtime<E> {
     usage_telemetry_sink: Arc<dyn UsageTelemetrySink>,
     capability_metadata: CapabilityMetadataIndex,
     contract_hydration: Arc<ContractHydrationCache>,
+    indexed_workflows: BTreeMap<(String, String), traverse_registry::ResolvedWorkflow>,
+    workspace_validator_version: String,
 }
 
 impl<E: Clone> Clone for Runtime<E> {
@@ -113,6 +116,8 @@ impl<E: Clone> Clone for Runtime<E> {
             usage_telemetry_sink: Arc::clone(&self.usage_telemetry_sink),
             capability_metadata: self.capability_metadata.clone(),
             contract_hydration: Arc::clone(&self.contract_hydration),
+            indexed_workflows: self.indexed_workflows.clone(),
+            workspace_validator_version: self.workspace_validator_version.clone(),
         }
     }
 }
@@ -132,6 +137,11 @@ impl<E: fmt::Debug> fmt::Debug for Runtime<E> {
             .field("usage_telemetry_sink", &"Arc<dyn UsageTelemetrySink>")
             .field("capability_metadata_len", &self.capability_metadata.len())
             .field("contract_hydration", &self.contract_hydration)
+            .field("indexed_workflows", &self.indexed_workflows.len())
+            .field(
+                "workspace_validator_version",
+                &self.workspace_validator_version,
+            )
             .finish()
     }
 }
@@ -154,6 +164,8 @@ impl<E> Runtime<E> {
             contract_hydration: Arc::new(ContractHydrationCache::new(
                 DEFAULT_HYDRATION_CACHE_CAPACITY,
             )),
+            indexed_workflows: BTreeMap::new(),
+            workspace_validator_version: String::new(),
         }
     }
 
@@ -186,13 +198,14 @@ impl<E> Runtime<E> {
         validator_version: &str,
     ) -> Result<Self, WorkspaceAppStateFailure> {
         let loaded =
-            load_workspace_application_registries(workspace_root, workspace_id, validator_version)?;
+            workspace_lazy::load_lazy_workspace(workspace_root, workspace_id, validator_version)?;
         let capability_metadata =
             CapabilityMetadataIndex::from_workspace_applications(&loaded.applications);
-        Ok(Self::new(loaded.capability_registry, executor)
-            .with_workflow_registry(loaded.workflow_registry)
+        Ok(Self::new(CapabilityRegistry::new(), executor)
             .with_workspace_applications(loaded.applications)
-            .with_capability_metadata(capability_metadata))
+            .with_capability_metadata(capability_metadata)
+            .with_indexed_workflows(loaded.workflows)
+            .with_workspace_validator_version(validator_version.to_string()))
     }
 
     #[must_use]
@@ -303,6 +316,25 @@ impl<E> Runtime<E> {
     }
 
     #[must_use]
+    pub fn with_indexed_workflows(
+        mut self,
+        workflows: BTreeMap<(String, String), traverse_registry::ResolvedWorkflow>,
+    ) -> Self {
+        self.indexed_workflows = workflows;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_validator_version(mut self, validator_version: String) -> Self {
+        self.workspace_validator_version = validator_version;
+        self
+    }
+
+    pub fn indexed_workflows(&self) -> impl Iterator<Item = &traverse_registry::ResolvedWorkflow> {
+        self.indexed_workflows.values()
+    }
+
+    #[must_use]
     pub fn with_hydration_cache_capacity(mut self, capacity: usize) -> Self {
         self.contract_hydration = Arc::new(ContractHydrationCache::new(capacity));
         self
@@ -329,6 +361,21 @@ impl<E> Runtime<E> {
             capability_id,
             capability_version,
         )
+    }
+
+    pub(crate) fn hydrate_resolved_capability(
+        &self,
+        capability_id: &str,
+        capability_version: &str,
+    ) -> Result<ResolvedCapability, HydrationError> {
+        let contract = self.hydrate_indexed_contract(capability_id, capability_version)?;
+        Ok(workspace_lazy::resolved_from_index(
+            &self.capability_metadata,
+            (*contract).clone(),
+            capability_id,
+            capability_version,
+            &self.workspace_validator_version,
+        ))
     }
 
     /// Returns a mutable reference to the workflow registry.
@@ -1294,7 +1341,9 @@ where
         } else {
             let resolution = self.resolve_candidates(&attempt.request, &mut emitter);
 
-            if resolution.eligible.is_empty() {
+            if let Some(error) = resolution.hydration_failure {
+                hydration_failure_outcome(attempt, emitter, resolution.collection, &error)
+            } else if resolution.eligible.is_empty() {
                 no_eligible_outcome(attempt, emitter, resolution.collection)
             } else if resolution.eligible.len() > 1 {
                 ambiguous_outcome(attempt, emitter, resolution)
@@ -1445,7 +1494,14 @@ where
             CandidateReason::IntentMatch
         };
 
-        let discovered = self.collect_candidates(request, candidate_reason);
+        let mut discovered = self.collect_candidates(request, candidate_reason);
+        let mut hydration_failure = None;
+        if discovered.is_empty() && !self.capability_metadata.is_empty() {
+            match self.collect_indexed_candidates(request) {
+                Ok(indexed) => discovered = indexed,
+                Err(error) => hydration_failure = Some(error),
+            }
+        }
         if !discovered.is_empty() {
             emitter.push(
                 RuntimeState::EvaluatingConstraints,
@@ -1492,7 +1548,82 @@ where
                 rejected_candidates: rejected,
             },
             candidate_reason,
+            hydration_failure,
         }
+    }
+
+    fn collect_indexed_candidates(
+        &self,
+        request: &RuntimeRequest,
+    ) -> Result<Vec<ResolvedCapability>, HydrationError> {
+        if let (Some(id), Some(version)) = (
+            request
+                .intent
+                .capability_id
+                .as_deref()
+                .filter(|value| non_empty(value)),
+            request
+                .intent
+                .capability_version
+                .as_deref()
+                .filter(|value| non_empty(value)),
+        ) {
+            if self.capability_metadata.get(id, version).is_none() {
+                return Ok(Vec::new());
+            }
+            return self
+                .hydrate_resolved_capability(id, version)
+                .map(|cap| vec![cap]);
+        }
+
+        if let (Some(capability_id), Some(range_str)) = (
+            request.intent.capability_id.as_deref(),
+            request.intent.version_range.as_deref(),
+        ) && non_empty(capability_id)
+            && non_empty(range_str)
+        {
+            let Ok(requirement) = semver::VersionReq::parse(range_str) else {
+                return Ok(Vec::new());
+            };
+            let mut matched = self
+                .capability_metadata
+                .entries()
+                .filter(|entry| entry.capability_id == capability_id)
+                .filter_map(|entry| {
+                    Version::parse(&entry.capability_version)
+                        .ok()
+                        .filter(|version| requirement.matches(version))
+                        .map(|version| (version, entry.clone()))
+                })
+                .collect::<Vec<_>>();
+            matched.sort_by(|left, right| left.0.cmp(&right.0));
+            let Some((_, selected)) = matched.pop() else {
+                return Ok(Vec::new());
+            };
+            return self
+                .hydrate_resolved_capability(&selected.capability_id, &selected.capability_version)
+                .map(|cap| vec![cap]);
+        }
+
+        let target = request
+            .intent
+            .capability_id
+            .as_deref()
+            .or(request.intent.intent_key.as_deref())
+            .unwrap_or_default();
+        let matches = self
+            .capability_metadata
+            .entries()
+            .filter(|entry| entry.capability_id == target)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut resolved = Vec::new();
+        for entry in matches {
+            resolved.push(
+                self.hydrate_resolved_capability(&entry.capability_id, &entry.capability_version)?,
+            );
+        }
+        Ok(resolved)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2261,6 +2392,75 @@ fn invalid_request_outcome(
         emitted_events: Vec::new(),
         workflow_evidence: None,
     })
+}
+
+fn hydration_failure_outcome(
+    attempt: AttemptContext,
+    mut emitter: StateEmitter,
+    candidate_collection: CandidateCollectionRecord,
+    error: &HydrationError,
+) -> RuntimeExecutionOutcome {
+    let placement = placement_not_attempted(
+        attempt.request.context.requested_target,
+        PlacementDecisionReason::SelectionNotReached,
+    );
+    let runtime_error = hydration_runtime_error(error);
+    emitter.push(
+        RuntimeState::Error,
+        RuntimeTransitionReasonCode::NoMatch,
+        json!({"code": runtime_error.code, "reason_code": error.code}),
+    );
+    emitter.push(
+        RuntimeState::Ready,
+        RuntimeTransitionReasonCode::ExecutionClosed,
+        json!({"terminal_state": RuntimeState::Error}),
+    );
+    let finished = emitter.finish();
+    let identity = attempt.request.context.identity.clone();
+    terminal_failure(FailureContext {
+        attempt,
+        state_events: finished.events,
+        state_transitions: finished.transitions,
+        state_machine_validation: finished.validation,
+        candidate_collection,
+        selection: SelectionRecord {
+            status: SelectionStatus::NoMatch,
+            selected_capability_id: None,
+            selected_capability_version: None,
+            failure_reason: Some(SelectionFailureReason::NotRunnable),
+            remaining_candidates: Vec::new(),
+        },
+        execution: ExecutionRecord {
+            placement: placement.clone(),
+            placement_target: placement.requested_target,
+            status: ExecutionStatus::NotStarted,
+            artifact_ref: None,
+            started_at: None,
+            completed_at: None,
+            output_digest: None,
+            failure_reason: Some(ExecutionFailureReason::ArtifactNotRunnable),
+            artifact_verification: None,
+            identity,
+        },
+        error: runtime_error,
+        emitted_events: Vec::new(),
+        workflow_evidence: None,
+    })
+}
+
+pub(crate) fn hydration_runtime_error(error: &HydrationError) -> RuntimeError {
+    let code = match error.code {
+        "indexed_capability_missing" => RuntimeErrorCode::CapabilityNotFound,
+        "contract_digest_mismatch" | "contract_parse_failed" | "contract_not_utf8" => {
+            RuntimeErrorCode::ContractViolation
+        }
+        _ => RuntimeErrorCode::ArtifactMissing,
+    };
+    runtime_error(
+        code,
+        "capability contract could not be hydrated",
+        json!({"reason_code": error.code}),
+    )
 }
 
 fn no_eligible_outcome(
@@ -3210,6 +3410,7 @@ struct CandidateResolution {
     eligible: Vec<ResolvedCapability>,
     collection: CandidateCollectionRecord,
     candidate_reason: CandidateReason,
+    hydration_failure: Option<HydrationError>,
 }
 
 struct FailureContext {
@@ -3536,13 +3737,14 @@ mod tests {
     };
     use super::{
         BrowserRuntimeSubscriptionErrorCode, BrowserRuntimeSubscriptionMessage,
-        BrowserRuntimeSubscriptionRequest, CandidateEvaluation, CandidateReason, LocalExecutor,
-        PlacementTarget, RejectedCandidateReason, Runtime, RuntimeContext, RuntimeIntent,
-        RuntimeLookup, RuntimeLookupScope, RuntimeLookupScope::*, RuntimeRequest,
-        RuntimeResultStatus, RuntimeState, RuntimeTransitionReasonCode,
-        browser_subscription_messages, evaluate_candidate, map_implementation_kind, map_lifecycle,
-        map_registry_scope, parse_runtime_request, runtime_candidate, subscription_targets_outcome,
-        validate_browser_subscription_request, validate_payload_against_contract, validate_request,
+        BrowserRuntimeSubscriptionRequest, CandidateEvaluation, CandidateReason, HydrationError,
+        HydrationEvidenceKind, LocalExecutor, PlacementTarget, RejectedCandidateReason, Runtime,
+        RuntimeContext, RuntimeIntent, RuntimeLookup, RuntimeLookupScope, RuntimeLookupScope::*,
+        RuntimeRequest, RuntimeResultStatus, RuntimeState, RuntimeTransitionReasonCode,
+        browser_subscription_messages, capability_metadata, evaluate_candidate,
+        map_implementation_kind, map_lifecycle, map_registry_scope, parse_runtime_request,
+        runtime_candidate, subscription_targets_outcome, validate_browser_subscription_request,
+        validate_payload_against_contract, validate_request,
     };
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
@@ -4022,7 +4224,7 @@ mod tests {
                     "expedition.planning.validate-team-readiness",
                     "1.0.0"
                 )
-                .is_some()
+                .is_none()
         );
         assert!(
             runtime
@@ -4032,7 +4234,12 @@ mod tests {
                     "expedition.planning.plan-expedition",
                     "1.0.0"
                 )
-                .is_some()
+                .is_none()
+        );
+        assert!(
+            runtime
+                .indexed_workflows()
+                .any(|workflow| workflow.definition.id == "expedition.planning.plan-expedition")
         );
         assert_eq!(
             runtime.workspace_applications()[0].model_dependencies[0].interface_id,
@@ -4067,6 +4274,339 @@ mod tests {
         .expect("reload")
         .with_hydration_cache_capacity(2);
         assert_eq!(sized.capability_metadata_index().len(), 5);
+    }
+
+    #[test]
+    fn workspace_command_hydrates_selected_capability_only() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let mut request = valid_request();
+        request.intent.capability_id =
+            Some("expedition.planning.validate-team-readiness".to_string());
+        request.intent.intent_key = Some("expedition.planning.validate-team-readiness".to_string());
+        request.input = json!({
+            "objective": {"objective_id": "obj-1"},
+            "conditions_summary": {
+                "conditions_summary_id": "cs-1",
+                "objective_id": "obj-1",
+                "overall_rating": "ok",
+                "key_findings": ["clear"],
+                "blocking_concerns": []
+            },
+            "team_profile": {
+                "team_id": "team-1",
+                "member_count": 2,
+                "experience_level": "intermediate",
+                "equipment_ready": true
+            }
+        });
+        let _outcome = runtime.execute(request);
+        let snapshot = runtime.contract_hydration.evidence_snapshot();
+        let leaders = snapshot
+            .iter()
+            .filter(|record| record.kind == HydrationEvidenceKind::HydrationLeader)
+            .map(|record| record.capability_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(leaders, vec!["expedition.planning.validate-team-readiness"]);
+        assert!(!snapshot.iter().any(|record| {
+            record.kind == HydrationEvidenceKind::HydrationLeader
+                && record.capability_id == "expedition.planning.assemble-expedition-plan"
+        }));
+        assert!(capability_metadata::evidence_is_secret_free(&snapshot[0]));
+    }
+
+    fn expedition_request(id: &str, version: Option<&str>, range: Option<&str>) -> RuntimeRequest {
+        let mut request = valid_request();
+        request.intent.capability_id = Some(id.to_string());
+        request.intent.capability_version = version.map(str::to_string);
+        request.intent.version_range = range.map(str::to_string);
+        request.intent.intent_key = Some(id.to_string());
+        request.input = json!({
+            "objective": {"objective_id": "obj-1"},
+            "conditions_summary": {
+                "conditions_summary_id": "cs-1",
+                "objective_id": "obj-1",
+                "overall_rating": "ok",
+                "key_findings": ["clear"],
+                "blocking_concerns": []
+            },
+            "team_profile": {
+                "team_id": "team-1",
+                "member_count": 2,
+                "experience_level": "intermediate",
+                "equipment_ready": true
+            }
+        });
+        request
+    }
+
+    #[test]
+    fn workspace_command_resolves_semver_range_and_intent_from_index() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let _ = runtime.execute(expedition_request(
+            "expedition.planning.validate-team-readiness",
+            None,
+            Some("^1.0"),
+        ));
+        let _ = runtime.execute(expedition_request(
+            "expedition.planning.validate-team-readiness",
+            None,
+            None,
+        ));
+        let leaders = runtime
+            .contract_hydration
+            .evidence_snapshot()
+            .into_iter()
+            .filter(|record| record.kind == HydrationEvidenceKind::HydrationLeader)
+            .count();
+        assert!(leaders >= 1);
+        let _ = runtime.execute(expedition_request(
+            "expedition.planning.validate-team-readiness",
+            None,
+            Some("^99.0"),
+        ));
+        let _ = runtime.execute(expedition_request(
+            "expedition.planning.validate-team-readiness",
+            None,
+            Some("not-a-range"),
+        ));
+    }
+
+    #[test]
+    fn hydration_runtime_error_maps_stable_codes() {
+        assert_eq!(
+            super::hydration_runtime_error(&HydrationError {
+                code: "indexed_capability_missing",
+                message: "x".to_string(),
+            })
+            .code,
+            super::RuntimeErrorCode::CapabilityNotFound
+        );
+        assert_eq!(
+            super::hydration_runtime_error(&HydrationError {
+                code: "contract_parse_failed",
+                message: "x".to_string(),
+            })
+            .code,
+            super::RuntimeErrorCode::ContractViolation
+        );
+        assert_eq!(
+            super::hydration_runtime_error(&HydrationError {
+                code: "contract_unreadable",
+                message: "x".to_string(),
+            })
+            .code,
+            super::RuntimeErrorCode::ArtifactMissing
+        );
+    }
+
+    #[test]
+    fn indexed_workflow_is_hidden_from_public_lookup() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let outcome = runtime.execute_workflow(super::WorkflowExecutionRequest {
+            kind: "workflow_execution_request".to_string(),
+            schema_version: "1.0.0".to_string(),
+            request_id: "wf-public".to_string(),
+            workflow_id: "expedition.planning.plan-expedition".to_string(),
+            workflow_version: "1.0.0".to_string(),
+            scope: super::WorkflowLookupScope::PublicOnly,
+            input: json!({}),
+            governing_spec: "007-workflow-registry-traversal".to_string(),
+        });
+        assert_eq!(outcome.result.status, super::WorkflowTraversalStatus::Error);
+    }
+
+    #[test]
+    fn indexed_workflow_hydration_fault_fails_only_that_step() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let corrupt = workspace_root.join("corrupt-contract.json");
+        fs::write(&corrupt, "{not-json").expect("corrupt");
+        let state_path = workspace_root
+            .join(".traverse/workspaces/local/apps/expedition.readiness/1.0.0/registration.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("json");
+        state["components"][0]["contract_path"] = json!(corrupt.display().to_string());
+        state["components"][0]["contract_digest"] = json!(format!("sha256:{}", "bb".repeat(32)));
+        fs::write(&state_path, serde_json::to_vec(&state).expect("write")).expect("state");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("load");
+        let outcome = runtime.execute_workflow(super::WorkflowExecutionRequest {
+            kind: "workflow_execution_request".to_string(),
+            schema_version: "1.0.0".to_string(),
+            request_id: "wf-hydrate-fail".to_string(),
+            workflow_id: "expedition.planning.plan-expedition".to_string(),
+            workflow_version: "1.0.0".to_string(),
+            scope: super::WorkflowLookupScope::PreferPrivate,
+            input: json!({
+                "destination": "alps",
+                "target_window": {
+                    "start": "2026-06-01T00:00:00Z",
+                    "end": "2026-06-07T00:00:00Z"
+                },
+                "preferences": {
+                    "style": "hut",
+                    "risk_tolerance": "low",
+                    "priority": "safety"
+                },
+                "notes": "none",
+                "planning_intent": "summit",
+                "team_profile": {
+                    "team_id": "team-1",
+                    "member_count": 2,
+                    "experience_level": "intermediate",
+                    "equipment_ready": true
+                }
+            }),
+            governing_spec: "007-workflow-registry-traversal".to_string(),
+        });
+        assert_eq!(
+            outcome.evidence.result.failure_reason,
+            Some(super::WorkflowTraversalFailureReason::StepExecutionFailed)
+        );
+    }
+
+    #[test]
+    fn workspace_workflow_hydrates_reached_steps_only() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("workspace app state should load");
+        let outcome = runtime.execute_workflow(super::WorkflowExecutionRequest {
+            kind: "workflow_execution_request".to_string(),
+            schema_version: "1.0.0".to_string(),
+            request_id: "wf-req-1".to_string(),
+            workflow_id: "expedition.planning.plan-expedition".to_string(),
+            workflow_version: "1.0.0".to_string(),
+            scope: super::WorkflowLookupScope::PreferPrivate,
+            input: json!({
+                "destination": "alps",
+                "target_window": {
+                    "start": "2026-06-01T00:00:00Z",
+                    "end": "2026-06-07T00:00:00Z"
+                },
+                "preferences": {
+                    "style": "hut",
+                    "risk_tolerance": "low",
+                    "priority": "safety"
+                },
+                "notes": "none",
+                "planning_intent": "summit",
+                "team_profile": {
+                    "team_id": "team-1",
+                    "member_count": 2,
+                    "experience_level": "intermediate",
+                    "equipment_ready": true
+                }
+            }),
+            governing_spec: "007-workflow-registry-traversal".to_string(),
+        });
+        assert_eq!(
+            outcome.evidence.visited_nodes[0].capability_id,
+            "expedition.planning.capture-expedition-objective"
+        );
+        let snapshot = runtime.contract_hydration.evidence_snapshot();
+        let leaders = snapshot
+            .iter()
+            .filter(|record| record.kind == HydrationEvidenceKind::HydrationLeader)
+            .map(|record| record.capability_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            leaders,
+            vec!["expedition.planning.capture-expedition-objective".to_string()]
+        );
+        assert!(!leaders.contains(&"expedition.planning.assemble-expedition-plan".to_string()));
+        assert!(
+            outcome
+                .evidence
+                .visited_nodes
+                .iter()
+                .any(|step| { step.status == super::WorkflowTraversalStepStatus::Failed })
+        );
+    }
+
+    #[test]
+    fn workspace_hydration_fault_is_secret_free_and_command_scoped() {
+        let workspace_root = unique_workspace_state_dir();
+        write_runtime_workspace_app_state_fixture(&workspace_root, "local");
+        let contract_path = repo_root().join(
+            "contracts/examples/expedition/capabilities/validate-team-readiness/contract.json",
+        );
+        let state_path = workspace_root
+            .join(".traverse/workspaces/local/apps/expedition.readiness/1.0.0/registration.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("json");
+        let corrupt = workspace_root.join("corrupt-contract.json");
+        fs::write(&corrupt, "{not-json").expect("corrupt contract");
+        state["components"][3]["contract_path"] = json!(corrupt.display().to_string());
+        state["components"][3]["contract_digest"] = json!(format!("sha256:{}", "aa".repeat(32)));
+        fs::write(&state_path, serde_json::to_vec(&state).expect("write")).expect("state");
+        let _ = contract_path;
+        let runtime = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("index should load without parsing contracts");
+        let mut request = valid_request();
+        request.intent.capability_id =
+            Some("expedition.planning.validate-team-readiness".to_string());
+        request.intent.capability_version = Some("1.0.0".to_string());
+        request.intent.intent_key = Some("expedition.planning.validate-team-readiness".to_string());
+        let outcome = runtime.execute(request);
+        assert_eq!(outcome.result.status, RuntimeResultStatus::Error);
+        let snapshot = runtime.contract_hydration.evidence_snapshot();
+        assert!(snapshot.iter().any(|record| {
+            record.kind == HydrationEvidenceKind::HydrationFailure
+                && record.capability_id == "expedition.planning.validate-team-readiness"
+        }));
+        assert!(
+            snapshot
+                .iter()
+                .all(capability_metadata::evidence_is_secret_free)
+        );
+        runtime
+            .hydrate_indexed_contract("expedition.planning.assemble-expedition-plan", "1.0.0")
+            .expect("unrelated indexed capability remains hydratable");
+        let mut miss = valid_request();
+        miss.intent.capability_id = Some("missing.capability".to_string());
+        miss.intent.capability_version = Some("1.0.0".to_string());
+        let miss_outcome = runtime.execute(miss);
+        assert_eq!(miss_outcome.result.status, RuntimeResultStatus::Error);
     }
 
     #[test]
