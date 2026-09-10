@@ -4057,6 +4057,16 @@ mod tests {
                 .id,
             "expedition.planning.validate-team-readiness"
         );
+        let _ = format!("{runtime:?}");
+        let sized = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("reload")
+        .with_hydration_cache_capacity(2);
+        assert_eq!(sized.capability_metadata_index().len(), 5);
     }
 
     #[test]

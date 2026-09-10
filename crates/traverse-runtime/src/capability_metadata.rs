@@ -203,11 +203,14 @@ impl ContractHydrationCache {
         self.capacity
     }
 
-    pub fn evidence_snapshot(&self) -> Vec<HydrationEvidence> {
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, CacheInner> {
         self.inner
             .lock()
-            .map(|inner| inner.evidence.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn evidence_snapshot(&self) -> Vec<HydrationEvidence> {
+        self.lock_inner().evidence.clone()
     }
 
     /// Digest-verifies, parses, and caches a persisted contract.
@@ -257,7 +260,7 @@ impl ContractHydrationCache {
         }
 
         let slot = {
-            let mut inner = self.inner.lock().map_err(|_| hydration_lock_error())?;
+            let mut inner = self.lock_inner();
             inner
                 .inflight
                 .entry(key.clone())
@@ -265,7 +268,9 @@ impl ContractHydrationCache {
                 .clone()
         };
 
-        let mut slot_guard = slot.lock().map_err(|_| hydration_lock_error())?;
+        let mut slot_guard = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = slot_guard.as_ref() {
             self.record(
                 HydrationEvidenceKind::CoalescedWaiter,
@@ -283,9 +288,7 @@ impl ContractHydrationCache {
         let outcome = self.hydrate_leader(index, &indexed);
         *slot_guard = Some(outcome.clone());
         drop(slot_guard);
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.inflight.remove(&key);
-        }
+        self.lock_inner().inflight.remove(&key);
         outcome
     }
 
@@ -333,7 +336,7 @@ impl ContractHydrationCache {
     }
 
     fn cache_get(&self, key: &HydrationKey) -> Option<Arc<CapabilityContract>> {
-        let mut inner = self.inner.lock().ok()?;
+        let mut inner = self.lock_inner();
         let hit = inner.entries.get(key).cloned()?;
         if let Some(position) = inner.order.iter().position(|item| item == key) {
             inner.order.remove(position);
@@ -348,28 +351,27 @@ impl ContractHydrationCache {
             capability_version: indexed.capability_version.clone(),
             contract_digest: indexed.contract_digest.clone(),
         };
-        if let Ok(mut inner) = self.inner.lock() {
-            if inner.entries.contains_key(&key) {
-                return;
-            }
-            while inner.entries.len() >= self.capacity {
-                if let Some(evicted) = inner.order.pop_front() {
-                    inner.entries.remove(&evicted);
-                    inner.evidence.push(HydrationEvidence {
-                        schema_version: EVIDENCE_SCHEMA_VERSION.to_string(),
-                        kind: HydrationEvidenceKind::Eviction,
-                        capability_id: evicted.capability_id,
-                        capability_version: evicted.capability_version,
-                        contract_digest: evicted.contract_digest,
-                        reason_code: "hydration_cache_evicted".to_string(),
-                    });
-                } else {
-                    break;
-                }
-            }
-            inner.order.push_back(key.clone());
-            inner.entries.insert(key, contract);
+        let mut inner = self.lock_inner();
+        if inner.entries.contains_key(&key) {
+            return;
         }
+        while inner.entries.len() >= self.capacity {
+            if let Some(evicted) = inner.order.pop_front() {
+                inner.entries.remove(&evicted);
+                inner.evidence.push(HydrationEvidence {
+                    schema_version: EVIDENCE_SCHEMA_VERSION.to_string(),
+                    kind: HydrationEvidenceKind::Eviction,
+                    capability_id: evicted.capability_id,
+                    capability_version: evicted.capability_version,
+                    contract_digest: evicted.contract_digest,
+                    reason_code: "hydration_cache_evicted".to_string(),
+                });
+            } else {
+                break;
+            }
+        }
+        inner.order.push_back(key.clone());
+        inner.entries.insert(key, contract);
     }
 
     fn record(&self, kind: HydrationEvidenceKind, indexed: &IndexedCapability, reason_code: &str) {
@@ -408,9 +410,7 @@ impl ContractHydrationCache {
             "reason_code": record.reason_code,
         });
         eprintln!("{envelope}");
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.evidence.push(record);
-        }
+        self.lock_inner().evidence.push(record);
     }
 }
 
@@ -432,13 +432,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         output.push(char::from(HEX[(byte & 0x0f) as usize]));
     }
     output
-}
-
-fn hydration_lock_error() -> HydrationError {
-    HydrationError {
-        code: "hydration_lock_poisoned",
-        message: "hydration cache lock poisoned".to_string(),
-    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -714,5 +707,155 @@ mod tests {
             .count();
         assert_eq!(leaders, 1);
         assert_eq!(waiters, 7);
+    }
+
+    #[test]
+    fn hydrate_reports_stable_secret_free_failure_codes() {
+        let cache = ContractHydrationCache::new(1);
+        assert_eq!(cache.capacity(), 1);
+        let empty = CapabilityMetadataIndex::default();
+        assert!(empty.is_empty());
+        let missing = cache
+            .hydrate(&empty, "demo.capability", "1.0.0")
+            .expect_err("missing");
+        assert_eq!(missing.code, "indexed_capability_missing");
+
+        let dir = unique_dir();
+        let state_path = dir.join("registration.json");
+        fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&json!({
+                "app_id": "demo.app",
+                "app_version": "1.0.0",
+                "components": [{
+                    "component_id": "demo.component",
+                    "capability_id": "demo.capability",
+                    "capability_version": "1.0.0",
+                    "contract_digest": "sha256:dead",
+                    "contract_path": ""
+                }, {
+                    "component_id": "skip.me",
+                    "capability_id": "",
+                    "capability_version": "1.0.0"
+                }]
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+        let index = CapabilityMetadataIndex::from_workspace_applications(&[app_for(&state_path)]);
+        assert_eq!(index.len(), 1);
+        assert!(index.entries().next().is_some());
+        let missing_source = cache
+            .hydrate(&index, "demo.capability", "1.0.0")
+            .expect_err("source");
+        assert_eq!(missing_source.code, "contract_source_missing");
+
+        let unreadable_path = dir.join("unreadable.json");
+        fs::write(
+            dir.join("registration-unread.json"),
+            serde_json::to_vec_pretty(&json!({
+                "app_id": "demo.app",
+                "app_version": "1.0.0",
+                "components": [{
+                    "component_id": "demo.component",
+                    "capability_id": "demo.unread",
+                    "capability_version": "1.0.0",
+                    "contract_digest": "sha256:dead",
+                    "contract_path": unreadable_path.display().to_string()
+                }]
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+        let unread_index = CapabilityMetadataIndex::from_workspace_applications(&[app_for(
+            &dir.join("registration-unread.json"),
+        )]);
+        let unread = cache
+            .hydrate(&unread_index, "demo.unread", "1.0.0")
+            .expect_err("unreadable");
+        assert_eq!(unread.code, "contract_unreadable");
+
+        let utf_path = dir.join("utf8.bin");
+        fs::write(&utf_path, [0xff, 0xfe]).expect("bytes");
+        let utf_state = write_registration(&dir, &utf_path, json!([]));
+        let utf_index =
+            CapabilityMetadataIndex::from_workspace_applications(&[app_for(&utf_state)]);
+        let utf8 = cache
+            .hydrate(&utf_index, "demo.capability", "1.0.0")
+            .expect_err("utf8");
+        assert_eq!(utf8.code, "contract_not_utf8");
+
+        let mismatch_path = dir.join("mismatch.json");
+        fs::write(&mismatch_path, real_contract()).expect("contract");
+        let mismatch_state = dir.join("registration-mismatch.json");
+        fs::write(
+            &mismatch_state,
+            serde_json::to_vec_pretty(&json!({
+                "app_id": "demo.app",
+                "app_version": "1.0.0",
+                "components": [{
+                    "component_id": "demo.component",
+                    "capability_id": "demo.mismatch",
+                    "capability_version": "1.0.0",
+                    "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                    "contract_path": mismatch_path.display().to_string()
+                }]
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+        let mismatch_index =
+            CapabilityMetadataIndex::from_workspace_applications(&[app_for(&mismatch_state)]);
+        let mismatch = cache
+            .hydrate(&mismatch_index, "demo.mismatch", "1.0.0")
+            .expect_err("digest");
+        assert_eq!(mismatch.code, "contract_digest_mismatch");
+
+        let envelope = evidence_envelope(&cache.evidence_snapshot());
+        assert_eq!(envelope["schema_version"], "1.0.0");
+        assert!(envelope["records"].as_array().expect("records").len() >= 4);
+    }
+
+    #[test]
+    fn skips_unreadable_or_malformed_registration_files() {
+        let dir = unique_dir();
+        let missing = app_for(&dir.join("nope.json"));
+        let bad = dir.join("bad.json");
+        fs::write(&bad, "not-json").expect("write");
+        let index = CapabilityMetadataIndex::from_workspace_applications(&[missing, app_for(&bad)]);
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn insert_covers_duplicate_and_empty_eviction_order() {
+        let dir = unique_dir();
+        let contract_path = dir.join("contract.json");
+        fs::write(&contract_path, real_contract()).expect("contract");
+        let state_path =
+            write_registration(&dir, &contract_path, json!({"schema_version": "1.0.0"}));
+        let index = CapabilityMetadataIndex::from_workspace_applications(&[app_for(&state_path)]);
+        let cache = ContractHydrationCache::new(1);
+        let contract = cache
+            .hydrate(&index, "demo.capability", "1.0.0")
+            .expect("hydrate");
+        let indexed = index
+            .get("demo.capability", "1.0.0")
+            .expect("indexed")
+            .clone();
+        cache.insert(&indexed, Arc::clone(&contract));
+        let mut other = indexed.clone();
+        other.capability_id = "demo.other".to_string();
+        other.contract_digest = "sha256:other".to_string();
+        {
+            let mut inner = cache.inner.lock().expect("lock");
+            inner.order.clear();
+        }
+        cache.insert(&other, contract);
+        let err = HydrationError {
+            code: "hydration_lock_poisoned",
+            message: "hydration cache lock poisoned".to_string(),
+        };
+        assert_eq!(err.code, "hydration_lock_poisoned");
+        assert!(!err.message.is_empty());
     }
 }
