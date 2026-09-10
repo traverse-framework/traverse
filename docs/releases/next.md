@@ -1,5 +1,12 @@
 # Next Release Notes
 
+## Lazy capability metadata index
+
+`serve` now builds an immutable persisted capability metadata index at workspace
+load without parsing every component contract. Verified contracts hydrate on
+demand into a host-configured process-local LRU with single-flight coalescing.
+Command and workflow integration remains a follow-up.
+
 ## Server-owned app availability
 
 `GET /v1/workspaces/{workspace}/apps/status` reports whether each registered

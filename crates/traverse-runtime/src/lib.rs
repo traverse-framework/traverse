@@ -4,6 +4,11 @@ mod workflows;
 pub use workflows::*;
 mod artifact_router;
 pub use artifact_router::*;
+pub mod capability_metadata;
+pub use capability_metadata::{
+    CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
+    HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,
+};
 pub mod data_store;
 /// Durable P3 checkpoint, recovery, wait, retry, and compensation controls.
 pub mod durable_orchestration;
@@ -89,6 +94,8 @@ pub struct Runtime<E> {
     trace_store: Arc<Mutex<TraceStore>>,
     event_broker: Arc<dyn EventBroker>,
     usage_telemetry_sink: Arc<dyn UsageTelemetrySink>,
+    capability_metadata: CapabilityMetadataIndex,
+    contract_hydration: Arc<ContractHydrationCache>,
 }
 
 impl<E: Clone> Clone for Runtime<E> {
@@ -104,6 +111,8 @@ impl<E: Clone> Clone for Runtime<E> {
             trace_store: Arc::clone(&self.trace_store),
             event_broker: Arc::clone(&self.event_broker),
             usage_telemetry_sink: Arc::clone(&self.usage_telemetry_sink),
+            capability_metadata: self.capability_metadata.clone(),
+            contract_hydration: Arc::clone(&self.contract_hydration),
         }
     }
 }
@@ -121,6 +130,8 @@ impl<E: fmt::Debug> fmt::Debug for Runtime<E> {
             .field("trace_store", &self.trace_store)
             .field("event_broker", &"Arc<dyn EventBroker>")
             .field("usage_telemetry_sink", &"Arc<dyn UsageTelemetrySink>")
+            .field("capability_metadata_len", &self.capability_metadata.len())
+            .field("contract_hydration", &self.contract_hydration)
             .finish()
     }
 }
@@ -139,6 +150,10 @@ impl<E> Runtime<E> {
             trace_store: Arc::new(Mutex::new(TraceStore::new())),
             event_broker: default_event_broker(),
             usage_telemetry_sink: Arc::new(NoOpUsageTelemetrySink),
+            capability_metadata: CapabilityMetadataIndex::default(),
+            contract_hydration: Arc::new(ContractHydrationCache::new(
+                DEFAULT_HYDRATION_CACHE_CAPACITY,
+            )),
         }
     }
 
@@ -172,9 +187,12 @@ impl<E> Runtime<E> {
     ) -> Result<Self, WorkspaceAppStateFailure> {
         let loaded =
             load_workspace_application_registries(workspace_root, workspace_id, validator_version)?;
+        let capability_metadata =
+            CapabilityMetadataIndex::from_workspace_applications(&loaded.applications);
         Ok(Self::new(loaded.capability_registry, executor)
             .with_workflow_registry(loaded.workflow_registry)
-            .with_workspace_applications(loaded.applications))
+            .with_workspace_applications(loaded.applications)
+            .with_capability_metadata(capability_metadata))
     }
 
     #[must_use]
@@ -276,6 +294,41 @@ impl<E> Runtime<E> {
     #[must_use]
     pub fn workspace_applications(&self) -> &[WorkspaceApplicationRegistration] {
         self.applications.as_slice()
+    }
+
+    #[must_use]
+    pub fn with_capability_metadata(mut self, index: CapabilityMetadataIndex) -> Self {
+        self.capability_metadata = index;
+        self
+    }
+
+    #[must_use]
+    pub fn with_hydration_cache_capacity(mut self, capacity: usize) -> Self {
+        self.contract_hydration = Arc::new(ContractHydrationCache::new(capacity));
+        self
+    }
+
+    #[must_use]
+    pub fn capability_metadata_index(&self) -> &CapabilityMetadataIndex {
+        &self.capability_metadata
+    }
+
+    /// Digest-verifies and parses a persisted contract for an indexed capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HydrationError`] when the capability is missing from the index
+    /// or the persisted contract cannot be verified or parsed.
+    pub fn hydrate_indexed_contract(
+        &self,
+        capability_id: &str,
+        capability_version: &str,
+    ) -> Result<Arc<traverse_contracts::CapabilityContract>, HydrationError> {
+        self.contract_hydration.hydrate(
+            &self.capability_metadata,
+            capability_id,
+            capability_version,
+        )
     }
 
     /// Returns a mutable reference to the workflow registry.
@@ -3985,6 +4038,35 @@ mod tests {
             runtime.workspace_applications()[0].model_dependencies[0].interface_id,
             "traverse.inference.generate"
         );
+        assert_eq!(runtime.capability_metadata_index().len(), 5);
+        let indexed = runtime
+            .capability_metadata_index()
+            .get("expedition.planning.validate-team-readiness", "1.0.0")
+            .expect("indexed capability");
+        assert_eq!(
+            indexed.component_id,
+            "expedition.readiness.validate-team-readiness-component"
+        );
+        runtime
+            .hydrate_indexed_contract("expedition.planning.validate-team-readiness", "1.0.0")
+            .expect("first selected capability should hydrate");
+        assert_eq!(
+            runtime
+                .hydrate_indexed_contract("expedition.planning.validate-team-readiness", "1.0.0",)
+                .expect("cached hydration")
+                .id,
+            "expedition.planning.validate-team-readiness"
+        );
+        let _ = format!("{runtime:?}");
+        let sized = Runtime::from_workspace_app_state(
+            &workspace_root,
+            "local",
+            NoopExecutor,
+            "test-runtime",
+        )
+        .expect("reload")
+        .with_hydration_cache_capacity(2);
+        assert_eq!(sized.capability_metadata_index().len(), 5);
     }
 
     #[test]
