@@ -1,6 +1,15 @@
 # Next Release Notes
 
-## Lazy capability metadata index
+## ArtifactRouter WASI diagnosis
+
+`ArtifactRouter` now forwards the concrete `WasmExecutor` failure text
+(trap, guest exit, instantiation/missing-export, or resource-limit detail)
+instead of collapsing every failure to `registered artifact execution failed`.
+Default WASM linear-memory limits are raised to 32 MiB so released registry
+`wasi-command` planners that reserve ~17 MiB initial memory
+(for example `core.create-audio-capture-request-plan@1.0.0`) can instantiate on
+the registered `target: local` path.
+
 
 `serve` now builds an immutable persisted capability metadata index at workspace
 load without parsing every component contract. Command routing and reached
