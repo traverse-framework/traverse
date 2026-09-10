@@ -3462,6 +3462,29 @@ execution:
 3. `#1319` Blocked until `traverse-registry 0.20.0` is on crates.io, then the
    CLI/embedder/runtime upgrade to the batch preparation API proceeds.
 
+## Decision 78: Server-Owned Application Availability Lifecycle
+
+- **Date**: 2026-09-09
+- **Status**: Accepted
+- **Related issue**: `#1324`
+- **Governing artifacts**: Spec `133-app-availability-lifecycle`; ADR-0066
+
+### Decision
+
+Keep runtime execution lifecycle, application business workflow, and server-owned
+application availability distinct. The initial availability model is closed:
+`loading → ready` and `loading → failed` are its only transitions. Transition
+evidence is structured and retained only for the active `serve` process.
+
+`ready` is based on persisted, resolved registration state, not source-manifest
+resolution or process-wide WASM preloading. First-use capability failures stay
+command-scoped. A read-only app-status endpoint and structured startup evidence
+make the state observable without a durable lifecycle journal.
+
+### Approval
+
+Approved by Enrico during the #1324 governing brainstorm on 2026-09-09.
+
 ## Decision 77: Final Unblock Path for `#1314` / `#1308` — Config, Then Ops Cuts `web-v0.9.0`
 
 - **Date**: 2026-09-09
