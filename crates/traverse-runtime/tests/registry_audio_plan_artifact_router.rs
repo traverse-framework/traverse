@@ -107,11 +107,7 @@ fn artifact_router_runs_sibling_audio_plan_artifacts() {
     );
     let window = router
         .execute(
-            &resolved_capability(
-                "core.create-audio-window-plan",
-                &window_path,
-                WINDOW_DIGEST,
-            ),
+            &resolved_capability("core.create-audio-window-plan", &window_path, WINDOW_DIGEST),
             &json!({
                 "artifact_ref": "asset:pcm-17",
                 "duration_millis": 60_000,
@@ -183,15 +179,17 @@ fn wasm_executor_still_traps_released_capture_plan_under_eight_mib_cap() {
             }),
         )
         .expect_err("8 MiB must still trap this module");
-    match err {
-        ExecutorError::ResourceExhausted(detail) => {
-            assert!(
-                detail.contains("17891328") || detail.contains("forcing trap"),
-                "expected concrete memory trap detail, got {detail}"
-            );
-        }
-        other => panic!("expected ResourceExhausted, got {other:?}"),
-    }
+    assert!(
+        matches!(&err, ExecutorError::ResourceExhausted(_)),
+        "expected ResourceExhausted, got {err:?}"
+    );
+    let ExecutorError::ResourceExhausted(detail) = err else {
+        return;
+    };
+    assert!(
+        detail.contains("17891328") || detail.contains("forcing trap"),
+        "expected concrete memory trap detail, got {detail}"
+    );
 }
 
 fn load_released_artifact(capability_id: &str, asset_name: &str, expected_digest: &str) -> PathBuf {
@@ -205,7 +203,7 @@ fn load_released_artifact(capability_id: &str, asset_name: &str, expected_digest
             .arg(&fixture)
             .arg(&url)
             .status()
-            .unwrap_or_else(|error| panic!("curl failed to start for {url}: {error}"));
+            .expect("curl should start when TRAVERSE_FETCH_REGISTRY_ARTIFACTS is set");
         assert!(
             status.success(),
             "failed to fetch released artifact {url} (exit {status})"
@@ -216,12 +214,11 @@ fn load_released_artifact(capability_id: &str, asset_name: &str, expected_digest
         "missing released artifact fixture at {}",
         fixture.display()
     );
-    let bytes = fs::read(&fixture).unwrap_or_else(|error| {
-        panic!("failed to read {}: {error}", fixture.display());
-    });
+    let bytes = fs::read(&fixture).expect("released artifact fixture should be readable");
     let actual = sha256_hex(&bytes);
     assert_eq!(
-        actual, expected_digest,
+        actual,
+        expected_digest,
         "digest mismatch for {} ({})",
         fixture.display(),
         capability_id
