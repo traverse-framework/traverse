@@ -3665,3 +3665,96 @@ Customer DEVs and agents get one story: discover/plan at authoring time (with a 
 ### Approval
 
 Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-10).
+
+## Decision 81: Single-Role `service_type` — Compose Multi-Concern at Workflow
+
+- **Date**: 2026-09-11
+- **Status**: Accepted
+- **Related issue**: `#1291`
+- **Governing artifacts**: ADR-0069; Specs `014`/`208`, `098`, `131` (unchanged)
+- **Origin**: `/brainstorm` over the 12 open Project 1 issues (2026-09-11)
+
+### Context
+
+Decision 68 deferred Stateful + events multi-role. Spec `131` already excludes
+it. Session-flavored roster items plausibly want both persistence and events,
+but no published capability is blocked today.
+
+### Decision
+
+1. Keep `service_type` as a single enum.
+2. Do not add a combined variant or orthogonal storage/events flags.
+3. When both concerns are needed, author separate `Stateful` and `Subscribable`
+   capabilities and compose them at the workflow / application layer.
+4. Leave `098` / `131` call-time gates and `014`/`208` placement rules unchanged.
+5. Revisit only with a narrow enum variant if a concrete published capability
+   proves composition is worse than a combined type.
+
+### Alternatives considered
+
+- New `service_type` variant — deferred without demand; gate/placement churn.
+- Orthogonal flags — rejected; placement is written against `service_type`.
+- Thin amendment to Spec `014`/`208` or a new dedicated multi-role spec —
+  rejected for a pure negative ruling; ADR-0069 + this log entry suffice.
+
+### Outcome
+
+`#1291` closes as a governing ruling (ADR-0069 Accepted). No new positive ABI
+or taxonomy surface.
+
+### Approval
+
+Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-11).
+
+## Decision 82: Open-Issue Ready Triage — Executable Ready Only; Demand-Gate Deferred ABI
+
+- **Date**: 2026-09-11
+- **Status**: Accepted
+- **Related issues**: `#1341`, `#1242`, `#1291`, `#1287`, `#1288`, `#1290`,
+  `#1294`, `#1295`, `#1150`, `#1152`, `#1168`, `#884`
+- **Origin**: `/brainstorm` over the 12 open Project 1 issues (2026-09-11)
+
+### Context
+
+Twelve issues were open with zero Ready tickets. Open ≠ Ready: most were
+Project Status `future`, one (`#1341`) carried stale `needs-spec` despite
+Approved Spec `135`, and umbrellas / upstream trackers are not executable
+agent work.
+
+### Decision
+
+1. **Ready means executable now.** Promote only tickets with approved
+   governing artifacts and no external blocker.
+2. **Promote to Ready now:**
+   - `#1341` — Spec `135` + ADR-0068 + Decision 79 Approved; remove
+     `needs-spec`, add `spec-complete`, add to Project 1, Status Ready.
+   - `#1242` — Spec `520` / `no-spec-needed`; Status Ready.
+3. **Close as ruling (not implement):** `#1291` after ADR-0069 + Decision 81.
+4. **Demand-gate (remain `future`, no new ABI spec until a named consumer is
+   blocked):**
+   - `#1287` `state_clear`, `#1288` quotas, `#1290` CAS (Decision 68 deferrals)
+   - `#1294` IndexedDB KeyProvider, `#1295` IndexedDB maintenance (Spec `528`
+     fail-closed follow-ons)
+5. **Stay out of Ready:**
+   - `#1150`, `#1152`, `#1168` — umbrellas / proof outcomes until split into
+     executable children.
+   - `#884` — external WasmKit upstream watch.
+
+### Alternatives considered
+
+- Promote already-governed first, then design everything else into Ready —
+  rejected; invents ABI before demand.
+- Design every missing artifact before any Ready move — rejected; idles
+  `#1341`/`#1242` for no technical reason.
+- Spec+ADR now for Deferred Stateful/IndexedDB while keeping `future` —
+  rejected; design cost without a blocked consumer.
+
+### Outcome
+
+Ready board gets real implement work (`#1341`, `#1242`). Deferred ABI and
+umbrella tickets stay honest as `future` / non-Ready. Single-role taxonomy
+closes via Decision 81 / ADR-0069.
+
+### Approval
+
+Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-11).
