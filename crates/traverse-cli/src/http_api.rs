@@ -6132,7 +6132,7 @@ fn parse_app_proposal_request(body: &[u8]) -> Result<AppProposalRequest, String>
     let composition_mode = match object.get("composition_mode") {
         None | Some(Value::Null) => CompositionMode::Sealed,
         Some(Value::String(raw)) => {
-            CompositionMode::parse(Some(raw.as_str())).map_err(|message| message.to_string())?
+            CompositionMode::parse(Some(raw.as_str())).map_err(str::to_string)?
         }
         Some(_) => {
             return Err("composition_mode must be a string when present".to_string());
