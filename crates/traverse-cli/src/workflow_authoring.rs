@@ -191,8 +191,7 @@ mod tests {
             "traverse-promote-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         assert!(
             fs::create_dir_all(&dir).is_ok(),
@@ -218,9 +217,8 @@ mod tests {
             ],
             excluded_fields: Vec::new(),
         };
-        let candidate_bytes = match serde_json::to_vec_pretty(&candidate) {
-            Ok(bytes) => bytes,
-            Err(_) => return,
+        let Ok(candidate_bytes) = serde_json::to_vec_pretty(&candidate) else {
+            return;
         };
         if fs::write(&candidate_path, candidate_bytes).is_err() {
             return;
