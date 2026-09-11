@@ -36,7 +36,7 @@ workflows.
 
 | Surface | Role |
 |---|---|
-| [`.agents/skills/traverse-app-builder/`](../.agents/skills/traverse-app-builder/) (landing via [#1344](https://github.com/traverse-framework/traverse/issues/1344)) | Canonical deep authoring ritual (plan → gap-author → confirm seal → validate). Until that path lands in-repo, use the personal skill copy if present. |
+| [`.agents/skills/traverse-app-builder/`](../.agents/skills/traverse-app-builder/) | Canonical deep authoring ritual (plan → gap-author → confirm seal → validate). Prefer this in-repo copy over any personal `~/.claude/skills/traverse-app-builder`. |
 | `traverse-cli` `app validate` / `workflow` validate & register | Verifier and registrar — see [cli-reference.md](cli-reference.md). |
 | Future `workflow plan` / `promote` ([#1346](https://github.com/traverse-framework/traverse/issues/1346)) | CLI wrappers over planner (113) and promotion (112) once shipped; prefer them from the skill when available. |
 | Adaptive runtime opt-in ([#1345](https://github.com/traverse-framework/traverse/issues/1345)) | Explicit sealed-default vs adaptive knob — follow-on implementation. |
