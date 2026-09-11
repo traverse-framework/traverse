@@ -11,7 +11,11 @@ coverage.profdata
 # Local-only agent tooling and scratch workspaces (must not enter the repo).
 .claude/
 external/
-references/
+/references/
+
+# In-repo skill reference packs (Decision 80 traverse-app-builder, etc.)
+!.agents/skills/**/references/
+!.agents/skills/**/references/**
 
 # Benchmark results — gitignored; check in manually when publishing
 benchmarks/results/*.json
