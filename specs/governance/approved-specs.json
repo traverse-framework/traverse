@@ -1837,6 +1837,23 @@
         "specs/134-lazy-capability-registry-reconstruction/",
         "docs/adr/0067-lazy-capability-registry-reconstruction.md"
       ]
+    },
+    {
+      "id": "135-component-model-wit-host-capabilities",
+      "version": "0.1.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/135-component-model-wit-host-capabilities/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-cli/src/capability_packages.rs",
+        "crates/traverse-contracts/",
+        "crates/traverse-registry/",
+        "crates/traverse-embedder/",
+        "packages/",
+        "specs/135-component-model-wit-host-capabilities/",
+        "docs/adr/0068-component-model-wit-host-capabilities.md"
+      ]
     }
   ]
 }

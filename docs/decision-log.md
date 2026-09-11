@@ -3462,6 +3462,52 @@ execution:
 3. `#1319` Blocked until `traverse-registry 0.20.0` is on crates.io, then the
    CLI/embedder/runtime upgrade to the batch preparation API proceeds.
 
+## Decision 79: Govern Target-Local Authority Through Versioned Component Model WIT Bindings
+
+- **Date**: 2026-09-10
+- **Status**: Accepted
+- **Related issue**: `#1340`
+- **Governing artifacts**: Spec `135-component-model-wit-host-capabilities`; ADR-0068
+- **Origin**: Owner-directed brainstorm on portable host capabilities and
+  Callweave's proposed recording WIT contract.
+
+### Decision
+
+1. Preserve the fixed `core-wasm-v1` Host ABI v1 behavior. Add a separately
+   versioned `component-wit-v1` Component Model profile rather than broadening
+   the existing import whitelist.
+2. Publish narrowly scoped `traverse:platform` WIT interfaces, not one ambient
+   platform/device interface. Components declare exact mandatory imports;
+   application/embedder code explicitly activates an exact compatible trusted
+   binding for its target. Component code does not choose a target or host.
+3. Standard recording is a host-owned foreground authority. Its portable surface
+   is lifecycle/session/reference based; it excludes raw audio, native device
+   details, codecs, OS permission mechanics, background execution, and implicit
+   cross-capability media access.
+4. Registry metadata may advertise conformance-verified host implementations,
+   but registry installation never activates native authority. Local unverified
+   hosts remain possible only through explicit application activation.
+5. Missing, incompatible, target-mismatched, ambiguous, or untrusted bindings
+   fail before execution with stable redacted diagnostics. WIT operations return
+   typed public domain outcomes; secure host telemetry retains private details.
+
+### Alternatives considered
+
+- **Fold WIT imports into Host ABI v1** — rejected: a fixed core-Wasm import
+  whitelist is an intentional safety and compatibility boundary.
+- **Use WASI for device recording** — rejected: its standardized runtime scope
+  does not model microphone authority, permission, or lifecycle portably.
+- **Use a generic all-purpose WIT platform interface** — rejected: it would
+  recreate ambient authority and impede narrow capability governance.
+- **Keep Callweave's package as an automatic alias** — rejected: package
+  identities and semantic ownership must remain explicit.
+
+### Approval
+
+Approved by Enrico in this owner-directed brainstorm. Spec 135 and ADR-0068
+are accepted and recorded together; their immutable registry entry is the
+implementation gate.
+
 ## Decision 78: Server-Owned Application Availability Lifecycle
 
 - **Date**: 2026-09-09
