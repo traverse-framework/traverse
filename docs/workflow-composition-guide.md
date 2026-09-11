@@ -1,5 +1,9 @@
 # Workflow Composition Guide
 
+For the product defaults (sealed production path, plan-then-seal authoring,
+adaptive opt-in), see [workflow-authoring-guide.md](workflow-authoring-guide.md)
+and [Decision 80](decision-log.md#decision-80-dual-path-workflow-authoring--plan-then-seal-default-skill-front-door).
+
 This guide shows how to chain two capabilities into a governed workflow using the Traverse registry and deterministic traversal model.
 
 After completing it you will be able to:

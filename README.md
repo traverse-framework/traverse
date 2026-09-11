@@ -277,6 +277,7 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 - [docs/wasm-agent-authoring-guide.md](docs/wasm-agent-authoring-guide.md) — WASM capability authoring
 - [docs/wasm-microservice-authoring-guide.md](docs/wasm-microservice-authoring-guide.md) — WASM microservice authoring
 - [docs/workflow-composition-guide.md](docs/workflow-composition-guide.md) — composing workflows
+- [docs/workflow-authoring-guide.md](docs/workflow-authoring-guide.md) — plan-then-seal default vs adaptive opt-in
 - [docs/capability-publish.md](docs/capability-publish.md) — publishing to the registry
 - [docs/expedition-example-authoring.md](docs/expedition-example-authoring.md) — worked example
 
