@@ -26,8 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_contracts::{ProposalLimits, SnapshotDigests};
 use traverse_mcp::tools::proposals::{
-    ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED, CompositionMode, ProposalExecutionRequest,
-    ProposalExecutionResponse, adaptive_composition_opt_in_message, authorization_state,
+    CompositionMode, ProposalExecutionRequest, ProposalExecutionResponse, authorization_state,
     deny_unless_adaptive, execute_proposal_via_mcp, submit_proposal, validate_proposal,
 };
 use traverse_registry::{
@@ -10870,6 +10869,7 @@ mod tests {
 
     #[test]
     fn app_proposals_require_adaptive_composition_opt_in() {
+        use traverse_mcp::tools::proposals::ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED;
         let state = empty_state();
         let req = make_http_request(
             "POST",
@@ -10888,7 +10888,6 @@ mod tests {
                 .contains("sealed workflows are the default"),
             "denial must point callers at sealed workflows: {body}"
         );
-        let _ = adaptive_composition_opt_in_message();
     }
 
     #[test]

@@ -43,7 +43,7 @@ impl CompositionMode {
     /// `sealed` or `adaptive`.
     pub fn parse(raw: Option<&str>) -> Result<Self, &'static str> {
         match raw.map(str::trim) {
-            None | Some("") | Some("sealed") => Ok(Self::Sealed),
+            None | Some("" | "sealed") => Ok(Self::Sealed),
             Some("adaptive") => Ok(Self::Adaptive),
             Some(_) => Err("composition_mode must be sealed or adaptive when present"),
         }
@@ -553,8 +553,12 @@ mod composition_mode_tests {
             CompositionMode::parse(Some("sealed")).ok(),
             Some(CompositionMode::Sealed)
         );
-        let denial = deny_unless_adaptive(CompositionMode::Sealed).expect("sealed denies");
-        assert_eq!(denial.code, ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED);
+        assert_eq!(
+            deny_unless_adaptive(CompositionMode::Sealed)
+                .as_ref()
+                .map(|denial| denial.code.as_str()),
+            Some(ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED)
+        );
     }
 
     #[test]
