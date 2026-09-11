@@ -6132,8 +6132,9 @@ fn parse_app_proposal_request(body: &[u8]) -> Result<AppProposalRequest, String>
     };
     let composition_mode = match object.get("composition_mode") {
         None | Some(Value::Null) => CompositionMode::Sealed,
-        Some(Value::String(raw)) => CompositionMode::parse(Some(raw.as_str()))
-            .map_err(|message| message.to_string())?,
+        Some(Value::String(raw)) => {
+            CompositionMode::parse(Some(raw.as_str())).map_err(|message| message.to_string())?
+        }
         Some(_) => {
             return Err("composition_mode must be a string when present".to_string());
         }
@@ -10879,10 +10880,7 @@ mod tests {
         handle_workspace_operation(&mut out, &req, &state, true).expect("response");
         assert_eq!(response_status(&out), 403);
         let body = parse_response_body(&out);
-        assert_eq!(
-            body["traverse_code"],
-            ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED
-        );
+        assert_eq!(body["traverse_code"], ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED);
         assert!(
             body["detail"]
                 .as_str()
@@ -11326,7 +11324,8 @@ mod tests {
         let req = make_http_request(
             "POST",
             "/v1/workspaces/ws-test/apps/expedition.readiness/proposals",
-            br#"{"action":"validate","proposal":{"nodes":[]},"composition_mode":"adaptive"}"#.to_vec(),
+            br#"{"action":"validate","proposal":{"nodes":[]},"composition_mode":"adaptive"}"#
+                .to_vec(),
         );
 
         let mut out = Vec::new();

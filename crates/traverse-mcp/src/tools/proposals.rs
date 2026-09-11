@@ -541,13 +541,14 @@ fn debug_enum_to_snake_case(value: &str) -> String {
 
 #[cfg(test)]
 mod composition_mode_tests {
-    use super::{
-        ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED, CompositionMode, deny_unless_adaptive,
-    };
+    use super::{ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED, CompositionMode, deny_unless_adaptive};
 
     #[test]
     fn missing_or_sealed_denies_proposal_surfaces() {
-        assert_eq!(CompositionMode::parse(None).ok(), Some(CompositionMode::Sealed));
+        assert_eq!(
+            CompositionMode::parse(None).ok(),
+            Some(CompositionMode::Sealed)
+        );
         assert_eq!(
             CompositionMode::parse(Some("sealed")).ok(),
             Some(CompositionMode::Sealed)
