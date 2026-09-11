@@ -26,8 +26,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use traverse_contracts::{CapabilityContract, EventContract, parse_contract, parse_event_contract};
 use traverse_contracts::{ProposalLimits, SnapshotDigests};
 use traverse_mcp::tools::proposals::{
-    ProposalExecutionRequest, ProposalExecutionResponse, authorization_state,
-    execute_proposal_via_mcp, submit_proposal, validate_proposal,
+    ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED, CompositionMode, ProposalExecutionRequest,
+    ProposalExecutionResponse, adaptive_composition_opt_in_message, authorization_state,
+    deny_unless_adaptive, execute_proposal_via_mcp, submit_proposal, validate_proposal,
 };
 use traverse_registry::{
     ApplicationBundleManifest, ApplicationStateMachine, ApplicationStateTransition,
@@ -5967,6 +5968,14 @@ fn handle_app_proposals<W: Write, E: LocalExecutor + Clone>(
             );
         }
     };
+    if let Some(denial) = deny_unless_adaptive(parsed.composition_mode) {
+        return write_json(
+            w,
+            403,
+            "Forbidden",
+            &error_envelope(&denial.code, &denial.message),
+        );
+    }
 
     let result = state.with_workspace_mut(workspace_id, |ws| {
         let Some(state_path) = ws
@@ -6085,6 +6094,7 @@ struct AppProposalRequest {
     action: String,
     proposal: Value,
     approval_token: Option<String>,
+    composition_mode: CompositionMode,
 }
 
 fn parse_app_proposal_request(body: &[u8]) -> Result<AppProposalRequest, String> {
@@ -6120,10 +6130,19 @@ fn parse_app_proposal_request(body: &[u8]) -> Result<AppProposalRequest, String>
         Some(Value::String(token)) if !token.trim().is_empty() => Some(token.clone()),
         _ => return Err("'approval_token' must be a non-empty string when present".to_string()),
     };
+    let composition_mode = match object.get("composition_mode") {
+        None | Some(Value::Null) => CompositionMode::Sealed,
+        Some(Value::String(raw)) => CompositionMode::parse(Some(raw.as_str()))
+            .map_err(|message| message.to_string())?,
+        Some(_) => {
+            return Err("composition_mode must be a string when present".to_string());
+        }
+    };
     Ok(AppProposalRequest {
         action,
         proposal,
         approval_token,
+        composition_mode,
     })
 }
 
@@ -10849,12 +10868,55 @@ mod tests {
     }
 
     #[test]
+    fn app_proposals_require_adaptive_composition_opt_in() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/missing/proposals",
+            br#"{"action":"validate","proposal":{}}"#.to_vec(),
+        );
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true).expect("response");
+        assert_eq!(response_status(&out), 403);
+        let body = parse_response_body(&out);
+        assert_eq!(
+            body["traverse_code"],
+            ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED
+        );
+        assert!(
+            body["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sealed workflows are the default"),
+            "denial must point callers at sealed workflows: {body}"
+        );
+        let _ = adaptive_composition_opt_in_message();
+    }
+
+    #[test]
+    fn app_proposals_accept_explicit_adaptive_opt_in_past_the_gate() {
+        let state = empty_state();
+        let req = make_http_request(
+            "POST",
+            "/v1/workspaces/ws-test/apps/missing/proposals",
+            br#"{"action":"validate","proposal":{},"composition_mode":"adaptive"}"#.to_vec(),
+        );
+        let mut out = Vec::new();
+        handle_workspace_operation(&mut out, &req, &state, true).expect("response");
+        assert_eq!(response_status(&out), 404);
+        assert_eq!(
+            parse_response_body(&out)["traverse_code"],
+            "app_not_registered"
+        );
+    }
+
+    #[test]
     fn app_proposals_reject_invalid_browser_request_before_runtime_access() {
         let state = empty_state();
         let req = make_http_request(
             "POST",
             "/v1/workspaces/ws-test/apps/missing/proposals",
-            br#"{"action":"validate","proposal":{},"credentials":"secret"}"#.to_vec(),
+            br#"{"action":"validate","proposal":{},"credentials":"secret","composition_mode":"adaptive"}"#.to_vec(),
         );
         let mut out = Vec::new();
         handle_workspace_operation(&mut out, &req, &state, true).expect("response");
@@ -10871,7 +10933,7 @@ mod tests {
         let req = make_http_request(
             "POST",
             "/v1/workspaces/ws-test/apps/missing/proposals",
-            br#"{"action":"validate","proposal":{}}"#.to_vec(),
+            br#"{"action":"validate","proposal":{},"composition_mode":"adaptive"}"#.to_vec(),
         );
         let mut out = Vec::new();
         handle_workspace_operation(&mut out, &req, &state, true).expect("response");
@@ -11264,7 +11326,7 @@ mod tests {
         let req = make_http_request(
             "POST",
             "/v1/workspaces/ws-test/apps/expedition.readiness/proposals",
-            br#"{"action":"validate","proposal":{"nodes":[]}}"#.to_vec(),
+            br#"{"action":"validate","proposal":{"nodes":[]},"composition_mode":"adaptive"}"#.to_vec(),
         );
 
         let mut out = Vec::new();
