@@ -116,11 +116,12 @@ fn parse_plan_target(
 ) -> Result<PlanTarget, CliError> {
     match (target_capability, target_event) {
         (Some(capability), None) => {
-            let (capability_id, capability_version) = capability.split_once('@').ok_or_else(|| {
-                CliError::ValidationFailed(
-                    "--target-capability must be <capability_id>@<version>".to_string(),
-                )
-            })?;
+            let (capability_id, capability_version) =
+                capability.split_once('@').ok_or_else(|| {
+                    CliError::ValidationFailed(
+                        "--target-capability must be <capability_id>@<version>".to_string(),
+                    )
+                })?;
             if capability_id.is_empty() || capability_version.is_empty() {
                 return Err(CliError::ValidationFailed(
                     "--target-capability must be <capability_id>@<version>".to_string(),
