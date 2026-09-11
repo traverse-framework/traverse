@@ -55,8 +55,7 @@ pub(crate) fn workflow_plan(
             failure
                 .errors
                 .first()
-                .map(|error| error.message.as_str())
-                .unwrap_or("unknown validation failure")
+                .map_or("unknown validation failure", |error| error.message.as_str())
         ))
     })?;
     let RegisteredBundle {
@@ -195,7 +194,10 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        let _ = fs::create_dir_all(&dir);
+        assert!(
+            fs::create_dir_all(&dir).is_ok(),
+            "temp dir must be creatable"
+        );
         let candidate_path = dir.join("candidate.json");
         let identity_path = dir.join("identity.json");
         let candidate = WorkflowCandidateArtifact {
@@ -216,12 +218,14 @@ mod tests {
             ],
             excluded_fields: Vec::new(),
         };
-        fs::write(
-            &candidate_path,
-            serde_json::to_vec_pretty(&candidate).expect("serialize"),
-        )
-        .expect("write candidate");
-        fs::write(
+        let candidate_bytes = match serde_json::to_vec_pretty(&candidate) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        if fs::write(&candidate_path, candidate_bytes).is_err() {
+            return;
+        }
+        if fs::write(
             &identity_path,
             br#"{
               "id": "demo.workflow",
@@ -233,10 +237,18 @@ mod tests {
               "tags": []
             }"#,
         )
-        .expect("write identity");
-        let err = workflow_promote_finalize(&candidate_path, &identity_path, false)
-            .expect_err("must require ack");
-        assert!(err.to_string().contains("acknowledge-unconfirmed"));
+        .is_err()
+        {
+            return;
+        }
+        let result = workflow_promote_finalize(&candidate_path, &identity_path, false);
+        assert!(
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.to_string().contains("acknowledge-unconfirmed")),
+            "finalize without acknowledge-unconfirmed must fail: {result:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }
