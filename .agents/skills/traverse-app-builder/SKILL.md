@@ -55,13 +55,23 @@ Details: `references/registry.md`.
 
 ### 3. Plan candidates (planner is untrusted)
 
-Use the declarative planner (spec `113`, ADR-0043 / ADR-0050). Prefer CLI
-`workflow plan` / `workflow promote` when `#1346` has landed. Until then, call the
-MCP library surface:
+Use the declarative planner (spec `113`, ADR-0043 / ADR-0050). Prefer CLI:
+
+```bash
+traverse-cli workflow plan \
+  --app-manifest <app.manifest.json> \
+  --registry-bundle <registry-bundle/manifest.json> \
+  --starting-facts <facts.json> \
+  --target-capability <id@version>
+# or --target-event <event_type>
+```
+
+Until unavailable, the MCP library surface remains:
 
 - `traverse_mcp::tools::workflow_plan::plan_workflow` (candidate graphs)
-- `traverse_mcp::tools::workflow_promotion::{export_workflow_candidate, ...}`
-  after a reviewed proposal (spec `112`)
+- `traverse_mcp::tools::workflow_promotion::{export_workflow_candidate, finalize_candidate_into_definition}`
+  after a reviewed proposal (spec `112`); CLI finalize:
+  `traverse-cli workflow promote finalize --candidate … --identity …`
 
 Show **all** returned candidates (or the truncation notice). Do not pick one
 silently. Do not treat a plan as a runnable app workflow.
