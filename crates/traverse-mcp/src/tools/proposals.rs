@@ -25,6 +25,58 @@ use traverse_runtime::{LocalExecutor, Runtime};
 
 use crate::{McpError, McpErrorCode};
 
+/// Decision 80 dual-path: sealed workflows are the default production path;
+/// live proposal validate/submit/execute requires explicit `adaptive` opt-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompositionMode {
+    #[default]
+    Sealed,
+    Adaptive,
+}
+
+impl CompositionMode {
+    /// Parses an optional request/app field. Missing or empty means sealed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable secret-free message when the value is present but not
+    /// `sealed` or `adaptive`.
+    pub fn parse(raw: Option<&str>) -> Result<Self, &'static str> {
+        match raw.map(str::trim) {
+            None | Some("" | "sealed") => Ok(Self::Sealed),
+            Some("adaptive") => Ok(Self::Adaptive),
+            Some(_) => Err("composition_mode must be sealed or adaptive when present"),
+        }
+    }
+
+    #[must_use]
+    pub const fn allows_proposal_surfaces(self) -> bool {
+        matches!(self, Self::Adaptive)
+    }
+}
+
+/// Stable denial when adaptive proposal surfaces are used without opt-in.
+pub const ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED: &str = "adaptive_composition_opt_in_required";
+
+#[must_use]
+pub fn adaptive_composition_opt_in_message() -> &'static str {
+    "adaptive composition requires explicit composition_mode=adaptive; sealed workflows are the default — author and validate a pinned workflow instead"
+}
+
+/// Fail-closed gate for proposal validate/submit/execute (Decision 80 §6).
+#[must_use]
+pub fn deny_unless_adaptive(mode: CompositionMode) -> Option<ProposalDenial> {
+    if mode.allows_proposal_surfaces() {
+        None
+    } else {
+        Some(ProposalDenial {
+            code: ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED.to_string(),
+            path: "/composition_mode".to_string(),
+            message: adaptive_composition_opt_in_message().to_string(),
+        })
+    }
+}
+
 /// One stable, machine-readable, secret-free denial (spec 109 FR-010).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProposalDenial {
@@ -485,4 +537,41 @@ fn debug_enum_to_snake_case(value: &str) -> String {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod composition_mode_tests {
+    use super::{ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED, CompositionMode, deny_unless_adaptive};
+
+    #[test]
+    fn missing_or_sealed_denies_proposal_surfaces() {
+        assert_eq!(
+            CompositionMode::parse(None).ok(),
+            Some(CompositionMode::Sealed)
+        );
+        assert_eq!(
+            CompositionMode::parse(Some("sealed")).ok(),
+            Some(CompositionMode::Sealed)
+        );
+        assert_eq!(
+            deny_unless_adaptive(CompositionMode::Sealed)
+                .as_ref()
+                .map(|denial| denial.code.as_str()),
+            Some(ADAPTIVE_COMPOSITION_OPT_IN_REQUIRED)
+        );
+    }
+
+    #[test]
+    fn adaptive_allows_proposal_surfaces() {
+        assert_eq!(
+            CompositionMode::parse(Some("adaptive")).ok(),
+            Some(CompositionMode::Adaptive)
+        );
+        assert!(deny_unless_adaptive(CompositionMode::Adaptive).is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_composition_mode_values() {
+        assert!(CompositionMode::parse(Some("auto")).is_err());
+    }
 }

@@ -13,7 +13,7 @@ the defaults and where to go next.
 |---|---|---|
 | **Sealed workflow (default)** | What ships and runs in production | Reviewed, pinned `workflow.json` referenced from the app/package manifest (`known_compositions` / workflow refs). Deterministic traversal. |
 | **Plan-then-seal (authoring)** | Building or changing a workflow | Planner/MCP proposes candidates; human confirms seal; CLI validates before trust. |
-| **Adaptive composition (opt-in)** | Explicit app/request flag only | Live plan at execution time under governed proposal rules. Not the default; never silently persisted as the sealed app workflow. |
+| **Adaptive composition (opt-in)** | Explicit app/request `composition_mode: "adaptive"` only | Live plan at execution time under governed proposal rules. Not the default; never silently persisted as the sealed app workflow. Missing or `"sealed"` fails closed on proposal validate/submit/execute with `adaptive_composition_opt_in_required`. |
 
 Sealed workflows are the production path. Runtime planning is not.
 
