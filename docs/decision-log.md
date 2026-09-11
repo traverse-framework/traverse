@@ -3608,3 +3608,60 @@ Not in scope of this brainstorm (tracked elsewhere, not blocking
 `#1314`/`#1308`): registry `#412` close-out once `v0.20.0` propagation is
 confirmed; relabeling `specs/1285-capability-state-host-abi/spec.md` from `Draft`
 now that Decision 71 shipped it.
+
+## Decision 80: Dual-Path Workflow Authoring — Plan-Then-Seal Default, Skill Front Door
+
+- **Date**: 2026-09-10
+- **Status**: Accepted
+- **Related artifacts**: Specs `007`, `041`, `108`–`113`, `109`–`112` (planner as untrusted proposer; sealed workflow as execution authority); skill `traverse-app-builder` (last major refresh 2026-07-22)
+- **Related issues**: `#1343` (Decision 80 + thin pointer doc), `#1344` (skill refresh), `#1345` (sealed-default / adaptive opt-in), `#1346` (CLI `workflow plan` / `promote`)
+- **Origin**: Owner `/brainstorm` on evolving the runtime usage model for customer DEVs and coding agents — deterministic sealed workflows plus MCP/planner discovery, with quality as the bar.
+
+### Context
+
+Traverse can already traverse sealed workflows deterministically and can use MCP + the declarative planner at authoring/proposal time to discover capability chains for a structured target. The open product question was how those paths show up as one usage story: what DEVs put in manifests, whether CLI or an agent skill is the front door, and when (if ever) runtime planning is allowed — without sacrificing reproducible, testable apps.
+
+### Decision
+
+1. **Default relationship: plan then seal.** The planner/MCP path helps *author* a workflow (or proposal). What ships and runs by default is a reviewed, pinned, deterministic `workflow.json` referenced from the app/package manifest (`known_compositions` / workflow refs). Runtime planning is not the default production path.
+   - Rejected: *two equal runtime modes forever* — doubles mental model and weakens quality guarantees.
+   - Rejected: *runtime planner primary, sealed as escape hatch* — fights determinism and DEV trust.
+
+2. **Primary authoring UX: evolve `traverse-app-builder` into the plan-then-seal front door.** CLI remains verifier/registrar (`workflow`/`app` validate, register, inspect; execute via existing surfaces). Do not invent a sibling skill or leave only a light patch.
+   - Rejected: *CLI-first plan/promote before proving the ritual* — encode CLI once UX is proven.
+   - Rejected: *manual artifacts + docs only* — underuses the planner and keeps agent DX high-friction.
+   - Note: skill is stale (2026-07-22) relative to planner/promotion governance landed since.
+
+3. **Gap handling: author missing capabilities, then re-plan.** If published capabilities cannot complete the goal, the skill drops into the existing atomic-capability authoring path for gaps, re-runs planning, and seals only a complete, validatable workflow.
+   - Rejected: *stop with gap report only* — incomplete for “build the app” sessions.
+   - Rejected: *seal placeholder/partial workflows* — broken-by-default artifacts and noisy CI.
+
+4. **Human seal gate: always pause for explicit “seal this proposal.”** Before writing `workflow.json` / manifest refs, show the chosen graph (capabilities, versions, edges, any newly authored caps) and wait for confirmation.
+   - Rejected: *auto-seal on a single valid proposal* — a sole bad proposal can still land.
+   - Rejected: *seal and let CLI/PR be the only gate* — review too late for quality.
+
+5. **Session DoD: seal + CLI validate required; register/smoke-execute optional.** Success means artifacts on disk after confirm and validation green (including digest fixes). Register + one smoke execute is an offered follow-on when the workspace/runtime is ready, not required for every authoring session.
+
+6. **Runtime adaptive path: explicit opt-in per app/request.** Sealed workflow remains default. Live goal→plan→propose at execution time is allowed only when the app/request deliberately opts in (e.g. a `composition_mode: adaptive` or equivalent knob) and still obeys governed proposal rules (planner remains untrusted; no silent auto-persist as the app’s sealed workflow).
+   - Rejected: *authoring-only forever* — leaves no governed path for “achieve this goal now.”
+   - Rejected: *adaptive by default unless pinned* — too easy to ship nondeterministic apps by accident.
+
+7. **Delivery sequencing: skill + thin repo pointer + evals first.** Refresh the skill and add a short repo doc that states sealed-default vs adaptive-opt-in and points at the skill + CLI validate path. File separate tickets/spec work for the adaptive runtime/API knob afterward.
+   - Rejected: *spec dual-mode runtime before touching the skill* — leaves the stale skill blocking customer value.
+   - Rejected: *one tranche of spec + runtime + skill* — high stall risk.
+
+8. **Docs model: skill is canonical deep ritual; repo gets a thin pointer guide.** Avoid duplicating the full loop in both places.
+
+### Outcome
+
+Customer DEVs and agents get one story: discover/plan at authoring time (with a brainstorm-style skill that can close capability gaps), confirm seal, validate, then run deterministic workflows. Adaptive runtime composition stays a deliberate, later product mode. Immediate work is skill refresh + evals + thin `docs/` pointer; adaptive opt-in is follow-on governance/implementation.
+
+### Explicitly deferred / ticketed
+
+- Exact API/manifest field name for runtime adaptive opt-in (e.g. `composition_mode`) — implementation choice under approved specs `108`/`109`; tracked in `#1345`
+- CLI `workflow plan` / `promote` — tracked as Ready `#1346` (may land in parallel with skill; skill prefers CLI once merged)
+- Broader distribution of the skill beyond in-repo `.agents/skills/traverse-app-builder/` (tracked via `#1344` landing the in-repo copy first)
+
+### Approval
+
+Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-10).
