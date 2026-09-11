@@ -12,6 +12,7 @@ mod http_api;
 mod registry_resolution_diagnostics;
 mod supply_chain;
 mod telemetry;
+mod workflow_authoring;
 mod workspace_app_materialization;
 
 use capability_packages::load_capability_package;
@@ -208,6 +209,19 @@ enum Command {
         version: Option<String>,
         workspace_id: String,
     },
+    WorkflowPlan {
+        app_manifest_path: PathBuf,
+        registry_bundle_path: PathBuf,
+        starting_facts_path: PathBuf,
+        target_capability: Option<String>,
+        target_event: Option<String>,
+        workspace_id: String,
+    },
+    WorkflowPromoteFinalize {
+        candidate_path: PathBuf,
+        identity_path: PathBuf,
+        acknowledge_unconfirmed: bool,
+    },
     Serve {
         bind_address: String,
         auth_mode: Option<String>,
@@ -253,7 +267,7 @@ struct ArtifactStateSignature {
 }
 
 #[derive(Debug)]
-enum CliError {
+pub(crate) enum CliError {
     ExecutionFailed(String),
     ValidationFailed(String),
     RegistrationConflict(String),
@@ -467,6 +481,30 @@ fn run_command(command: Command) -> Result<String, CliError> {
             version,
             workspace_id,
         } => workflow_inspect(&workflow_id, version.as_deref(), &workspace_id),
+        Command::WorkflowPlan {
+            app_manifest_path,
+            registry_bundle_path,
+            starting_facts_path,
+            target_capability,
+            target_event,
+            workspace_id,
+        } => workflow_authoring::workflow_plan(
+            &app_manifest_path,
+            &registry_bundle_path,
+            &starting_facts_path,
+            target_capability.as_deref(),
+            target_event.as_deref(),
+            &workspace_id,
+        ),
+        Command::WorkflowPromoteFinalize {
+            candidate_path,
+            identity_path,
+            acknowledge_unconfirmed,
+        } => workflow_authoring::workflow_promote_finalize(
+            &candidate_path,
+            &identity_path,
+            acknowledge_unconfirmed,
+        ),
         Command::TelemetryEnable => telemetry::enable_telemetry()
             .map(|config| render_telemetry_state("enabled", &config))
             .map_err(CliError::IoError),
@@ -1181,6 +1219,8 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("workflow"), Some("register")) => help_workflow_register(),
         (Some("workflow"), Some("list")) => help_workflow_list(),
         (Some("workflow"), Some("inspect")) => help_workflow_inspect(),
+        (Some("workflow"), Some("plan")) => help_workflow_plan(),
+        (Some("workflow"), Some("promote")) => help_workflow_promote(),
         (Some("workflow"), _) => help_workflow(),
         (Some("expedition"), Some("execute")) => help_expedition_execute(),
         (Some("expedition"), _) => help_expedition(),
@@ -1766,6 +1806,45 @@ fn help_workflow_inspect() -> String {
         .to_string()
 }
 
+fn help_workflow_plan() -> String {
+    "traverse-cli workflow plan --app-manifest <path> --registry-bundle <path> --starting-facts <path> (--target-capability <id@version> | --target-event <type>) [--workspace-id <id>]
+
+  Purpose:
+    Deterministic declarative planner (spec 113). Emits untrusted candidate
+    proposal JSON for authoring. Structured targets only — no natural-language
+    goals. Candidates are not sealed workflows; confirm seal + CLI validate
+    before trusting them (Decision 80).
+
+  Required flags:
+    --app-manifest <path>         Application bundle manifest JSON.
+    --registry-bundle <path>      Capability registry bundle covering declared components.
+    --starting-facts <path>       JSON object of facts available before any node.
+    --target-capability <id@ver>  OR --target-event <event_type>
+
+  Optional flags:
+    --workspace-id <id>           Workspace id stamped into candidates.
+    --help                        Print this help text."
+        .to_string()
+}
+
+fn help_workflow_promote() -> String {
+    "traverse-cli workflow promote finalize --candidate <path> --identity <path> [--acknowledge-unconfirmed]
+
+  Purpose:
+    Spec 112 finalize step: turn a reviewed workflow candidate artifact into a
+    registrable workflow definition JSON. Does not mutate catalogs or manifests.
+    Register the result with `traverse-cli workflow register` after review.
+
+  Required flags:
+    --candidate <path>            Exported WorkflowCandidateArtifact JSON.
+    --identity <path>             Reviewer-assigned identity JSON.
+
+  Optional flags:
+    --acknowledge-unconfirmed     Required when unconfirmed mappings remain.
+    --help                        Print this help text."
+        .to_string()
+}
+
 fn help_workflow() -> String {
     "traverse-cli workflow <subcommand> [options]
 
@@ -1773,8 +1852,10 @@ fn help_workflow() -> String {
     register <workflow-path>   Register a workflow definition.
     list                       List registered workflows.
     inspect <workflow-id>      Inspect a registered workflow.
+    plan                       Declarative planner candidates (spec 113).
+    promote finalize           Finalize a reviewed candidate (spec 112).
 
-  Run `traverse-cli workflow inspect --help` for subcommand-specific help."
+  Run `traverse-cli workflow plan --help` or `workflow promote --help` for details."
         .to_string()
 }
 
@@ -2521,6 +2602,39 @@ fn parse_workflow_command(args: &[String]) -> Result<Command, String> {
                 workflow_id: workflow_id.clone(),
                 version,
                 workspace_id: override_workspace.unwrap_or(workspace_id),
+            })
+        }
+        [_, _, ..] if args[2] == "plan" => {
+            let app_manifest_path = parse_string_flag(args, "--app-manifest")
+                .ok_or_else(|| "--app-manifest is required".to_string())?;
+            let registry_bundle_path = parse_string_flag(args, "--registry-bundle")
+                .ok_or_else(|| "--registry-bundle is required".to_string())?;
+            let starting_facts_path = parse_string_flag(args, "--starting-facts")
+                .ok_or_else(|| "--starting-facts is required".to_string())?;
+            Ok(Command::WorkflowPlan {
+                app_manifest_path: PathBuf::from(app_manifest_path),
+                registry_bundle_path: PathBuf::from(registry_bundle_path),
+                starting_facts_path: PathBuf::from(starting_facts_path),
+                target_capability: parse_string_flag(args, "--target-capability"),
+                target_event: parse_string_flag(args, "--target-event"),
+                workspace_id,
+            })
+        }
+        [_, _, ..] if args[2] == "promote" => {
+            if args.get(3).map(String::as_str) != Some("finalize") {
+                return Err(
+                    "usage: traverse-cli workflow promote finalize --candidate <path> --identity <path>"
+                        .to_string(),
+                );
+            }
+            let candidate_path = parse_string_flag(args, "--candidate")
+                .ok_or_else(|| "--candidate is required".to_string())?;
+            let identity_path = parse_string_flag(args, "--identity")
+                .ok_or_else(|| "--identity is required".to_string())?;
+            Ok(Command::WorkflowPromoteFinalize {
+                candidate_path: PathBuf::from(candidate_path),
+                identity_path: PathBuf::from(identity_path),
+                acknowledge_unconfirmed: args.iter().any(|a| a == "--acknowledge-unconfirmed"),
             })
         }
         _ => Err(usage()),
@@ -6934,9 +7048,9 @@ fn debug_enum_to_snake_case(value: &str) -> String {
 }
 
 #[derive(Debug)]
-struct RegisteredBundle {
+pub(crate) struct RegisteredBundle {
     bundle: RegistryBundle,
-    capability_registry: CapabilityRegistry,
+    pub(crate) capability_registry: CapabilityRegistry,
     event_registry: EventRegistry,
     workflow_registry: WorkflowRegistry,
     capability_records: Vec<String>,
@@ -7043,7 +7157,7 @@ fn build_capability_registration_with_artifacts(
     })
 }
 
-fn load_registered_bundle(manifest_path: &Path) -> Result<RegisteredBundle, CliError> {
+pub(crate) fn load_registered_bundle(manifest_path: &Path) -> Result<RegisteredBundle, CliError> {
     load_registered_bundle_with_public_records(manifest_path, &[])
 }
 
@@ -13514,6 +13628,8 @@ mod tests {
             ("workflow", Some("register")),
             ("workflow", Some("list")),
             ("workflow", Some("inspect")),
+            ("workflow", Some("plan")),
+            ("workflow", Some("promote")),
             ("workflow", None),
             ("expedition", Some("execute")),
             ("expedition", None),

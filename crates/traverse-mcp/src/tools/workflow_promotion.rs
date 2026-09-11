@@ -34,7 +34,7 @@
 //! is listed in `unconfirmed_mappings` for the reviewer to resolve by hand
 //! rather than guessed at.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use traverse_contracts::{
@@ -55,7 +55,7 @@ const WORKFLOW_GOVERNING_SPEC: &str = "007-workflow-registry-traversal";
 /// One candidate node's declared capability and best-effort state-key
 /// wiring, carried for reviewer visibility (spec 112 FR-002a: preserve
 /// reviewed effect/determinism/data-flow/reliability declarations).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateNode {
     pub node_id: String,
     pub capability_id: String,
@@ -67,7 +67,7 @@ pub struct CandidateNode {
     pub to_workflow_state: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateEdge {
     pub from: String,
     pub to: String,
@@ -76,7 +76,7 @@ pub struct CandidateEdge {
 /// A mapping that could not be reduced to a shared top-level state key
 /// unambiguously and needs reviewer correction before promotion — mirrors
 /// spec 113's `mapping_unconfirmed` convention.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnconfirmedMapping {
     pub source_path: String,
     pub target_node_id: String,
@@ -87,7 +87,7 @@ pub struct UnconfirmedMapping {
 /// A non-mutating, secret-free candidate workflow artifact exported from a
 /// successfully completed runtime workflow proposal (spec 112 FR-001,
 /// FR-002a). Never registered directly — see the module documentation.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowCandidateArtifact {
     pub source_proposal_id: String,
     pub source_proposal_digest: String,
