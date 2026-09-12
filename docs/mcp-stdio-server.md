@@ -9,8 +9,8 @@ For the first `youaskm3` release-facing client path, use [docs/youaskm3-canonica
 It is intentionally narrow:
 
 - it stays a façade over Traverse runtime authority
-- it uses the canonical expedition registry bundle as its source of truth
-- it exposes discovery, description, validation, execution, and execution-report rendering through one stdio command surface
+- contributor `stdio` without a cache uses the canonical expedition registry bundle as its source of truth
+- Mode A / Mode B serve discover, description, validation, execution, and execution-report from a host-owned verified cache
 - it is documented and runnable locally
 
 ## Supported Bootstrap Path
@@ -21,12 +21,15 @@ The supported developer bootstrap path for the dedicated MCP server is:
 cargo run -p traverse-mcp -- stdio
 ```
 
-That `stdio` command is the only supported bootstrap mode in the current app-consumable release path.
+Supported host commands:
+
+- `stdio [--cache <dir>] [--simulate-startup-failure]` — serve MCP on stdio
+- `prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]` — Mode B Spec 520 cache prepare
 
 Unsupported bootstrap attempts fail loudly:
 
 - omitting the command prints the usage line and exits non-zero
-- using any command other than `stdio` prints `Unsupported command: <command>` and exits non-zero
+- using any command other than `stdio` or `prepare-cache` prints `Unsupported command: <command>` and exits non-zero
 
 Developers and agents should treat other bootstrap ideas as unsupported unless they are explicitly documented in this page or in the packaged artifact docs.
 
@@ -165,6 +168,38 @@ the checked-in verified kit fixture at
 `cargo test -p traverse-mcp --lib -- --ignored --exact stdio_server::tests::mode_a::regenerate_committed_fixture`)
 and asserts Mode A discovery + inline execute succeed and that an unprepared
 cache fails closed.
+
+## Mode B Embedded Verified-Cache Host
+
+Governed by spec [`080-embedded-registry-cache`](../specs/520-embedded-registry-cache/spec.md).
+
+Mode B prepares a host-owned Spec 520 verified cache from public registry refs,
+then serves MCP from that cache only. App-References consumers point
+`mode-b/serve.sh` at the shipped `traverse-mcp` binary — they do not rewrite
+trees via `registry materialize`.
+
+```bash
+cargo run -p traverse-mcp -- prepare-cache \
+  --synced-state /path/to/synced-public-registry-state.json \
+  --cache /path/to/verified-registry-cache \
+  --ref core/core.normalize-participants@=1.1.0 \
+  --json
+
+cargo run -p traverse-mcp -- stdio --cache /path/to/verified-registry-cache
+```
+
+Prepare is the only network-capable step. A missing or invalid cache fails
+closed with `registry_sync_missing` / `registry_metadata_cache_invalid` /
+`registry_cache_entry_missing`. The versioned binary pin path for App-Refs
+Mode B is documented in
+[docs/mcp-mode-b-release-evidence.md](mcp-mode-b-release-evidence.md).
+
+```bash
+bash scripts/ci/mcp_stdio_server_mode_b_smoke.sh
+```
+
+The smoke prepares a fixture cache, drives stdio MCP execute against one
+digest-pinned capability, and asserts an unprepared `--cache` fails closed.
 
 Run repository checks:
 
