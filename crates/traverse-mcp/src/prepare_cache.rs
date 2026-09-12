@@ -127,12 +127,6 @@ pub fn prepare_verified_cache(
             .map(|raw| parse_registry_ref(raw))
             .collect::<Result<Vec<_>, _>>()?
     };
-    if references.is_empty() {
-        return Err(PrepareCacheError::new(
-            RegistryCacheErrorCode::RegistrySyncMissing.as_str(),
-            "synced registry index snapshot contains no preparable capabilities",
-        ));
-    }
 
     prepare_refs(&snapshot, cache_root, &references)
 }
@@ -430,6 +424,15 @@ mod tests {
     }
 
     #[test]
+    fn prepare_fails_closed_for_malformed_ref_token() {
+        let root = fresh_root("bad-ref");
+        let state = write_snapshot(&root);
+        let error = prepare_verified_cache(&state, &root.join("cache"), &["not-a-ref".to_string()])
+            .expect_err("malformed ref");
+        assert_eq!(error.code, "registry_ref_invalid");
+    }
+
+    #[test]
     fn prepare_fails_closed_for_unknown_ref() {
         let root = fresh_root("unknown-ref");
         let state = write_snapshot(&root);
@@ -441,6 +444,45 @@ mod tests {
         )
         .expect_err("unknown ref");
         assert_eq!(error.code, "registry_version_not_found");
+    }
+
+    #[test]
+    fn prepare_error_display_is_secret_free() {
+        let error = PrepareCacheError::new("registry_sync_missing", "synced snapshot is missing");
+        assert_eq!(
+            format!("{error}"),
+            "registry_sync_missing: synced snapshot is missing"
+        );
+        assert_eq!(
+            error.to_string(),
+            "registry_sync_missing: synced snapshot is missing"
+        );
+    }
+
+    #[test]
+    fn prepare_rejects_snapshot_with_only_deprecated_capabilities() {
+        let root = fresh_root("deprecated");
+        let state = write_snapshot(&root);
+        let mut snapshot: SyncedPublicRegistryState =
+            serde_json::from_slice(&fs::read(&state).expect("read")).expect("parse");
+        snapshot.capabilities[0].deprecated = true;
+        fs::write(&state, serde_json::to_vec(&snapshot).expect("write")).expect("update");
+        let error =
+            prepare_verified_cache(&state, &root.join("cache"), &[]).expect_err("deprecated");
+        assert_eq!(error.code, "registry_sync_missing");
+    }
+
+    #[test]
+    fn host_fetcher_http_urls_fail_closed_without_echoing_the_url() {
+        let error = HostCliFetcher
+            .fetch("https://127.0.0.1:1/traverse-mode-b-missing")
+            .expect_err("http");
+        assert_eq!(error, "host registry artifact fetch failed");
+        assert!(!error.contains("127.0.0.1"));
+        let http = HostCliFetcher
+            .fetch("http://127.0.0.1:1/traverse-mode-b-missing")
+            .expect_err("http scheme");
+        assert_eq!(http, "host registry artifact fetch failed");
     }
 
     #[test]

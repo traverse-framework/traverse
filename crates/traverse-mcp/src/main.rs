@@ -258,6 +258,137 @@ mod tests {
     }
 
     #[test]
+    fn prepare_cache_flag_values_are_required() {
+        assert_eq!(
+            run(["prepare-cache".to_string(), "--synced-state".to_string()].into_iter()),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            run([
+                "prepare-cache".to_string(),
+                "--synced-state".to_string(),
+                "state.json".to_string(),
+                "--cache".to_string()
+            ]
+            .into_iter()),
+            ExitCode::from(1)
+        );
+    }
+
+    #[test]
+    fn prepare_cache_run_reports_json_and_text_failures() {
+        assert_eq!(
+            run([
+                "prepare-cache".to_string(),
+                "--synced-state".to_string(),
+                "/tmp/missing-traverse-mode-b-state.json".to_string(),
+                "--cache".to_string(),
+                "/tmp/missing-traverse-mode-b-cache".to_string(),
+                "--json".to_string()
+            ]
+            .into_iter()),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            run([
+                "prepare-cache".to_string(),
+                "--synced-state".to_string(),
+                "/tmp/missing-traverse-mode-b-state.json".to_string(),
+                "--cache".to_string(),
+                "/tmp/missing-traverse-mode-b-cache".to_string()
+            ]
+            .into_iter()),
+            ExitCode::from(1)
+        );
+    }
+
+    #[test]
+    fn prepare_cache_run_prepares_a_local_file_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "traverse-mcp-mode-b-cli-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp");
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace")
+            .to_path_buf();
+        let wasm = repo.join(
+            "examples/core-normalize-participants/artifacts/core-normalize-participants.wasm",
+        );
+        let contract = repo.join("examples/core-normalize-participants/contract.json");
+        let wasm_bytes = std::fs::read(&wasm).expect("wasm");
+        let contract_bytes = std::fs::read(&contract).expect("contract");
+        let digest = |bytes: &[u8]| {
+            use sha2::{Digest, Sha256};
+            let hashed = Sha256::digest(bytes);
+            let mut out = String::from("sha256:");
+            for byte in hashed {
+                use std::fmt::Write as _;
+                let _ = write!(out, "{byte:02x}");
+            }
+            out
+        };
+        let snapshot = serde_json::json!({
+            "schema_version": "1.0.0",
+            "workspace_id": "mode-b-cli",
+            "state_scope": "public_registry_synced",
+            "source_repo": "traverse-framework/registry",
+            "release_tag": "index-v1",
+            "index_version": 1,
+            "generated_at": "2026-09-11T00:00:00Z",
+            "source_commit": null,
+            "synced_at": "2026-09-11T00:00:00Z",
+            "record_count": 1,
+            "validation_status": "valid",
+            "governing_spec": "055-registry-sync",
+            "capabilities": [{
+                "namespace": "core",
+                "id": "core.normalize-participants",
+                "version": "1.1.0",
+                "digest": digest(&wasm_bytes),
+                "artifact_url": format!("file://{}", wasm.display()),
+                "contract_digest": digest(&contract_bytes),
+                "contract_url": format!("file://{}", contract.display()),
+                "deprecated": false
+            }],
+            "events": []
+        });
+        let state = root.join("state.json");
+        std::fs::write(&state, serde_json::to_vec(&snapshot).expect("json")).expect("write");
+        let cache = root.join("cache");
+        assert_eq!(
+            run([
+                "prepare-cache".to_string(),
+                "--synced-state".to_string(),
+                state.display().to_string(),
+                "--cache".to_string(),
+                cache.display().to_string(),
+                "--json".to_string()
+            ]
+            .into_iter()),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            run([
+                "prepare-cache".to_string(),
+                "--synced-state".to_string(),
+                state.display().to_string(),
+                "--cache".to_string(),
+                cache.display().to_string()
+            ]
+            .into_iter()),
+            ExitCode::SUCCESS
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn parse_prepare_cache_accepts_refs_and_json() {
         let command = parse_command(
             [
