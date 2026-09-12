@@ -1,5 +1,13 @@
 # Next Release Notes
 
+## Mode B embedded MCP host CLI
+
+`traverse-mcp prepare-cache` prepares a Spec 520 host-owned verified registry
+cache from public `registry_ref` values. `traverse-mcp stdio --cache <dir>`
+then serves discover/validate/execute/report from that cache only, without an
+expedition checkout or App-References materialize rewrite. Pin and verify the
+same versioned `traverse-mcp` binary documented for Mode A.
+
 ## ArtifactRouter WASI diagnosis
 
 `ArtifactRouter` now forwards the concrete `WasmExecutor` failure text
