@@ -5,6 +5,8 @@ pub use workflows::*;
 mod artifact_router;
 pub use artifact_router::*;
 pub mod capability_metadata;
+/// Spec `135` Component Model WIT host-capability activation.
+pub mod component_wit;
 pub use capability_metadata::{
     CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,

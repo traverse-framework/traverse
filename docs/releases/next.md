@@ -1,5 +1,12 @@
 # Next Release Notes
 
+## Component Model WIT host-capability activation
+
+`component-wit-v1` validates exact `traverse:platform` WIT imports and resolves
+them only through application-activated target-local bindings. Host ABI v1 /
+`core-wasm-v1` fixtures are unchanged. Callweave recording identity is not an
+automatic alias. See [docs/component-wit-v1-migration.md](../component-wit-v1-migration.md).
+
 ## Mode B embedded MCP host CLI
 
 `traverse-mcp prepare-cache` prepares a Spec 520 host-owned verified registry
