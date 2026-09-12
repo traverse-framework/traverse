@@ -11,7 +11,7 @@ description = "Apple static-library feasibility host for the Traverse runtime br
 crate-type = ["staticlib"]
 
 [dependencies]
-wasmi = { version = "1.1.0", default-features = false }
+wasmi = { version = "2.0.0", default-features = false }
 wat = "1"
 sha2 = "0.11"
 serde_json = "1.0.145"
