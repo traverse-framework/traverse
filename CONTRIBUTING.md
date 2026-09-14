@@ -4,15 +4,15 @@ Thanks for contributing to Traverse.
 
 ## First contributions (start here)
 
-You do **not** need a new governing spec for small, labeled first PRs.
-
-1. Pick an open issue labeled [`good first issue`](https://github.com/traverse-framework/traverse/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [`help wanted`](https://github.com/traverse-framework/traverse/labels/help%20wanted) — also check [`website`](https://github.com/traverse-framework/website/labels/help%20wanted), [`registry`](https://github.com/traverse-framework/registry/labels/help%20wanted), and [`claude-skills`](https://github.com/traverse-framework/claude-skills/labels/help%20wanted).
+1. Pick an open org issue labeled [`good first issue`](https://github.com/issues?q=is%3Aopen+is%3Aissue+org%3Atraverse-framework+label%3A%22good+first+issue%22) or [`help wanted`](https://github.com/issues?q=is%3Aopen+is%3Aissue+org%3Atraverse-framework+label%3A%22help+wanted%22).
 2. Comment on the issue so we know you are taking it.
-3. Open a focused PR that links the issue. For docs/examples marked `no-spec-needed`, say that in the PR body and skip inventing a new `specs/` slice.
+3. Open a focused PR that links the issue. In the PR body, fill in **## Governing Spec** and **## Validation** — even for `no-spec-needed` tickets. If you touch a governed path, declare that path's approved spec; otherwise say `no-spec-needed` and follow the issue / repo convention (no new `specs/` slice required).
+
+By contributing, you accept the [CLA](https://github.com/traverse-framework/.github/blob/main/CLA.md). Please also read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md).
+
+Deeper rules for runtime, contracts, coverage, and ADRs are below — and in [org governance](https://github.com/traverse-framework/.github). Do not treat the constitution as the onboarding doc.
 
 Good first shapes right now: MCP client config docs, TypeScript/Python consume examples, website polish, one small registry capability, skill-template wording.
-
-Please still read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and accept the CLA at [`traverse-framework/.github/CLA.md`](https://github.com/traverse-framework/.github/blob/main/CLA.md).
 
 ## Before You Start (deeper changes)
 
@@ -44,7 +44,7 @@ Please read:
 
 Every pull request should:
 
-- reference the governing spec version **or** state `no-spec-needed` with the issue link
+- include **## Governing Spec** and **## Validation** in the body (template sections) — declare the governing approved spec for any touched governed path, or state `no-spec-needed` with the issue link
 - reference the relevant issue or work item
 - explain any contract changes
 - explain any compatibility impact
