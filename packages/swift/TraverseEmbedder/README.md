@@ -8,21 +8,26 @@ the ordered runtime-shaped events recorded by the harness. Compatible-capability
 start, stop, and kill operations return stable instance identifiers and lifecycle
 results. It never starts `traverse-cli serve` or uses server-discovery files.
 
-`WasmKitRuntimeBridge` is the production runtime loader. It resolves only the
-core WasmKit product, verifies `runtime/runtime.wasm` against its declared
-SHA-256 digest and a 32 MiB default artifact limit before parsing, rejects all
-ambient imports, and validates the memory, function signatures, and ABI version
-required by `runtime-wasm-bridge/1.1.0`, including compatible lifecycle exports.
-It never links WasmKitWASI. JSON
-marshalling is provided by `WasmKitBridgeClient`, which serializes calls,
-copies runtime-owned output before the next mutation, bounds descriptors, and
-releases every caller allocation exactly once.
+`WasmiHostBridgeClient` is the production runtime loader. It links
+`TraverseSwiftHost`, a prebuilt XCFramework wrapping the `wasmi` interpreter
+behind a narrow C ABI, verifies `runtime/runtime.wasm` against its declared
+SHA-256 digest before instantiation, and enforces host-owned `TraverseHostLimits`
+(artifact size, linear-memory ceiling, fuel per invocation, and input/output/event
+bounds) on every call. Exceeding any limit fails the call with a stable
+`bridge_resource_limit` error rather than allowing continued unbounded execution.
+This is the certification path defined by Spec 074 (Swift Native
+Resource-Control Certification) and governed by ADR-0014 (wasmi Apple runtime
+profile) and ADR-0015 (production Swift wasmi C ABI).
 
 `RuntimeTraverseEmbedder` maps that boundary into stable public Swift
 submission, event, and compatible-lifecycle result types without synthesizing
-runtime identifiers, ordering, or statuses.
-Evidence publication and app-reference integration remain tracked by Traverse
-#647.
+runtime identifiers, ordering, or statuses. Its default initializer constructs
+a `WasmiHostBridgeClient`.
+
+`WasmKitRuntimeBridge` and `WasmKitBridgeClient` are deprecated and retained
+only for source compatibility; they never enforced production resource
+controls. New integrations should use `WasmiHostBridgeClient` (directly, or via
+`RuntimeTraverseEmbedder`) instead.
 
 Release tooling constructs `TraverseReleaseEvidence` with the semantic package
 version, runtime-WASM digest, conformance version, and supported iOS/macOS host
@@ -37,10 +42,13 @@ defaults to the package's `TraverseEmbedder.apiVersion`. Initialization rejects
 a bundle declaring a different version with `incompatibleBundle`; it does not
 start a sidecar or attempt a network fallback.
 
-The package pins WasmKit 0.2.2 and swift-system 1.5.0 exactly. The accompanying
-`dependency-review.json` records why this is the newest reviewed combination
-compatible with the package's Swift 6.0 toolchain and discloses the engine's
-remaining resource-control limitations.
+The package pins `TraverseSwiftHost` to a specific released XCFramework
+checksum (currently v0.8.2) for the production `wasmi` bridge. It also pins
+WasmKit 0.2.2 and swift-system 1.5.0 exactly for the deprecated compatibility
+path. The accompanying `dependency-review.json` records why WasmKit 0.2.2 is
+the newest reviewed combination compatible with the package's Swift 6.0
+toolchain and discloses that engine's resource-control limitations, which do
+not apply to the `wasmi` bridge.
 
 The package follows semantic versioning. Additive, backward-compatible API
 changes use minor releases; breaking public API or error-semantic changes use a
