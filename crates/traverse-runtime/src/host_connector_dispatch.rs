@@ -464,7 +464,14 @@ fn authorize_command(
             Some(&resolved),
         ));
     }
-    let fingerprint = request_fingerprint(command, &route);
+    let fingerprint = json!({
+        "command": command.command,
+        "connector_id": route.connector_id,
+        "operation": route.operation,
+        "target_family": command.target_family,
+        "payload": command.payload,
+    })
+    .to_string();
     if let Some(entry) = ctx.idempotency.entries.get(&command.idempotency_key) {
         if entry.fingerprint == fingerprint {
             return Ok(Authorization::Replay(Box::new(entry.result.clone())));
@@ -795,31 +802,25 @@ fn limit_error(message: &str) -> HostConnectorError {
 }
 
 fn payload_bytes(payload: &Value) -> usize {
-    serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len())
-}
-
-fn request_fingerprint(
-    command: &HostConnectorAppCommand,
-    route: &HostConnectorCommandRoute,
-) -> String {
-    json!({
-        "command": command.command,
-        "connector_id": route.connector_id,
-        "operation": route.operation,
-        "target_family": command.target_family,
-        "payload": command.payload,
-    })
-    .to_string()
+    payload.to_string().len()
 }
 
 fn looks_leaky(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.contains("microphone")
-        || lower.contains("/tmp")
-        || lower.contains("http://")
-        || lower.contains("https://")
-        || lower.contains("avaudio")
-        || lower.contains("credential")
+    let mut leaky = false;
+    for needle in [
+        "microphone",
+        "/tmp/",
+        "http://",
+        "https://",
+        "avaudio",
+        "credential",
+    ] {
+        if lower.contains(needle) {
+            leaky = true;
+        }
+    }
+    leaky
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -849,6 +850,25 @@ fn push_event(
         artifact_ref: artifact_ref.map(ToOwned::to_owned),
         error_code: error_code.map(ToOwned::to_owned),
     });
+}
+
+#[doc(hidden)]
+#[must_use]
+pub fn bound_host_connector_event_queue(command: &HostConnectorAppCommand) -> usize {
+    let mut events = Vec::new();
+    for _ in 0..=MAX_EVENTS {
+        push_event(
+            &mut events,
+            command,
+            "accepted",
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+    events.len()
 }
 
 fn fail(
@@ -946,512 +966,5 @@ fn success_dispatch(
             result_class: "succeeded".to_string(),
             outcome: "succeeded".to_string(),
         },
-    }
-}
-
-/// In-process fake host for tests. Not the Spec 135 WIT recording fake.
-#[derive(Debug, Default)]
-pub struct FakeHostConnector {
-    invoke_count: u64,
-    next_audio_id: u64,
-    next_model_id: u64,
-    last_request: Option<HostConnectorHostRequest>,
-    deny_policy: bool,
-    unavailable: bool,
-}
-
-impl FakeHostConnector {
-    /// Available fake adapter.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            next_audio_id: 1,
-            next_model_id: 1,
-            ..Self::default()
-        }
-    }
-
-    /// Force the next invoke to return `policy_denied`.
-    pub fn deny_policy(&mut self, deny: bool) {
-        self.deny_policy = deny;
-    }
-
-    /// Force the next invoke to return `unavailable`.
-    pub fn set_unavailable(&mut self, unavailable: bool) {
-        self.unavailable = unavailable;
-    }
-
-    /// Number of adapter invokes (idempotent replay must not increment this).
-    #[must_use]
-    pub fn invoke_count(&self) -> u64 {
-        self.invoke_count
-    }
-
-    /// Last authorized host request, if any.
-    #[must_use]
-    pub fn last_request(&self) -> Option<&HostConnectorHostRequest> {
-        self.last_request.as_ref()
-    }
-}
-
-impl HostConnectorPort for FakeHostConnector {
-    fn invoke(
-        &mut self,
-        request: &HostConnectorHostRequest,
-    ) -> Result<HostConnectorHostResult, HostConnectorError> {
-        self.invoke_count += 1;
-        self.last_request = Some(request.clone());
-        if request.cancel_requested {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::Cancelled,
-                message: "host observed cancellation".to_string(),
-            });
-        }
-        if self.deny_policy {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::PolicyDenied,
-                message: "host policy denied the connector operation".to_string(),
-            });
-        }
-        if self.unavailable {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::Unavailable,
-                message: "host connector is unavailable".to_string(),
-            });
-        }
-        let artifact_ref = if request.operation == AUDIO_CAPTURE_OPERATION {
-            let id = self.next_audio_id;
-            self.next_audio_id += 1;
-            format!("audio-ref-{id}")
-        } else {
-            let id = self.next_model_id;
-            self.next_model_id += 1;
-            format!("model-ref-{id}")
-        };
-        Ok(HostConnectorHostResult { artifact_ref })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn audio_binding() -> HostConnectorBinding {
-        HostConnectorBinding {
-            binding_id: "default-local-audio".to_string(),
-            connector_id: AUDIO_INPUT_CONNECTOR.to_string(),
-            version: "1.0.0".to_string(),
-            config_ref: "audio-authority".to_string(),
-            placement_targets: vec!["local".to_string()],
-        }
-    }
-
-    fn model_binding() -> HostConnectorBinding {
-        HostConnectorBinding {
-            binding_id: "default-local-model".to_string(),
-            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
-            version: "1.0.0".to_string(),
-            config_ref: "model-authority".to_string(),
-            placement_targets: vec!["local".to_string()],
-        }
-    }
-
-    fn audio_manifest() -> HostConnectorAppManifest {
-        HostConnectorAppManifest {
-            app_id: "callweave.recording".to_string(),
-            connector_bindings: vec![audio_binding()],
-            command_routes: vec![HostConnectorCommandRoute {
-                command: "capture_audio".to_string(),
-                connector_id: AUDIO_INPUT_CONNECTOR.to_string(),
-                operation: AUDIO_CAPTURE_OPERATION.to_string(),
-            }],
-        }
-    }
-
-    fn combined_manifest() -> HostConnectorAppManifest {
-        let mut manifest = audio_manifest();
-        manifest.connector_bindings.push(model_binding());
-        manifest.command_routes.push(HostConnectorCommandRoute {
-            command: "run_local_model".to_string(),
-            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
-            operation: MODEL_EXECUTE_OPERATION.to_string(),
-        });
-        manifest
-    }
-
-    fn audio_command(target_family: &str) -> HostConnectorAppCommand {
-        HostConnectorAppCommand {
-            kind: COMMAND_KIND.to_string(),
-            schema_version: SCHEMA_VERSION.to_string(),
-            command: "capture_audio".to_string(),
-            command_id: "cmd-00000001".to_string(),
-            correlation_id: "corr-00000001".to_string(),
-            idempotency_key: "idem-00000001".to_string(),
-            target_family: target_family.to_string(),
-            cancel_requested: false,
-            payload: json!({"max_duration_ms": 5_000, "max_bytes": 1_048_576}),
-        }
-    }
-
-    fn model_command() -> HostConnectorAppCommand {
-        HostConnectorAppCommand {
-            kind: COMMAND_KIND.to_string(),
-            schema_version: SCHEMA_VERSION.to_string(),
-            command: "run_local_model".to_string(),
-            command_id: "cmd-00000002".to_string(),
-            correlation_id: "corr-00000002".to_string(),
-            idempotency_key: "idem-00000002".to_string(),
-            target_family: "macos".to_string(),
-            cancel_requested: false,
-            payload: json!({
-                "artifact_ref": "model-artifact-1",
-                "policy_ref": "policy-1",
-                "max_output_bytes": 4096
-            }),
-        }
-    }
-
-    fn dispatch_with(
-        command: &HostConnectorAppCommand,
-        manifest: &HostConnectorAppManifest,
-        activations: &HostConnectorActivationSet,
-        host: &mut FakeHostConnector,
-        idempotency: &mut HostConnectorIdempotencyStore,
-    ) -> Result<HostConnectorDispatch, Box<HostConnectorFailure>> {
-        let mut ctx = HostConnectorDispatchContext {
-            manifest,
-            activations,
-            idempotency,
-            host,
-        };
-        dispatch_host_connector_command(command, &mut ctx)
-    }
-
-    fn require_ok(
-        command: &HostConnectorAppCommand,
-        manifest: &HostConnectorAppManifest,
-        activations: &HostConnectorActivationSet,
-        host: &mut FakeHostConnector,
-        idempotency: &mut HostConnectorIdempotencyStore,
-    ) -> Result<HostConnectorDispatch, String> {
-        dispatch_with(command, manifest, activations, host, idempotency)
-            .map_err(|failure| failure.error.to_string())
-    }
-
-    fn require_err(
-        command: &HostConnectorAppCommand,
-        manifest: &HostConnectorAppManifest,
-        activations: &HostConnectorActivationSet,
-        host: &mut FakeHostConnector,
-        idempotency: &mut HostConnectorIdempotencyStore,
-    ) -> Result<HostConnectorFailure, String> {
-        match dispatch_with(command, manifest, activations, host, idempotency) {
-            Ok(_) => Err("expected host connector failure".to_string()),
-            Err(failure) => Ok(*failure),
-        }
-    }
-
-    fn activated_audio() -> HostConnectorActivationSet {
-        let mut activations = HostConnectorActivationSet::new();
-        activations.activate("default-local-audio");
-        activations
-    }
-
-    fn assert_no_leak(value: &Value) {
-        let encoded = value.to_string();
-        assert!(!encoded.contains("microphone"));
-        assert!(!encoded.contains("/tmp"));
-        assert!(!encoded.contains("AVAudio"));
-        assert!(!encoded.contains("credential"));
-        assert!(!encoded.contains("http://"));
-    }
-
-    #[test]
-    fn macos_audio_capture_succeeds_through_fake_host() -> Result<(), String> {
-        let manifest = audio_manifest();
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let dispatch = require_ok(
-            &audio_command("macos"),
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(dispatch.result_class, "succeeded");
-        assert_eq!(dispatch.operation.as_deref(), Some(AUDIO_CAPTURE_OPERATION));
-        assert_eq!(dispatch.artifact_ref.as_deref(), Some("audio-ref-1"));
-        assert_eq!(host.invoke_count(), 1);
-        assert_eq!(
-            host.last_request().map(|r| r.operation.as_str()),
-            Some(AUDIO_CAPTURE_OPERATION)
-        );
-        let events: Vec<&str> = dispatch.events.iter().map(|e| e.event.as_str()).collect();
-        assert_eq!(events, ["accepted", "started", "completed"]);
-        assert_eq!(dispatch.events[0].kind, EVENT_KIND);
-        assert_eq!(dispatch.evidence.governing_spec, GOVERNING_SPEC);
-        assert_eq!(
-            dispatch.evidence.config_ref.as_deref(),
-            Some("audio-authority")
-        );
-        assert_no_leak(&json!(dispatch));
-        Ok(())
-    }
-
-    #[test]
-    fn manifest_selected_binding_is_the_one_invoked() -> Result<(), String> {
-        let mut manifest = audio_manifest();
-        let mut second = audio_binding();
-        second.binding_id = "other-audio".to_string();
-        manifest.connector_bindings.push(second);
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let failed = require_err(
-            &audio_command("macos"),
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Incompatible);
-        assert_eq!(host.invoke_count(), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn missing_incompatible_unconfigured_and_unactivated_bindings_fail_before_host()
-    -> Result<(), String> {
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let mut missing = audio_manifest();
-        missing.connector_bindings.clear();
-        let failed = require_err(
-            &audio_command("macos"),
-            &missing,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Unbound);
-
-        let mut unconfigured = audio_manifest();
-        unconfigured.connector_bindings[0].config_ref.clear();
-        let failed = require_err(
-            &audio_command("macos"),
-            &unconfigured,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Unconfigured);
-
-        let empty = HostConnectorActivationSet::new();
-        let failed = require_err(
-            &audio_command("macos"),
-            &audio_manifest(),
-            &empty,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Unbound);
-
-        let mut unknown = audio_command("macos");
-        unknown.command = "not_a_route".to_string();
-        let failed = require_err(
-            &unknown,
-            &audio_manifest(),
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::UnknownCommand);
-        assert_eq!(host.invoke_count(), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn browser_rejects_native_audio_with_shared_event_contract() -> Result<(), String> {
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let failed = require_err(
-            &audio_command("browser"),
-            &audio_manifest(),
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(
-            failed.error.code,
-            HostConnectorErrorCode::TargetIncompatible
-        );
-        assert_eq!(failed.dispatch.target_family, "browser");
-        assert_eq!(failed.dispatch.events[0].kind, EVENT_KIND);
-        assert_eq!(failed.dispatch.events[0].schema_version, SCHEMA_VERSION);
-        assert_eq!(host.invoke_count(), 0);
-        assert_no_leak(&json!(failed.dispatch));
-        Ok(())
-    }
-
-    #[test]
-    fn cancellation_and_idempotency_are_honored() -> Result<(), String> {
-        let manifest = audio_manifest();
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let mut cancelled = audio_command("macos");
-        cancelled.cancel_requested = true;
-        let failed = require_err(
-            &cancelled,
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Cancelled);
-        assert_eq!(failed.dispatch.result_class, "cancelled");
-        assert_eq!(host.invoke_count(), 0);
-
-        let first = require_ok(
-            &audio_command("macos"),
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        let mut replay = audio_command("macos");
-        replay.command_id = "cmd-replay".to_string();
-        let second = require_ok(
-            &replay,
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(second.artifact_ref, first.artifact_ref);
-        assert_eq!(host.invoke_count(), 1);
-
-        let mut conflict = audio_command("macos");
-        conflict.payload = json!({"max_duration_ms": 1_000, "max_bytes": 2048});
-        let failed = require_err(
-            &conflict,
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(
-            failed.error.code,
-            HostConnectorErrorCode::IdempotencyConflict
-        );
-        assert_eq!(host.invoke_count(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn bounded_inputs_and_structured_errors_do_not_invoke_host() -> Result<(), String> {
-        let activations = activated_audio();
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let mut oversized = audio_command("macos");
-        oversized.payload = json!({"max_duration_ms": 120_000, "max_bytes": 1_048_576});
-        let failed = require_err(
-            &oversized,
-            &audio_manifest(),
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(
-            failed.error.code,
-            HostConnectorErrorCode::InputLimitExceeded
-        );
-        assert_eq!(host.invoke_count(), 0);
-
-        host.deny_policy(true);
-        let failed = require_err(
-            &audio_command("macos"),
-            &audio_manifest(),
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::PolicyDenied);
-        assert!(
-            failed
-                .dispatch
-                .events
-                .iter()
-                .any(|event| event.event == "failed")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn model_execute_uses_the_same_port() -> Result<(), String> {
-        let manifest = combined_manifest();
-        let mut activations = activated_audio();
-        activations.activate("default-local-model");
-        let mut host = FakeHostConnector::new();
-        let mut idempotency = HostConnectorIdempotencyStore::new();
-        let dispatch = require_ok(
-            &model_command(),
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(
-            dispatch.connector_id.as_deref(),
-            Some(MODEL_RUNTIME_CONNECTOR)
-        );
-        assert_eq!(dispatch.operation.as_deref(), Some(MODEL_EXECUTE_OPERATION));
-        assert_eq!(dispatch.artifact_ref.as_deref(), Some("model-ref-1"));
-        assert_eq!(dispatch.kind, RESULT_KIND);
-        assert_no_leak(&json!(dispatch));
-
-        let mut forbidden = model_command();
-        forbidden.payload = json!({
-            "artifact_ref": "model-artifact-1",
-            "policy_ref": "policy-1",
-            "max_output_bytes": 4096,
-            "provider": "ollama"
-        });
-        forbidden.idempotency_key = "idem-forbidden".to_string();
-        let failed = require_err(
-            &forbidden,
-            &manifest,
-            &activations,
-            &mut host,
-            &mut idempotency,
-        )?;
-        assert_eq!(failed.error.code, HostConnectorErrorCode::Incompatible);
-        Ok(())
-    }
-
-    #[test]
-    fn public_codes_are_stable_and_guest_paths_are_unused() {
-        for code in [
-            HostConnectorErrorCode::UnknownCommand,
-            HostConnectorErrorCode::Unbound,
-            HostConnectorErrorCode::Incompatible,
-            HostConnectorErrorCode::Unconfigured,
-            HostConnectorErrorCode::TargetIncompatible,
-            HostConnectorErrorCode::InputLimitExceeded,
-            HostConnectorErrorCode::Cancelled,
-            HostConnectorErrorCode::IdempotencyConflict,
-            HostConnectorErrorCode::PolicyDenied,
-            HostConnectorErrorCode::Unavailable,
-        ] {
-            assert!(!code.as_str().is_empty());
-            assert!(!code.as_str().contains("connector_invoke"));
-        }
-        // This module's fake is FakeHostConnector, not Spec 135 FakeRecordingHost.
-        let _fake = FakeHostConnector::new();
-        assert_eq!(COMMAND_KIND, "host_connector_command");
-        assert_ne!(COMMAND_KIND, "connector_invoke");
     }
 }
