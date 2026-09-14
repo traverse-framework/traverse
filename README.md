@@ -242,13 +242,17 @@ the canonical board — all active work has an issue, a project item, and a PR.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
-[SECURITY.md](SECURITY.md), and [docs/quality-standards.md](docs/quality-standards.md)
-before opening a PR. Every PR must be backed by an approved spec.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) — especially **First contributions** —
+then [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md).
+Pick a [`good first issue`](https://github.com/traverse-framework/traverse/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+or [`help wanted`](https://github.com/traverse-framework/traverse/labels/help%20wanted)
+ticket; docs/examples marked `no-spec-needed` do not need a new `specs/` slice.
+Runtime and contract changes still need an approved governing spec.
 
 Common starting points: [docs/getting-started.md](docs/getting-started.md) ·
 [docs/troubleshooting.md](docs/troubleshooting.md) ·
-[docs/what-can-i-build.md](docs/what-can-i-build.md).
+[docs/what-can-i-build.md](docs/what-can-i-build.md) ·
+[docs/quality-standards.md](docs/quality-standards.md).
 
 ---
 
