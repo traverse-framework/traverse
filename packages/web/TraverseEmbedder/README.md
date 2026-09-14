@@ -154,7 +154,14 @@ npm test   # builds with tsc, then runs the node:test suite
 
 ## Publishing
 
-This package is not yet published to npm. See
+Published to npm as [`traverse-embedder-web`](https://www.npmjs.com/package/traverse-embedder-web)
+(currently `0.9.0`; verify with `npm view traverse-embedder-web version`):
+
+```bash
+npm install traverse-embedder-web
+```
+
+Maintainers: see
 [docs/web-embedder-npm-publish-runbook.md](../../../docs/web-embedder-npm-publish-runbook.md)
 for the preflight checklist and exact publish commands.
 
