@@ -69,12 +69,14 @@ function executionInput(state: Record<string, JsonValue>, proposal: BrowserWorkf
   return input;
 }
 
-function run(module: WebAssembly.Module, input: JsonValue): { output: JsonValue | null; failure: string | null } {
+async function run(module: WebAssembly.Module, input: JsonValue): Promise<{ output: JsonValue | null; failure: string | null }> {
   const pipes = new WasiPipes(encoder.encode(JSON.stringify(input)));
   const memoryRef: WasiMemoryRef = { memory: null };
   let instance: WebAssembly.Instance;
   try {
-    instance = new WebAssembly.Instance(module, { wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef), traverse_host: { emit_event: () => -1, connector_invoke: () => -1 } });
+    // WebAssembly.Instance's synchronous constructor is disallowed on the main thread for
+    // modules over 8MB (Chrome and others enforce this); the async overload has no such limit.
+    instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef), traverse_host: { emit_event: () => -1, connector_invoke: () => -1 } });
   } catch { return { output: null, failure: "constraint_violated" }; }
   memoryRef.memory = instance.exports["memory"] instanceof WebAssembly.Memory ? instance.exports["memory"] as WebAssembly.Memory : null;
   const entry = instance.exports["_start"] ?? instance.exports[""];
@@ -106,7 +108,7 @@ export async function executeBrowserComposedWorkflow(proposal: BrowserWorkflowPr
     let module: WebAssembly.Module;
     try { module = await WebAssembly.compile(copyBuffer(dependency.wasmBytes)); } catch { throw new ComposedWorkflowError("composed_workflow_dependency_contract_invalid", "prepared artifact is not executable WASM", node.node_id); }
     if (findUnauthorizedImport(module) !== null) throw new ComposedWorkflowError("composed_workflow_registry_rejected_contract", "prepared artifact exceeds the browser host ABI", node.node_id);
-    const result = run(module, executionInput(state, proposal, node.node_id));
+    const result = await run(module, executionInput(state, proposal, node.node_id));
     outcomes.push({ node_id: node.node_id, capability_id: node.capability_id, capability_version: node.capability_version, status: result.failure === null ? "succeeded" : "failed", failure_class: result.failure });
     if (result.failure !== null) {
       for (const later of nodes.slice(outcomes.length)) outcomes.push({ node_id: later.node_id, capability_id: later.capability_id, capability_version: later.capability_version, status: "not_started", failure_class: null });
