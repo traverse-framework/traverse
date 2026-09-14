@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse.dev/contracts/app-runtime/host-connector-command-1.0.0.json",
+  "title": "Host connector command contract",
+  "description": "Shared browser/macOS app-runtime envelopes for Spec 137. Native and browser adapters remain host implementations.",
+  "version": "1.0.0",
+  "governing_spec": "137-host-connector-command-dispatch",
+  "command": {
+    "type": "object",
+    "required": [
+      "kind",
+      "schema_version",
+      "command",
+      "command_id",
+      "correlation_id",
+      "idempotency_key",
+      "target_family",
+      "payload"
+    ],
+    "properties": {
+      "kind": { "const": "host_connector_command" },
+      "schema_version": { "const": "1.0.0" },
+      "command": { "type": "string", "minLength": 1 },
+      "command_id": { "type": "string", "minLength": 1 },
+      "correlation_id": { "type": "string", "minLength": 1 },
+      "idempotency_key": { "type": "string", "minLength": 1 },
+      "target_family": { "enum": ["browser", "macos", "local"] },
+      "cancel_requested": { "type": "boolean" },
+      "payload": { "type": "object" }
+    },
+    "additionalProperties": false
+  },
+  "event": {
+    "type": "object",
+    "required": [
+      "kind",
+      "schema_version",
+      "event",
+      "command_id",
+      "correlation_id",
+      "target_family"
+    ],
+    "properties": {
+      "kind": { "const": "host_connector_event" },
+      "schema_version": { "const": "1.0.0" },
+      "event": {
+        "enum": ["accepted", "started", "completed", "cancelled", "failed"]
+      },
+      "command_id": { "type": "string" },
+      "correlation_id": { "type": "string" },
+      "connector_id": { "type": "string" },
+      "operation": { "type": "string" },
+      "binding_id": { "type": "string" },
+      "target_family": { "enum": ["browser", "macos", "local"] },
+      "artifact_ref": { "type": "string" },
+      "error_code": { "type": "string" }
+    },
+    "additionalProperties": false
+  },
+  "error_codes": [
+    "unknown_command",
+    "unbound",
+    "incompatible",
+    "unconfigured",
+    "target_incompatible",
+    "input_limit_exceeded",
+    "cancelled",
+    "idempotency_conflict",
+    "policy_denied",
+    "unavailable"
+  ],
+  "downstream": {
+    "runtime": "traverse_runtime::host_connector_dispatch::dispatch_host_connector_command",
+    "web": "packages/web/TraverseEmbedder hostConnectorCommand.ts",
+    "macos": "packages/swift/TraverseEmbedder HostConnectorCommand.swift"
+  }
+}

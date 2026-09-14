@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Host connector command dispatch
+
+- App runtime can dispatch a manifest-selected, explicitly activated host
+  connector from a state-machine command (`audio.capture` first;
+  `model.execute` on the same port). Guest `connector_invoke` and the
+  Component WIT fake are not used. See
+  [docs/host-connector-command-dispatch.md](docs/host-connector-command-dispatch.md).
+
 ## v0.10.1 — 2026-09-09
 
 ### Fixes

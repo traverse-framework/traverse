@@ -1,0 +1,78 @@
+{
+  "kind": "connector_contract",
+  "schema_version": "1.0.0",
+  "connector_id": "traverse.model-runtime",
+  "version": "1.0.0",
+  "capabilities_provided": [
+    "traverse.model-runtime.execute"
+  ],
+  "required_config_schema": {
+    "type": "object",
+    "required": [
+      "authority_ref"
+    ],
+    "properties": {
+      "authority_ref": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "operation_envelopes": [
+    {
+      "operation_id": "model.execute",
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "artifact_ref",
+          "policy_ref",
+          "max_output_bytes"
+        ],
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "policy_ref": {
+            "type": "string"
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          }
+        },
+        "additionalProperties": false
+      },
+      "success_schema": {
+        "type": "object",
+        "required": [
+          "artifact_ref",
+          "result_class"
+        ],
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "result_class": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "failure_classes": [
+        "unbound",
+        "incompatible",
+        "unconfigured",
+        "target_incompatible",
+        "input_limit_exceeded",
+        "cancelled",
+        "idempotency_conflict",
+        "policy_denied",
+        "unavailable"
+      ]
+    }
+  ],
+  "supported_placement_targets": [
+    "local"
+  ]
+}

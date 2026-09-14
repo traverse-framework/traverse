@@ -133,6 +133,27 @@ export {
   SUPPORTED_HOST_ABI_VERSION,
   findUnauthorizedImport,
 } from "./hostAbi.js";
+
+export {
+  AUDIO_CAPTURE_OPERATION,
+  AUDIO_INPUT_CONNECTOR,
+  HOST_CONNECTOR_COMMAND_KIND,
+  HOST_CONNECTOR_COMMAND_SCHEMA_VERSION,
+  HOST_CONNECTOR_EVENT_KIND,
+  HOST_CONNECTOR_GOVERNING_SPEC,
+  HOST_CONNECTOR_RESULT_KIND,
+  MODEL_EXECUTE_OPERATION,
+  MODEL_RUNTIME_CONNECTOR,
+  audioCaptureCommand,
+} from "./hostConnectorCommand.js";
+export type {
+  HostConnectorAppCommand,
+  HostConnectorError,
+  HostConnectorErrorCode,
+  HostConnectorEvent,
+  HostConnectorEventName,
+  HostConnectorTargetFamily,
+} from "./hostConnectorCommand.js";
 export type { HostAbiImport } from "./hostAbi.js";
 
 export { executeVerifiedEntrypoint, VerifiedEntrypointError } from "./verifiedEntrypoint.js";

@@ -21,7 +21,7 @@ The current Traverse release notes are:
 At `v1.0.0`, Traverse makes the following stability commitments:
 
 **Public API (stable — semver guarantees apply):**
-- `traverse-runtime`: `CapabilityExecutor`, `ExecutorCapability`, `ExecutorError`, `ArtifactType`, `PlacementRouter`, `RouterRequest`, `RouterResponse`, `TraceStore`, `TraceOutcome`
+- `traverse-runtime`: `CapabilityExecutor`, `ExecutorCapability`, `ExecutorError`, `ArtifactType`, `PlacementRouter`, `RouterRequest`, `RouterResponse`, `TraceStore`, `TraceOutcome`, `host_connector_dispatch` (Spec 137 schema `1.0.0`)
 - `traverse-contracts`: all public contract types (`CapabilityContract`, `EventContract`, etc.)
 - `traverse-registry` (currently v0.18.0) is consumed as a separately published registry crate; its public API compatibility is governed in `traverse-framework/registry`.
 - `traverse-cli`: all documented CLI subcommands and their `--json` output shapes

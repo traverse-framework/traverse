@@ -1872,6 +1872,24 @@
       ]
     },
     {
+      "id": "137-host-connector-command-dispatch",
+      "version": "0.1.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/137-host-connector-command-dispatch/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "contracts/connectors/traverse.audio-input/",
+        "contracts/connectors/traverse.model-runtime/",
+        "contracts/app-runtime/",
+        "packages/web/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/",
+        "specs/137-host-connector-command-dispatch/",
+        "docs/adr/0071-host-connector-command-dispatch.md",
+        "docs/host-connector-command-dispatch.md"
+      ]
+    },
+    {
       "id": "529-production-platform-certification",
       "version": "1.0.0",
       "status": "approved",

@@ -1,5 +1,13 @@
 # Next Release Notes
 
+## Host connector command dispatch
+
+`dispatch_host_connector_command` is the public app-runtime port for a
+manifest-selected, explicitly activated host connector. The first operation
+is `audio.capture`; `local-model-runtime` (`model.execute`) uses the same
+envelopes. Browser and macOS share schema `1.0.0`. See
+[docs/host-connector-command-dispatch.md](../host-connector-command-dispatch.md).
+
 ## Component Model WIT host-capability activation
 
 `component-wit-v1` validates exact `traverse:platform` WIT imports and resolves

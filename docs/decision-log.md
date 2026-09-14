@@ -3837,3 +3837,46 @@ XCFramework, until Enrico records 2.0.0 device fixtures.
 
 Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-13),
 decisions 1–10.
+
+## Decision 84: App-Command Host Connector Dispatch Is Spec 137
+
+- **Date**: 2026-09-14
+- **Status**: Accepted
+- **Governing specs**: `137-host-connector-command-dispatch` (new),
+  `059-http-command-dispatch`, `103-application-connector-binding`,
+  `104-mediated-connector-invocation`, `135-component-model-wit-host-capabilities`,
+  `1259-portable-authority-contracts`
+- **Related ADRs**: ADR-0071 (Accepted); ADR-0039; ADR-0060; ADR-0068
+- **Related issues**: `#1384`
+- **Origin**: Owner-filed Ready implementation ticket `#1384` (Callweave
+  recording-to-analysis workflow contract, commit `0acc2e8`)
+
+### Context
+
+Apps need to invoke an explicitly activated host connector from a state-machine
+command. Guest `connector_invoke` and the Spec 135 WIT recording fake already
+exist and must not become that port.
+
+### Decision
+
+1. **One successor spec (137)** governs the public app-runtime dispatch
+   surface.
+2. **First operation is `audio.capture`** on `traverse.audio-input`.
+   `traverse.model-runtime` / `model.execute` uses the same envelopes.
+3. **Do not use** guest `traverse_host.connector_invoke` or the Component
+   WIT fake.
+4. **Browser and macOS share** the command/event contract; adapters remain
+   host implementations. Native-only audio fails closed on `browser`.
+5. Envelopes include typed request/result/event/error, manifest binding
+   resolution, limits, cancellation, idempotency, opaque artifact
+   references, and redaction.
+
+### Alternatives considered
+
+- Guest ABI as the app command path: rejected; wrong authorization boundary.
+- WIT fake as the capture port: rejected; different profile (Spec 135).
+- Device/provider fields on the public contract: rejected; Spec 1259.
+
+### Approval
+
+Approved by the owner-filed `#1384` Definition of Done (2026-09-14).
