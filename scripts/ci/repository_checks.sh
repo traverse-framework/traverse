@@ -31,6 +31,7 @@ required_files=(
   "docs/mcp-consumption-validation.md"
   "docs/mcp-stdio-server.md"
   "docs/mcp-mode-a-release-evidence.md"
+  "docs/mcp-mode-b-release-evidence.md"
   "docs/youaskm3-canonical-mcp-client-path.md"
   "docs/mcp-real-agent-exercise.md"
   "docs/app-consumable-release-checklist.md"
@@ -153,6 +154,7 @@ required_files=(
   "scripts/ci/mcp_stdio_server_discovery_smoke.sh"
   "scripts/ci/mcp_stdio_server_execution_report_smoke.sh"
   "scripts/ci/mcp_stdio_server_mode_a_smoke.sh"
+  "scripts/ci/mcp_stdio_server_mode_b_smoke.sh"
   "scripts/ci/mcp_real_agent_exercise_smoke.sh"
   "scripts/ci/project_board_audit.sh"
   "scripts/scaffold/hello_world_agent_scaffold.sh"
@@ -513,6 +515,12 @@ grep -q "119-verified-registry-mcp-mode-a" docs/mcp-stdio-server.md
 grep -q "docs/mcp-mode-a-release-evidence.md" docs/mcp-stdio-server.md
 grep -q "bash scripts/ci/mcp_stdio_server_mode_a_smoke.sh" docs/mcp-mode-a-release-evidence.md
 grep -q "docs/mcp-stdio-server.md" docs/mcp-mode-a-release-evidence.md
+grep -q "bash scripts/ci/mcp_stdio_server_mode_b_smoke.sh" docs/mcp-stdio-server.md
+grep -q "prepare-cache" docs/mcp-stdio-server.md
+grep -q "docs/mcp-mode-b-release-evidence.md" docs/mcp-stdio-server.md
+grep -q "bash scripts/ci/mcp_stdio_server_mode_b_smoke.sh" docs/mcp-mode-b-release-evidence.md
+grep -q "docs/mcp-stdio-server.md" docs/mcp-mode-b-release-evidence.md
+grep -q "traverse-mcp prepare-cache" docs/mcp-mode-b-release-evidence.md
 grep -q "render_execution_report" docs/mcp-stdio-server.md
 grep -q "list_entrypoints" docs/mcp-stdio-server.md
 grep -q "describe_entrypoint" docs/mcp-stdio-server.md

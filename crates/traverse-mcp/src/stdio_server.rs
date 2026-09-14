@@ -1493,7 +1493,10 @@ fn observation_message_summary(message: McpObservationMessage) -> Value {
 /// # Errors
 ///
 /// Returns `catalog_load_failed` when the canonical expedition bundle cannot be loaded.
-pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServerFailure> {
+pub fn run_stdio_server(
+    simulate_startup_failure: bool,
+    cache_root: Option<PathBuf>,
+) -> Result<(), StdioServerFailure> {
     let canonical_execution = CanonicalExecutionContext::load_canonical()?;
     let catalog = McpDiscoveryCatalog::load_canonical()?;
 
@@ -1531,8 +1534,9 @@ pub fn run_stdio_server(simulate_startup_failure: bool) -> Result<(), StdioServe
     // Loading fails closed — a missing or invalid prepared state stops startup
     // with a stable error envelope rather than silently falling back to the
     // expedition catalog (FR-003).
-    if let Some(cache_root) = std::env::var_os(MODE_A_CACHE_ENV) {
-        match ModeAContext::load(PathBuf::from(cache_root)) {
+    let cache_root = cache_root.or_else(|| std::env::var_os(MODE_A_CACHE_ENV).map(PathBuf::from));
+    if let Some(cache_root) = cache_root {
+        match ModeAContext::load(cache_root) {
             Ok(context) => {
                 server = server.with_mode_a(Box::leak(Box::new(context)));
             }
@@ -2905,7 +2909,7 @@ mod tests {
 
     #[test]
     fn run_stdio_server_reports_simulated_startup_failure() {
-        let result = run_stdio_server(true);
+        let result = run_stdio_server(true, None);
         assert!(result.is_err());
     }
 
