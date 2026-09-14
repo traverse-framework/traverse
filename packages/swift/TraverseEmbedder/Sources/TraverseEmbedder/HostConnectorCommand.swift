@@ -1,3 +1,5 @@
+import Foundation
+
 /// Shared Spec 137 host-connector command/event contract for browser and macOS.
 /// Native/browser adapters remain host implementations behind this wire type.
 
