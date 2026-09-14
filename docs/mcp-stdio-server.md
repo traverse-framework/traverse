@@ -33,6 +33,60 @@ Unsupported bootstrap attempts fail loudly:
 
 Developers and agents should treat other bootstrap ideas as unsupported unless they are explicitly documented in this page or in the packaged artifact docs.
 
+## Client configs
+
+Build the dedicated server first:
+
+```bash
+cargo build -p traverse-mcp
+```
+
+Then point the MCP client at the **absolute path** to the resulting
+`traverse-mcp` binary (typically `<checkout>/target/debug/traverse-mcp`, or
+`traverse-mcp.exe` on Windows). Every launcher must pass `stdio` as the first
+argument.
+
+Cursor project configuration (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "traverse": {
+      "command": "/absolute/path/to/traverse-mcp",
+      "args": ["stdio"]
+    }
+  }
+}
+```
+
+Claude Desktop configuration (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "traverse": {
+      "command": "/absolute/path/to/traverse-mcp",
+      "args": ["stdio"]
+    }
+  }
+}
+```
+
+For source-checkout development, the equivalent launch command is:
+
+```bash
+cargo run -p traverse-mcp -- stdio
+```
+
+These examples use the default `local_trust` mode described below. If a local
+launcher needs execution authentication, configure
+`TRAVERSE_MCP_STDIO_BEARER_TOKEN` in that launcher's environment rather than
+placing credentials in the command arguments.
+
+For a release-facing Mode A integration, pin and verify the versioned binary
+and checksum/provenance before configuring the client; see
+[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md).
+
 ## Start The Server
 
 From the repository root:
