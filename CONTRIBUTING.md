@@ -2,7 +2,19 @@
 
 Thanks for contributing to Traverse.
 
-## Before You Start
+## First contributions (start here)
+
+You do **not** need a new governing spec for small, labeled first PRs.
+
+1. Pick an open issue labeled [`good first issue`](https://github.com/traverse-framework/traverse/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [`help wanted`](https://github.com/traverse-framework/traverse/labels/help%20wanted) — also check [`website`](https://github.com/traverse-framework/website/labels/help%20wanted), [`registry`](https://github.com/traverse-framework/registry/labels/help%20wanted), and [`claude-skills`](https://github.com/traverse-framework/claude-skills/labels/help%20wanted).
+2. Comment on the issue so we know you are taking it.
+3. Open a focused PR that links the issue. For docs/examples marked `no-spec-needed`, say that in the PR body and skip inventing a new `specs/` slice.
+
+Good first shapes right now: MCP client config docs, TypeScript/Python consume examples, website polish, one small registry capability, skill-template wording.
+
+Please still read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and accept the CLA at [`traverse-framework/.github/CLA.md`](https://github.com/traverse-framework/.github/blob/main/CLA.md).
+
+## Before You Start (deeper changes)
 
 Please read:
 
@@ -11,7 +23,7 @@ Please read:
 
 ## Core Rules
 
-- Approved specs are versioned, immutable, and merge-gating.
+- Approved specs are versioned, immutable, and merge-gating for runtime/contract changes.
 - Contracts are the source of truth for runtime behavior.
 - Core runtime and business logic require 100% automated coverage.
 - Material architecture changes require an ADR.
@@ -20,7 +32,7 @@ Please read:
 
 ## Workflow
 
-1. Start from the governing approved spec.
+1. Start from the governing approved spec (or confirm `no-spec-needed` on the issue).
 2. Confirm whether an issue already exists.
 3. Open or link the work item in the project board:
    [GitHub Project](https://github.com/orgs/traverse-framework/projects/1)
@@ -32,7 +44,7 @@ Please read:
 
 Every pull request should:
 
-- reference the governing spec version
+- reference the governing spec version **or** state `no-spec-needed` with the issue link
 - reference the relevant issue or work item
 - explain any contract changes
 - explain any compatibility impact
