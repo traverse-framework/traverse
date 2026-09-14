@@ -10,9 +10,7 @@ use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 #[cfg(test)]
 use wasmi::{Caller, Extern};
-use wasmi::{
-    Config, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
-};
+use wasmi::{Config, Engine, Instance, Linker, Memory, Store, StoreLimits, StoreLimitsBuilder};
 
 const ABI_VERSION: u32 = 2;
 const OK: i32 = 0;
@@ -167,7 +165,7 @@ fn execute_wasi_command(
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
-    let module = Module::new(&engine, artifact)
+    let module = wasmi::Module::new(&engine, artifact)
         .map_err(|_| HostError::new(INVALID_INPUT, "wasi_invalid_module"))?;
     if module
         .imports()
@@ -316,7 +314,7 @@ fn create_host(runtime: &[u8], expected_digest: &[u8], limits: Limits) -> Result
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
-    let module = Module::new(&engine, runtime)
+    let module = wasmi::Module::new(&engine, runtime)
         .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_module"))?;
     if module.imports().next().is_some() {
         return Err(HostError::new(INVALID_INPUT, "bridge_ambient_import"));
