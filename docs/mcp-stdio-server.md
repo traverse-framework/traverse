@@ -33,6 +33,69 @@ Unsupported bootstrap attempts fail loudly:
 
 Developers and agents should treat other bootstrap ideas as unsupported unless they are explicitly documented in this page or in the packaged artifact docs.
 
+## Client configs
+
+Every launcher below must pass `stdio` as the first argument. Omitting it fails
+loudly (see [Supported Bootstrap Path](#supported-bootstrap-path)). After
+`cargo build -p traverse-mcp`, the binary is
+`target/debug/traverse-mcp` by default (or `target/release/traverse-mcp` after
+`--release`). If `CARGO_TARGET_DIR` is set, use
+`$CARGO_TARGET_DIR/debug/traverse-mcp` instead. Put that binary on `PATH`, or
+use an absolute path.
+
+Default launch is `local_trust` (the parent process already owns the local
+session). For stricter launchers, set `TRAVERSE_MCP_STDIO_BEARER_TOKEN` as
+documented in [Start The Server](#start-the-server). Production pin-and-verify
+for a versioned binary plus a host-owned verified cache is
+[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md) — do not
+paste a Mode A config here until that binary is checksum-verified.
+
+### Cursor
+
+Project config: `.cursor/mcp.json`. User config lives in Cursor Settings → MCP.
+
+```json
+{
+  "mcpServers": {
+    "traverse": {
+      "command": "traverse-mcp",
+      "args": ["stdio"]
+    }
+  }
+}
+```
+
+If `traverse-mcp` is not on `PATH`, set `command` to the absolute path of the
+built binary. Keep `args` as `["stdio"]`.
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json` (macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`). Claude
+Desktop requires an absolute `command` path.
+
+```json
+{
+  "mcpServers": {
+    "traverse": {
+      "command": "/absolute/path/to/traverse-mcp",
+      "args": ["stdio"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+
+### Cargo (contributor-only)
+
+```bash
+cargo run -p traverse-mcp -- stdio
+```
+
+This is the in-repo source-run path. Cursor and Claude Desktop configs above
+should launch the built `traverse-mcp` binary, not `cargo`.
+
 ## Start The Server
 
 From the repository root:
