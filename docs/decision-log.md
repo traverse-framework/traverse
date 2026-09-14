@@ -3758,3 +3758,82 @@ closes via Decision 81 / ADR-0069.
 ### Approval
 
 Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-11).
+
+## Decision 83: Native Public Packages Are Spec 136 + wasmi 2.0.0; 529 Is Certified Only
+
+- **Date**: 2026-09-13
+- **Status**: Accepted
+- **Governing specs**: `136-native-embedder-publication` (new),
+  `529-production-platform-certification` (amended + approved),
+  `068-public-platform-embedder-packages`, `074-swift-native-resource-control-certification`
+- **Related ADRs**: ADR-0070 (Accepted); ADR-0014 (Superseded)
+- **Related issues**: `#1366`, `#1368`, `#1369`, `#1370`, `#1371`, `#1372`;
+  `reference-apps#308`; close `#884` when ADR-0070 merges
+- **Origin**: Owner-directed `/brainstorm` after the website platform-status audit
+  (website#84) asked this repo for a Shipped plan
+
+### Context
+
+Website and agent copy had used Spec 529 Draft and a stale “Swift Blocked”
+table as Shipped gates. Independent re-verify showed: Swift/iOS already has
+`WasmiHostBridgeClient`, a v0.8.2 XCFramework, and `reference-apps` iOS
+shells; Kotlin/.NET have working bridges and App-Refs integrations but no
+Maven/NuGet; `#647`/`#648`/`#649` and App-Refs `#114`–`#116` are closed;
+`#1352` moved the Apple host to wasmi 2.0.0 without a successor ADR; Spec
+068 already requires a public package but does not name registries or `v*`
+coupling.
+
+### Decision
+
+1. **This slice is Spec 068 Shipped plus Spec 529 approval.** Edge host and
+   cloud placement stay out (constitution v0.1 / pre-spec).
+2. **Successor ADR-0070 selects wasmi 2.0.0.** Republish the XCFramework from
+   current `main`. Do not silently patch ADR-0014. Do not keep 1.1.0 as the
+   Apple release pin.
+3. **One successor spec (136) governs native publication**: Maven Central
+   (`dev.traverse:traverse-embedder`), nuget.org (`TraverseEmbedder`), and the
+   GitHub-release XCFramework zip. GitHub Packages is not Shipped.
+4. **Those three versions equal the crates / `v*` tag.** A tag that does not
+   publish all three MUST NOT claim the native line shipped. Do not
+   re-publish onto `v0.10.1`.
+5. **Registries are language-default public ones**, not GitHub Packages, not
+   a GH-Packages-now / Central-later two-step.
+6. **Amend then approve Spec 529.** Shipped = 068/136 public package;
+   Certified/Preview = 529 matrix. Missing Maven/NuGet is Preview, not
+   Blocked. No new 529 ADR. Five-platform runner is a later ticket.
+7. **wasmi 2.0.0 XCFramework requires new physical iOS + macOS Spec 074
+   fixtures.** CI plus the 1.1.0 device record is not enough.
+8. **First native public release is one `v*` tag with all three artifacts.**
+   Kotlin/.NET work may merge earlier; publish waits on device evidence.
+9. **Tickets:** `#1366` spec 136, `#1368` ADR-0070, `#1369` 529 amend/approve,
+   `#1370` XCFramework, `#1371` Maven, `#1372` NuGet, `reference-apps#308`
+   cutover. No umbrella. Close `#884` from the ADR-0070 PR.
+
+### Alternatives considered
+
+- Shipped-only (no 529 approval): rejected; Certified/Preview would stay
+  unofficial and keep getting used as a Swift blocker.
+- Include an Edge host spec: rejected; still pre-spec; constitution
+  distinction is a later conversation.
+- Spec 068 enough, no Spec 136: rejected; 068 does not name registries or
+  the `v*` trio lock.
+- GitHub Packages or a two-step publish: rejected; not what “published
+  Maven artifact” means.
+- Independent per-package semver (npm-style): rejected; that skew is how
+  the site went stale.
+- Approve 529 as-is without the Shipped clause: rejected; the mix-up would
+  recur.
+- 529 + extra ADR: rejected; Decision 38 plus the amended spec are enough.
+- Waive device evidence or let Maven/NuGet ship on an earlier tag:
+  rejected; would recreate version skew and skip Spec 074.
+
+### Outcome
+
+Governing artifacts: Spec 136, ADR-0070, approved Spec 529. Implement
+tickets stay `needs-spec` / Blocked until this PR merges and, for the
+XCFramework, until Enrico records 2.0.0 device fixtures.
+
+### Approval
+
+Approved by Enrico in this owner-directed `/brainstorm` session (2026-09-13),
+decisions 1–10.

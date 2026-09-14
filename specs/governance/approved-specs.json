@@ -1854,6 +1854,37 @@
         "specs/135-component-model-wit-host-capabilities/",
         "docs/adr/0068-component-model-wit-host-capabilities.md"
       ]
+    },
+    {
+      "id": "136-native-embedder-publication",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/136-native-embedder-publication/spec.md",
+      "governs": [
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/TraverseEmbedder/",
+        "packages/dotnet/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/Package.swift",
+        ".github/workflows/",
+        "specs/136-native-embedder-publication/",
+        "docs/adr/0070-wasmi-2-apple-runtime-profile.md"
+      ]
+    },
+    {
+      "id": "529-production-platform-certification",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/529-production-platform-certification/spec.md",
+      "governs": [
+        "packages/web/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/TraverseEmbedder/",
+        "packages/dotnet/TraverseEmbedder/",
+        "scripts/ci/embedder_conformance/",
+        "specs/529-production-platform-certification/"
+      ]
     }
   ]
 }

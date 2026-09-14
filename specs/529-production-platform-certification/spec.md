@@ -1,15 +1,37 @@
 # Feature Specification: Production Platform Certification
 
-**Status**: Draft — implementation requires normal governance approval.
-**Input**: Traverse #849; Decision 38; `524-production-app-readiness`; Specs
+**Status**: Approved (2026-09-13)
+**Canonical governing ID**: `529-production-platform-certification`
+**Version**: 1.0.0
+**Input**: Traverse #849; #1369; Decision 38; Decision 83;
+`524-production-app-readiness`; Specs
 `073-native-embedder-release-baseline`, `074-swift-native-resource-control-certification`,
-`075-native-runtime-distribution-contract`, `076-production-swift-wasmi-cabi`, and `080`.
+`075-native-runtime-distribution-contract`, `076-production-swift-wasmi-cabi`,
+`080`, `068-public-platform-embedder-packages`, and
+`136-native-embedder-publication`.
 
 ## Purpose
 
 Define the single, host-neutral conformance decision that classifies the Web,
 Linux/Rust, Apple, Android, and Windows/.NET embedded packages as Certified or
 Preview for a specific immutable runtime and locked application generation.
+
+## Relationship to Shipped
+
+**Shipped** is Spec 068 / Spec 136 public-package completeness: a stranger can
+depend on the host package from the language-default registry (crates.io, npm,
+Maven Central, nuget.org, or the GitHub-release XCFramework) and a reference
+app can execute without a sidecar.
+
+**Certified** and **Preview** are this spec's classification only. This spec
+is not a Shipped gate and MUST NOT be cited to hold a platform at Blocked or
+In progress when Spec 068 / Spec 136 is met.
+
+A host that has no Maven, NuGet, or current XCFramework publish, or that lacks
+a required matrix result, is **Preview** (`platform_conformance_missing` or
+`platform_conformance_failed`). It is never Blocked by this spec. Edge is not
+in the Certified target set. Implementing the five-platform runner is a later
+ticket; approving this spec does not authorize host-package work.
 
 ## Capability Boundary
 
@@ -96,3 +118,5 @@ storage, and DataStore migration are governed by separate successors.
 - Registry publisher trust, lock resolution, cache storage, trace persistence,
   DataStore migration, and platform-specific engine selection.
 - Declaring a platform Certified from simulated or partial results.
+- Using this spec as the website or Spec 068/136 Shipped gate.
+- Edge host adapters and cloud / multi-cloud placement.

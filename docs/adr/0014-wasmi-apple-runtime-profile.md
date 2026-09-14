@@ -1,6 +1,7 @@
 # ADR-0014: Select wasmi 1.1.0 for the Apple Runtime Profile
 
-- Status: Accepted
+- Status: Superseded
+- Superseded by: ADR-0070 (2026-09-13)
 - Date: 2026-07-20
 - Governing specs: `071-native-runtime-wasm-bridge`,
   `073-native-embedder-release-baseline`,
