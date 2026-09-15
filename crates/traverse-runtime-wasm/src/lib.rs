@@ -83,23 +83,23 @@ fn parse_execution_target(raw: &str) -> Option<ExecutionTarget> {
     }
 }
 
-fn default_permitted_targets() -> Vec<ExecutionTarget> {
-    vec![
-        ExecutionTarget::Local,
-        ExecutionTarget::Browser,
-        ExecutionTarget::Edge,
-        ExecutionTarget::Cloud,
-        ExecutionTarget::Worker,
-        ExecutionTarget::Device,
-    ]
+fn default_permitted_targets(host: &ExecutionTarget) -> Vec<ExecutionTarget> {
+    // Absent `permitted_targets` means "run here" — matching the default
+    // `host_placement_target`. Expanding to every ExecutionTarget would let
+    // equal-load heuristics pick Browser (lexicographically first) and fail
+    // closed against a Local host.
+    vec![host.clone()]
 }
 
-fn parse_permitted_targets(header: &serde_json::Value) -> Result<Vec<ExecutionTarget>, String> {
+fn parse_permitted_targets(
+    header: &serde_json::Value,
+    host: &ExecutionTarget,
+) -> Result<Vec<ExecutionTarget>, String> {
     let Some(entries) = header
         .get("permitted_targets")
         .and_then(serde_json::Value::as_array)
     else {
-        return Ok(default_permitted_targets());
+        return Ok(default_permitted_targets(host));
     };
     if entries.is_empty() {
         return Err("permitted_targets must not be empty when provided".to_string());
@@ -193,7 +193,6 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
                 .collect()
         })
         .unwrap_or_default();
-    let permitted_targets = parse_permitted_targets(&header)?;
     let host_placement_target = header
         .get("host_placement_target")
         .and_then(serde_json::Value::as_str)
@@ -203,6 +202,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         })
         .transpose()?
         .unwrap_or(ExecutionTarget::Local);
+    let permitted_targets = parse_permitted_targets(&header, &host_placement_target)?;
     let target_hint = header
         .get("target_hint")
         .and_then(serde_json::Value::as_str)

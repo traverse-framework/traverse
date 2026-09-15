@@ -59,6 +59,10 @@ fn workspace_root() -> PathBuf {
 fn build_runtime_wasm_artifact() -> PathBuf {
     let target_dir = workspace_root().join("target/runtime-wasm-host-test");
 
+    // Nested wasm32 builds must not inherit the outer llvm-cov /
+    // instrument-coverage RUSTFLAGS — the wasm32 target has no
+    // `profiler_builtins`, so coverage instrumentation fails the compile.
+    // Likewise clear wrapper env that only applies to the host triple.
     let status = Command::new("cargo")
         .args([
             "build",
@@ -68,6 +72,10 @@ fn build_runtime_wasm_artifact() -> PathBuf {
             "wasm32-unknown-unknown",
         ])
         .env("CARGO_TARGET_DIR", &target_dir)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .current_dir(workspace_root())
         .status()
         .expect("cargo build -p traverse-runtime-wasm must run");
