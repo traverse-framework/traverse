@@ -21,9 +21,11 @@ App bundles must include `runtime/runtime.wasm` plus
 supports linear `direct`-triggered pipelines; event-driven/conditional edges
 are rejected deterministically at `init`.
 
-**Migration (Phase 3):** the interim TypeScript `emit_event` host (#1404),
-`wasi.ts`, and per-capability Host ABI import gating are removed. Bundles
-without `runtime/runtime.wasm` fail closed at `init`.
+**Migration (Phase 3 / FR-010):** the interim TypeScript `emit_event` host
+(#1404), `wasi.ts`, and per-capability Host ABI import gating are removed.
+Bundles without `runtime/runtime.wasm` fail closed at `init`. This is a
+breaking embedder change; the next lockstep cut that publishes it MUST be
+`0.11.0` (or later), not a `0.10.x` patch.
 
 ```ts
 import { BundleEmbedder, FetchBundleLoader } from "traverse-embedder-web";
