@@ -1914,6 +1914,7 @@
       "governs": [
         "crates/traverse-native-bridge/",
         "crates/traverse-runtime/",
+        "crates/traverse-nested-wasm-spike/",
         "packages/web/TraverseEmbedder/",
         "specs/1402-runtime-wasm-orchestrator-convergence/",
         "docs/adr/0072-runtime-wasm-orchestrator-convergence.md",

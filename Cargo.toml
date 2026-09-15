@@ -8,6 +8,7 @@ members = [
   "crates/traverse-native-bridge",
   "crates/traverse-runtime",
   "crates/traverse-swift-host",
+  "crates/traverse-nested-wasm-spike",
 ]
 resolver = "3"
 

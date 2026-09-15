@@ -1,0 +1,23 @@
+[package]
+name = "traverse-nested-wasm-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Feasibility spike (#1403): wasmi-hosted capability execution (Spec 1402 Phase 1)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "spike_bench"
+path = "src/bin/spike_bench.rs"
+
+[dependencies]
+wasmi = { version = "2.0.0", default-features = false, features = ["stable", "validate", "portable-dispatch", "prefer-btree-collections"] }
+wat = "1"
+
+[lints]
+workspace = true

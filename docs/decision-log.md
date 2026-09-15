@@ -4028,3 +4028,52 @@ independently and closes the actually-reported gap.
 
 Approved by the owner in this owner-directed `/brainstorm` session
 (2026-09-14).
+
+## Decision 87: Proceed with Nested wasmi for `runtime.wasm` Capability Execution
+
+- **Date**: 2026-09-14
+- **Status**: Accepted
+- **Governing specs**: `1402-runtime-wasm-orchestrator-convergence` (Phase 1)
+- **ADR**: ADR-0072 (Accepted; spike evidence)
+- **Related issues**: `#1403` (spike), `#1402` (initiative)
+- **Origin**: Feasibility spike in `crates/traverse-nested-wasm-spike/`
+
+### Context
+
+Decision 86 / Spec 1402 gated Phase 2 on proving WASM-hosting-WASM via a
+pure-Rust interpreter (wasmi) before committing implementation detail.
+
+### Decision
+
+1. **Proceed with nested wasmi** as the capability executor inside a future
+   real `runtime.wasm` orchestrator. Spike evidence:
+   - wasmi 2.0.0 with `portable-dispatch` + `prefer-btree-collections`
+     successfully executes a WASI-command echo capability with stdin/stdout
+     JSON round-trip under fuel + memory limits.
+   - The same feature set compiles for `wasm32-unknown-unknown`.
+   - Tiny-echo nested cost is sub-millisecond per call on a native host
+     running that wasmi configuration (`spike_bench`).
+2. **Defer browser-instantiate C-ABI packaging** of the outer module until
+   an audited `unsafe_code` export boundary is approved (today only
+   `traverse-swift-host` may opt out). This does not reverse the nested-
+   interpreter choice; it only delays the browser packaging demonstration.
+3. **Do not adopt the ADR-0072 host-side-dispatch fallback** unless a later
+   Phase 2 measurement against realistic multi-MB capability payloads shows
+   unacceptable double-interpretation cost.
+
+### Alternatives considered
+
+- Host-side capability dispatch forever (orchestrator-only `runtime.wasm`):
+  deferred as fallback; spike did not require it.
+- Different interpreter (wasm3 / custom): rejected; wasmi 2.0.0 is already
+  production-vetted for Apple hosts (ADR-0070).
+
+### Outcome
+
+Phase 2 may assume nested wasmi. Follow-up: audited outer-module export ABI
+for browser hosts; payload-size benchmarks against `/discover`-class
+artifacts.
+
+### Approval
+
+Accepted as the recorded recommendation of spike `#1403`.
