@@ -3923,3 +3923,108 @@ package of the same version. Nothing named `0.12.2` exists in this org.
 `0.12.2` is not a Traverse package. Web consumers install
 `traverse-embedder-web` at the crate version. `#1393` backfills `0.10.2`;
 `#1394` makes lockstep the release helper default.
+
+## Decision 86: Converge Browser and Native Embedders on a Real `runtime.wasm` Orchestrator
+
+- **Date**: 2026-09-14
+- **Status**: Accepted
+- **Governing specs**: `1402-runtime-wasm-orchestrator-convergence` (new);
+  `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
+  `098-capability-event-host-abi`, `1277-browser-local-workflow-composition`
+  (unchanged, extended/amended)
+- **ADR**: `0072-runtime-wasm-orchestrator-convergence` (Accepted)
+- **Related issues**: `#1402` (tracking), `#1403` (feasibility spike),
+  `#1404` (interim patch)
+- **Origin**: Owner-directed `/brainstorm` session (2026-09-14), triggered by
+  an investigation into `traverse_host::emit_event` being a no-op stub in the
+  browser embedder.
+
+### Context
+
+`packages/web/TraverseEmbedder`'s `traverse_host::emit_event` is hardcoded to
+return `-1` in both `composedWorkflow.ts` and `bundleEmbedder.ts`, silently
+dropping every capability-declared business event instead of forwarding it to
+the browser host page — surfaced by a `/discover` demo that wanted progress
+events from a real ~31MB ML-model capability. Runtime lifecycle events
+(`capability_invoked`, `capability_result`, `state_changed`, `error`) already
+reach the host page via `EmbedderCore.emit`/`subscribe`; the gap is
+specifically capability-emitted business events (spec `098`).
+
+Investigating why led to three escalating findings, each surfaced live during
+the brainstorm and each changing the decision on the table:
+
+1. The browser package never adopted spec `071`'s `runtime.wasm` orchestrator
+   model. `BundleEmbedder` reimplements a thin per-capability executor by
+   hand in TypeScript, citing spec `068` FR-002 ("no nested WASM engine") —
+   but Decision 18 (`068`'s own origin) says all five platforms "load
+   application-owned runtime and capability bundles," and FR-002's literal
+   text lists "the runtime WASM" as required bundle content. The cited
+   justification looks like a misreading of the spec it invokes.
+2. Because it reimplements the executor, it also had to reimplement
+   `emit_event`'s validation logic instead of reusing
+   `crates/traverse-runtime/src/executor/wasm.rs`'s `handle_emit_event` — and
+   never did.
+3. `runtime.wasm` itself, as built by `crates/traverse-native-bridge`, is a
+   hand-authored WAT fixture returning hardcoded canned JSON for a fixed
+   3-event sequence. No real capability execution, `EventBroker`, or
+   `emit_event` validation exists inside it today, for any platform —
+   Swift/Kotlin/.NET's real, actively-shipping conformance work (ADR-0014,
+   ADR-0070, specs `074`/`075`/`136`) certifies the host bridge engine, not
+   the artifact's content. Additionally, nothing in this codebase addresses
+   running a capability WASM module from *inside* `runtime.wasm`
+   (WASM-hosting-WASM) — an unsolved feasibility question, not a solved one.
+
+### Decision
+
+1. **Commit to building a real `runtime.wasm`** — the actual
+   `traverse-runtime` `PlacementRouter`/`EventBroker`/`WasmExecutor` logic
+   compiled to `wasm32`, replacing the WAT fixture, exporting the unchanged
+   `071` ABI.
+2. **Gate the design on a feasibility spike first** (`#1403`): prove
+   nested-interpreter capability execution works inside a `wasm32`
+   orchestrator (most plausibly via `wasmi`, already production-vetted for
+   the Swift *host* role but never applied to this *embedded* role) before
+   committing to Phase 2/3 implementation details. If it doesn't pan out, the
+   spec is amended to the recommended alternative rather than proceeding on
+   an unproven premise.
+3. **Converge every embedder — native and browser — onto that one artifact**
+   once built and conformant, retiring both the native fixture and
+   `BundleEmbedder`'s hand-rolled executor, including spec `1277`'s
+   composed-execution path (security properties there unchanged — only what
+   executes the verified artifacts changes).
+4. **Ship a small, explicitly temporary interim patch now** (`#1404`):
+   implement `emit_event`'s validation directly in TypeScript, mirroring
+   `handle_emit_event` exactly, under the already-approved spec `098` (no new
+   governance needed — this is a conformance fix, not a new architectural
+   decision). This fixes the actually-reported `/discover` bug this cycle
+   without waiting on the larger initiative, and is removed once Phase 3
+   lands.
+
+### Alternatives considered
+
+- Patch the browser in place and keep two architectures indefinitely:
+  rejected; leaves the logic-duplication risk this gap exemplifies
+  permanently unaddressed for every future `traverse_host` function.
+- Adopt `runtime.wasm` for browser only, leave native's fixture as-is:
+  rejected; native has the identical underlying problem, just not yet
+  reported as a bug.
+- Skip the feasibility spike and commit directly to a nested-interpreter
+  design: rejected; WASM-hosting-WASM is genuinely unattempted here, and
+  committing FRs to an unproven mechanism risks the same kind of
+  spec-vs-reality drift this investigation just found in `068` FR-002.
+- Strategic spec/ADR only, leave the reported bug open until the real
+  orchestrator ships: rejected by the owner in favor of shipping the interim
+  patch alongside the strategic direction.
+
+### Outcome
+
+Spec `1402-runtime-wasm-orchestrator-convergence` (Approved) and ADR-0072
+(Accepted) are the governing artifacts. `#1402` tracks the multi-phase
+initiative; `#1403` (feasibility spike) gates Phase 2/3 detail; `#1404`
+(interim TypeScript patch, governed by existing spec `098`) ships
+independently and closes the actually-reported gap.
+
+### Approval
+
+Approved by the owner in this owner-directed `/brainstorm` session
+(2026-09-14).
