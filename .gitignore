@@ -21,3 +21,4 @@ external/
 benchmarks/results/*.json
 benchmarks/results/*.csv
 !benchmarks/results/baseline.json
+target-wasm/

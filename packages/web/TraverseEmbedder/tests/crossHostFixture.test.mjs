@@ -47,6 +47,16 @@ async function writeBrowserBundle(digest) {
       validation_evidence: [],
     }),
   );
+  const runtimeDir = join(root, "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  await copyFile(
+    new URL("fixtures/runtime.wasm", import.meta.url),
+    join(runtimeDir, "runtime.wasm"),
+  );
+  await copyFile(
+    new URL("fixtures/runtime.wasm.sha256", import.meta.url),
+    join(runtimeDir, "runtime.wasm.sha256"),
+  );
   const manifestPath = join(root, "app.manifest.json");
   await writeFile(
     manifestPath,

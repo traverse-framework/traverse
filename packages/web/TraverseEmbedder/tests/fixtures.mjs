@@ -1,12 +1,16 @@
 // Shared bundle fixture helpers for BundleEmbedder tests (mirrors the Rust
 // traverse-embedder crate's tests/common/mod.rs pattern): real WAT-compiled
 // WASI capability modules and a generated application bundle on disk.
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import initWabt from "wabt";
 
+const FIXTURES_DIR = dirname(fileURLToPath(import.meta.url));
+const RUNTIME_WASM_FIXTURE = join(FIXTURES_DIR, "fixtures/runtime.wasm");
+const RUNTIME_WASM_DIGEST_FIXTURE = join(FIXTURES_DIR, "fixtures/runtime.wasm.sha256");
 let wabtInstance = null;
 async function wabt() {
   wabtInstance ??= await initWabt();
@@ -230,6 +234,13 @@ export async function writeBundleFixture({ appId, components, workflow, compatib
     placement_policy: { preferred_targets: ["local"], allow_fallback: false },
     public_surfaces: ["cli"],
   });
+
+  // Bundle-owned runtime.wasm (spec 068 FR-002 / 1402 FR-006) — never shipped
+  // inside the npm package dist; tests copy the checked-in fixture.
+  const runtimeDir = join(root, "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  await copyFile(RUNTIME_WASM_FIXTURE, join(runtimeDir, "runtime.wasm"));
+  await copyFile(RUNTIME_WASM_DIGEST_FIXTURE, join(runtimeDir, "runtime.wasm.sha256"));
 
   return manifestPath;
 }
