@@ -3880,3 +3880,46 @@ exist and must not become that port.
 ### Approval
 
 Approved by the owner-filed `#1384` Definition of Done (2026-09-14).
+
+## Decision 85: Lockstep Crate and npm Versions on Every Traverse Release
+
+- **Date**: 2026-09-14
+- **Status**: Accepted
+- **Governing specs**: `048-semver-publishing-pipeline` (to be amended)
+- **Related issues**: `#1393` (backfill `traverse-embedder-web@0.10.2`),
+  `#1394` (helper + spec amendment)
+
+### Context
+
+A downstream web app tried to consume the just-shipped Traverse `v0.10.2`
+(misread as `0.12.2`) as `traverse-embedder-web@0.12.2` / `@0.10.2` and got
+404. Crates.io had `0.10.2`; npm only had `0.7.0` and `0.9.0`. Spec 048 made
+the web SDK an independent `web-v*` line, so a crate tag did not imply an npm
+package of the same version. Nothing named `0.12.2` exists in this org.
+
+### Decision
+
+1. **Lockstep public versions.** A Traverse release `X.Y.Z` publishes crates
+   `X.Y.Z` *and* `traverse-embedder-web@X.Y.Z`. Consumers can use one number.
+2. **Keep two tags / two pipelines.** `vX.Y.Z` still publishes crates.io;
+   `web-vX.Y.Z` still publishes npm via Trusted Publishing. The release
+   helper bumps Cargo workspace version and the web `package.json` / lockfile
+   to the same `X.Y.Z`, then both tags are pushed.
+3. **Backfill now.** Publish `traverse-embedder-web@0.10.2` from current
+   `main` so the already-cut crate release has a matching npm package. Then
+   amend spec 048 and `bump_version.sh` so the next cut is automatic.
+
+### Alternatives considered
+
+- Independent versions plus a consumption matrix each release — rejected;
+  apps still guess the npm number from the crate tag.
+- One `v*` tag publishes both crates and npm — rejected; keep the existing
+  OIDC `web-v*` workflow.
+- Leave npm at `0.9.0` until the next crate cut — rejected; `0.10.2` already
+  shipped and web consumers are blocked.
+
+### Outcome
+
+`0.12.2` is not a Traverse package. Web consumers install
+`traverse-embedder-web` at the crate version. `#1393` backfills `0.10.2`;
+`#1394` makes lockstep the release helper default.

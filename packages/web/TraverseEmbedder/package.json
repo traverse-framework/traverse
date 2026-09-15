@@ -1,6 +1,6 @@
 {
   "name": "traverse-embedder-web",
-  "version": "0.9.0",
+  "version": "0.10.2",
   "description": "Public Traverse platform embedder SDK for Web/TypeScript clients, implementing embedder-api/1.0.0 (spec 068)",
   "license": "Apache-2.0",
   "repository": {
