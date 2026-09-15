@@ -1915,7 +1915,8 @@
         "crates/traverse-runtime/",
         "packages/web/TraverseEmbedder/",
         "specs/1402-runtime-wasm-orchestrator-convergence/",
-        "docs/adr/0072-runtime-wasm-orchestrator-convergence.md"
+        "docs/adr/0072-runtime-wasm-orchestrator-convergence.md",
+        "docs/decision-log.md"
       ]
     }
   ]
