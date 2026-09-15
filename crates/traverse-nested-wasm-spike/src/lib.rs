@@ -96,7 +96,11 @@ fn wasi_fd_read(
     let Ok(capacity) = usize::try_from(buf_len) else {
         return WASI_ERRNO_INVAL;
     };
-    let remaining = caller.data().stdin.len().saturating_sub(caller.data().stdin_offset);
+    let remaining = caller
+        .data()
+        .stdin
+        .len()
+        .saturating_sub(caller.data().stdin_offset);
     let take = remaining.min(capacity);
     let start = caller.data().stdin_offset;
     let chunk = caller.data().stdin[start..start + take].to_vec();

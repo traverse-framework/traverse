@@ -67,7 +67,10 @@ fn main() {
     let elapsed = started.elapsed();
     let per_call_us = elapsed.as_secs_f64() * 1_000_000.0 / f64::from(iterations);
     println!("nested_wasmi_iterations={iterations}");
-    println!("nested_wasmi_total_ms={:.3}", elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "nested_wasmi_total_ms={:.3}",
+        elapsed.as_secs_f64() * 1000.0
+    );
     println!("nested_wasmi_per_call_us={per_call_us:.1}");
     println!("artifact_bytes={}", artifact.len());
     println!("stdout_bytes={}", last.len());
