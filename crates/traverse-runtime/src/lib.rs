@@ -27,6 +27,11 @@ pub mod parallel_proposal;
 pub mod placement;
 pub mod proposal;
 pub mod router;
+/// Production host driver for `runtime.wasm` (spec `1402` FR-003, Decision
+/// 89): loads a real bridge artifact, drives its ABI, and publishes the
+/// events it hands back to a real `EventBroker`.
+#[cfg(feature = "wasmtime-executor")]
+pub mod runtime_wasm_host;
 pub mod security;
 /// Spec `132` Stateful Browser activation attestation.
 pub mod stateful_browser;
