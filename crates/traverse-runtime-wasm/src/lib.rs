@@ -141,7 +141,9 @@ fn parse_runtime_snapshot(header: &serde_json::Value) -> Result<RuntimeSnapshot,
                 None
             }
         }) else {
-            return Err(format!("runtime_snapshot.{key} must be a finite f32-range number"));
+            return Err(format!(
+                "runtime_snapshot.{key} must be a finite f32-range number"
+            ));
         };
         target_loads.insert(target, load);
     }
@@ -204,9 +206,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
     let target_hint = header
         .get("target_hint")
         .and_then(serde_json::Value::as_str)
-        .map(|raw| {
-            parse_execution_target(raw).ok_or_else(|| format!("unknown target_hint: {raw}"))
-        })
+        .map(|raw| parse_execution_target(raw).ok_or_else(|| format!("unknown target_hint: {raw}")))
         .transpose()?;
     let runtime_snapshot = parse_runtime_snapshot(&header)?;
 
@@ -829,7 +829,10 @@ mod tests {
         assert_eq!(parsed.host_placement_target, ExecutionTarget::Browser);
         assert_eq!(parsed.target_hint, Some(ExecutionTarget::Local));
         assert_eq!(
-            parsed.runtime_snapshot.target_loads.get(&ExecutionTarget::Local),
+            parsed
+                .runtime_snapshot
+                .target_loads
+                .get(&ExecutionTarget::Local),
             Some(&0.2)
         );
     }
