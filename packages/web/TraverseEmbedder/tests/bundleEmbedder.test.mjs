@@ -12,10 +12,12 @@ import {
 } from "../dist/index.js";
 import {
   ECHO_WAT,
+  EMIT_TEST_EVENT_PAYLOAD,
   INVALID_OUTPUT_WAT,
   NONZERO_EXIT_WAT,
   UNAUTHORIZED_IMPORT_WAT,
   compileWat,
+  emitEventWat,
   sha256Digest,
   writeBundleFixture,
 } from "./fixtures.mjs";
@@ -409,4 +411,91 @@ test("real checked-in traverse-starter bundle loads and executes without a sidec
   const detail = embedder.traceGet("1.0.0", page.summaries[0].traceId);
   assert.equal(detail.summary.targetId, "traverse-starter.process");
   assert.equal(JSON.stringify(detail).includes("hello"), false);
+});
+
+// --- interim traverse_host::emit_event (spec 098 / issue #1404) ---
+
+const DECLARED_EMIT = [{ event_id: "dev.traverse.test.emitted", version: "1.0.0" }];
+
+test("emit_event: declared Subscribable event reaches subscribe() as capability_event", async () => {
+  const wasm = await compileWat(emitEventWat());
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{
+      capabilityId: "fixture.emit",
+      wasmBytes: wasm,
+      serviceType: "subscribable",
+      emits: DECLARED_EMIT,
+    }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+
+  const outcome = embedder.submit("fixture.emit", {});
+  assert.equal(outcome.status, "accepted");
+  assert.equal(events.map((e) => e.event_type).join(","), "capability_invoked,capability_event,capability_result");
+  assert.equal(events[1].data.event_id, "dev.traverse.test.emitted");
+  assert.equal(events[1].data.version, "1.0.0");
+  assert.deepEqual(events[1].data.payload, { n: 1 });
+  assert.equal(events[1].data.capability_id, "fixture.emit");
+  assert.equal(events[2].data.status, "completed");
+});
+
+test("emit_event: undeclared event is rejected without reaching subscribe()", async () => {
+  const wasm = await compileWat(emitEventWat());
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{
+      capabilityId: "fixture.emit",
+      wasmBytes: wasm,
+      serviceType: "subscribable",
+      emits: [{ event_id: "other.event", version: "1.0.0" }],
+    }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+
+  embedder.submit("fixture.emit", {});
+  assert.equal(events.some((e) => e.event_type === "capability_event"), false);
+  assert.equal(events.at(-1).event_type, "capability_result");
+});
+
+test("emit_event: non-Subscribable capability is rejected without reaching subscribe()", async () => {
+  const wasm = await compileWat(emitEventWat());
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{
+      capabilityId: "fixture.emit",
+      wasmBytes: wasm,
+      serviceType: "stateless",
+      emits: DECLARED_EMIT,
+    }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+
+  embedder.submit("fixture.emit", {});
+  assert.equal(events.some((e) => e.event_type === "capability_event"), false);
+  assert.equal(events.at(-1).event_type, "capability_result");
+});
+
+test("emit_event: malformed and oversized payloads reject without trapping", async () => {
+  const malformed = await compileWat(emitEventWat("not-json"));
+  const oversized = await compileWat(emitEventWat(EMIT_TEST_EVENT_PAYLOAD, 64 * 1024 + 1));
+  for (const wasmBytes of [malformed, oversized]) {
+    const manifestPath = await writeBundleFixture({
+      appId: "fixture-app",
+      components: [{
+        capabilityId: "fixture.emit",
+        wasmBytes,
+        serviceType: "subscribable",
+        emits: DECLARED_EMIT,
+      }],
+    });
+    const embedder = await initEmbedder(manifestPath);
+    const events = collectEvents(embedder);
+    embedder.submit("fixture.emit", {});
+    assert.equal(events.some((e) => e.event_type === "capability_event"), false);
+    assert.equal(events.at(-1).event_type, "capability_result");
+  }
 });

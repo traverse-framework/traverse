@@ -1286,6 +1286,7 @@
         "crates/traverse-runtime/src/executor/",
         "crates/traverse-runtime/src/router/",
         "crates/traverse-contracts/",
+        "packages/web/TraverseEmbedder/",
         "docs/adr/0035-capability-event-host-abi.md",
         "specs/969-capability-event-host-abi/"
       ]
