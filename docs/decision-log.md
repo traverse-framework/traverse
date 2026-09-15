@@ -4162,3 +4162,80 @@ publication.
 
 Accepted as the recorded outcome of an owner-directed `/brainstorm` session,
 2026-09-15.
+
+## Decision 89: `EventBroker` Durability Is Host-Owned, Not `runtime.wasm`-Owned
+
+- **Date**: 2026-09-15
+- **Status**: Accepted
+- **Governing specs**: `1402-runtime-wasm-orchestrator-convergence` (amended
+  1.1.0 -> 1.2.0, FR-003)
+- **Related issues**: `#1419` (closed by this clarification), `#1407`
+- **Origin**: Investigating `#1419` ("durable `EventBroker` feature parity
+  inside `runtime.wasm`") before implementation
+
+### Context
+
+`#1419` assumed `runtime.wasm`'s nested-wasmi guest must itself reproduce
+`DurableBroker`'s cross-execution publish/replay durability (an append-only
+filesystem journal, `fsync`, a background writer thread —
+`crates/traverse-runtime/src/events/broker.rs`/`durable.rs`/`journal.rs`).
+That is impossible inside this spec's own `wasm32-unknown-unknown` guest:
+spec `071` FR-008 already forbids ambient host capabilities — no filesystem,
+no threads — and `crates/traverse-runtime-wasm` has no dependency on
+`std::fs`, threads, or `traverse-runtime` itself (it depends only on `wasmi`
+and `traverse-contracts`).
+
+Checking how *native* capability execution already handles this found the
+answer already exists: `PlacementRouter`
+(`crates/traverse-runtime/src/router/mod.rs`) does not publish to
+`EventBroker` from inside the Wasmtime-hosted guest either. The executor
+collects `emitted_events` into its return value; only after guest execution
+returns does `PlacementRouter`, running in the host process, call
+`EventBroker::publish`. `crates/traverse-runtime-wasm` (landed in `#1407`,
+spec `1402` FR-011) already follows this exact shape — it collects events
+into `pending_events` and hands them across the ABI via `traverse_next_event`
+— without anyone having stated it as a deliberate architectural choice.
+
+### Decision
+
+1. **`EventBroker` durability is explicitly a host-side responsibility** for
+   `runtime.wasm`, matching the already-shipping native architecture — not
+   something the guest must own. Spec `1402` FR-003 amended to say so.
+2. **Close `#1419` as resolved by this clarification.** No new guest-side
+   code is needed for the parity `#1419` asked for; `#1407`'s existing
+   event-collection design already satisfies it once the host-owned
+   architecture is named.
+3. **File separately-scoped work for what's actually still missing**: a
+   production host-side driver that loads `runtime.wasm`, runs its
+   init/submit/next_event lifecycle for real dispatch, and publishes drained
+   events to a real `EventBroker`. Today only a test-only harness
+   (`crates/traverse-runtime/tests/native_bridge_conformance.rs`, its own
+   throwaway fixture) drives `runtime.wasm` at all. This is materially
+   larger than "durability parity" and was not scoped or estimated as part
+   of `#1419` — it is not built by this decision, only identified.
+
+### Alternatives considered
+
+- Build `DurableBroker`-equivalent persistence inside the guest via a
+  future host-provided storage import (mirroring spec `1285`'s
+  `traverse_host::state_*` pattern): rejected for this decision — `1285`'s
+  pattern is real precedent for guest-delegates-to-host persistence, but
+  wiring a new import surface is itself the kind of new architecture that
+  needs its own spec work, not something to fold into a "parity" ticket
+  silently.
+- Leave `#1419` open pending the host-side driver: rejected — conflates two
+  different pieces of work (a documentation/architecture clarification vs.
+  building the first production consumer of `runtime.wasm`) under one
+  ticket's DoD, exactly the kind of scope creep the minimality ladder exists
+  to prevent.
+
+### Outcome
+
+Spec `1402` amended to 1.2.0. `#1419` closes. A new issue tracks the
+host-side `runtime.wasm` driver as its own, honestly-sized piece of work.
+
+### Approval
+
+Accepted per this org's spec-approval policy: generated post-investigation,
+aligned with the owner-selected "document the reframe only" option in this
+session's direct exchange with the owner (2026-09-15).

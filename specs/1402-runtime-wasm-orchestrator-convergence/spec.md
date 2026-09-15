@@ -2,7 +2,7 @@
 
 **Status**: Approved
 **Canonical governing ID**: `1402-runtime-wasm-orchestrator-convergence`
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Extends**: `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
 `098-capability-event-host-abi`, `995-local-executor-event-emission`
 **Amends**: `1277-browser-local-workflow-composition` (its composed-execution
@@ -24,6 +24,27 @@ shared, engine-agnostic validation core," and a new FR-011 governs the new crate
 and audited `unsafe_code` boundary the real ABI export requires. FR-003, FR-004,
 Acceptance Scenario 2, and the Capability Boundary section are updated to match.
 No other requirement changed.
+
+**Amendment (2026-09-15, version 1.1.0 -> 1.2.0, approved 2026-09-15)**: Follow-up
+issue #1419 (durable `EventBroker` parity) assumed `runtime.wasm` itself must
+reproduce `DurableBroker`'s cross-execution publish/replay durability (filesystem
+journal, background writer thread, fsync). That is impossible inside this spec's
+own `wasm32-unknown-unknown` guest, which FR-008 (`071`) already forbids ambient
+host capabilities to — no filesystem, no threads. Investigating #1419 found the
+native architecture already resolves this the same way: `PlacementRouter`
+(`crates/traverse-runtime/src/router/mod.rs`) does not publish to `EventBroker`
+from inside the Wasmtime-hosted guest either — it collects `emitted_events` from
+the executor's return value and publishes them itself, in the host process, only
+after guest execution completes. `crates/traverse-runtime-wasm` (FR-011) already
+follows this exact shape (collects into `pending_events`, hands them across the
+ABI via `traverse_next_event`) without anyone having stated it as a requirement.
+FR-003 is amended to make this the explicit, named architecture — `EventBroker`
+durability is a host-side responsibility for `runtime.wasm` the same way it
+already is for native Wasmtime-hosted capabilities, not something the guest
+must own — closing #1419 as resolved by this clarification rather than new guest
+code. Building the first production host-side driver that loads `runtime.wasm`
+for real dispatch and publishes its drained events to a real `EventBroker`
+remains open work, tracked as a new, separately-scoped issue (not #1419's).
 
 ## Purpose
 
@@ -92,14 +113,22 @@ question, out of scope here as it was for the originating investigation).
 
 - **FR-003**: `crates/traverse-native-bridge`'s WAT fixture MUST be replaced
   by a real `wasm32` build implementing `traverse-runtime`'s
-  `PlacementRouter`, `EventBroker`, and capability-dispatch logic per the
-  nested-wasmi design Decision 87 recommends, exporting the unchanged
-  `runtime-wasm-bridge/1.0.0` ABI (`071`) so existing native host adapters
-  require no changes. Phase 2 MAY land incrementally across multiple PRs; an
-  intermediate PR's reduced scope (e.g. a minimal `PlacementRouter`/
-  `EventBroker` slice, a narrower conformance test) is not itself a spec
-  violation as long as FR-004's full bar is met before Phase 2 is tagged
-  complete and before any release.
+  `PlacementRouter` and capability-dispatch logic per the nested-wasmi design
+  Decision 87 recommends, exporting the unchanged `runtime-wasm-bridge/1.0.0`
+  ABI (`071`) so existing native host adapters require no changes.
+  `EventBroker` durability (persistence, replay) is explicitly a host-side
+  responsibility, not something `runtime.wasm` itself owns — the same
+  architecture already used for native Wasmtime-hosted capabilities, where
+  `PlacementRouter` publishes to `EventBroker` only after guest execution
+  returns (`crates/traverse-runtime/src/router/mod.rs`), never from inside
+  the guest. `runtime.wasm` MUST collect emitted events during execution and
+  hand them to the host across the ABI (`traverse_next_event`); the host
+  process — which owns the full native `traverse-runtime` crate — is
+  responsible for actually publishing them to `EventBroker`/`DurableBroker`.
+  Phase 2 MAY land incrementally across multiple PRs; an intermediate PR's
+  reduced scope (e.g. a minimal `PlacementRouter` slice, a narrower
+  conformance test) is not itself a spec violation as long as FR-004's full
+  bar is met before Phase 2 is tagged complete and before any release.
 - **FR-004**: The rebuilt `runtime.wasm` MUST pass the existing bridge and
   embedder conformance corpora (`071` Acceptance Scenario 4, `068` FR-009)
   before any release. This applies to Phase 2's completion/release gate, not
