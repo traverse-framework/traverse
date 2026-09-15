@@ -1,17 +1,15 @@
 /**
  * Production embedder: loads an application-owned bundle and executes
  * bundled WASM capabilities directly in the browser's native WebAssembly
- * host — no `traverse-cli serve`, no server round trip, no nested WASM
- * engine (spec 068 FR-002).
+ * host — no `traverse-cli serve`, no server round trip.
  *
- * Where the native Rust `traverse-embedder` crate embeds Wasmtime to run
- * bundled capability artifacts, the browser *is already* a WebAssembly
- * host: `BundleEmbedder` compiles each bundled capability module with
- * `WebAssembly.compile` once at `init`, validates its imports against the
- * Traverse Host ABI whitelist (`hostAbi.ts`), and instantiates + invokes it
- * synchronously per `submit` through a minimal WASI `preview1` shim
- * (`wasi.ts`) that pipes JSON stdin/stdout exactly like the native
- * `WasmExecutor`.
+ * INTERIM architecture: each capability module is compiled with
+ * `WebAssembly.compile` once at `init`, validated against the Traverse Host
+ * ABI whitelist (`hostAbi.ts`), and instantiated + invoked synchronously per
+ * `submit` through a minimal WASI `preview1` shim (`wasi.ts`) that pipes JSON
+ * stdin/stdout like the native `WasmExecutor`. Spec `1402-runtime-wasm-
+ * orchestrator-convergence` Phase 3 (#1408) will replace this hand-rolled
+ * path with a real `runtime.wasm` orchestrator; see ADR-0072.
  *
  * Workflow execution supports linear, `direct`-triggered pipelines only
  * (the shape used by every bundled example workflow today: `analyze` ->
