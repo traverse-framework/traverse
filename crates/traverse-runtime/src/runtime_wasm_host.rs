@@ -16,7 +16,7 @@ use uuid::Uuid;
 use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc};
 
 use crate::events::types::{EventBroker, EventError, LifecycleStatus, TraverseEvent};
-use traverse_contracts::{EventReference, ServiceType};
+use traverse_contracts::{EventReference, ExecutionTarget, ServiceType};
 
 /// Lifecycle bookkeeping event types `runtime.wasm` emits alongside domain
 /// events (spec 071's `$out`-shaped response convention) — not themselves
@@ -47,6 +47,38 @@ fn service_type_str(service_type: &ServiceType) -> &'static str {
         ServiceType::Stateful => "stateful",
         ServiceType::Stateless => "stateless",
     }
+}
+
+/// Matches `traverse-runtime-wasm`'s `parse_execution_target` wire strings
+/// exactly (spec `1402` FR-003/FR-004, Decision 88's shared placement core).
+fn execution_target_str(target: &ExecutionTarget) -> &'static str {
+    match target {
+        ExecutionTarget::Local => "local",
+        ExecutionTarget::Browser => "browser",
+        ExecutionTarget::Edge => "edge",
+        ExecutionTarget::Cloud => "cloud",
+        ExecutionTarget::Worker => "worker",
+        ExecutionTarget::Device => "device",
+    }
+}
+
+/// Metadata `RuntimeWasmHost::init` sends to the guest for one capability.
+///
+/// `host_placement_target` declares the [`ExecutionTarget`] this
+/// `runtime.wasm` instance itself runs at — nested execution only proceeds
+/// when the guest's shared `PlacementConstraintEvaluator` (spec `1402`
+/// FR-003/FR-004, Decision 88) selects this same target. `permitted_targets`
+/// restricts which targets that evaluator may choose from; passing just
+/// `host_placement_target` removes any ambiguity the evaluator would
+/// otherwise have to resolve.
+#[derive(Clone, Copy)]
+pub struct CapabilityInit<'a> {
+    pub capability_id: &'a str,
+    pub capability_version: &'a str,
+    pub service_type: &'a ServiceType,
+    pub declared_emits: &'a [EventReference],
+    pub host_placement_target: &'a ExecutionTarget,
+    pub permitted_targets: &'a [ExecutionTarget],
 }
 
 /// Drives one `runtime.wasm` instance's `runtime-wasm-bridge/1.0.0` ABI
@@ -192,8 +224,8 @@ impl RuntimeWasmHost {
         Ok((status, response))
     }
 
-    /// Calls `traverse_init` with the capability metadata and nested WASM
-    /// artifact bytes, using `crates/traverse-runtime-wasm`'s documented
+    /// Calls `traverse_init` with `capability`'s metadata and
+    /// `capability_wasm`, using `crates/traverse-runtime-wasm`'s documented
     /// init payload layout: a 4-byte little-endian header length, that many
     /// bytes of JSON metadata, then the raw capability artifact.
     ///
@@ -203,12 +235,17 @@ impl RuntimeWasmHost {
     /// any ABI call fails.
     pub fn init(
         &mut self,
-        capability_id: &str,
-        capability_version: &str,
-        service_type: &ServiceType,
-        declared_emits: &[EventReference],
+        capability: CapabilityInit<'_>,
         capability_wasm: &[u8],
     ) -> Result<Value, RuntimeWasmHostError> {
+        let CapabilityInit {
+            capability_id,
+            capability_version,
+            service_type,
+            declared_emits,
+            host_placement_target,
+            permitted_targets,
+        } = capability;
         let header = serde_json::json!({
             "capability_id": capability_id,
             "capability_version": capability_version,
@@ -219,6 +256,11 @@ impl RuntimeWasmHost {
                     "event_id": reference.event_id,
                     "version": reference.version,
                 }))
+                .collect::<Vec<_>>(),
+            "host_placement_target": execution_target_str(host_placement_target),
+            "permitted_targets": permitted_targets
+                .iter()
+                .map(execution_target_str)
                 .collect::<Vec<_>>(),
         });
         let header_bytes =
@@ -440,6 +482,16 @@ mod tests {
     }
 
     #[test]
+    fn execution_target_str_covers_every_variant() {
+        assert_eq!(execution_target_str(&ExecutionTarget::Local), "local");
+        assert_eq!(execution_target_str(&ExecutionTarget::Browser), "browser");
+        assert_eq!(execution_target_str(&ExecutionTarget::Edge), "edge");
+        assert_eq!(execution_target_str(&ExecutionTarget::Cloud), "cloud");
+        assert_eq!(execution_target_str(&ExecutionTarget::Worker), "worker");
+        assert_eq!(execution_target_str(&ExecutionTarget::Device), "device");
+    }
+
+    #[test]
     fn runtime_wasm_host_error_displays_a_stable_prefixed_message() {
         let error = err("something went wrong");
         assert_eq!(
@@ -469,10 +521,14 @@ mod tests {
         let artifact = wat::parse_str(REJECTING_FIXTURE_WAT).expect("wat parses");
         let mut host = RuntimeWasmHost::instantiate(&artifact).expect("instantiate");
         let result = host.init(
-            "example.rejecting",
-            "1.0.0",
-            &ServiceType::Subscribable,
-            &[],
+            CapabilityInit {
+                capability_id: "example.rejecting",
+                capability_version: "1.0.0",
+                service_type: &ServiceType::Subscribable,
+                declared_emits: &[],
+                host_placement_target: &ExecutionTarget::Local,
+                permitted_targets: &[ExecutionTarget::Local],
+            },
             b"",
         );
         let error = result.expect_err("init must be rejected");

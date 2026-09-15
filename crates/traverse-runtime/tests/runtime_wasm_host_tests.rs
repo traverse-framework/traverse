@@ -11,11 +11,11 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde_json::json;
-use traverse_contracts::{EventReference, ServiceType};
+use traverse_contracts::{EventReference, ExecutionTarget, ServiceType};
 use traverse_runtime::events::broker::InProcessBroker;
 use traverse_runtime::events::catalog::{EventCatalog, EventCatalogEntry};
 use traverse_runtime::events::types::{EventBroker, LifecycleStatus};
-use traverse_runtime::runtime_wasm_host::{RuntimeWasmHost, publish_domain_events};
+use traverse_runtime::runtime_wasm_host::{CapabilityInit, RuntimeWasmHost, publish_domain_events};
 
 /// A WASI-command capability that echoes stdin to stdout, then calls
 /// `traverse_host::emit_event` with a fixed declared domain event.
@@ -104,13 +104,17 @@ fn host_driver_runs_real_artifact_and_publishes_a_real_domain_event() {
 
     let init_response = host
         .init(
-            "example.host-driver-smoke",
-            "1.0.0",
-            &ServiceType::Subscribable,
-            &[EventReference {
-                event_id: "host.driver.smoke".to_string(),
-                version: "1.0.0".to_string(),
-            }],
+            CapabilityInit {
+                capability_id: "example.host-driver-smoke",
+                capability_version: "1.0.0",
+                service_type: &ServiceType::Subscribable,
+                declared_emits: &[EventReference {
+                    event_id: "host.driver.smoke".to_string(),
+                    version: "1.0.0".to_string(),
+                }],
+                host_placement_target: &ExecutionTarget::Local,
+                permitted_targets: &[ExecutionTarget::Local],
+            },
             &nested_capability,
         )
         .expect("traverse_init succeeds");
