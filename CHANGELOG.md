@@ -2,13 +2,46 @@
 
 ## Unreleased
 
-### Host connector command dispatch
+## v0.10.2 — 2026-09-14
 
+### Verified Registry application references
+
+- Hosts prepare an active signed Registry release into a host-owned cache
+  under immutable digest keys. `app validate`, `app register`, and
+  `app activate` consume prepared evidence only.
+
+### MCP hosts
+
+- Mode A verified-registry MCP host over host-owned verified public metadata.
+- Mode B: `traverse-mcp prepare-cache` then `traverse-mcp stdio --cache`
+  serves discover/validate/execute/report from that cache only.
+
+### Runtime and CLI
+
+- `component-wit-v1` activates exact `traverse:platform` WIT imports through
+  application-activated target-local bindings.
 - App runtime can dispatch a manifest-selected, explicitly activated host
   connector from a state-machine command (`audio.capture` first;
-  `model.execute` on the same port). Guest `connector_invoke` and the
-  Component WIT fake are not used. See
+  `model.execute` on the same port). See
   [docs/host-connector-command-dispatch.md](docs/host-connector-command-dispatch.md).
+- `serve` builds a persisted capability metadata index and hydrates
+  digest-verified contracts on demand.
+- `GET /v1/workspaces/{workspace}/apps/status` reports `ready`/`failed` app
+  availability; Registry-backed commands dispatch from the persisted
+  `state_machine`.
+- Default WASM linear memory raised to 32 MiB; `ArtifactRouter` forwards
+  concrete WASI diagnosis instead of a generic execution failure.
+- CLI: `workflow plan` and promote/finalize commands; capability authoring
+  metadata recorded at package time.
+- Adaptive composition is opt-in; plan-then-seal is the default.
+
+### Embedders
+
+- Browser-local deterministic workflow planner and offline composed-workflow
+  execution (Rust embedder and `traverse-embedder-web`).
+- Stateful browser placement via IndexedDB attestation; Host ABI
+  `state_get` / `state_put` / `state_delete`.
+- Web embedder npm Trusted Publishing via `web-v*` tags.
 
 ## v0.10.1 — 2026-09-09
 

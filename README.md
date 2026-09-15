@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-core%20100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.10.1-blue)](https://github.com/traverse-framework/traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.10.2-blue)](https://github.com/traverse-framework/traverse/releases)
 [![Registry](https://img.shields.io/badge/registry-82%20capabilities-6f42c1)](https://registry.traverse-framework.com/)
 
 **Define once. Run anywhere.**
@@ -147,15 +147,15 @@ Guides: [docs/wasm-microservice-authoring-guide.md](docs/wasm-microservice-autho
 
 ## Project state
 
-Traverse is **pre-1.0 (`v0.10.1`)** and spec-driven — every capability below is
+Traverse is **pre-1.0 (`v0.10.2`)** and spec-driven — every capability below is
 real, running, tested code.
 
 | | |
 |---|---|
-| **Runtime crates** | 8 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.10.1` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge` and `traverse-swift-host` are newer and not yet published. |
+| **Runtime crates** | 8 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.10.2` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge` and `traverse-swift-host` are newer and not yet published. |
 | **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io) and Web/TypeScript (npm) published; Swift/iOS+macOS (wasmi), Kotlin/Android (Chicory), and .NET/Windows (Wasmtime) in `packages/` with production runtime bridges, not yet on SwiftPM/Maven/NuGet. |
 | **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` `0.20.0` on crates.io; **82 capabilities / 185 signed versions / 31 domains** (147 non-deprecated) in the live catalog, all signed and CI-validated. |
-| **Governance** | **133 approved, immutable specs** gate the runtime, contracts, registry, MCP surface, WASM execution, native embedding, event delivery, and durable local storage. `jq -r '.specs[].id' specs/governance/approved-specs.json` |
+| **Governance** | **148 approved, immutable specs** gate the runtime, contracts, registry, MCP surface, WASM execution, native embedding, event delivery, and durable local storage. `jq -r '.specs[].id' specs/governance/approved-specs.json` |
 | **Quality bar** | 100% line coverage enforced on the core crates (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`); `traverse-cli-rs` 87%, `traverse-mcp` 98%. Spec-alignment and supply-chain gates on every PR. 5-target CI matrix: Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64. |
 | **Reference apps** | Web, iOS, macOS, Android, Windows, Linux, and CLI clients live in [`traverse-framework/reference-apps`](https://github.com/traverse-framework/reference-apps). |
 | **Latency** | No container runtime; one binary per platform. Measured cold-start and steady-state methodology in [docs/benchmarks.md](docs/benchmarks.md). |
@@ -287,7 +287,8 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 
 ### Releases
 
-- [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — current release notes
+- [docs/releases/v0.10.2.md](docs/releases/v0.10.2.md) — current release notes
+- [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — prior release notes
 - [docs/releases/v0.9.1.md](docs/releases/v0.9.1.md) — prior release notes
 - [docs/releases/v0.8.1.md](docs/releases/v0.8.1.md) — prior release notes
 
