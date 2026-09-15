@@ -180,6 +180,8 @@ required_files=(
   "specs/README.md"
   "scripts/ci/openapi_structural_validation.sh"
   "scripts/ci/spec_context_check.sh"
+  "scripts/ci/bump_version.sh"
+  "scripts/ci/bump_version_test.sh"
 )
 
 for file in "${required_files[@]}"; do
@@ -545,6 +547,9 @@ grep -q "## Governing Spec" .github/pull_request_template.md
 grep -q 'bash scripts/ci/rust_checks.sh' scripts/ci/local_preflight.sh
 grep -q 'cargo clippy --workspace --all-targets -- -D warnings' scripts/ci/rust_checks.sh
 grep -q 'bash scripts/ci/coverage_gate.sh' scripts/ci/local_preflight.sh
+
+echo "Running bump_version.sh fixture tests (spec 048)..."
+TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/bump_version_test.sh"
 
 echo "Running new-capability scaffold smoke..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/new_capability_scaffold_smoke.sh"

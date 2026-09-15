@@ -2,9 +2,9 @@
 
 **Feature Branch**: `048-semver-publishing-pipeline`
 **Created**: 2026-07-03
-**Amended**: 2026-09-09
+**Amended**: 2026-09-14
 **Status**: Approved
-**Version**: 1.2.0
+**Version**: 1.3.0
 **Input**: Cargo.toml workspace version has drifted from the git tag (0.5.0 in Cargo.toml, v0.7.0 tagged). No crates.io publishing is configured. No automated version bump exists. `repository` field still points to old org URL. This spec closes all three gaps.
 
 ## Purpose
@@ -41,13 +41,14 @@ As a downstream developer, I want all Traverse crates available on crates.io so 
 
 ### User Story 3 — Version bump is a single script, not manual edits (Priority: P1)
 
-As a release engineer, I want `bash scripts/ci/bump_version.sh <new-version>` to update Cargo.toml, commit, tag, and push so that version bumps have no manual file-editing step.
+As a release engineer, I want `bash scripts/ci/bump_version.sh <new-version>` to update Cargo and web package versions together, commit, and create both release tags so that version bumps have no manual file-editing step and crate/npm versions cannot drift.
 
 **Acceptance Scenarios**:
 
-1. **Given** current version `0.7.0`, **When** `bash scripts/ci/bump_version.sh 0.8.0` runs, **Then** `Cargo.toml` contains `version = "0.8.0"`, a commit `chore: bump version to v0.8.0` exists, and tag `v0.8.0` is created locally.
+1. **Given** current crate and web versions at `0.7.0`, **When** `bash scripts/ci/bump_version.sh 0.8.0` runs, **Then** `Cargo.toml` contains `version = "0.8.0"`, `packages/web/TraverseEmbedder/package.json` is `0.8.0`, a commit `chore: bump version to v0.8.0` exists, and local tags `v0.8.0` and `web-v0.8.0` are created.
 2. **Given** an invalid semver string like `foo`, **When** the script runs, **Then** it exits non-zero with a clear error before making any changes.
 3. **Given** the working tree has uncommitted changes, **When** the script runs, **Then** it exits non-zero and makes no changes.
+4. **Given** Cargo at `0.7.0` and web `package.json` at a different version, **When** `bash scripts/ci/bump_version.sh 0.8.0` runs, **Then** both are set to `0.8.0` in the same bump commit.
 
 ### User Story 4 — repository URL and crate metadata are correct (Priority: P0)
 
@@ -61,8 +62,9 @@ As a crates.io consumer, I want the `repository` and `homepage` fields in publis
 ### User Story 5 — Web embedder publication uses npm Trusted Publishing (Priority: P0)
 
 As a web consumer, I want `traverse-embedder-web` releases published from a
-reviewed `web-v<version>` tag using GitHub OIDC, so that publication is
-reproducible and never depends on a long-lived npm token.
+reviewed `web-v<version>` tag using GitHub OIDC at the same `X.Y.Z` as the
+crate release, so that publication is reproducible, lockstep with crates.io,
+and never depends on a long-lived npm token.
 
 **Acceptance Scenarios**:
 
@@ -74,6 +76,11 @@ reproducible and never depends on a long-lived npm token.
 3. **Given** the same web tag is rerun after publication, **When** npm reports
    that version already exists, **Then** the workflow succeeds without replacing
    the published artifact.
+4. **Given** a `web-v*` tag whose version differs from the Cargo workspace
+   version, **When** the web publish workflow runs, **Then** it fails before
+   publication.
+5. **Given** a `v*` tag whose version differs from web `package.json`, **When**
+   `version-guard` runs, **Then** it fails before crate publication.
 
 ## Functional Requirements
 
@@ -83,13 +90,15 @@ reproducible and never depends on a long-lived npm token.
 - **FR-004**: CI MUST include a `publish` job triggered only on `push` of a `v*` tag, publishing crates in dependency order.
 - **FR-005**: `scripts/ci/bump_version.sh <semver>` MUST validate input is a valid semver string before making any changes.
 - **FR-006**: `bump_version.sh` MUST refuse to run on a dirty working tree.
-- **FR-007**: `bump_version.sh` MUST restrict its edits to `Cargo.toml` and `Cargo.lock` — no other files. In `Cargo.toml` it updates `[workspace.package] version` and the matching `[workspace.dependencies]` path-crate `version =` pins; in `Cargo.lock` it updates the `version = "…"` line of each workspace path crate only (`[[package]]` entries named `traverse-*` that carry no `source` line). If any other file shows as changed, the script MUST abort without committing.
+- **FR-007**: `bump_version.sh` MUST restrict its edits to `Cargo.toml`, `Cargo.lock`, `packages/web/TraverseEmbedder/package.json`, and `packages/web/TraverseEmbedder/package-lock.json` — no other files. In `Cargo.toml` it updates `[workspace.package] version` and the matching `[workspace.dependencies]` path-crate `version =` pins; in `Cargo.lock` it updates the `version = "…"` line of each workspace path crate only (`[[package]]` entries named `traverse-*` that carry no `source` line); in the web package it sets both `package.json` and `package-lock.json` (root and `packages[""]`) to the same semver. If any other file shows as changed, the script MUST abort without committing.
 - **FR-008**: After `bump_version.sh`, running `cargo build` MUST succeed without manual intervention, and `cargo metadata --locked` (equivalently `cargo build --locked`) MUST succeed with no further change to `Cargo.lock`.
-- **FR-009**: `bump_version.sh` MUST stage `Cargo.toml` and `Cargo.lock` together in the single `chore: bump version to v<version>` commit, so the tree is tag-ready in one step with no follow-up lockfile-sync commit.
+- **FR-009**: `bump_version.sh` MUST stage the Cargo and web version files together in the single `chore: bump version to v<version>` commit, create local tags `v<version>` and `web-v<version>`, and leave the tree dual-tag-ready in one step with no follow-up lockfile-sync commit.
 - **FR-010**: CI MUST fail a `Cargo.toml`/`Cargo.lock` version drift before the `publish` job runs. The `version-guard` job MUST run `cargo metadata --locked` on every `push`, `pull_request`, and `v*` tag, and `publish` MUST depend on `version-guard`.
 - **FR-011**: A dedicated workflow MUST trigger only for `web-v*` tags and publish `packages/web/TraverseEmbedder` through npm Trusted Publishing with `id-token: write` and `contents: read`; it MUST NOT reference `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
-- **FR-012**: The web workflow MUST use a committed npm lockfile, run `npm ci`, validate that `web-v<version>` exactly matches `package.json`, build, test, and publish with `npm publish --provenance --access public`.
-- **FR-013**: Web publication reruns MUST be idempotent: an already-published exact version is a successful no-op. The release runbook MUST document the OIDC model, `web-v<version>` tag creation, and post-publish verification.
+- **FR-012**: The web workflow MUST use a committed npm lockfile, run `npm ci`, validate that `web-v<version>` exactly matches `package.json`, validate that the Cargo workspace version equals the same `<version>`, build, test, and publish with `npm publish --provenance --access public`.
+- **FR-013**: Web publication reruns MUST be idempotent: an already-published exact version is a successful no-op. The release runbook MUST document the OIDC model, dual-tag cut (`v<version>` and `web-v<version>`), and post-publish verification.
+- **FR-014**: At each Traverse release `X.Y.Z`, the Cargo workspace version and `traverse-embedder-web` npm version MUST be identical. Web is not an independent version line.
+- **FR-015**: On every `v*` release tag, `version-guard` MUST fail when web `package.json` version does not equal the tag version (without the leading `v`).
 
 ## Non-Functional Requirements
 
@@ -140,3 +149,16 @@ personal npm credential.
 target. `web-v<version>` tags bind an exact package version, a committed lockfile
 makes installation reproducible, and provenance is attached by npm. This is
 additive: the crate publishing interface and `v<version>` tags are unchanged.
+
+### 1.3.0 — 2026-09-14
+
+**Owner**: Traverse maintainers (issue #1394 / Decision 85). **Rationale**:
+independent `web-v*` versions let crate and npm lines diverge, so consumers
+guessing `traverse-embedder-web@X.Y.Z` from a crate tag got 404s.
+
+**Changes**: crate and npm versions MUST lockstep at each Traverse release
+`X.Y.Z`. `bump_version.sh` updates Cargo and the web package/lockfile in one
+commit and creates both `vX.Y.Z` and `web-vX.Y.Z`. `version-guard` fails a
+`v*` tag whose web `package.json` does not match; the web publish workflow
+fails a `web-v*` tag whose Cargo workspace version does not match. FR-007,
+FR-009, FR-012, and FR-013 amended; FR-014 and FR-015 added.
