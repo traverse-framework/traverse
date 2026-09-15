@@ -110,6 +110,25 @@ here:
 - Full browser + HTTP walkthrough → [quickstart.md](quickstart.md)
 - Author your own capability → [docs/capability-contract-authoring-guide.md](docs/capability-contract-authoring-guide.md)
 
+## Install
+
+Public packages are on [crates.io](https://crates.io) and
+[npmjs](https://www.npmjs.com/package/traverse-embedder-web), not GitHub
+Packages. Current release: **v0.10.2**.
+
+```bash
+# Rust
+cargo add traverse-runtime@0.10.2
+cargo add traverse-embedder@0.10.2
+# also: traverse-contracts, traverse-mcp, traverse-cli-rs,
+#       traverse-expedition-wasm
+
+# Web / TypeScript
+npm install traverse-embedder-web@0.10.2
+```
+
+Swift, Maven, and NuGet packages are not published yet.
+
 ---
 
 ## Where it runs
