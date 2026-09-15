@@ -40,6 +40,28 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
             exit 1
           fi
+      - name: Verify Cargo workspace version matches package version
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/web/TraverseEmbedder/package.json').version")"
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          if [[ "${workspace_version}" != "${package_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match web package ${package_version}." >&2
+            exit 1
+          fi
+          echo "Cargo workspace ${workspace_version} matches web package ${package_version}."
       - name: Build
         run: npm run build
       - name: Test

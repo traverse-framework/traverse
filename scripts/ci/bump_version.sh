@@ -27,8 +27,22 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 tag_name="v${new_version}"
+web_tag_name="web-v${new_version}"
 if git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
   echo "Tag ${tag_name} already exists." >&2
+  exit 1
+fi
+if git rev-parse --verify --quiet "refs/tags/${web_tag_name}" >/dev/null; then
+  echo "Tag ${web_tag_name} already exists." >&2
+  exit 1
+fi
+
+web_package_json="packages/web/TraverseEmbedder/package.json"
+web_package_lock="packages/web/TraverseEmbedder/package-lock.json"
+if [[ ! -f "${web_package_json}" || ! -f "${web_package_lock}" ]]; then
+  echo "Missing web package files required for lockstep bump:" >&2
+  echo "  ${web_package_json}" >&2
+  echo "  ${web_package_lock}" >&2
   exit 1
 fi
 
@@ -161,19 +175,41 @@ awk -v new_version="${new_version}" '
 
 mv "${lock_tmp_file}" Cargo.lock
 
+# Lockstep Decision 85: set traverse-embedder-web to the same X.Y.Z.
+node - "${web_package_json}" "${web_package_lock}" "${new_version}" <<'NODE'
+const fs = require("fs");
+const [packagePath, lockPath, version] = process.argv.slice(2);
+
+const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+packageJson.version = version;
+fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+const packageLock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+packageLock.version = version;
+if (
+  packageLock.packages &&
+  Object.prototype.hasOwnProperty.call(packageLock.packages, "")
+) {
+  packageLock.packages[""].version = version;
+}
+fs.writeFileSync(lockPath, `${JSON.stringify(packageLock, null, 2)}\n`);
+NODE
+
 changed_files="$(git diff --name-only)"
-unexpected_files="$(printf '%s\n' "${changed_files}" | grep -vxE 'Cargo\.toml|Cargo\.lock' || true)"
+unexpected_files="$(printf '%s\n' "${changed_files}" | grep -vxE 'Cargo\.toml|Cargo\.lock|packages/web/TraverseEmbedder/package\.json|packages/web/TraverseEmbedder/package-lock\.json' || true)"
 if [[ -n "${unexpected_files}" ]]; then
   echo "Version bump changed unexpected files:" >&2
   echo "${unexpected_files}" >&2
   exit 1
 fi
 
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock "${web_package_json}" "${web_package_lock}"
 git commit -m "chore: bump version to ${tag_name}"
 git tag "${tag_name}"
+git tag "${web_tag_name}"
 
-echo "Created commit and local tag ${tag_name}."
+echo "Created commit and local tags ${tag_name} and ${web_tag_name}."
 echo "Push explicitly with:"
 echo "  git push origin main"
 echo "  git push origin ${tag_name}"
+echo "  git push origin ${web_tag_name}"

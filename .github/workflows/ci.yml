@@ -60,6 +60,8 @@ jobs:
             END { if (!found) exit 1 }
           ' Cargo.toml)"
 
+          web_version="$(node -p "require('./packages/web/TraverseEmbedder/package.json').version")"
+
           if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
             echo "No release tag present; version guard passes for ${GITHUB_REF:-unknown ref}."
             exit 0
@@ -77,7 +79,12 @@ jobs:
             exit 1
           fi
 
-          echo "Cargo.toml workspace version ${workspace_version} matches ${tag_name}."
+          if [[ "${web_version}" != "${tag_version}" ]]; then
+            echo "Web package.json version ${web_version} does not match tag ${tag_name}." >&2
+            exit 1
+          fi
+
+          echo "Cargo.toml workspace version ${workspace_version} and web package ${web_version} match ${tag_name}."
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
