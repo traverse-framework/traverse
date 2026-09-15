@@ -151,6 +151,11 @@ fn wasi_proc_exit(_caller: Caller<'_, WasiState>, _code: i32) {
 }
 
 /// Execute `artifact` as a WASI command module with `input` as stdin JSON bytes.
+///
+/// # Errors
+///
+/// Returns a stable, secret-free error string when module validation, linking,
+/// fuel setup, or execution fails.
 pub fn execute_capability(artifact: &[u8], input: &[u8]) -> Result<Vec<u8>, String> {
     let mut config = Config::default();
     config.consume_fuel(true);
@@ -216,10 +221,13 @@ mod tests {
     "#;
 
     #[test]
-    fn nested_wasmi_echoes_stdin_to_stdout() {
-        let artifact = wat::parse_str(ECHO_WAT).expect("wat parses");
+    fn nested_wasmi_echoes_stdin_to_stdout() -> Result<(), String> {
+        let artifact = wat::parse_str(ECHO_WAT).map_err(|error| format!("wat: {error}"))?;
         let input = br#"{"hello":"nested"}"#;
-        let output = execute_capability(&artifact, input).expect("execute");
-        assert_eq!(output, input);
+        let output = execute_capability(&artifact, input)?;
+        if output != input {
+            return Err("stdout mismatch".to_string());
+        }
+        Ok(())
     }
 }
