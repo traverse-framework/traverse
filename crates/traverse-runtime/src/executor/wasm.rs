@@ -28,7 +28,13 @@ use super::{
 };
 use crate::data_store::{DataStoreErrorCode, InMemoryDataStore, RuntimeDataStore};
 use crate::events::types::{LifecycleStatus, TraverseEvent};
-use traverse_contracts::{ConnectorRequirement, EventReference, ServiceType};
+// `emit_event`'s error codes / OK status are the shared core's (spec 1402
+// FR-005/FR-011) — not redefined here, so native and nested engines cannot
+// drift on their values.
+use traverse_contracts::{
+    ConnectorRequirement, EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_OK, EventReference,
+    ServiceType,
+};
 
 /// Traverse Host ABI v1 is independently versioned from the runtime crate.
 pub const SUPPORTED_HOST_ABI_VERSION: &str = "1.0.0";
@@ -49,26 +55,6 @@ const DEFAULT_INSTANCE_LIMIT: usize = 1;
 const DEFAULT_TABLE_LIMIT: usize = 8;
 const DEFAULT_LINEAR_MEMORY_LIMIT: usize = 1;
 const DEFAULT_MODULE_CACHE_MAX_ENTRIES: usize = 64;
-
-/// Maximum bytes accepted for one `traverse_host::emit_event` payload
-/// (spec 098-capability-event-host-abi FR-008). Enforced before the guest
-/// memory read, and before deserialization.
-const MAX_EVENT_EMIT_PAYLOAD_BYTES: usize = 64 * 1024;
-
-/// `traverse_host::emit_event` accepted the event; it will be published to
-/// `EventBroker` once execution completes (spec 098 acceptance scenario 1).
-const EMIT_EVENT_OK: i32 = 0;
-/// The guest-supplied pointer/length was out of the guest's linear memory
-/// bounds, or the payload exceeded [`MAX_EVENT_EMIT_PAYLOAD_BYTES`], or the
-/// bytes were not a valid JSON object with `event_id`/`version` string
-/// fields (spec 098 FR-008, acceptance scenario 5).
-const EMIT_EVENT_ERR_INVALID_PAYLOAD: i32 = -1;
-/// The event type/version is not declared in the calling capability's
-/// contract `emits` list (spec 098 FR-002, acceptance scenario 2).
-const EMIT_EVENT_ERR_UNDECLARED_EVENT: i32 = -2;
-/// The calling capability's `service_type` is not `Subscribable` (spec 098
-/// FR-003, acceptance scenario 3).
-const EMIT_EVENT_ERR_NOT_SUBSCRIBABLE: i32 = -3;
 
 /// Maximum bytes accepted for one `traverse_host::state_*` envelope
 /// (spec `1285-capability-state-host-abi` FR-007). Same bound as `emit_event`.
@@ -1197,21 +1183,13 @@ fn map_state_store_error(code: DataStoreErrorCode) -> i32 {
 /// malformed or out-of-bounds guest pointer (FR-008) — every failure path
 /// returns a negative status code to the guest instead.
 fn handle_emit_event(mut caller: Caller<'_, WasmStoreState>, ptr: i32, len: i32) -> i32 {
-    // FR-003: checked before any guest memory is touched — rejected
-    // regardless of payload.
-    if caller.data().service_type != ServiceType::Subscribable {
-        return EMIT_EVENT_ERR_NOT_SUBSCRIBABLE;
-    }
-
-    // FR-008: bounds/size checked before any read or deserialization.
+    // FR-008: bounds checked before any read — negative values never reach
+    // the shared validation core, which only ever sees a safe slice.
     if ptr < 0 || len < 0 {
         return EMIT_EVENT_ERR_INVALID_PAYLOAD;
     }
     #[allow(clippy::cast_sign_loss)]
     let (ptr, len) = (ptr as usize, len as usize);
-    if len > MAX_EVENT_EMIT_PAYLOAD_BYTES {
-        return EMIT_EVENT_ERR_INVALID_PAYLOAD;
-    }
 
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return EMIT_EVENT_ERR_INVALID_PAYLOAD;
@@ -1220,54 +1198,41 @@ fn handle_emit_event(mut caller: Caller<'_, WasmStoreState>, ptr: i32, len: i32)
     let mut buffer = vec![0u8; len];
     // `Memory::read` bounds-checks `ptr + len` against actual guest memory
     // size and returns `Err` rather than panicking or reading out of bounds.
+    // A length over the shared core's own bound is still read here (bounded
+    // by the guest's own memory size) so the core sees the real payload and
+    // reports the same `InvalidPayload` error it would for any other engine.
     if memory.read(&caller, ptr, &mut buffer).is_err() {
         return EMIT_EVENT_ERR_INVALID_PAYLOAD;
     }
 
-    let Ok(payload) = serde_json::from_slice::<Value>(&buffer) else {
-        return EMIT_EVENT_ERR_INVALID_PAYLOAD;
+    // Everything past this point — payload shape, size bound, declared-emits
+    // check, error codes — is the shared core (spec 1402 FR-005/FR-011),
+    // identical to the nested-wasmi executor's own call into it.
+    let declared = caller.data().emits.clone();
+    let validated = match traverse_contracts::validate_emit_event(
+        &buffer,
+        &caller.data().service_type,
+        &declared,
+    ) {
+        Ok(validated) => validated,
+        Err(error) => return error.code(),
     };
-    let Some(event_type) = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return EMIT_EVENT_ERR_INVALID_PAYLOAD;
-    };
-    let Some(version) = payload
-        .get("version")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return EMIT_EVENT_ERR_INVALID_PAYLOAD;
-    };
-    let data = payload
-        .get("payload")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-
-    // FR-002: declared-emission check, synchronous, at call time.
-    let declared = caller
-        .data()
-        .emits
-        .iter()
-        .any(|decl| decl.event_id == event_type && decl.version == version);
-    if !declared {
-        return EMIT_EVENT_ERR_UNDECLARED_EVENT;
-    }
 
     let capability_id = caller.data().capability_id.clone();
     let event = TraverseEvent {
         id: Uuid::new_v4().to_string(),
         source: format!("traverse-runtime/{capability_id}"),
-        event_type: event_type.clone(),
+        event_type: validated.event_type.clone(),
         datacontenttype: "application/json".to_string(),
         time: Utc::now().to_rfc3339(),
-        data,
+        data: validated.data,
         owner: capability_id.clone(),
-        version: version.clone(),
+        version: validated.version.clone(),
         lifecycle_status: LifecycleStatus::Active,
-        deduplication_id: Some(format!("{capability_id}:{event_type}:{version}")),
+        deduplication_id: Some(format!(
+            "{capability_id}:{}:{}",
+            validated.event_type, validated.version
+        )),
         ordering_scope: Some(capability_id),
         correlation_id: None,
         causation_id: None,

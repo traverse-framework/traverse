@@ -4077,3 +4077,88 @@ artifacts.
 ### Approval
 
 Accepted as the recorded recommendation of spike `#1403`.
+
+## Decision 88: FR-005 Amendment, `traverse-runtime-wasm` Crate, and Phase 2 Scope Split for `runtime.wasm`
+
+- **Date**: 2026-09-15
+- **Status**: Accepted
+- **Governing specs**: `1402-runtime-wasm-orchestrator-convergence` (amended
+  1.0.0 -> 1.1.0, FR-003/FR-004/FR-005/FR-011)
+- **ADR**: ADR-0073 (Accepted; new audited `unsafe_code` exception)
+- **Related issues**: `#1407` (Phase 2), `#1408` (Phase 3), `#1402`
+  (umbrella)
+- **Origin**: Owner-directed `/brainstorm` session (2026-09-15), triggered by
+  implementing `#1407` and finding FR-005's original text unsatisfiable
+
+### Context
+
+Claiming `#1407` surfaced that FR-005's "same compiled code path, not a
+second implementation" is impossible as written: `WasmExecutor`
+(`crates/traverse-runtime/src/executor/wasm.rs`) is built on Wasmtime, which
+cannot itself target `wasm32`, so the nested-wasmi executor Decision 87
+already chose cannot literally be the same compiled binary. Spec `1402`'s own
+Acceptance Scenario 1 anticipated exactly this: a different dispatch design
+than assumed triggers a spec amendment before Phase 2 FRs are binding. Two
+further open questions surfaced alongside it: where the C-ABI export
+boundary's unavoidable `unsafe` code should live, given the workspace denies
+`unsafe_code` everywhere except the single named `traverse-swift-host`
+exception; and how large the first implementation PR against #1407's full
+Definition of Done should be, given it spans full `PlacementRouter`/
+`EventBroker` parity, three-native-host-profile conformance, and registry
+digest publication.
+
+### Decision
+
+1. **FR-005 amendment: shared validation core, not shared binary.** The
+   `emit_event` validation logic (payload-bound check, declared-`emits`
+   check, error-code mapping) moves into an engine-agnostic function in
+   `crates/traverse-contracts` (already home to `EventReference`), operating
+   on plain `&[u8]` and `&[EventReference]` — no `wasmtime` or `wasmi` types.
+   Both `crates/traverse-runtime` (native) and the new nested executor call
+   into it after their own engine-specific code produces a safe slice. This
+   satisfies FR-005's intent (identical validation behavior, single source of
+   truth) without requiring a literal single compiled code path, which the
+   Wasmtime/`wasm32` conflict makes impossible.
+2. **New crate `crates/traverse-runtime-wasm`** houses the nested-wasmi
+   executor and the `071` FR-006 C-ABI export boundary, with its own narrow,
+   audited `#![allow(unsafe_code)]` exception (ADR-0073) — mirroring the
+   `traverse-swift-host`/Spec-076 precedent rather than repurposing the
+   spike crate (`traverse-nested-wasm-spike`, kept `#![deny(unsafe_code)]`
+   and unmodified as historical record) or broadening `traverse-swift-host`'s
+   own exception to an unrelated boundary.
+3. **Phase 2 lands incrementally.** #1407's full Definition of Done (complete
+   `PlacementRouter`/`EventBroker` parity, full three-native-host-profile
+   release conformance, registry digest publication per spec `075`) is too
+   large for one PR. The first PR delivers the foundational slice — shared
+   validation core, `traverse-runtime-wasm` crate with a minimal
+   `PlacementRouter`/`EventBroker` path, and a narrow conformance test
+   (single capability dispatch + `emit_event` parity) — with the remaining
+   scope split into separate follow-up issues linked from `#1407`. FR-004's
+   full conformance bar still gates Phase 2's actual completion/release, not
+   any individual PR.
+
+### Alternatives considered
+
+- Two independent `emit_event` implementations with only shared test
+  fixtures for parity: rejected — real ongoing drift risk if one is edited
+  without the other, versus a shared core that makes drift structurally
+  impossible.
+- Repurpose `traverse-nested-wasm-spike` into the production crate: rejected
+  — blurs the reviewed spike-only scope; its tests/benchmarks were written
+  for spike purposes, not ABI conformance.
+- Attempt #1407's full Definition of Done in one PR: rejected as
+  disproportionately large and high-risk for a single review cycle, against
+  this org's minimality-ladder guidance to split into follow-up tickets
+  rather than expand an active slice.
+
+### Outcome
+
+Spec `1402` amended to 1.1.0. ADR-0073 accepted. `#1407` proceeds against the
+foundational slice; follow-up issues track full `PlacementRouter`/
+`EventBroker` parity, the full three-host conformance run, and registry
+publication.
+
+### Approval
+
+Accepted as the recorded outcome of an owner-directed `/brainstorm` session,
+2026-09-15.

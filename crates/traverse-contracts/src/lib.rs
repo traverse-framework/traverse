@@ -5,9 +5,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
+pub mod emit_event;
 pub mod proposal;
 pub mod usage_telemetry;
 pub mod violations;
+pub use emit_event::{
+    EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,
+    EMIT_EVENT_ERR_UNDECLARED_EVENT, EMIT_EVENT_OK, EmitEventError, MAX_EVENT_EMIT_PAYLOAD_BYTES,
+    ValidatedEmitEvent, validate_emit_event,
+};
 pub use proposal::{
     CanonicalProposal, DEFAULT_MAX_CONCURRENT_NODES, DEFAULT_MAX_FAN_OUT, DEFAULT_MAX_JOIN_WIDTH,
     DEFAULT_MAX_QUEUE_DEPTH, ManifestReference, MappingSource, ParallelSchedule,

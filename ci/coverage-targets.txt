@@ -12,3 +12,12 @@ traverse-embedder 100
 traverse-mcp 98
 # Audited production C-ABI boundary; ADR-0018 records the measured ratchet.
 traverse-swift-host 78
+# Audited runtime.wasm C-ABI boundary (ADR-0073): the exported extern "C"
+# functions take raw i32 addresses that are only valid pointers on an actual
+# wasm32 target's 32-bit address space — reconstructing them on this native
+# 64-bit test host is undefined behavior (verified: it segfaults). Their
+# pointer marshalling is exercised by the wasm32-unknown-unknown build and
+# the real cross-host conformance run (#1420), not native unit tests. The
+# safe internal logic (executor.rs, parse_init_payload, submit) is unit
+# tested directly; 70 is the measured floor for the crate as a whole.
+traverse-runtime-wasm 70

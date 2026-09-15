@@ -1,0 +1,26 @@
+[package]
+name = "traverse-runtime-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Nested-wasmi runtime.wasm orchestrator: the wasm32 executor and audited C-ABI export boundary (Spec 1402 Phase 2, FR-011)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+# cdylib: `wasm32-unknown-unknown` produces the loadable `runtime.wasm`
+# artifact itself. rlib: keeps `cargo test`'s native unit tests working.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+traverse-contracts = { workspace = true }
+serde_json = "1.0.145"
+wasmi = { version = "2.0.0", default-features = false, features = ["stable", "validate", "portable-dispatch", "prefer-btree-collections"] }
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

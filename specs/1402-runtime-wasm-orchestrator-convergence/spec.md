@@ -2,7 +2,7 @@
 
 **Status**: Approved
 **Canonical governing ID**: `1402-runtime-wasm-orchestrator-convergence`
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Extends**: `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
 `098-capability-event-host-abi`, `995-local-executor-event-emission`
 **Amends**: `1277-browser-local-workflow-composition` (its composed-execution
@@ -10,6 +10,20 @@ mechanism migrates under this spec's Phase 3; its security model does not
 change)
 **Input**: Issue #1402; ADR-0072; `/brainstorm` session recorded as Decision 86
 in `docs/decision-log.md`.
+
+**Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**: FR-002's
+gate resolved — Decision 87 (spike `#1403`, ADR-0072) recorded nested wasmi as the
+proven design, which is a different dispatch design than FR-005's original text
+assumed. Implementing #1407 (Phase 2) surfaced the concrete conflict: `WasmExecutor`
+(`crates/traverse-runtime/src/executor/wasm.rs`) is built on Wasmtime, which cannot
+itself target `wasm32` — so the nested-wasmi executor inside `runtime.wasm` cannot
+literally be "the same compiled code path" FR-005 originally required. Resolved via
+a live, owner-participated brainstorm (2026-09-15, recorded as Decision 88 in
+`docs/decision-log.md`): FR-005 changes from "same compiled code path" to "same
+shared, engine-agnostic validation core," and a new FR-011 governs the new crate
+and audited `unsafe_code` boundary the real ABI export requires. FR-003, FR-004,
+Acceptance Scenario 2, and the Capability Boundary section are updated to match.
+No other requirement changed.
 
 ## Purpose
 
@@ -42,10 +56,12 @@ fixture and the browser's hand-rolled executor.
 ## Capability Boundary
 
 Governs: `crates/traverse-native-bridge` (the `runtime.wasm` builder), a new
-`wasm32`-target-compatible capability-execution path inside
-`crates/traverse-runtime`, `packages/web/TraverseEmbedder`'s `BundleEmbedder`
-and `composedWorkflow.ts` (their eventual retirement/replacement), and how
-native packages consume the resulting artifact.
+`crates/traverse-runtime-wasm` crate (the `wasm32`-target nested-wasmi
+executor and C-ABI export boundary, FR-011), a shared engine-agnostic
+`emit_event` validation core in `crates/traverse-contracts` (FR-005),
+`packages/web/TraverseEmbedder`'s `BundleEmbedder` and `composedWorkflow.ts`
+(their eventual retirement/replacement), and how native packages consume the
+resulting artifact.
 
 Does not govern: the native host bridge engine selection itself
 (wasmi/Wasmtime/Chicory — ADR-0014/ADR-0070, unchanged by this spec); the
@@ -75,19 +91,45 @@ question, out of scope here as it was for the originating investigation).
 ### Phase 2 — Real orchestrator content
 
 - **FR-003**: `crates/traverse-native-bridge`'s WAT fixture MUST be replaced
-  by a real `wasm32` build of `traverse-runtime`'s `PlacementRouter`,
-  `EventBroker`, and `WasmExecutor` (or the design FR-002 recommends),
-  exporting the unchanged `runtime-wasm-bridge/1.0.0` ABI (`071`) so existing
-  native host adapters require no changes.
+  by a real `wasm32` build implementing `traverse-runtime`'s
+  `PlacementRouter`, `EventBroker`, and capability-dispatch logic per the
+  nested-wasmi design Decision 87 recommends, exporting the unchanged
+  `runtime-wasm-bridge/1.0.0` ABI (`071`) so existing native host adapters
+  require no changes. Phase 2 MAY land incrementally across multiple PRs; an
+  intermediate PR's reduced scope (e.g. a minimal `PlacementRouter`/
+  `EventBroker` slice, a narrower conformance test) is not itself a spec
+  violation as long as FR-004's full bar is met before Phase 2 is tagged
+  complete and before any release.
 - **FR-004**: The rebuilt `runtime.wasm` MUST pass the existing bridge and
   embedder conformance corpora (`071` Acceptance Scenario 4, `068` FR-009)
-  before any release.
+  before any release. This applies to Phase 2's completion/release gate, not
+  to every intermediate PR (see FR-003).
 - **FR-005**: `traverse_host::emit_event`'s validation behavior inside the
   new `runtime.wasm` MUST be identical to
   `crates/traverse-runtime/src/executor/wasm.rs`'s `handle_emit_event`
   (`098` FR-002/FR-003/FR-008) — same acceptance criteria, same error codes —
-  because it is now the same compiled code path, not a second
-  implementation.
+  because both call the same shared, engine-agnostic validation core (see
+  FR-011), not two independently maintained implementations. The core
+  operates on plain byte slices and the capability's declared `EventReference`
+  list; it does not depend on which engine (Wasmtime, natively, or wasmi,
+  nested) read the guest's linear memory.
+- **FR-011**: The nested-wasmi executor and its C-ABI export boundary
+  (reading/writing the guest's own linear memory for `traverse_init`,
+  `traverse_submit`, `traverse_next_event`, and the rest of `071` FR-006's
+  export list) MUST live in a new, dedicated crate
+  (`crates/traverse-runtime-wasm`) rather than extending
+  `crates/traverse-native-bridge` (the native-side WAT/artifact builder,
+  unrelated in kind) or `crates/traverse-nested-wasm-spike` (explicitly
+  spike-scoped, `#![deny(unsafe_code)]`, kept as historical record). This new
+  crate MAY declare `#![allow(unsafe_code)]`, scoped to the minimum surface
+  the ptr/len-to-slice ABI conversions require, under a new audited exception
+  (ADR-0073) following the precedent `076-production-swift-wasmi-cabi` set
+  for `traverse-swift-host`. The shared validation core (FR-005) MUST NOT
+  itself require `unsafe_code` and MUST live in `crates/traverse-contracts`
+  (already the home of `EventReference`), built as an ordinary `std` crate —
+  `wasm32-unknown-unknown` supports `std`; only `crates/traverse-nested-wasm-
+  spike`'s own `wasmi` dependency configuration chose `no_std` + `alloc`; that
+  choice does not propagate to crates that merely depend on it.
 
 ### Phase 3 — Browser convergence
 
@@ -120,15 +162,18 @@ question, out of scope here as it was for the originating investigation).
 ## Acceptance Scenarios
 
 1. Given the Phase 1 spike concludes with a workable nested-execution design,
-   when Phase 2 begins, then FR-003 through FR-005 apply as written; given
-   the spike instead recommends a different dispatch design, then this spec
-   is amended to reflect the proven design before Phase 2 FRs are treated as
-   binding.
+   when Phase 2 begins, then FR-003 through FR-005 apply as amended (Decision
+   88); the spike did recommend a different dispatch design than originally
+   assumed (nested wasmi, Decision 87), and this spec was amended accordingly
+   before Phase 2 FRs were treated as binding, per this scenario's own
+   condition.
 2. Given a `Subscribable` capability declares an event in its `emits` list
    and calls `emit_event` while running inside the Phase-2 `runtime.wasm` on
    any platform, native or browser, when execution completes, then the event
    reaches `EventBroker` with identical validation behavior across every
-   platform, because it is the same compiled code.
+   platform, because every platform calls the same shared validation core
+   (FR-005, FR-011) — not because it is the same compiled binary, which is
+   no longer true once native (Wasmtime) and nested (wasmi) engines differ.
 3. Given `BundleEmbedder`'s hand-rolled executor is retired (FR-007), when an
    existing bundled app upgrades to the new major version, then its
    capability and workflow execution produces identical outputs, verified by

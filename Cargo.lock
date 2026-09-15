@@ -2754,6 +2754,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-runtime-wasm"
+version = "0.10.2"
+dependencies = [
+ "serde_json",
+ "traverse-contracts",
+ "wasmi",
+ "wat",
+]
+
+[[package]]
 name = "traverse-swift-host"
 version = "0.10.2"
 dependencies = [
