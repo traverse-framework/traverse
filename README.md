@@ -141,7 +141,7 @@ same Host ABI — the browser is one target among several, not the default.
 | Platform | Embedder | WASM host | Status |
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
-| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` | Published (npm) |
+| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` | Published (npm `traverse-embedder-web@0.10.2`) |
 | **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | In-repo package, CI-conformed; not yet on SwiftPM |
 | **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | In-repo package, CI-conformed; not yet on Maven |
 | **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | In-repo package, CI-conformed; not yet on NuGet |
@@ -172,7 +172,7 @@ real, running, tested code.
 | | |
 |---|---|
 | **Runtime crates** | 8 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.10.2` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge` and `traverse-swift-host` are newer and not yet published. |
-| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io) and Web/TypeScript (npm) published; Swift/iOS+macOS (wasmi), Kotlin/Android (Chicory), and .NET/Windows (Wasmtime) in `packages/` with production runtime bridges, not yet on SwiftPM/Maven/NuGet. |
+| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.10.2`) and Web/TypeScript (npm `traverse-embedder-web@0.10.2`) published and aligned; Swift/iOS+macOS (wasmi), Kotlin/Android (Chicory), and .NET/Windows (Wasmtime) in `packages/` with production runtime bridges, not yet on SwiftPM/Maven/NuGet. |
 | **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` `0.20.0` on crates.io; **83 capabilities / 186 signed versions / 31 domains** (148 non-deprecated) in the live catalog, all signed and CI-validated. |
 | **Governance** | **148 approved, immutable specs** gate the runtime, contracts, registry, MCP surface, WASM execution, native embedding, event delivery, and durable local storage. `jq -r '.specs[].id' specs/governance/approved-specs.json` |
 | **Quality bar** | 100% line coverage enforced on the core crates (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`); `traverse-cli-rs` 87%, `traverse-mcp` 98%. Spec-alignment and supply-chain gates on every PR. 5-target CI matrix: Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64. |
