@@ -82,6 +82,34 @@ export const NONZERO_EXIT_WAT = `
   )
 `;
 
+export const EMIT_TEST_EVENT_PAYLOAD =
+  '{"event_id":"dev.traverse.test.emitted","version":"1.0.0","payload":{"n":1}}';
+
+function watEscape(payload) {
+  return payload.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** WASI command module that calls `traverse_host::emit_event` then writes `{}` to stdout. */
+export function emitEventWat(payload = EMIT_TEST_EVENT_PAYLOAD, claimedLen = payload.length) {
+  return `
+    (module
+      (import "traverse_host" "emit_event"
+        (func $emit_event (param i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "fd_write"
+        (func $fd_write (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 100) "${watEscape(payload)}")
+      (data (i32.const 300) "{}")
+      (func $_start (export "_start")
+        (drop (call $emit_event (i32.const 100) (i32.const ${claimedLen})))
+        (i32.store (i32.const 0) (i32.const 300))
+        (i32.store (i32.const 4) (i32.const 2))
+        (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4100)))
+      )
+    )
+  `;
+}
+
 function sha256Hex(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -127,6 +155,8 @@ export async function writeBundleFixture({ appId, components, workflow, compatib
       dependencies: [],
       connector_requirements: [],
       validation_evidence: [],
+      ...(component.serviceType !== undefined ? { service_type: component.serviceType } : {}),
+      ...(component.emits !== undefined ? { emits: component.emits } : {}),
     });
     componentEntries.push({
       component_id: `fixture.component-${index}`,

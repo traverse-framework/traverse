@@ -75,7 +75,27 @@ export {
 } from "./browserLocalPlan.js";
 
 export { COMPOSED_WORKFLOW_MAX_NODES, COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES, ComposedWorkflowError, executeBrowserComposedWorkflow } from "./composedWorkflow.js";
-export type { ComposedWorkflowErrorCode, ComposedWorkflowNodeOutcome, ComposedWorkflowTrace } from "./composedWorkflow.js";
+export type {
+  ComposedWorkflowErrorCode,
+  ComposedWorkflowExecutionOptions,
+  ComposedWorkflowNodeOutcome,
+  ComposedWorkflowTrace,
+} from "./composedWorkflow.js";
+
+export {
+  EMIT_EVENT_ERR_INVALID_PAYLOAD,
+  EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,
+  EMIT_EVENT_ERR_UNDECLARED_EVENT,
+  EMIT_EVENT_OK,
+  MAX_EVENT_EMIT_PAYLOAD_BYTES,
+  createEmitEventHostImport,
+  parseDeclaredEmits,
+} from "./emitEventHost.js";
+export type {
+  AcceptedCapabilityEvent,
+  DeclaredEmit,
+  EmitEventHostContext,
+} from "./emitEventHost.js";
 export type {
   BrowserPlanErrorCode,
   BrowserPlanResponse,

@@ -152,6 +152,7 @@ export interface EmbedderEvent {
     | "state_changed"
     | "capability_invoked"
     | "capability_result"
+    | "capability_event"
     | "error";
   readonly workspace_id: string;
   readonly app_id: string;

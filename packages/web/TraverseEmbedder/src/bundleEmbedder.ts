@@ -35,6 +35,11 @@ import { IndexedDbDataStore } from "./indexedDbDataStore.js";
 import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
 import { WasiExit, WasiPipes, createWasiPreview1Imports } from "./wasi.js";
 import type { WasiMemoryRef } from "./wasi.js";
+import {
+  createEmitEventHostImport,
+  parseDeclaredEmits,
+} from "./emitEventHost.js";
+import type { DeclaredEmit } from "./emitEventHost.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
@@ -63,11 +68,14 @@ export interface BundleEmbedderConfig {
 }
 
 interface WasmTarget {
+  readonly capabilityId: string;
   readonly capabilityVersion: string;
   readonly digest: string;
   readonly module: WebAssembly.Module;
   /** Optional contract `service_type` from the component manifest (Spec 132). */
   readonly serviceType: string | null;
+  /** Declared contract `emits` entries used by `traverse_host::emit_event` (spec 098). */
+  readonly emits: readonly DeclaredEmit[];
 }
 
 interface WorkflowNodeSpec {
@@ -307,10 +315,12 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
 
       wasmTargets.set(capabilityId, {
+        capabilityId,
         capabilityVersion,
         digest: wasmDigest,
         module,
         serviceType: optionalString(record, "service_type"),
+        emits: parseDeclaredEmits(record["emits"]),
       });
       wasmComponentEvidence.push({
         component_id: component.componentId,
@@ -495,7 +505,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
     }
 
-    const result = executeWasmModule(target, input);
+    const result = executeWasmModule(target, input, (event) => {
+      this.core.emit("capability_event", sessionId, {
+        execution_id: executionId,
+        capability_id: targetId,
+        event_id: event.event_id,
+        version: event.version,
+        payload: event.payload,
+      });
+    });
     this.core.recordTrace({
       executionId,
       targetId,
@@ -584,7 +602,16 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
           break;
         }
       }
-      const result = executeWasmModule(target, nodeInput);
+      const result = executeWasmModule(target, nodeInput, (event) => {
+        this.core.emit("capability_event", sessionId, {
+          execution_id: `exec_${requestId}`,
+          capability_id: node.capabilityId,
+          node_id: node.nodeId,
+          event_id: event.event_id,
+          version: event.version,
+          payload: event.payload,
+        });
+      });
       if (!result.ok) {
         steps.push({
           stepIndex,
@@ -706,8 +733,19 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
  * against an already-compiled, host-ABI-validated `WebAssembly.Module`,
  * piping `input` as WASI stdin JSON and parsing WASI stdout as the output
  * JSON — the same contract as the native `WasmExecutor` (spec 057).
+ *
+ * INTERIM (#1404): `emit_event` is validated in TypeScript pending #1402's
+ * real `runtime.wasm` orchestrator.
  */
-function executeWasmModule(target: WasmTarget, input: JsonValue): WasmExecutionResult {
+function executeWasmModule(
+  target: WasmTarget,
+  input: JsonValue,
+  onCapabilityEvent: (event: {
+    event_id: string;
+    version: string;
+    payload: JsonValue;
+  }) => void,
+): WasmExecutionResult {
   const inputBytes = new TextEncoder().encode(JSON.stringify(input));
   const pipes = new WasiPipes(inputBytes);
   const memoryRef: WasiMemoryRef = { memory: null };
@@ -718,7 +756,16 @@ function executeWasmModule(target: WasmTarget, input: JsonValue): WasmExecutionR
     // returning a deterministic denial until an activated binding adapter is
     // provided by a later host integration.
     traverse_host: {
-      emit_event: (_ptr: number, _len: number): number => -1,
+      // INTERIM pending #1402 — TypeScript mirror of Rust handle_emit_event.
+      emit_event: createEmitEventHostImport(
+        {
+          capabilityId: target.capabilityId,
+          serviceType: target.serviceType,
+          emits: target.emits,
+          onAccepted: onCapabilityEvent,
+        },
+        memoryRef,
+      ),
       connector_invoke: (_requestPtr: number, _requestLen: number, _responsePtr: number, _responseLen: number): number => -1,
     },
   };

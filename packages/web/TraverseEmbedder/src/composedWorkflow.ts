@@ -10,6 +10,11 @@ import type { BrowserWorkflowProposal } from "./browserLocalPlan.js";
 import type { JsonValue } from "./types.js";
 import { WasiExit, WasiPipes, createWasiPreview1Imports } from "./wasi.js";
 import type { WasiMemoryRef } from "./wasi.js";
+import {
+  createEmitEventHostImport,
+  parseDeclaredEmits,
+} from "./emitEventHost.js";
+import type { AcceptedCapabilityEvent } from "./emitEventHost.js";
 
 export const COMPOSED_WORKFLOW_MAX_NODES = 8;
 export const COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -46,6 +51,19 @@ export interface ComposedWorkflowTrace {
   readonly node_outcomes: readonly ComposedWorkflowNodeOutcome[];
 }
 
+export interface ComposedWorkflowExecutionOptions {
+  /**
+   * Called synchronously when a capability's `traverse_host::emit_event` is
+   * accepted (spec 098). Offline composed execution has no EmbedderCore;
+   * hosts that need subscribe()-style delivery wire this callback.
+   */
+  readonly onCapabilityEvent?: (event: AcceptedCapabilityEvent & {
+    readonly node_id: string;
+    readonly capability_id: string;
+    readonly capability_version: string;
+  }) => void;
+}
+
 const encoder = new TextEncoder();
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -69,14 +87,30 @@ function executionInput(state: Record<string, JsonValue>, proposal: BrowserWorkf
   return input;
 }
 
-async function run(module: WebAssembly.Module, input: JsonValue): Promise<{ output: JsonValue | null; failure: string | null }> {
+async function run(
+  module: WebAssembly.Module,
+  input: JsonValue,
+  emitContext: {
+    capabilityId: string;
+    serviceType: string | null;
+    emits: ReturnType<typeof parseDeclaredEmits>;
+    onAccepted: (event: AcceptedCapabilityEvent) => void;
+  },
+): Promise<{ output: JsonValue | null; failure: string | null }> {
   const pipes = new WasiPipes(encoder.encode(JSON.stringify(input)));
   const memoryRef: WasiMemoryRef = { memory: null };
   let instance: WebAssembly.Instance;
   try {
     // WebAssembly.Instance's synchronous constructor is disallowed on the main thread for
     // modules over 8MB (Chrome and others enforce this); the async overload has no such limit.
-    instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef), traverse_host: { emit_event: () => -1, connector_invoke: () => -1 } });
+    // INTERIM pending #1402 — TypeScript emit_event until runtime.wasm orchestrator lands.
+    instance = await WebAssembly.instantiate(module, {
+      wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef),
+      traverse_host: {
+        emit_event: createEmitEventHostImport(emitContext, memoryRef),
+        connector_invoke: () => -1,
+      },
+    });
   } catch { return { output: null, failure: "constraint_violated" }; }
   memoryRef.memory = instance.exports["memory"] instanceof WebAssembly.Memory ? instance.exports["memory"] as WebAssembly.Memory : null;
   const entry = instance.exports["_start"] ?? instance.exports[""];
@@ -86,7 +120,12 @@ async function run(module: WebAssembly.Module, input: JsonValue): Promise<{ outp
 }
 
 /** Executes a reviewed proposal entirely offline against exact cache entries. */
-export async function executeBrowserComposedWorkflow(proposal: BrowserWorkflowProposal, store: RegistryCacheStore, snapshot: SyncedPublicRegistryState): Promise<ComposedWorkflowTrace> {
+export async function executeBrowserComposedWorkflow(
+  proposal: BrowserWorkflowProposal,
+  store: RegistryCacheStore,
+  snapshot: SyncedPublicRegistryState,
+  options: ComposedWorkflowExecutionOptions = {},
+): Promise<ComposedWorkflowTrace> {
   if (proposal.mapping_unconfirmed || proposal.kind !== "browser_workflow_proposal" || proposal.proposal.kind !== "workflow_proposal" || proposal.proposal.nodes.length === 0 || proposal.proposal.nodes.length > COMPOSED_WORKFLOW_MAX_NODES || bytes(proposal.proposal.initial_input) > COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES) throw new ComposedWorkflowError("composed_workflow_proposal_invalid", "reviewed proposal exceeds the supported structural bounds");
   if (proposal.source_release !== snapshot.releaseTag || proposal.snapshot_digest !== await digest(snapshot as unknown as JsonValue)) throw new ComposedWorkflowError("composed_workflow_snapshot_mismatch", "reviewed proposal is not bound to the supplied snapshot");
   const nodes = proposal.proposal.nodes;
@@ -108,7 +147,21 @@ export async function executeBrowserComposedWorkflow(proposal: BrowserWorkflowPr
     let module: WebAssembly.Module;
     try { module = await WebAssembly.compile(copyBuffer(dependency.wasmBytes)); } catch { throw new ComposedWorkflowError("composed_workflow_dependency_contract_invalid", "prepared artifact is not executable WASM", node.node_id); }
     if (findUnauthorizedImport(module) !== null) throw new ComposedWorkflowError("composed_workflow_registry_rejected_contract", "prepared artifact exceeds the browser host ABI", node.node_id);
-    const result = await run(module, executionInput(state, proposal, node.node_id));
+    const serviceType = typeof contract.service_type === "string" ? contract.service_type : null;
+    const emits = parseDeclaredEmits(contract.emits);
+    const result = await run(module, executionInput(state, proposal, node.node_id), {
+      capabilityId: node.capability_id,
+      serviceType,
+      emits,
+      onAccepted: (event) => {
+        options.onCapabilityEvent?.({
+          ...event,
+          node_id: node.node_id,
+          capability_id: node.capability_id,
+          capability_version: node.capability_version,
+        });
+      },
+    });
     outcomes.push({ node_id: node.node_id, capability_id: node.capability_id, capability_version: node.capability_version, status: result.failure === null ? "succeeded" : "failed", failure_class: result.failure });
     if (result.failure !== null) {
       for (const later of nodes.slice(outcomes.length)) outcomes.push({ node_id: later.node_id, capability_id: later.capability_id, capability_version: later.capability_version, status: "not_started", failure_class: null });
