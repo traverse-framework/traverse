@@ -205,7 +205,9 @@
       "immutable": true,
       "path": "specs/204-placement-constraint-evaluator/spec.md",
       "governs": [
-        "crates/traverse-runtime/"
+        "crates/traverse-runtime/",
+        "crates/traverse-contracts/src/placement.rs",
+        "crates/traverse-runtime-wasm/"
       ]
     },
     {

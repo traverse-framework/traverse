@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
 pub mod emit_event;
+pub mod placement;
 pub mod proposal;
 pub mod usage_telemetry;
 pub mod violations;
@@ -13,6 +14,10 @@ pub use emit_event::{
     EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,
     EMIT_EVENT_ERR_UNDECLARED_EVENT, EMIT_EVENT_OK, EmitEventError, MAX_EVENT_EMIT_PAYLOAD_BYTES,
     ValidatedEmitEvent, validate_emit_event,
+};
+pub use placement::{
+    PlacementConfidence, PlacementConstraintEvaluator, PlacementDecision, PlacementError,
+    PlacementReason, PlacementRequest, RuntimeSnapshot,
 };
 pub use proposal::{
     CanonicalProposal, DEFAULT_MAX_CONCURRENT_NODES, DEFAULT_MAX_FAN_OUT, DEFAULT_MAX_JOIN_WIDTH,
