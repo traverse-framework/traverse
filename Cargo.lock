@@ -2711,6 +2711,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-nested-wasm-spike"
+version = "0.10.2"
+dependencies = [
+ "wasmi",
+ "wat",
+]
+
+[[package]]
 name = "traverse-registry"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
