@@ -83,7 +83,17 @@ what's already published.
 
 ## Quick Start
 
-**Requirements**: Rust 1.94+
+**Author a capability (plain English):** use the official Claude skill
+[`traverse-capability-author`](https://github.com/traverse-framework/claude-skills/tree/main/skills/traverse-capability-author)
+in [`traverse-framework/claude-skills`](https://github.com/traverse-framework/claude-skills).
+It interviews you one question at a time, checks the public (and any private)
+registry, writes the contract, produces executable WASM, and opens a
+human-reviewed PR. You describe the business rule — you do not have to write
+the Rust yourself. Under the hood the implementation is still Rust→WASM
+(determinism, sandboxing, portability). That is the LLM-assisted authoring
+on-ramp.
+
+**Build / run from this repo (manual path):** Rust 1.94+
 
 ```bash
 git clone https://github.com/traverse-framework/traverse.git
@@ -108,7 +118,8 @@ here:
 
 - Run it end to end and see the trace → [docs/getting-started.md](docs/getting-started.md)
 - Full browser + HTTP walkthrough → [quickstart.md](quickstart.md)
-- Author your own capability → [docs/capability-contract-authoring-guide.md](docs/capability-contract-authoring-guide.md)
+- Author in plain English (skill) → [claude-skills / traverse-capability-author](https://github.com/traverse-framework/claude-skills/tree/main/skills/traverse-capability-author)
+- Author manually in Rust → [docs/capability-contract-authoring-guide.md](docs/capability-contract-authoring-guide.md)
 
 ## Install
 
