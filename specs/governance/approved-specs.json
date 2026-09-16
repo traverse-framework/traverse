@@ -1907,7 +1907,10 @@
         "contracts/connectors/traverse.model-runtime/",
         "specs/138-governed-exact-model-execution/",
         "docs/adr/0074-governed-exact-model-execution.md",
-        "fixtures/models/"
+        "fixtures/models/",
+        "docs/exact-ref-model-execution.md",
+        "docs/decision-log.md",
+        "packages/web/TraverseEmbedder/"
       ]
     },
     {
