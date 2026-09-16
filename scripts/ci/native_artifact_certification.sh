@@ -11,6 +11,11 @@ artifact_root="$(mktemp -d "${TMPDIR:-/tmp}/traverse-native-artifact.XXXXXX")"
 cleanup() { rm -rf "${artifact_root}"; }
 trap cleanup EXIT
 
+# traverse-native-bridge builds the real crates/traverse-runtime-wasm
+# artifact for wasm32-unknown-unknown; this job's pinned toolchain does not
+# install that target by default. Idempotent no-op if already present.
+rustup target add wasm32-unknown-unknown
+
 cargo run -q -p traverse-native-bridge -- "${artifact_root}/runtime"
 
 python3 - "${artifact_root}/runtime" <<'PY'
