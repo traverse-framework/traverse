@@ -598,7 +598,11 @@ fn model_host_err(code: HostConnectorErrorCode, message: &str) -> HostConnectorE
 }
 
 #[cfg(feature = "wasmtime-executor")]
-fn require_ok(ok: bool, code: HostConnectorErrorCode, message: &str) -> Result<(), HostConnectorError> {
+fn require_ok(
+    ok: bool,
+    code: HostConnectorErrorCode,
+    message: &str,
+) -> Result<(), HostConnectorError> {
     if ok {
         Ok(())
     } else {
@@ -978,7 +982,11 @@ mod tests {
         let mut missing_license = fixture_package();
         missing_license.manifest.license_id.clear();
         assert_eq!(
-            missing_license.manifest.validate().expect_err("license").code,
+            missing_license
+                .manifest
+                .validate()
+                .expect_err("license")
+                .code,
             HostConnectorErrorCode::ModelIncompatible
         );
 
@@ -1000,17 +1008,11 @@ mod tests {
         let mut mismatched = fixture_package();
         mismatched.manifest.wasm_digest = "00".repeat(32);
         assert_eq!(
-            store
-                .insert_verified(mismatched)
-                .expect_err("digest")
-                .code,
+            store.insert_verified(mismatched).expect_err("digest").code,
             HostConnectorErrorCode::ModelIncompatible
         );
         assert_eq!(
-            store
-                .resolve_offline("missing")
-                .expect_err("offline")
-                .code,
+            store.resolve_offline("missing").expect_err("offline").code,
             HostConnectorErrorCode::ModelUnavailable
         );
     }
@@ -1038,7 +1040,10 @@ mod tests {
             io.read_model_output(&output_ref, 2).expect_err("cap").code,
             HostConnectorErrorCode::InputLimitExceeded
         );
-        assert_eq!(io.read_model_output(&output_ref, 8).expect("read"), vec![1, 2, 3, 4]);
+        assert_eq!(
+            io.read_model_output(&output_ref, 8).expect("read"),
+            vec![1, 2, 3, 4]
+        );
         assert_eq!(
             io.read_model_output("missing", 8).expect_err("miss").code,
             HostConnectorErrorCode::Unavailable
@@ -1142,9 +1147,13 @@ mod tests {
         host.pins[0].offline_allowed = false;
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
-                .expect_err("offline")
-                .code,
+            host.invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("offline")
+            .code,
             HostConnectorErrorCode::ModelUnavailable
         );
         host.pins[0].offline_allowed = true;
@@ -1176,9 +1185,13 @@ mod tests {
             .expect("overwrite");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
-                .expect_err("identity")
-                .code,
+            host.invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("identity")
+            .code,
             HostConnectorErrorCode::ModelIncompatible
         );
 
@@ -1194,22 +1207,36 @@ mod tests {
             HostConnectorErrorCode::ModelIncompatible
         );
 
-        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 0;
+        host.policies
+            .get_mut("policy-1")
+            .expect("policy")
+            .max_output_bytes = 0;
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
-                .expect_err("zero out")
-                .code,
+            host.invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("zero out")
+            .code,
             HostConnectorErrorCode::ResourceExhausted
         );
-        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 4096;
+        host.policies
+            .get_mut("policy-1")
+            .expect("policy")
+            .max_output_bytes = 4096;
 
         let oversized = vec![9_u8; 5000];
         let input_ref = host.io.stage_model_input(&oversized, 8000).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
-                .expect_err("input ceiling")
-                .code,
+            host.invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("input ceiling")
+            .code,
             HostConnectorErrorCode::ResourceExhausted
         );
     }
@@ -1247,9 +1274,13 @@ mod tests {
         host.packages.insert_verified(bad_wasm).expect("insert bad");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&bad_digest, &input_ref, serde_json::Map::new()))
-                .expect_err("bad wasm")
-                .code,
+            host.invoke(&execute_request(
+                &bad_digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("bad wasm")
+            .code,
             HostConnectorErrorCode::ModelIncompatible
         );
 
@@ -1301,9 +1332,13 @@ mod tests {
         host.packages.insert_verified(pkg).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest_mem, &input_ref, serde_json::Map::new()))
-                .expect_err("memory")
-                .code,
+            host.invoke(&execute_request(
+                &digest_mem,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("memory")
+            .code,
             HostConnectorErrorCode::ModelIncompatible
         );
 
@@ -1331,9 +1366,13 @@ mod tests {
         host.packages.insert_verified(pkg).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest_fuel, &input_ref, serde_json::Map::new()))
-                .expect_err("fuel")
-                .code,
+            host.invoke(&execute_request(
+                &digest_fuel,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("fuel")
+            .code,
             HostConnectorErrorCode::ExecutionFailed
         );
 
@@ -1359,9 +1398,13 @@ mod tests {
         host.packages.insert_verified(pkg).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
-            host.invoke(&execute_request(&digest_len, &input_ref, serde_json::Map::new()))
-                .expect_err("len")
-                .code,
+            host.invoke(&execute_request(
+                &digest_len,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("len")
+            .code,
             HostConnectorErrorCode::ResourceExhausted
         );
 
@@ -1380,8 +1423,8 @@ mod tests {
     #[test]
     fn require_ok_and_host_err_helpers_cover_both_branches() {
         assert!(require_ok(true, HostConnectorErrorCode::ExecutionFailed, "ok").is_ok());
-        let err = require_ok(false, HostConnectorErrorCode::ExecutionFailed, "no")
-            .expect_err("false");
+        let err =
+            require_ok(false, HostConnectorErrorCode::ExecutionFailed, "no").expect_err("false");
         assert_eq!(err.code, HostConnectorErrorCode::ExecutionFailed);
         assert_eq!(err.message, "no");
         let built = model_host_err(HostConnectorErrorCode::Unavailable, "x");
@@ -1416,10 +1459,14 @@ mod tests {
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut extras = serde_json::Map::new();
         extras.insert("max_output_bytes".to_string(), json!(70_000));
-        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 70_000;
-        assert!(host
-            .invoke(&execute_request(&grow_digest, &input_ref, extras))
-            .is_ok());
+        host.policies
+            .get_mut("policy-1")
+            .expect("policy")
+            .max_output_bytes = 70_000;
+        assert!(
+            host.invoke(&execute_request(&grow_digest, &input_ref, extras))
+                .is_ok()
+        );
 
         // Distinct 1-page module so the store limiter can block grow independently.
         let mut blocked = fixture_package();
