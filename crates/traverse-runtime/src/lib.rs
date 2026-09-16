@@ -7,17 +7,17 @@ pub use artifact_router::*;
 pub mod capability_metadata;
 /// Spec `135` Component Model WIT host-capability activation.
 pub mod component_wit;
-/// Spec `137` app-command host connector dispatch.
-pub mod host_connector_dispatch;
 /// Spec `138` exact-ref model packages, staging I/O, and wasm-cpu execute.
 pub mod exact_model;
-pub use exact_model::{
-    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelIoStore, ModelPackageManifest,
-    ModelPackageStore, PLACEMENT_WASM_CPU, VerifiedModelPackage, digest_hex, encode_guest_frame,
-};
+/// Spec `137` app-command host connector dispatch.
+pub mod host_connector_dispatch;
 pub use capability_metadata::{
     CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,
+};
+pub use exact_model::{
+    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelIoStore, ModelPackageManifest,
+    ModelPackageStore, PLACEMENT_WASM_CPU, VerifiedModelPackage, digest_hex, encode_guest_frame,
 };
 pub mod data_store;
 /// Durable P3 checkpoint, recovery, wait, retry, and compensation controls.

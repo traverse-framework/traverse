@@ -172,7 +172,10 @@ impl ModelPackageStore {
     }
 
     /// Resolve by package digest without network.
-    pub fn resolve_offline(&self, digest: &str) -> Result<&VerifiedModelPackage, HostConnectorError> {
+    pub fn resolve_offline(
+        &self,
+        digest: &str,
+    ) -> Result<&VerifiedModelPackage, HostConnectorError> {
         self.by_digest
             .get(&normalize_digest(digest))
             .ok_or_else(|| HostConnectorError {
@@ -606,12 +609,10 @@ fn execute_wasm_cpu_model(
         .build();
     let mut store = Store::new(&engine, limits);
     store.limiter(|state| state);
-    store
-        .set_fuel(max_fuel)
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ExecutionFailed,
-            message: "failed to set fuel".to_string(),
-        })?;
+    store.set_fuel(max_fuel).map_err(|_| HostConnectorError {
+        code: HostConnectorErrorCode::ExecutionFailed,
+        message: "failed to set fuel".to_string(),
+    })?;
 
     // Empty linker: deny-by-default (no WASI / no host imports).
     let linker = Linker::new(&engine);
@@ -637,7 +638,8 @@ fn execute_wasm_cpu_model(
 
     let in_ptr = 64_i32;
     let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
-    let out_cap = i32::try_from(max_output_bytes.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
+    let out_cap =
+        i32::try_from(max_output_bytes.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
     let end = out_ptr as usize + out_cap as usize;
     let current_pages = (memory.data_size(&store) as u64) / 65_536;
     let needed_pages = (end as u64 + 65_535) / 65_536;
@@ -729,9 +731,10 @@ pub const FIXTURE_ECHO_WAT: &str = r#"
 mod tests {
     use super::*;
     use crate::host_connector_dispatch::{
-        HostConnectorActivationSet, HostConnectorAppCommand, HostConnectorAppManifest,
-        HostConnectorBinding, HostConnectorCommandRoute, HostConnectorIdempotencyStore, SCHEMA_VERSION,
-        COMMAND_KIND, dispatch_host_connector_command, HostConnectorDispatchContext,
+        COMMAND_KIND, HostConnectorActivationSet, HostConnectorAppCommand,
+        HostConnectorAppManifest, HostConnectorBinding, HostConnectorCommandRoute,
+        HostConnectorDispatchContext, HostConnectorIdempotencyStore, SCHEMA_VERSION,
+        dispatch_host_connector_command,
     };
     use serde_json::json;
 
@@ -789,10 +792,7 @@ mod tests {
         );
 
         let frame = encode_guest_frame(1, &[4], b"test");
-        let input_ref = host
-            .io
-            .stage_model_input(&frame, 4096)
-            .expect("stage");
+        let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
         let manifest = HostConnectorAppManifest {
             app_id: "fixture.app".to_string(),
             connector_bindings: vec![HostConnectorBinding {
