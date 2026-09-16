@@ -4463,3 +4463,87 @@ tickets. Drafts authored on `main` working tree; tickets #1435–#1437 filed.
 
 Approved by Enrico in owner-directed `/brainstorm` continuation
 (2026-09-16); each recommendation accepted.
+
+## Decision 93: Real Inference Fixture Closes the Spec 138 Gap; Spec 045 Bridge Deliberately Deferred
+
+- **Date**: 2026-09-16
+- **Status**: Accepted
+- **Governing specs**: 138-governed-exact-model-execution (fixture/DoD
+  scope only — no amendment); 045-governed-model-dependency-resolution
+  (untouched this round)
+- **Related ADRs**: none new
+- **Related issues**: to be filed
+- **Origin**: post-v0.12.0 gap-review `/brainstorm` (external critique of
+  the Spec 138 ship: an echo fixture is not an AI capability; Spec 045
+  already has real inference but is disconnected from Spec 138)
+
+### Context
+
+v0.12.0 shipped Spec 138's governed exact-ref `model.execute` pipeline
+(digest verification, staged input/output refs, resource limits, native
+wasm-cpu + browser cross-target), proven only against the
+`workload.conformance.native-echo` fixture — a pass-through, not real
+inference. Separately, Spec 045 already has a real, working Ollama-backed
+inference provider (`crates/traverse-runtime/src/inference.rs`, merged
+PR #465) with candidate resolution and genuine HTTP generation, but it is
+native-only (blocking `TcpStream`, gated off wasm32) and Spec 138's own
+text explicitly excludes Spec 045 from its DoD. The gap: two genuinely
+real, working pieces that do not compose into one "Traverse runs a real,
+governed AI capability" story.
+
+### Decision
+
+1. **A real fixture, not a 045/138 integration, closes the immediate gap.**
+   Build a small, hand-built, fully deterministic linear/logistic
+   classifier (fixed weights, small feature vector) as a new signed model
+   package fixture under `fixtures/models/`, satisfying FR-015 with real
+   computed inference rather than pass-through.
+2. **Echo fixture stays.** `workload.conformance.native-echo` remains for
+   cheap plumbing/latency conformance (`workload_conformance.rs`,
+   `native_bridge_conformance.rs`); the classifier fixture is additive,
+   used specifically to prove real inference end to end.
+3. **No spec amendment needed.** FR-015 requires only "a signed example
+   model package fixture," not specifically echo — adding a genuinely
+   computing fixture is within existing approved Spec 138 scope.
+4. **Spec 045 ↔ Spec 138 bridge deliberately deferred.** No connecting
+   spec, and no amendment admitting Spec 045 resolution into Spec 138,
+   this round. The separation was a deliberate, already-approved boundary;
+   designing that seam (how an unsigned, network-backed Ollama model
+   identity maps into Spec 138's signed-digest package model) blind, before
+   a real model artifact exists, would be premature. Revisit once the
+   classifier fixture ships.
+5. **Cross-target scope resolved for free.** The new fixture is a WASM
+   guest, not a network call, so it inherits Spec 138's existing native
+   wasm-cpu + browser conformance without touching Spec 045's
+   wasm32/`TcpStream` gating problem.
+
+### Alternatives considered
+
+Wiring Spec 138's `model.execute` to call the existing `OllamaProvider`
+directly (rejected: doesn't fit the signed/verified-package shape,
+reintroduces native-only scope); a pre-trained model exported from a real
+ML toolchain with hand-rolled matrix ops (rejected for this round: bigger
+lift, cross-target floating-point determinism risk, no clear win over a
+hand-built classifier for the "real inference" bar); replacing echo
+outright (rejected: echo is referenced by name in two existing conformance
+suites — unnecessary blast radius for no functional gain); bridging Spec
+045 and Spec 138 now via a new spec or amendment (rejected: premature
+before a real model artifact exists to define the seam against).
+
+### Safe to author without further brainstorm
+
+Exact classifier weights/feature vector; fixture file layout under
+`fixtures/models/`; conformance test naming; ticket/issue split (single
+vs. multiple) for build + wire-up.
+
+### Outcome
+
+No further product decisions required before filing ticket(s) under
+existing approved Spec 138 governance. Spec 045 ↔ Spec 138 convergence
+remains an open, deliberately-deferred question — worth a fresh
+`/brainstorm` once the classifier fixture ships.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` session (2026-09-16); each
+recommendation accepted as given.

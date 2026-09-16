@@ -754,6 +754,53 @@ pub const FIXTURE_ECHO_WAT: &str = r#"
 )
 "#;
 
+/// WAT source for the signed real-inference conformance fixture: a fixed-weight
+/// linear classifier over 4 `f32` features, proving genuinely computed
+/// inference (not a pass-through) through the same governed pipeline as the
+/// echo fixture. Input/output frames use the Spec 138 guest ABI
+/// (`encode_guest_frame`/`decode_guest_frame`): input dtype 2, dims `[4]`,
+/// payload = 4 little-endian `f32` features; output dtype 3, dims `[2]`,
+/// payload = `[score, label]` as little-endian `f32` (label is 1.0 or 0.0).
+/// Fails closed (`-1`) when the input or output-capacity ceilings are too
+/// small for that fixed frame shape.
+pub const FIXTURE_CLASSIFIER_WAT: &str = r#"
+(module
+  (memory (export "memory") 2)
+  (func (export "model_execute")
+    (param $in_ptr i32) (param $in_len i32) (param $out_ptr i32) (param $out_cap i32) (result i32)
+    (local $x0 f32) (local $x1 f32) (local $x2 f32) (local $x3 f32) (local $score f32) (local $label f32)
+    (if (i32.lt_u (local.get $in_len) (i32.const 28))
+      (then (return (i32.const -1))))
+    (if (i32.lt_u (local.get $out_cap) (i32.const 20))
+      (then (return (i32.const -1))))
+    (local.set $x0 (f32.load offset=12 (local.get $in_ptr)))
+    (local.set $x1 (f32.load offset=16 (local.get $in_ptr)))
+    (local.set $x2 (f32.load offset=20 (local.get $in_ptr)))
+    (local.set $x3 (f32.load offset=24 (local.get $in_ptr)))
+    (local.set $score
+      (f32.sub
+        (f32.add
+          (f32.add
+            (f32.mul (local.get $x0) (f32.const 0.5))
+            (f32.mul (local.get $x1) (f32.const -0.25)))
+          (f32.add
+            (f32.mul (local.get $x2) (f32.const 1.0))
+            (f32.mul (local.get $x3) (f32.const 0.75))))
+        (f32.const 0.5)))
+    (local.set $label
+      (select (f32.const 1.0) (f32.const 0.0) (f32.ge (local.get $score) (f32.const 0.0))))
+    (i32.store16 offset=0 (local.get $out_ptr) (i32.const 1))
+    (i32.store8 offset=2 (local.get $out_ptr) (i32.const 3))
+    (i32.store8 offset=3 (local.get $out_ptr) (i32.const 1))
+    (i32.store offset=4 (local.get $out_ptr) (i32.const 2))
+    (i32.store offset=8 (local.get $out_ptr) (i32.const 8))
+    (f32.store offset=12 (local.get $out_ptr) (local.get $score))
+    (f32.store offset=16 (local.get $out_ptr) (local.get $label))
+    (i32.const 20)
+  )
+)
+"#;
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -1532,6 +1579,161 @@ mod tests {
             .expect_err("imports")
             .code,
             HostConnectorErrorCode::ExecutionFailed
+        );
+    }
+
+    fn fixture_classifier_package() -> VerifiedModelPackage {
+        let wasm = wat::parse_str(FIXTURE_CLASSIFIER_WAT).expect("wat");
+        let wasm_digest = digest_hex(&wasm);
+        let manifest = ModelPackageManifest {
+            schema_version: "1.0.0".to_string(),
+            model_id: "fixture.classifier".to_string(),
+            version: "1.0.0".to_string(),
+            wasm_digest: wasm_digest.clone(),
+            package_digest: wasm_digest.clone(),
+            registry_ref: "registry:fixture.classifier@1.0.0".to_string(),
+            executable_format: "traverse-model-wasm".to_string(),
+            abi_version: MODEL_GUEST_ABI_VERSION,
+            input_schema_ref: "schema:fixture-classifier-in".to_string(),
+            input_schema_version: "1.0.0".to_string(),
+            output_schema_ref: "schema:fixture-classifier-out".to_string(),
+            output_schema_version: "1.0.0".to_string(),
+            license_id: "Apache-2.0".to_string(),
+            attribution: "Traverse fixture".to_string(),
+            redistribution: "test-only".to_string(),
+            supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
+            max_memory_bytes: 2 * 64 * 1024,
+            max_fuel: 1_000_000,
+            max_input_bytes: 4096,
+            max_output_bytes: 4096,
+            max_execution_ms: 5_000,
+            offline_allowed: true,
+        };
+        VerifiedModelPackage { manifest, wasm }
+    }
+
+    fn classifier_input_frame(features: [f32; 4]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(16);
+        for feature in features {
+            payload.extend_from_slice(&feature.to_le_bytes());
+        }
+        encode_guest_frame(2, &[4], &payload)
+    }
+
+    fn classifier_execute_request(digest: &str, input_ref: &str) -> HostConnectorHostRequest {
+        HostConnectorHostRequest {
+            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+            operation: MODEL_EXECUTE_OPERATION.to_string(),
+            binding_id: "b".to_string(),
+            target_family: "macos".to_string(),
+            correlation_id: "c".to_string(),
+            payload: json!({
+                "model_ref": {
+                    "model_id": "fixture.classifier",
+                    "version": "1.0.0",
+                    "digest": digest
+                },
+                "input_ref": input_ref,
+                "policy_ref": "policy-1",
+                "data_classification": "sensitive",
+                "input_schema_ref": "schema:fixture-classifier-in",
+                "input_schema_version": "1.0.0",
+                "max_output_bytes": 4096
+            }),
+            cancel_requested: false,
+        }
+    }
+
+    fn seeded_classifier_host() -> (ExactModelHostConnector, String) {
+        let package = fixture_classifier_package();
+        let digest = package.manifest.package_digest.clone();
+        let pin = ExactModelPin {
+            model_id: "fixture.classifier".to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest.clone(),
+            offline_allowed: true,
+        };
+        let mut host = ExactModelHostConnector::new(vec![pin]);
+        host.packages
+            .insert_verified(package)
+            .expect("insert package");
+        host.policies.insert(
+            "policy-1".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-1".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+            },
+        );
+        (host, digest)
+    }
+
+    #[test]
+    fn classifier_fixture_computes_real_inference_not_a_pass_through() {
+        let (mut host, digest) = seeded_classifier_host();
+        let frame = classifier_input_frame([1.0, 2.0, -1.0, 4.0]);
+        let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
+        let result = host
+            .invoke(&classifier_execute_request(&digest, &input_ref))
+            .expect("execute");
+        let output = host
+            .io
+            .read_model_output(&result.artifact_ref, 4096)
+            .expect("read");
+        assert_ne!(output, frame, "classifier output must not echo the input");
+        let (dtype, dims, payload) = decode_guest_frame(&output).expect("decode output");
+        assert_eq!(dtype, 3);
+        assert_eq!(dims, vec![2]);
+        assert_eq!(payload.len(), 8);
+        let score = f32::from_le_bytes(payload[0..4].try_into().expect("score bytes"));
+        let label = f32::from_le_bytes(payload[4..8].try_into().expect("label bytes"));
+        // 0.5*1.0 - 0.25*2.0 + 1.0*-1.0 + 0.75*4.0 - 0.5 == 1.5
+        assert!((score - 1.5).abs() < f32::EPSILON);
+        assert!((label - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn classifier_fixture_yields_zero_label_below_threshold() {
+        let (mut host, digest) = seeded_classifier_host();
+        let frame = classifier_input_frame([-4.0, 0.0, 0.0, 0.0]);
+        let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
+        let result = host
+            .invoke(&classifier_execute_request(&digest, &input_ref))
+            .expect("execute");
+        let output = host
+            .io
+            .read_model_output(&result.artifact_ref, 4096)
+            .expect("read");
+        let (_, _, payload) = decode_guest_frame(&output).expect("decode output");
+        let score = f32::from_le_bytes(payload[0..4].try_into().expect("score bytes"));
+        let label = f32::from_le_bytes(payload[4..8].try_into().expect("label bytes"));
+        // 0.5*-4.0 - 0.5 == -2.5
+        assert!((score - (-2.5)).abs() < f32::EPSILON);
+        assert!(label.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn classifier_fixture_fails_closed_on_undersized_input_and_output() {
+        let (mut host, digest) = seeded_classifier_host();
+        let short_input_ref = host.io.stage_model_input(b"too-short", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&classifier_execute_request(&digest, &short_input_ref))
+                .expect_err("undersized input")
+                .code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+
+        let frame = classifier_input_frame([1.0, 1.0, 1.0, 1.0]);
+        let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
+        let mut extras = serde_json::Map::new();
+        extras.insert("max_output_bytes".to_string(), json!(10));
+        let mut request = classifier_execute_request(&digest, &input_ref);
+        if let Some(object) = request.payload.as_object_mut() {
+            object.extend(extras);
+        }
+        assert_eq!(
+            host.invoke(&request).expect_err("undersized output").code,
+            HostConnectorErrorCode::ResourceExhausted
         );
     }
 }
