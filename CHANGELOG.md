@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## v0.11.0 — 2026-09-16
+
+### Real `runtime.wasm` orchestrator (spec 1402)
+
+- Nested-wasmi capability execution inside application-owned `runtime.wasm`
+  (`traverse-runtime-wasm`), with shared engine-agnostic `emit_event` and
+  placement validation in `traverse-contracts`.
+- Production `RuntimeWasmHost` driver; EventBroker durability remains
+  host-owned.
+- Swift/wasmi, Kotlin/Chicory, and .NET/Wasmtime conform against the real
+  artifact; digest published via `runtime/native-runtime-registry.json`.
+
+### Browser convergence
+
+- `traverse-embedder-web` loads digest-verified `runtime/runtime.wasm` from
+  the app bundle and retires the interim TypeScript WASI/`emit_event` path.
+  **Breaking:** bundles must ship `runtime/runtime.wasm` + `.sha256`.
+
+### Release pipeline
+
+- Lockstep crate and npm versions on every cut (Decision 85).
+- Python CLI consume example.
+
+See [docs/releases/v0.11.0.md](docs/releases/v0.11.0.md).
+
 ## v0.10.2 — 2026-09-14
 
 ### Verified Registry application references

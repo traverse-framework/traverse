@@ -61,3 +61,48 @@ already updates the web package/lockfile and creates `web-v<version>`. Push
 that tag after `main` to trigger the credential-free npm Trusted Publishing
 workflow. See [the web embedder npm publish runbook](web-embedder-npm-publish-runbook.md)
 for setup assumptions and verification.
+
+## Post-cut documentation, READMEs, and website
+
+`bump_version.sh` only rewrites Cargo / web package version fields. After
+crates.io and npm list the new `X.Y.Z`, finish the human-facing surfaces:
+
+### 1. This repo (before or with the release-notes PR; finish after publish)
+
+- [ ] `docs/releases/vX.Y.Z.md` — full release notes (move content out of
+      `docs/releases/next.md`).
+- [ ] `CHANGELOG.md` — matching `## vX.Y.Z` section; clear Unreleased.
+- [ ] Root `README.md` — version badge, Install pins (`cargo add` /
+      `npm install`), Project state table, “current release notes” links.
+- [ ] Package READMEs that pin a published version (at least
+      `packages/web/TraverseEmbedder/README.md`).
+- [ ] Example / consume READMEs that hard-code a version, if any.
+- [ ] Approved-spec count in README if `specs/governance/approved-specs.json`
+      changed since the last cut
+      (`jq -r '.specs | length' specs/governance/approved-specs.json`).
+- [ ] Native runtime artifact registry: if this cut ships a new certified
+      `runtime.wasm`, publish a new `runtime_version` row in
+      `runtime/native-runtime-registry.json` (spec `075` FR-007 forbids
+      overwriting). See [native-runtime-artifact-registry.md](native-runtime-artifact-registry.md).
+
+### 2. Website (`traverse-framework/website`)
+
+File a website issue before the cut (pattern:
+[website#91](https://github.com/traverse-framework/website/pull/91) /
+[website#97](https://github.com/traverse-framework/website/issues/97) for
+v0.11.0). After publish is live:
+
+- [ ] Truth-pass every current-version surface (hero, footer, system, about,
+      roadmap, faq, quickstart, concepts, production-ready Q, platforms as
+      needed) to `vX.Y.Z`.
+- [ ] Changelog page: new latest entry distilled from the GitHub Release —
+      no invented features.
+- [ ] Short release blog when the ship story is user-visible.
+- [ ] Re-verify live registry counts / approved-spec count before claiming
+      them.
+- [ ] `npm run build` and `npm test` green in the website repo.
+
+### 3. Announcement
+
+- [ ] GitHub Release notes from `docs/releases/vX.Y.Z.md`.
+- [ ] Org Discussion (or linked announcement) when the cut is public.
