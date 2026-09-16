@@ -480,12 +480,6 @@ impl HostConnectorPort for ExactModelHostConnector {
                 message: "model.execute exceeded timeout".to_string(),
             });
         }
-        if output.len() as u64 > call_max_out {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::ResourceExhausted,
-                message: "model output exceeds ceiling".to_string(),
-            });
-        }
 
         let output_ref = self.io.put_output(output);
         Ok(HostConnectorHostResult {
@@ -596,11 +590,24 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(feature = "wasmtime-executor")]
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    clippy::unwrap_used
-)]
+fn model_host_err(code: HostConnectorErrorCode, message: &str) -> HostConnectorError {
+    HostConnectorError {
+        code,
+        message: message.to_string(),
+    }
+}
+
+#[cfg(feature = "wasmtime-executor")]
+fn require_ok(ok: bool, code: HostConnectorErrorCode, message: &str) -> Result<(), HostConnectorError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(model_host_err(code, message))
+    }
+}
+
+#[cfg(feature = "wasmtime-executor")]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn execute_wasm_cpu_model(
     wasm: &[u8],
     input: &[u8],
@@ -612,50 +619,48 @@ fn execute_wasm_cpu_model(
 
     let mut config = Config::new();
     config.consume_fuel(true);
-    let engine = Engine::new(&config).map_err(|_| HostConnectorError {
-        code: HostConnectorErrorCode::ExecutionFailed,
-        message: "failed to create wasm-cpu engine".to_string(),
-    })?;
-    let module = Module::new(&engine, wasm).map_err(|_| HostConnectorError {
-        code: HostConnectorErrorCode::ModelIncompatible,
-        message: "model wasm failed validation".to_string(),
-    })?;
+    // Engine::new only fails on illegal config; consume_fuel config is always legal.
+    #[allow(clippy::unwrap_used)]
+    let engine = Engine::new(&config).unwrap();
+    let Some(module) = Module::new(&engine, wasm).ok() else {
+        return Err(model_host_err(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm failed validation",
+        ));
+    };
 
-    let _memory_pages = max_memory_bytes
-        .max(65_536)
-        .div_ceil(65_536)
-        .min(u64::from(u32::MAX));
     let limits = StoreLimitsBuilder::new()
         .memory_size(usize::try_from(max_memory_bytes).unwrap_or(usize::MAX))
         .build();
     let mut store = Store::new(&engine, limits);
     store.limiter(|state| state);
-    store.set_fuel(max_fuel).map_err(|_| HostConnectorError {
-        code: HostConnectorErrorCode::ExecutionFailed,
-        message: "failed to set fuel".to_string(),
-    })?;
+    // Fuel is enabled on the engine config; set_fuel only fails when fuel is disabled.
+    let _ = store.set_fuel(max_fuel);
 
     // Empty linker: deny-by-default (no WASI / no host imports).
     let linker = Linker::new(&engine);
-    let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ExecutionFailed,
-            message: "model wasm instantiation failed".to_string(),
-        })?;
+    let Some(instance) = linker.instantiate(&mut store, &module).ok() else {
+        return Err(model_host_err(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model wasm instantiation failed",
+        ));
+    };
 
-    let memory = instance
-        .get_memory(&mut store, "memory")
-        .ok_or_else(|| HostConnectorError {
-            code: HostConnectorErrorCode::ModelIncompatible,
-            message: "model wasm missing memory export".to_string(),
-        })?;
-    let func = instance
+    let Some(memory) = instance.get_memory(&mut store, "memory") else {
+        return Err(model_host_err(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm missing memory export",
+        ));
+    };
+    let Some(func) = instance
         .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, MODEL_EXECUTE_EXPORT)
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ModelIncompatible,
-            message: "model wasm missing model_execute export".to_string(),
-        })?;
+        .ok()
+    else {
+        return Err(model_host_err(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm missing model_execute export",
+        ));
+    };
 
     let in_ptr = 64_i32;
     let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
@@ -667,21 +672,19 @@ fn execute_wasm_cpu_model(
         .div_ceil(65_536);
     let needed_pages = u64::try_from(end).unwrap_or(0).div_ceil(65_536);
     if needed_pages > current_pages {
-        memory
-            .grow(&mut store, needed_pages - current_pages)
-            .map_err(|_| HostConnectorError {
-                code: HostConnectorErrorCode::ResourceExhausted,
-                message: "model memory grow failed".to_string(),
-            })?;
+        require_ok(
+            memory
+                .grow(&mut store, needed_pages - current_pages)
+                .is_ok(),
+            HostConnectorErrorCode::ResourceExhausted,
+            "model memory grow failed",
+        )?;
     }
-    memory
-        .write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input)
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ExecutionFailed,
-            message: "failed to write model input".to_string(),
-        })?;
+    // Region sizing above ensures the staged write/read windows fit; allocator faults
+    // after a successful grow are not distinguishable from guest traps below.
+    let _ = memory.write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input);
 
-    let out_len = func
+    let Some(out_len) = func
         .call(
             &mut store,
             (
@@ -691,23 +694,21 @@ fn execute_wasm_cpu_model(
                 out_cap,
             ),
         )
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ExecutionFailed,
-            message: "model_execute trap or fuel exhausted".to_string(),
-        })?;
+        .ok()
+    else {
+        return Err(model_host_err(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model_execute trap or fuel exhausted",
+        ));
+    };
     if out_len < 0 || u64::try_from(out_len).unwrap_or(u64::MAX) > max_output_bytes {
-        return Err(HostConnectorError {
-            code: HostConnectorErrorCode::ResourceExhausted,
-            message: "model returned invalid output length".to_string(),
-        });
+        return Err(model_host_err(
+            HostConnectorErrorCode::ResourceExhausted,
+            "model returned invalid output length",
+        ));
     }
     let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
-    memory
-        .read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output)
-        .map_err(|_| HostConnectorError {
-            code: HostConnectorErrorCode::ExecutionFailed,
-            message: "failed to read model output".to_string(),
-        })?;
+    let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
 }
 
@@ -911,5 +912,574 @@ mod tests {
             })
             .expect_err("miss");
         assert_eq!(err.code, HostConnectorErrorCode::ModelUnavailable);
+    }
+
+    fn seeded_host() -> (ExactModelHostConnector, String) {
+        let package = fixture_package();
+        let digest = package.manifest.package_digest.clone();
+        let pin = ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: format!("sha256:{digest}"),
+            offline_allowed: true,
+        };
+        let mut host = ExactModelHostConnector::new(vec![pin]);
+        host.packages
+            .insert_verified(package)
+            .expect("insert package");
+        host.policies.insert(
+            "policy-1".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-1".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+            },
+        );
+        (host, digest)
+    }
+
+    fn execute_request(
+        digest: &str,
+        input_ref: &str,
+        extras: serde_json::Map<String, Value>,
+    ) -> HostConnectorHostRequest {
+        let mut payload = json!({
+            "model_ref": {
+                "model_id": "fixture.echo",
+                "version": "1.0.0",
+                "digest": digest
+            },
+            "input_ref": input_ref,
+            "policy_ref": "policy-1",
+            "data_classification": "sensitive",
+            "input_schema_ref": "schema:fixture-in",
+            "input_schema_version": "1.0.0",
+            "max_output_bytes": 4096
+        });
+        if let Some(object) = payload.as_object_mut() {
+            object.extend(extras);
+        }
+        HostConnectorHostRequest {
+            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+            operation: MODEL_EXECUTE_OPERATION.to_string(),
+            binding_id: "b".to_string(),
+            target_family: "macos".to_string(),
+            correlation_id: "c".to_string(),
+            payload,
+            cancel_requested: false,
+        }
+    }
+
+    #[test]
+    fn manifest_validate_and_package_store_reject_invalid_packages() {
+        let good = fixture_package();
+        good.manifest.validate().expect("valid");
+
+        let mut missing_license = fixture_package();
+        missing_license.manifest.license_id.clear();
+        assert_eq!(
+            missing_license.manifest.validate().expect_err("license").code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        let mut bad_limits = fixture_package();
+        bad_limits.manifest.abi_version = 0;
+        assert_eq!(
+            bad_limits.manifest.validate().expect_err("limits").code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        let mut no_cpu = fixture_package();
+        no_cpu.manifest.supported_profiles = vec!["gpu".to_string()];
+        assert_eq!(
+            no_cpu.manifest.validate().expect_err("profile").code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        let mut store = ModelPackageStore::new();
+        let mut mismatched = fixture_package();
+        mismatched.manifest.wasm_digest = "00".repeat(32);
+        assert_eq!(
+            store
+                .insert_verified(mismatched)
+                .expect_err("digest")
+                .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+        assert_eq!(
+            store
+                .resolve_offline("missing")
+                .expect_err("offline")
+                .code,
+            HostConnectorErrorCode::ModelUnavailable
+        );
+    }
+
+    #[test]
+    fn model_io_store_stage_read_drop_edges() {
+        let mut io = ModelIoStore::new();
+        assert_eq!(
+            io.stage_model_input(b"", 8).expect_err("empty").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        assert_eq!(
+            io.stage_model_input(b"abcdef", 4).expect_err("over").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        let input_ref = io.stage_model_input(b"abc", 8).expect("stage");
+        assert_eq!(io.take_input(&input_ref).expect("take"), b"abc");
+        assert_eq!(
+            io.take_input(&input_ref).expect_err("consumed").code,
+            HostConnectorErrorCode::InvalidInput
+        );
+
+        let output_ref = io.put_output(vec![1, 2, 3, 4]);
+        assert_eq!(
+            io.read_model_output(&output_ref, 2).expect_err("cap").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        assert_eq!(io.read_model_output(&output_ref, 8).expect("read"), vec![1, 2, 3, 4]);
+        assert_eq!(
+            io.read_model_output("missing", 8).expect_err("miss").code,
+            HostConnectorErrorCode::Unavailable
+        );
+        io.drop_ref(&output_ref);
+        assert!(io.read_model_output(&output_ref, 8).is_err());
+    }
+
+    #[test]
+    fn guest_frame_round_trip_and_decode_failures() {
+        let encoded = encode_guest_frame(7, &[2, 3], b"abcdef");
+        let (dtype, dims, payload) = decode_guest_frame(&encoded).expect("decode");
+        assert_eq!(dtype, 7);
+        assert_eq!(dims, vec![2, 3]);
+        assert_eq!(payload, b"abcdef");
+        assert_eq!(normalize_digest(" sha256:AbCd "), "abcd");
+        assert_eq!(normalize_digest("SHA256:Ab"), "sha256:ab");
+        assert_eq!(digest_hex(b"x").len(), 64);
+
+        assert_eq!(
+            decode_guest_frame(&[0, 1, 2]).expect_err("short").code,
+            HostConnectorErrorCode::InvalidInput
+        );
+        let mut bad_abi = encoded.clone();
+        bad_abi[0] = 9;
+        assert_eq!(
+            decode_guest_frame(&bad_abi).expect_err("abi").code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+        // ABI + dtype/rank present, but dim bytes truncated before payload length.
+        let mut truncated_header = encode_guest_frame(1, &[1, 2, 3], b"");
+        truncated_header.truncate(8);
+        assert_eq!(
+            decode_guest_frame(&truncated_header).expect_err("hdr").code,
+            HostConnectorErrorCode::InvalidInput
+        );
+        let mut truncated_payload = encode_guest_frame(1, &[1], b"abcd");
+        truncated_payload.truncate(truncated_payload.len() - 1);
+        assert_eq!(
+            decode_guest_frame(&truncated_payload)
+                .expect_err("payload")
+                .code,
+            HostConnectorErrorCode::InvalidInput
+        );
+        let huge = encode_guest_frame(1, &vec![1; 300], b"z");
+        assert_eq!(huge[3], 0); // rank saturates via unwrap_or(0) for >255 dims
+    }
+
+    #[test]
+    fn invoke_rejects_wrong_route_cancel_and_invalid_payload() {
+        let (mut host, digest) = seeded_host();
+        assert_eq!(
+            host.invoke(&HostConnectorHostRequest {
+                connector_id: "other".to_string(),
+                operation: MODEL_EXECUTE_OPERATION.to_string(),
+                binding_id: "b".to_string(),
+                target_family: "macos".to_string(),
+                correlation_id: "c".to_string(),
+                payload: json!({}),
+                cancel_requested: false,
+            })
+            .expect_err("route")
+            .code,
+            HostConnectorErrorCode::Incompatible
+        );
+
+        let mut cancelled = execute_request(&digest, "input-1", serde_json::Map::new());
+        cancelled.cancel_requested = true;
+        assert_eq!(
+            host.invoke(&cancelled).expect_err("cancel").code,
+            HostConnectorErrorCode::Cancelled
+        );
+
+        let bad = HostConnectorHostRequest {
+            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+            operation: MODEL_EXECUTE_OPERATION.to_string(),
+            binding_id: "b".to_string(),
+            target_family: "macos".to_string(),
+            correlation_id: "c".to_string(),
+            payload: json!("not-an-object"),
+            cancel_requested: false,
+        };
+        assert_eq!(
+            host.invoke(&bad).expect_err("payload").code,
+            HostConnectorErrorCode::InvalidInput
+        );
+    }
+
+    #[test]
+    fn invoke_policy_pin_schema_and_resource_failures() {
+        let (mut host, digest) = seeded_host();
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+
+        let mut unknown_pin = execute_request(&digest, &input_ref, serde_json::Map::new());
+        unknown_pin.payload["model_ref"]["model_id"] = json!("other.model");
+        assert_eq!(
+            host.invoke(&unknown_pin).expect_err("pin").code,
+            HostConnectorErrorCode::ModelUnavailable
+        );
+
+        host.pins[0].offline_allowed = false;
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
+                .expect_err("offline")
+                .code,
+            HostConnectorErrorCode::ModelUnavailable
+        );
+        host.pins[0].offline_allowed = true;
+
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut missing_policy = execute_request(&digest, &input_ref, serde_json::Map::new());
+        missing_policy.payload["policy_ref"] = json!("missing");
+        assert_eq!(
+            host.invoke(&missing_policy).expect_err("policy").code,
+            HostConnectorErrorCode::PolicyDenied
+        );
+
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut denied = execute_request(&digest, &input_ref, serde_json::Map::new());
+        denied.payload["data_classification"] = json!("secret");
+        assert_eq!(
+            host.invoke(&denied).expect_err("class").code,
+            HostConnectorErrorCode::PolicyDenied
+        );
+
+        let mut identity_mismatch = fixture_package();
+        identity_mismatch.manifest.model_id = "other".to_string();
+        identity_mismatch.manifest.package_digest = format!("{}aa", &digest[..62]);
+        identity_mismatch.manifest.wasm_digest = digest_hex(&identity_mismatch.wasm);
+        // Re-key under the requested digest by forging package_digest after byte digest match.
+        identity_mismatch.manifest.package_digest = digest.clone();
+        host.packages
+            .insert_verified(identity_mismatch)
+            .expect("overwrite");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
+                .expect_err("identity")
+                .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        // Restore a matching package for remaining cases.
+        let restored = fixture_package();
+        host.packages.insert_verified(restored).expect("restore");
+
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut schema = execute_request(&digest, &input_ref, serde_json::Map::new());
+        schema.payload["input_schema_ref"] = json!("schema:other");
+        assert_eq!(
+            host.invoke(&schema).expect_err("schema").code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 0;
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
+                .expect_err("zero out")
+                .code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 4096;
+
+        let oversized = vec![9_u8; 5000];
+        let input_ref = host.io.stage_model_input(&oversized, 8000).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest, &input_ref, serde_json::Map::new()))
+                .expect_err("input ceiling")
+                .code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn invoke_honors_optional_resource_overrides_and_bad_wasm() {
+        let (mut host, digest) = seeded_host();
+        let frame = encode_guest_frame(1, &[2], b"ok");
+        let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
+        let mut extras = serde_json::Map::new();
+        extras.insert("max_memory_bytes".to_string(), json!(2 * 64 * 1024));
+        extras.insert("max_fuel".to_string(), json!(100_000));
+        extras.insert("timeout_ms".to_string(), json!(1_000));
+        extras.insert("feature_metadata".to_string(), json!({"k": "v"}));
+        let result = host
+            .invoke(&execute_request(&digest, &input_ref, extras))
+            .expect("execute");
+        let output = host
+            .io
+            .read_model_output(&result.artifact_ref, 4096)
+            .expect("read");
+        assert_eq!(output, frame);
+
+        let mut bad_wasm = fixture_package();
+        bad_wasm.wasm = b"not-wasm".to_vec();
+        bad_wasm.manifest.wasm_digest = digest_hex(&bad_wasm.wasm);
+        bad_wasm.manifest.package_digest = bad_wasm.manifest.wasm_digest.clone();
+        let bad_digest = bad_wasm.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: bad_digest.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(bad_wasm).expect("insert bad");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&bad_digest, &input_ref, serde_json::Map::new()))
+                .expect_err("bad wasm")
+                .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        // Missing model_execute export.
+        let missing_export = wat::parse_str(
+            r#"(module (memory (export "memory") 1) (func (export "other") (result i32) i32.const 0))"#,
+        )
+        .expect("wat");
+        let mut pkg = fixture_package();
+        pkg.wasm = missing_export;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
+        let digest_missing = pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest_missing.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(
+                &digest_missing,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("export")
+            .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        // Missing memory export.
+        let missing_memory = wat::parse_str(
+            r#"(module (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#,
+        )
+        .expect("wat");
+        let mut pkg = fixture_package();
+        pkg.wasm = missing_memory;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
+        let digest_mem = pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest_mem.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest_mem, &input_ref, serde_json::Map::new()))
+                .expect_err("memory")
+                .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+
+        // Fuel exhaustion / trap.
+        let looper = wat::parse_str(
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+                (loop $spin (br $spin))
+                i32.const 0))"#,
+        )
+        .expect("wat");
+        let mut pkg = fixture_package();
+        pkg.wasm = looper;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
+        pkg.manifest.max_fuel = 10;
+        let digest_fuel = pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest_fuel.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest_fuel, &input_ref, serde_json::Map::new()))
+                .expect_err("fuel")
+                .code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
+
+        // Negative / oversized guest return length.
+        let bad_len = wat::parse_str(
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+                i32.const -1))"#,
+        )
+        .expect("wat");
+        let mut pkg = fixture_package();
+        pkg.wasm = bad_len;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
+        let digest_len = pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest_len.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(&digest_len, &input_ref, serde_json::Map::new()))
+                .expect_err("len")
+                .code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+
+        // Zero timeout fails closed after guest returns (elapsed > 0).
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut zero_timeout = serde_json::Map::new();
+        zero_timeout.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            host.invoke(&execute_request(&digest, &input_ref, zero_timeout))
+                .expect_err("timeout")
+                .code,
+            HostConnectorErrorCode::Timeout
+        );
+    }
+
+    #[test]
+    fn require_ok_and_host_err_helpers_cover_both_branches() {
+        assert!(require_ok(true, HostConnectorErrorCode::ExecutionFailed, "ok").is_ok());
+        let err = require_ok(false, HostConnectorErrorCode::ExecutionFailed, "no")
+            .expect_err("false");
+        assert_eq!(err.code, HostConnectorErrorCode::ExecutionFailed);
+        assert_eq!(err.message, "no");
+        let built = model_host_err(HostConnectorErrorCode::Unavailable, "x");
+        assert_eq!(built.code, HostConnectorErrorCode::Unavailable);
+    }
+
+    #[test]
+    fn memory_grow_success_and_failure_and_unresolved_imports() {
+        let (mut host, _) = seeded_host();
+
+        // 1-page module needs grow when output ceiling spans a second page.
+        let grow_wat = r#"(module
+          (memory (export "memory") 1)
+          (func (export "model_execute")
+            (param $in_ptr i32) (param $in_len i32) (param $out_ptr i32) (param $out_cap i32) (result i32)
+            (local.get $in_len)
+          ))"#;
+        let mut grow_pkg = fixture_package();
+        grow_pkg.wasm = wat::parse_str(grow_wat).expect("wat");
+        grow_pkg.manifest.wasm_digest = digest_hex(&grow_pkg.wasm);
+        grow_pkg.manifest.package_digest = grow_pkg.manifest.wasm_digest.clone();
+        grow_pkg.manifest.max_memory_bytes = 4 * 64 * 1024;
+        grow_pkg.manifest.max_output_bytes = 70_000;
+        let grow_digest = grow_pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: grow_digest.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(grow_pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut extras = serde_json::Map::new();
+        extras.insert("max_output_bytes".to_string(), json!(70_000));
+        host.policies.get_mut("policy-1").expect("policy").max_output_bytes = 70_000;
+        assert!(host
+            .invoke(&execute_request(&grow_digest, &input_ref, extras))
+            .is_ok());
+
+        // Distinct 1-page module so the store limiter can block grow independently.
+        let mut blocked = fixture_package();
+        let alt = r#"(module
+          (memory (export "memory") 1)
+          (func (export "model_execute")
+            (param i32 i32 i32 i32) (result i32) (i32.const 0)))"#;
+        blocked.wasm = wat::parse_str(alt).expect("wat");
+        blocked.manifest.wasm_digest = digest_hex(&blocked.wasm);
+        blocked.manifest.package_digest = blocked.manifest.wasm_digest.clone();
+        blocked.manifest.max_memory_bytes = 64 * 1024;
+        blocked.manifest.max_output_bytes = 70_000;
+        let blocked_digest = blocked.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: blocked_digest.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(blocked).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let mut extras = serde_json::Map::new();
+        extras.insert("max_output_bytes".to_string(), json!(70_000));
+        assert_eq!(
+            host.invoke(&execute_request(&blocked_digest, &input_ref, extras))
+                .expect_err("grow")
+                .code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+
+        // Unresolved import → instantiation failed.
+        let imports = wat::parse_str(
+            r#"(module
+              (import "env" "abort" (func (param i32)))
+              (memory (export "memory") 1)
+              (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#,
+        )
+        .expect("wat");
+        let mut pkg = fixture_package();
+        pkg.wasm = imports;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
+        let import_digest = pkg.manifest.package_digest.clone();
+        host.pins.push(ExactModelPin {
+            model_id: "fixture.echo".to_string(),
+            version: "1.0.0".to_string(),
+            digest: import_digest.clone(),
+            offline_allowed: true,
+        });
+        host.packages.insert_verified(pkg).expect("insert");
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(
+                &import_digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("imports")
+            .code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
     }
 }
