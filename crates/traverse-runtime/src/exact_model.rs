@@ -755,7 +755,12 @@ pub const FIXTURE_ECHO_WAT: &str = r#"
 "#;
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::too_many_lines,
+    clippy::unwrap_used
+)]
 mod tests {
     use super::*;
     use crate::host_connector_dispatch::{
