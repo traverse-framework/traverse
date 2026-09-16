@@ -24,6 +24,7 @@ required_files=(
   "docs/releases/v0.8.0.md"
   "docs/releases/v0.8.1.md"
   "docs/releases/v0.11.0.md"
+  "docs/releases/v0.12.0.md"
   "docs/troubleshooting.md"
   "docs/adapter-boundaries.md"
   "docs/contract-publication-policy.md"
@@ -411,10 +412,14 @@ grep -q "docs/youaskm3-v0.3.0-integration-readiness.md" README.md
 grep -Eq 'version = "[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml
 grep -q "docs/releases/v0.8.1.md" README.md
 grep -q "docs/releases/v0.11.0.md" README.md
+grep -q "docs/releases/v0.12.0.md" README.md
 grep -q "Traverse v0.11.0" docs/releases/v0.11.0.md
 grep -q "1402-runtime-wasm-orchestrator-convergence" docs/releases/v0.11.0.md
 grep -q "runtime/runtime.wasm" docs/releases/v0.11.0.md
 grep -q "bash scripts/ci/bump_version.sh 0.11.0" docs/releases/v0.11.0.md
+grep -q "Traverse v0.12.0" docs/releases/v0.12.0.md
+grep -q "138-governed-exact-model-execution" docs/releases/v0.12.0.md
+grep -q "bash scripts/ci/bump_version.sh 0.12.0" docs/releases/v0.12.0.md
 grep -q "Post-cut documentation, READMEs, and website" docs/release-process.md
 grep -q "Traverse v0.4.0" docs/releases/v0.4.0.md
 grep -q "044-application-bundle-manifest" docs/releases/v0.4.0.md
