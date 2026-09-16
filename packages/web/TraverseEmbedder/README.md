@@ -8,19 +8,24 @@ sidecar and no `.traverse/server.json` discovery.
 
 ## Runtime-WASM execution
 
-Unlike the native platform embedders, which embed Wasmtime to execute
-bundled capability artifacts, the browser *is already* a WebAssembly host.
-`BundleEmbedder` compiles each bundled capability module with
-`WebAssembly.compile` once at `init`, validates its imports against the
-Traverse Host ABI whitelist (only `wasi_snapshot_preview1.fd_read` /
-`fd_write` / `proc_exit` and the reserved `traverse_host.*` imports — no
-filesystem, no network, no environment, deny-by-default, matching the native
-`WasmExecutor`), and instantiates + invokes it synchronously per `submit`
-through a minimal WASI `preview1` shim that pipes JSON stdin/stdout exactly
-like the native executor. Workflow execution supports linear,
-`direct`-triggered pipelines (the shape used by every bundled example
-workflow today); event-driven/conditional edges are rejected deterministically
-at `init` rather than silently mis-executed.
+`BundleEmbedder` loads the application bundle's `runtime/runtime.wasm`
+orchestrator (spec `1402` / `068` FR-002 — **not** shipped inside this npm
+package) via `BundleLoader`, digest-verifies it, and drives the same
+`runtime-wasm-bridge/1.0.0` ABI native hosts use (`traverse_init` /
+`traverse_submit` / `traverse_next_event`). Nested capability execution and
+`traverse_host::emit_event` validation run inside that orchestrator (Decision
+86–89), not in a hand-rolled TypeScript WASI/`emit_event` path.
+
+App bundles must include `runtime/runtime.wasm` plus
+`runtime/runtime.wasm.sha256` (`sha256:<64 hex>`). Workflow execution still
+supports linear `direct`-triggered pipelines; event-driven/conditional edges
+are rejected deterministically at `init`.
+
+**Migration (Phase 3 / FR-010):** the interim TypeScript `emit_event` host
+(#1404), `wasi.ts`, and per-capability Host ABI import gating are removed.
+Bundles without `runtime/runtime.wasm` fail closed at `init`. This is a
+breaking embedder change; the next lockstep cut that publishes it MUST be
+`0.11.0` (or later), not a `0.10.x` patch.
 
 ```ts
 import { BundleEmbedder, FetchBundleLoader } from "traverse-embedder-web";

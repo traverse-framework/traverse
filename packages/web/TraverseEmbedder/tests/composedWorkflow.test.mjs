@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { ComposedWorkflowError, MemoryRegistryCacheStore, executeBrowserComposedWorkflow, prepareRegistryDependency } from "../dist/index.js";
 import { ECHO_WAT, compileWat, emitEventWat } from "./fixtures.mjs";
 
 const digest = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
+
+const RUNTIME_WASM_BYTES = await readFile(
+  join(dirname(fileURLToPath(import.meta.url)), "fixtures/runtime.wasm"),
+);
 
 async function fixture(overrides = {}) {
   const wasm = overrides.wasm ?? await compileWat(ECHO_WAT);
@@ -24,9 +31,13 @@ async function fixture(overrides = {}) {
   return { store, snapshot, proposal };
 }
 
+function withRuntime(options = {}) {
+  return { runtimeWasmBytes: new Uint8Array(RUNTIME_WASM_BYTES), ...options };
+}
+
 test("reviewed composed proposal executes exact prepared WASM offline with a redacted trace", async () => {
   const { store, snapshot, proposal } = await fixture();
-  const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot);
+  const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, withRuntime());
   assert.equal(trace.terminal_state, "succeeded");
   assert.deepEqual(trace.node_outcomes.map(outcome => outcome.status), ["succeeded"]);
   assert.equal(JSON.stringify(trace).includes("world"), false);
@@ -34,8 +45,8 @@ test("reviewed composed proposal executes exact prepared WASM offline with a red
 
 test("composed execution fails closed on artifact drift and unreviewed mappings", async () => {
   const { store, snapshot, proposal } = await fixture();
-  await assert.rejects(() => executeBrowserComposedWorkflow({ ...proposal, mapping_unconfirmed: true }, store, snapshot), error => error instanceof ComposedWorkflowError && error.code === "composed_workflow_proposal_invalid");
-  await assert.rejects(() => executeBrowserComposedWorkflow({ ...proposal, proposal: { ...proposal.proposal, nodes: [{ ...proposal.proposal.nodes[0], artifact_digest: digest(Buffer.from("wrong")) }] } }, store, snapshot), error => error instanceof ComposedWorkflowError && error.code === "composed_workflow_artifact_digest_drift");
+  await assert.rejects(() => executeBrowserComposedWorkflow({ ...proposal, mapping_unconfirmed: true }, store, snapshot, withRuntime()), error => error instanceof ComposedWorkflowError && error.code === "composed_workflow_proposal_invalid");
+  await assert.rejects(() => executeBrowserComposedWorkflow({ ...proposal, proposal: { ...proposal.proposal, nodes: [{ ...proposal.proposal.nodes[0], artifact_digest: digest(Buffer.from("wrong")) }] } }, store, snapshot, withRuntime()), error => error instanceof ComposedWorkflowError && error.code === "composed_workflow_artifact_digest_drift");
 });
 
 test("composed emit_event: declared Subscribable event reaches onCapabilityEvent", async () => {
@@ -48,9 +59,9 @@ test("composed emit_event: declared Subscribable event reaches onCapabilityEvent
     },
   });
   const accepted = [];
-  const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, {
+  const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, withRuntime({
     onCapabilityEvent: (event) => accepted.push(event),
-  });
+  }));
   assert.equal(trace.terminal_state, "succeeded");
   assert.equal(accepted.length, 1);
   assert.equal(accepted[0].event_id, "dev.traverse.test.emitted");
@@ -66,9 +77,9 @@ test("composed emit_event: undeclared and non-Subscribable events do not invoke 
   ]) {
     const { store, snapshot, proposal } = await fixture({ wasm, contract });
     const accepted = [];
-    const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, {
+    const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, withRuntime({
       onCapabilityEvent: (event) => accepted.push(event),
-    });
+    }));
     assert.equal(trace.terminal_state, "succeeded");
     assert.equal(accepted.length, 0);
   }

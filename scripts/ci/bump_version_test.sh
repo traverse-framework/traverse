@@ -3,6 +3,18 @@
 
 set -euo pipefail
 
+# This script is reachable from a git hook (pre-push -> local_preflight.sh ->
+# repository_checks.sh), which git invokes with GIT_DIR (and sometimes
+# GIT_WORK_TREE/GIT_INDEX_FILE) set to the REAL calling repository. Those env
+# vars take precedence over `-C`-based discovery, so every `git -C "${root}"
+# ...` call below would silently operate on the real repo instead of the
+# isolated fixture it targets — corrupting the caller's shared git state
+# (observed: repeated `core.bare` corruption in a shared .git/config across
+# worktrees). Unsetting here, before any fixture is seeded, ensures every
+# git invocation in this script and in the `bump_version.sh` it drives stays
+# scoped to `-C "${root}"` as intended.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 helper="${repo_root}/scripts/ci/bump_version.sh"
 

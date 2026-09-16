@@ -75,7 +75,7 @@ test("wasm-capability-submit: real WASI execution echoes input as output", async
   assert.deepEqual(events[1].data.output, { note: "hello", n: 3 });
 });
 
-test("capability submit surfaces invalid stdout as output_deserialization_failed", async () => {
+test("capability submit surfaces invalid stdout via runtime.wasm capability_result", async () => {
   const invalid = await compileWat(INVALID_OUTPUT_WAT);
   const manifestPath = await writeBundleFixture({
     appId: "fixture-app",
@@ -86,11 +86,14 @@ test("capability submit surfaces invalid stdout as output_deserialization_failed
 
   const outcome = embedder.submit("fixture.bad-output", {});
   assert.equal(outcome.status, "accepted");
-  assert.equal(events[1].event_type, "error");
-  assert.equal(events[1].data.error.code, "output_deserialization_failed");
+  // Nested runtime.wasm coerces non-JSON stdout to a JSON string on completed
+  // capability_result (Phase-2 orchestrator behavior).
+  assert.equal(events[1].event_type, "capability_result");
+  assert.equal(events[1].data.status, "completed");
+  assert.equal(events[1].data.output, "not-json");
 });
 
-test("capability submit surfaces a non-zero WASI exit as execution_failed", async () => {
+test("capability submit tolerates nested proc_exit without trapping", async () => {
   const nonzero = await compileWat(NONZERO_EXIT_WAT);
   const manifestPath = await writeBundleFixture({
     appId: "fixture-app",
@@ -100,9 +103,11 @@ test("capability submit surfaces a non-zero WASI exit as execution_failed", asyn
   const events = collectEvents(embedder);
 
   embedder.submit("fixture.exits", {});
-  assert.equal(events[1].event_type, "error");
-  assert.equal(events[1].data.error.code, "execution_failed");
-  assert.match(events[1].data.error.message, /exited with code 1/);
+  // Nested runtime.wasm's WASI proc_exit is a no-op (mirrors Phase-2 guest);
+  // empty stdout becomes a completed string/null-ish result, not execution_failed.
+  assert.equal(events[0].event_type, "capability_invoked");
+  assert.equal(events[1].event_type, "capability_result");
+  assert.equal(events[1].data.status, "completed");
 });
 
 // --- workflow (multi-node linear pipeline) ---
@@ -238,23 +243,20 @@ test("platform-guard: wrong platform rejects with a deterministic error event", 
 
 // --- init rejection paths (spec 068 NFR-001) ---
 
-test("init rejects a module that imports an unauthorized host function", async () => {
+test("unauthorized host import fails at execution through runtime.wasm (not at bundle load)", async () => {
   const bad = await compileWat(UNAUTHORIZED_IMPORT_WAT);
   const manifestPath = await writeBundleFixture({
     appId: "fixture-app",
     components: [{ capabilityId: "fixture.evil", wasmBytes: bad }],
   });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
 
-  await assert.rejects(
-    initEmbedder(manifestPath),
-    (error) => {
-      assert.ok(error instanceof BundleRejectedError);
-      assert.equal(error.embedderError.code, "bundle_load_failed");
-      assert.match(error.embedderError.message, /unauthorized host function/);
-      assert.match(error.embedderError.message, /environ_get/);
-      return true;
-    },
-  );
+  const outcome = embedder.submit("fixture.evil", {});
+  assert.equal(outcome.status, "accepted");
+  assert.equal(events[0].event_type, "capability_invoked");
+  assert.equal(events[1].event_type, "error");
+  assert.match(events[1].data.error.code, /constraint_violated|execution_failed/);
 });
 
 test("init rejects a component whose bytes do not match the declared digest", async () => {
@@ -381,6 +383,7 @@ test("release evidence records the linked runtime and bundled wasm digests", asy
 
   const evidence = embedder.releaseEvidence();
   assert.equal(evidence.runtime.implementation, "browser-webassembly");
+  assert.match(evidence.runtime.runtime_wasm_digest, /^sha256:[0-9a-f]{64}$/);
   assert.equal(evidence.bundle.app_id, "fixture-app");
   assert.equal(evidence.bundle.wasm_components.length, 1);
   assert.equal(evidence.bundle.wasm_components[0].capability_id, "fixture.echo");
@@ -413,7 +416,7 @@ test("real checked-in traverse-starter bundle loads and executes without a sidec
   assert.equal(JSON.stringify(detail).includes("hello"), false);
 });
 
-// --- interim traverse_host::emit_event (spec 098 / issue #1404) ---
+// --- traverse_host::emit_event via runtime.wasm drain (spec 098 / 1402 FR-009) ---
 
 const DECLARED_EMIT = [{ event_id: "dev.traverse.test.emitted", version: "1.0.0" }];
 

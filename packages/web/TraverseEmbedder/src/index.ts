@@ -12,11 +12,11 @@
  * package so every platform observes the same boundary (spec 057 FR-003).
  *
  * `BundleEmbedder` is the production implementation: it loads an
- * application-owned bundle, digest-verifies and host-ABI-validates every
- * bundled WASM capability, and executes them directly in the browser's
- * native WebAssembly host via a minimal WASI shim — no nested WASM engine,
- * no sidecar (spec 068 FR-002, NFR-001). `EmbedderTestDouble` is the
- * deterministic in-memory implementation required by spec 068 FR-006.
+ * application-owned bundle (including `runtime/runtime.wasm`),
+ * digest-verifies every bundled WASM capability, and executes them through
+ * the shared `runtime.wasm` orchestrator (spec `1402` FR-006).
+ * `EmbedderTestDouble` is the deterministic in-memory implementation
+ * required by spec 068 FR-006.
  */
 
 export {
@@ -74,8 +74,14 @@ export {
   SUPPORTED_BROWSER_PLAN_CONTRACT_SCHEMA_VERSION,
 } from "./browserLocalPlan.js";
 
-export { COMPOSED_WORKFLOW_MAX_NODES, COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES, ComposedWorkflowError, executeBrowserComposedWorkflow } from "./composedWorkflow.js";
+export {
+  COMPOSED_WORKFLOW_MAX_NODES,
+  COMPOSED_WORKFLOW_MAX_PAYLOAD_BYTES,
+  ComposedWorkflowError,
+  executeBrowserComposedWorkflow,
+} from "./composedWorkflow.js";
 export type {
+  ComposedCapabilityEvent,
   ComposedWorkflowErrorCode,
   ComposedWorkflowExecutionOptions,
   ComposedWorkflowNodeOutcome,
@@ -83,19 +89,18 @@ export type {
 } from "./composedWorkflow.js";
 
 export {
-  EMIT_EVENT_ERR_INVALID_PAYLOAD,
-  EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,
-  EMIT_EVENT_ERR_UNDECLARED_EVENT,
-  EMIT_EVENT_OK,
-  MAX_EVENT_EMIT_PAYLOAD_BYTES,
-  createEmitEventHostImport,
+  RuntimeWasmHost,
+  RuntimeWasmHostError,
+  mapRuntimeWasmEvents,
+  mapServiceType,
   parseDeclaredEmits,
-} from "./emitEventHost.js";
+} from "./runtimeWasmHost.js";
 export type {
-  AcceptedCapabilityEvent,
-  DeclaredEmit,
-  EmitEventHostContext,
-} from "./emitEventHost.js";
+  RuntimeWasmCapabilityInit,
+  RuntimeWasmEmitRef,
+  RuntimeWasmJson,
+} from "./runtimeWasmHost.js";
+
 export type {
   BrowserPlanErrorCode,
   BrowserPlanResponse,
@@ -151,8 +156,8 @@ export type {
 export {
   HOST_ABI_V1_WHITELIST,
   SUPPORTED_HOST_ABI_VERSION,
-  findUnauthorizedImport,
 } from "./hostAbi.js";
+export type { HostAbiImport } from "./hostAbi.js";
 
 export {
   AUDIO_CAPTURE_OPERATION,
@@ -174,7 +179,6 @@ export type {
   HostConnectorEventName,
   HostConnectorTargetFamily,
 } from "./hostConnectorCommand.js";
-export type { HostAbiImport } from "./hostAbi.js";
 
 export { executeVerifiedEntrypoint, VerifiedEntrypointError } from "./verifiedEntrypoint.js";
 export type {

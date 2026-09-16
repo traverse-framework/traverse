@@ -1,15 +1,8 @@
 /**
  * Production embedder: loads an application-owned bundle and executes
- * bundled WASM capabilities directly in the browser's native WebAssembly
- * host — no `traverse-cli serve`, no server round trip.
- *
- * INTERIM architecture: each capability module is compiled with
- * `WebAssembly.compile` once at `init`, validated against the Traverse Host
- * ABI whitelist (`hostAbi.ts`), and instantiated + invoked synchronously per
- * `submit` through a minimal WASI `preview1` shim (`wasi.ts`) that pipes JSON
- * stdin/stdout like the native `WasmExecutor`. Spec `1402-runtime-wasm-
- * orchestrator-convergence` Phase 3 (#1408) will replace this hand-rolled
- * path with a real `runtime.wasm` orchestrator; see ADR-0072.
+ * bundled WASM capabilities through the shared `runtime.wasm` orchestrator
+ * (spec `1402` FR-006/FR-007), loaded from the bundle via `BundleLoader` —
+ * not embedded in the npm package (spec `068` FR-002).
  *
  * Workflow execution supports linear, `direct`-triggered pipelines only
  * (the shape used by every bundled example workflow today: `analyze` ->
@@ -28,16 +21,16 @@ import {
   SHA256_DIGEST_PATTERN,
 } from "./bundleValidation.js";
 import type { BundleLoader } from "./bundleLoader.js";
-import { findUnauthorizedImport } from "./hostAbi.js";
 import { IndexedDbDataStore } from "./indexedDbDataStore.js";
-import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
-import { WasiExit, WasiPipes, createWasiPreview1Imports } from "./wasi.js";
-import type { WasiMemoryRef } from "./wasi.js";
 import {
-  createEmitEventHostImport,
+  RuntimeWasmHost,
+  RuntimeWasmHostError,
+  mapRuntimeWasmEvents,
+  mapServiceType,
   parseDeclaredEmits,
-} from "./emitEventHost.js";
-import type { DeclaredEmit } from "./emitEventHost.js";
+} from "./runtimeWasmHost.js";
+import type { RuntimeWasmEmitRef, RuntimeWasmJson } from "./runtimeWasmHost.js";
+import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
@@ -53,6 +46,8 @@ import type {
   TraverseEmbedderApi,
 } from "./types.js";
 
+const DEFAULT_RUNTIME_WASM_PATH = "runtime/runtime.wasm";
+
 /** Configuration for `BundleEmbedder.init` (`runtime.init` input). */
 export interface BundleEmbedderConfig {
   /** Path or URL to the application bundle's `app.manifest.json`. */
@@ -63,17 +58,23 @@ export interface BundleEmbedderConfig {
   readonly workspaceId?: string;
   /** Platform identity checked against compatible-capability allowlists. */
   readonly platform?: string;
+  /**
+   * Bundle-relative path to `runtime.wasm` (default `runtime/runtime.wasm`).
+   * Digest is read from the companion `<path>.sha256` sidecar.
+   */
+  readonly runtimeWasmPath?: string;
 }
 
 interface WasmTarget {
   readonly capabilityId: string;
   readonly capabilityVersion: string;
   readonly digest: string;
-  readonly module: WebAssembly.Module;
+  /** Nested capability artifact bytes (executed inside `runtime.wasm`). */
+  readonly wasmBytes: Uint8Array;
   /** Optional contract `service_type` from the component manifest (Spec 132). */
   readonly serviceType: string | null;
-  /** Declared contract `emits` entries used by `traverse_host::emit_event` (spec 098). */
-  readonly emits: readonly DeclaredEmit[];
+  /** Declared contract `emits` entries forwarded to `runtime.wasm` init (spec 098). */
+  readonly emits: readonly RuntimeWasmEmitRef[];
 }
 
 interface WorkflowNodeSpec {
@@ -192,8 +193,41 @@ function projectWorkflowOutput(
   return projected;
 }
 
+function parseRuntimeDigestText(text: string, digestPath: string): string {
+  const trimmed = text.trim();
+  const firstToken = trimmed.split(/\s+/)[0] ?? "";
+  if (!SHA256_DIGEST_PATTERN.test(firstToken)) {
+    throw loadFailure(
+      `runtime digest file '${digestPath}' must contain a sha256:<hex> digest; got '${trimmed}'`,
+    );
+  }
+  return firstToken.toLowerCase();
+}
+
+function classifyRuntimeFailure(message: string): { code: string; message: string } {
+  const lower = message.toLowerCase();
+  if (lower.includes("not valid json") || lower.includes("deserialization")) {
+    return { code: "output_deserialization_failed", message };
+  }
+  if (
+    lower.includes("unauthorized") ||
+    lower.includes("unknown import") ||
+    lower.includes("import ") ||
+    lower.includes("link ")
+  ) {
+    return { code: "constraint_violated", message };
+  }
+  return { code: "execution_failed", message };
+}
+
+function asJsonValue(value: RuntimeWasmJson): JsonValue {
+  return value as JsonValue;
+}
+
 export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly core: EmbedderCore;
+  private readonly runtimeModule: WebAssembly.Module;
+  private readonly runtimeDigest: string;
   private readonly wasmTargets: ReadonlyMap<string, WasmTarget>;
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
   private readonly wasmComponentEvidence: readonly JsonValue[];
@@ -201,11 +235,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
 
   private constructor(
     core: EmbedderCore,
+    runtimeModule: WebAssembly.Module,
+    runtimeDigest: string,
     wasmTargets: ReadonlyMap<string, WasmTarget>,
     workflowTargets: ReadonlyMap<string, WorkflowTarget>,
     wasmComponentEvidence: readonly JsonValue[],
   ) {
     this.core = core;
+    this.runtimeModule = runtimeModule;
+    this.runtimeDigest = runtimeDigest;
     this.wasmTargets = wasmTargets;
     this.workflowTargets = workflowTargets;
     this.wasmComponentEvidence = wasmComponentEvidence;
@@ -221,9 +259,10 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   }
 
   /**
-   * `runtime.init`: load, digest-verify, host-ABI-validate, and compile the
-   * application bundle. Rejects deterministically with a `BundleRejectedError`
-   * and never falls back to a sidecar (spec 068 NFR-001).
+   * `runtime.init`: load and digest-verify the application bundle plus
+   * `runtime.wasm`. Rejects deterministically with a `BundleRejectedError`
+   * and never falls back to a sidecar (spec 068 NFR-001). Host-ABI import
+   * validation for nested capabilities is owned by `runtime.wasm` (FR-007).
    */
   static async init(config: BundleEmbedderConfig): Promise<BundleEmbedder> {
     const { manifestPath, loader } = config;
@@ -234,6 +273,32 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       throw loadFailure(`failed to load application bundle manifest: ${String(error)}`);
     }
     const summary = validateBundleCompatibility(manifestText);
+
+    const runtimeRelPath = config.runtimeWasmPath ?? DEFAULT_RUNTIME_WASM_PATH;
+    const runtimePath = loader.resolve(manifestPath, runtimeRelPath);
+    const runtimeDigestPath = `${runtimePath}.sha256`;
+    let runtimeBytes: Uint8Array;
+    try {
+      runtimeBytes = await loader.loadBytes(runtimePath);
+    } catch (error) {
+      throw loadFailure(`failed to load runtime.wasm '${runtimePath}': ${String(error)}`);
+    }
+    let runtimeDigestText: string;
+    try {
+      runtimeDigestText = await loader.loadText(runtimeDigestPath);
+    } catch (error) {
+      throw loadFailure(
+        `failed to load runtime.wasm digest '${runtimeDigestPath}': ${String(error)}`,
+      );
+    }
+    const runtimeDigest = parseRuntimeDigestText(runtimeDigestText, runtimeDigestPath);
+    await verifyArtifactDigest(runtimeBytes, runtimeDigest, "runtime.wasm artifact");
+    let runtimeModule: WebAssembly.Module;
+    try {
+      runtimeModule = await WebAssembly.compile(toArrayBuffer(runtimeBytes));
+    } catch (error) {
+      throw loadFailure(`runtime.wasm failed to compile: ${String(error)}`);
+    }
 
     const wasmTargets = new Map<string, WasmTarget>();
     const compatibleTargets = new Map<string, readonly string[]>();
@@ -297,26 +362,11 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
       await verifyArtifactDigest(wasmBytes, wasmDigest, `component '${capabilityId}' artifact`);
 
-      let module: WebAssembly.Module;
-      try {
-        module = await WebAssembly.compile(toArrayBuffer(wasmBytes));
-      } catch (error) {
-        throw loadFailure(`component '${capabilityId}' WASM artifact failed to compile: ${String(error)}`);
-      }
-      const unauthorized = findUnauthorizedImport(module);
-      if (unauthorized !== null) {
-        throw loadFailure(
-          `component '${capabilityId}' imports unauthorized host function ` +
-            `'${unauthorized.module}.${unauthorized.name}'; Traverse Host ABI 1.0.0 permits ` +
-            "only the whitelisted stdio and traverse_host imports",
-        );
-      }
-
       wasmTargets.set(capabilityId, {
         capabilityId,
         capabilityVersion,
         digest: wasmDigest,
-        module,
+        wasmBytes,
         serviceType: optionalString(record, "service_type"),
         emits: parseDeclaredEmits(record["emits"]),
       });
@@ -424,7 +474,14 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       config.platform ?? "web",
       compatibleTargets,
     );
-    return new BundleEmbedder(core, wasmTargets, workflowTargets, wasmComponentEvidence);
+    return new BundleEmbedder(
+      core,
+      runtimeModule,
+      runtimeDigest,
+      wasmTargets,
+      workflowTargets,
+      wasmComponentEvidence,
+    );
   }
 
   submit(targetId: string, input: JsonValue): SubmitOutcome {
@@ -503,7 +560,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
     }
 
-    const result = executeWasmModule(target, input, (event) => {
+    const result = executeWasmModule(this.runtimeModule, target, input, (event) => {
       this.core.emit("capability_event", sessionId, {
         execution_id: executionId,
         capability_id: targetId,
@@ -600,7 +657,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
           break;
         }
       }
-      const result = executeWasmModule(target, nodeInput, (event) => {
+      const result = executeWasmModule(this.runtimeModule, target, nodeInput, (event) => {
         this.core.emit("capability_event", sessionId, {
           execution_id: `exec_${requestId}`,
           capability_id: node.capabilityId,
@@ -722,20 +779,25 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   }
 
   releaseEvidence(): JsonValue {
-    return this.core.evidence("browser-webassembly", [...this.wasmComponentEvidence]);
+    const evidence = this.core.evidence("browser-webassembly", [
+      ...this.wasmComponentEvidence,
+    ]) as { readonly [key: string]: JsonValue };
+    return {
+      ...evidence,
+      runtime: {
+        implementation: "browser-webassembly",
+        runtime_wasm_digest: this.runtimeDigest,
+      },
+    };
   }
 }
 
 /**
- * Instantiates and invokes one bundled WASM capability module synchronously
- * against an already-compiled, host-ABI-validated `WebAssembly.Module`,
- * piping `input` as WASI stdin JSON and parsing WASI stdout as the output
- * JSON — the same contract as the native `WasmExecutor` (spec 057).
- *
- * INTERIM (#1404): `emit_event` is validated in TypeScript pending #1402's
- * real `runtime.wasm` orchestrator.
+ * Drives one capability through a fresh `runtime.wasm` instance:
+ * instantiate → init → submit → drainEvents → map domain events.
  */
 function executeWasmModule(
+  runtimeModule: WebAssembly.Module,
   target: WasmTarget,
   input: JsonValue,
   onCapabilityEvent: (event: {
@@ -744,82 +806,114 @@ function executeWasmModule(
     payload: JsonValue;
   }) => void,
 ): WasmExecutionResult {
-  const inputBytes = new TextEncoder().encode(JSON.stringify(input));
-  const pipes = new WasiPipes(inputBytes);
-  const memoryRef: WasiMemoryRef = { memory: null };
-  const importObject: WebAssembly.Imports = {
-    wasi_snapshot_preview1: createWasiPreview1Imports(pipes, memoryRef),
-    // The browser does not receive ambient connector authority.  Supplying
-    // this explicit host namespace keeps ABI-valid modules loadable while
-    // returning a deterministic denial until an activated binding adapter is
-    // provided by a later host integration.
-    traverse_host: {
-      // INTERIM pending #1402 — TypeScript mirror of Rust handle_emit_event.
-      emit_event: createEmitEventHostImport(
-        {
-          capabilityId: target.capabilityId,
-          serviceType: target.serviceType,
-          emits: target.emits,
-          onAccepted: onCapabilityEvent,
-        },
-        memoryRef,
-      ),
-      connector_invoke: (_requestPtr: number, _requestLen: number, _responsePtr: number, _responseLen: number): number => -1,
-    },
-  };
-
-  let instance: WebAssembly.Instance;
+  let host: RuntimeWasmHost;
   try {
-    instance = new WebAssembly.Instance(target.module, importObject);
+    host = RuntimeWasmHost.fromModule(runtimeModule);
   } catch (error) {
-    return {
-      ok: false,
-      output: null,
-      code: "constraint_violated",
-      message: `module instantiation failed: ${String(error)}`,
-    };
+    const message =
+      error instanceof RuntimeWasmHostError
+        ? error.message
+        : `runtime.wasm instantiate failed: ${String(error)}`;
+    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
   }
 
-  const exportedMemory = instance.exports["memory"];
-  memoryRef.memory = exportedMemory instanceof WebAssembly.Memory ? exportedMemory : null;
-
-  const entry = instance.exports["_start"] ?? instance.exports[""];
-  if (typeof entry !== "function") {
-    return {
-      ok: false,
-      output: null,
-      code: "constraint_violated",
-      message: "module has no WASI command entry point ('_start')",
-    };
+  try {
+    host.init(
+      {
+        capabilityId: target.capabilityId,
+        capabilityVersion: target.capabilityVersion,
+        serviceType: mapServiceType(target.serviceType),
+        emits: target.emits,
+        hostPlacementTarget: "browser",
+        permittedTargets: ["browser"],
+      },
+      target.wasmBytes,
+    );
+  } catch (error) {
+    const message =
+      error instanceof RuntimeWasmHostError
+        ? error.message
+        : `runtime.wasm init failed: ${String(error)}`;
+    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
   }
 
-  let trapped: { code: string; message: string } | null = null;
   try {
-    (entry as () => void)();
+    host.submit(new TextEncoder().encode(JSON.stringify(input)));
   } catch (error) {
-    if (error instanceof WasiExit) {
-      if (error.code !== 0) {
-        trapped = { code: "execution_failed", message: `module exited with code ${error.code}` };
+    const message =
+      error instanceof RuntimeWasmHostError
+        ? error.message
+        : `runtime.wasm submit failed: ${String(error)}`;
+    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
+  }
+
+  let drained: RuntimeWasmJson[];
+  try {
+    drained = host.drainEvents();
+  } catch (error) {
+    const message =
+      error instanceof RuntimeWasmHostError
+        ? error.message
+        : `runtime.wasm drainEvents failed: ${String(error)}`;
+    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
+  }
+
+  try {
+    host.shutdown();
+  } catch {
+    // Best-effort cleanup for a one-shot instance.
+  }
+
+  const mapped = mapRuntimeWasmEvents(drained);
+  let result: WasmExecutionResult | null = null;
+  for (const event of mapped) {
+    if (event.type === "capability_event") {
+      const data =
+        event.data !== null && typeof event.data === "object" && !Array.isArray(event.data)
+          ? (event.data as { readonly [key: string]: RuntimeWasmJson })
+          : {};
+      const eventId = typeof data["event_type"] === "string" ? data["event_type"] : null;
+      const version = typeof data["version"] === "string" ? data["version"] : "0.0.0";
+      if (eventId !== null) {
+        onCapabilityEvent({
+          event_id: eventId,
+          version,
+          payload: asJsonValue(data["payload"] ?? {}),
+        });
       }
-    } else {
-      trapped = { code: "execution_failed", message: `module trapped: ${String(error)}` };
+      continue;
     }
-  }
-  if (trapped !== null) {
-    return { ok: false, output: null, ...trapped };
+    if (event.type !== "capability_result") {
+      continue;
+    }
+    const data =
+      event.data !== null && typeof event.data === "object" && !Array.isArray(event.data)
+        ? (event.data as { readonly [key: string]: RuntimeWasmJson })
+        : {};
+    const status = typeof data["status"] === "string" ? data["status"] : null;
+    if (status === "completed") {
+      result = {
+        ok: true,
+        output: asJsonValue(data["output"] ?? null),
+        code: "",
+        message: "",
+      };
+      continue;
+    }
+    const errorText =
+      typeof data["error"] === "string"
+        ? data["error"]
+        : `capability_result status '${status ?? "unknown"}'`;
+    result = { ok: false, output: null, ...classifyRuntimeFailure(errorText) };
   }
 
-  const rawOutput = pipes.stdoutBytes();
-  const rawText = new TextDecoder().decode(rawOutput);
-  try {
-    const output = JSON.parse(rawText) as JsonValue;
-    return { ok: true, output, code: "", message: "" };
-  } catch (error) {
+  if (result === null) {
     return {
       ok: false,
       output: null,
-      code: "output_deserialization_failed",
-      message: `stdout is not valid JSON: ${String(error)} — raw: ${rawText}`,
+      code: "execution_failed",
+      message: "runtime.wasm produced no capability_result event",
     };
   }
+  return result;
 }
