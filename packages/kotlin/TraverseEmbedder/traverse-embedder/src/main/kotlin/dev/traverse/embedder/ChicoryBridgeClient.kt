@@ -17,28 +17,40 @@ class ChicoryBridgeClient(
         require(maximumOutputBytes > 0) { "maximum bridge output size must be positive" }
     }
 
-    @Synchronized fun initialize(configJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_init", configJson)
+    @Synchronized fun initialize(configJson: String): String =
+        initialize(configJson.toByteArray(StandardCharsets.UTF_8))
+
+    /**
+     * `init` on a `runtime.wasm` orchestrator instance carries spec 1402
+     * FR-011's length-prefixed binary framing (a 4-byte header length, that
+     * many bytes of JSON metadata, then a raw nested-capability WASM
+     * artifact) instead of bare UTF-8 JSON — spec 071 FR-005's amended text
+     * (Decision 90) carves out exactly this one operation, so this overload
+     * takes the raw bytes directly rather than a `String` that could not
+     * carry them.
+     */
+    @Synchronized fun initialize(configBytes: ByteArray): String = executionBudget.run {
+        invokeWithInput("traverse_init", configBytes)
     }
 
     @Synchronized fun submit(submissionJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_submit", submissionJson)
+        invokeWithInput("traverse_submit", submissionJson.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized fun cancel(cancellationJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_cancel", cancellationJson)
+        invokeWithInput("traverse_cancel", cancellationJson.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized fun compatibleStart(requestJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_compatible_start", requestJson)
+        invokeWithInput("traverse_compatible_start", requestJson.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized fun compatibleStop(requestJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_compatible_stop", requestJson)
+        invokeWithInput("traverse_compatible_stop", requestJson.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized fun compatibleKill(requestJson: String): String = executionBudget.run {
-        invokeWithInput("traverse_compatible_kill", requestJson)
+        invokeWithInput("traverse_compatible_kill", requestJson.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized fun nextEvent(): String? = executionBudget.run {
@@ -61,8 +73,7 @@ class ChicoryBridgeClient(
         }
     }
 
-    private fun invokeWithInput(export: String, inputJson: String): String {
-        val input = inputJson.toByteArray(StandardCharsets.UTF_8)
+    private fun invokeWithInput(export: String, input: ByteArray): String {
         val inputPointer = allocate(input.size)
         val descriptor = allocate(DESCRIPTOR_BYTES)
         try {

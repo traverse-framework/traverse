@@ -9,7 +9,6 @@ description = "Deterministic builder for the governed native runtime WebAssembly
 
 [dependencies]
 sha2 = "0.11"
-wat = "1"
 
 [lints]
 workspace = true

@@ -423,7 +423,13 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
     if input.len() > host.limits.maximum_input_bytes {
         return Err(HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"));
     }
-    if !input.is_empty() {
+    // `init` on a `runtime.wasm` orchestrator instance carries spec 1402
+    // FR-011's length-prefixed binary framing (a 4-byte header length, that
+    // many bytes of JSON metadata, then a raw nested-capability WASM
+    // artifact) instead of bare UTF-8 JSON — spec 071 FR-005's amended text
+    // (Decision 90) carves out exactly this one operation. Every other
+    // operation is unchanged: still caller-owned UTF-8 JSON, validated here.
+    if operation != "init" && !input.is_empty() {
         serde_json::from_slice::<serde_json::Value>(input)
             .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_json"))?;
     }

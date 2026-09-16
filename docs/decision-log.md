@@ -4239,3 +4239,101 @@ host-side `runtime.wasm` driver as its own, honestly-sized piece of work.
 Accepted per this org's spec-approval policy: generated post-investigation,
 aligned with the owner-selected "document the reframe only" option in this
 session's direct exchange with the owner (2026-09-15).
+
+## Decision 90: `traverse_init`'s Binary Framing Is a Spec 071 FR-005 Exception, Scoped to That One Operation
+
+- **Date**: 2026-09-15
+- **Status**: Accepted
+- **Governing specs**: `071-native-runtime-wasm-bridge` (amended 1.0.0 ->
+  1.1.0, FR-005); `076-production-swift-wasmi-cabi` (amended 1.0.0 -> 1.1.0,
+  FR-005 — its "UTF-8 buffers" text is equally broken by a raw, non-UTF-8
+  WASM artifact in the `init` payload)
+- **Related issues**: `#1420` (full three-native-host-profile release
+  conformance), `#1407`/`#1418`/`#1419` (introduced the binary framing this
+  decision reconciles)
+- **Origin**: Implementing `#1420`'s real-artifact conformance run against
+  Swift and Kotlin, triggered by an owner-directed `AskUserQuestion` exchange
+  in this session (2026-09-15) choosing to fix both native profiles in this
+  same PR rather than defer them
+
+### Context
+
+`#1420` requires all three native host profiles (Swift/wasmi, Kotlin/Chicory,
+.NET/Wasmtime) to pass their conformance suites against the real, built
+`crates/traverse-runtime-wasm` artifact instead of the old WAT fixture. Spec
+071 FR-005 says "Inputs are caller-owned UTF-8 JSON bytes" for every bridge
+operation, and `crates/traverse-swift-host`'s audited native boundary
+(ADR-0015, Spec 076) enforces exactly that — it rejects any non-JSON `init`/
+`submit` input before it reaches the guest. That enforcement was correct
+against FR-005's original text.
+
+But `crates/traverse-runtime-wasm`'s real `traverse_init` (introduced by
+`#1407`/`#1418`, spec `1402` FR-011) never was JSON: its documented payload is
+a 4-byte little-endian header length, that many bytes of JSON metadata, then
+the raw nested-capability WASM artifact bytes appended — necessary because
+this `runtime.wasm` hosts a *second*, nested capability module inside itself
+(Decision 87), and that capability's bytes have to cross the ABI boundary
+somehow. `#1407`/`#1418`/`#1419` amended spec `1402` for the dispatch
+architecture but never touched spec `071` FR-005, so the binary framing they
+introduced has been in direct conflict with 071's still-approved text since
+`#1407` merged — undetected until `#1420` was the first work to actually
+drive the real artifact through the Swift and Kotlin host wrappers rather
+than a bare-JSON fixture built to satisfy FR-005 as originally written.
+
+Kotlin's `ChicoryBridgeClient.initialize(configJson: String)` has the same
+root problem one layer up: a Kotlin `String` cannot carry the raw WASM
+artifact bytes regardless of any host-side validation.
+
+### Decision
+
+1. **FR-005 amendment, scoped to one operation.** `init` on a `runtime.wasm`
+   orchestrator instance carries the length-prefixed binary framing spec
+   `1402` FR-011 defines instead of bare UTF-8 JSON. Every other bridge
+   operation (`submit`, `next_event`, `cancel`, `compatible_*`, `shutdown`)
+   is unchanged: still caller-owned UTF-8 JSON, still validated as such.
+   `crates/traverse-swift-host`'s `invoke()` now skips its JSON-parse check
+   only when `operation == "init"` — every other operation keeps the
+   existing gate verbatim.
+2. **Add, don't replace, the Kotlin entry point.** `ChicoryBridgeClient`
+   gains an `initialize(configBytes: ByteArray): String` overload that
+   `invokeWithInput`s the bytes directly; the existing
+   `initialize(configJson: String): String` is now a thin wrapper that
+   UTF-8-encodes and delegates to it. `RuntimeTraverseEmbedder.initialize`
+   and every other existing caller are unaffected — none of them address a
+   `runtime.wasm` orchestrator instance's `init` directly.
+3. **`.NET` and Rust need no change.** `WasmtimeBridgeClient.Initialize`
+   already takes raw `ReadOnlySpan<byte>` with no JSON validation, and
+   `crates/traverse-runtime/src/runtime_wasm_host.rs` (the production Rust
+   driver) already builds and sends the binary payload directly.
+
+### Alternatives considered
+
+- Keep `traverse-swift-host`'s JSON-only gate and give Swift a second,
+  bytes-only entry point that bypasses it: rejected — the gate itself is
+  what's now factually wrong for `init`; adding a bypass would leave a
+  stale, misleading check in place instead of correcting it.
+- Change Kotlin's `initialize` signature in place (`String` ->
+  `ByteArray`), breaking existing callers: rejected — `RuntimeTraverseEmbedder`
+  and any host application using the typed embedder API never send a
+  `runtime.wasm` orchestrator's binary init payload directly; breaking their
+  call site to serve a use case they don't have is unnecessary churn the
+  minimality ladder rules out.
+- Widen FR-005 to drop the JSON requirement for every operation: rejected —
+  `submit`/`cancel`/`compatible_*`/`shutdown` genuinely are still JSON under
+  the real artifact's own design (`traverse_submit` feeds the nested
+  capability's stdin, which this codebase's convention is JSON-shaped); only
+  `init`'s wire format actually changed.
+
+### Outcome
+
+Specs `071` and `076` both amended to 1.1.0. `crates/traverse-swift-host` and
+`ChicoryBridgeClient` both accept the real `init` payload; Swift, Kotlin,
+.NET, and Rust conformance all drive the same real, built
+`crates/traverse-runtime-wasm` artifact through the same nested-capability
+lifecycle transcript.
+
+### Approval
+
+Accepted per this org's spec-approval policy: generated post-investigation,
+aligned with the owner-selected "full fix now, this PR" option in this
+session's direct `AskUserQuestion` exchange with the owner (2026-09-15).

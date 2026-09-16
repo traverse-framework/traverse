@@ -162,17 +162,56 @@ import WAT
     guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return }
     let runtimeURL = URL(fileURLWithPath: rootPath).appendingPathComponent("runtime/runtime.wasm")
     let runtime = try Data(contentsOf: runtimeURL)
-    let client = try WasmiHostBridgeClient(bundle: TraverseBundle(
-        rootURL: URL(fileURLWithPath: rootPath),
-        runtimeWasmDigest: digest(of: Array(runtime))
-    ))
+    // The default `fuelPerInvocation` is sized for a trivial fixture guest.
+    // The real `runtime.wasm` interprets genuine Rust code (JSON parsing,
+    // heap allocation, a nested wasmi engine) on `init`/`submit`, which costs
+    // far more simulated fuel than a few `i32.store`s — a real production
+    // host embedding this real artifact needs a correspondingly larger
+    // budget, same as this test does.
+    let client = try WasmiHostBridgeClient(
+        bundle: TraverseBundle(
+            rootURL: URL(fileURLWithPath: rootPath),
+            runtimeWasmDigest: digest(of: Array(runtime))
+        ),
+        limits: try TraverseHostLimits(fuelPerInvocation: 50_000_000)
+    )
 
-    #expect(try client.initialize(configJSON: Data("{}".utf8)) == Data(#"{"status":"ready","error":null}"#.utf8))
-    #expect(try client.submit(requestJSON: Data(#"{"target_id":"traverse-starter.pipeline"}"#.utf8)) == Data(#"{"session_id":"runtime-session-1","status":"accepted","error":null}"#.utf8))
-    #expect(try client.nextEvent() == Data(#"{"type":"state_changed","session_id":"runtime-session-1","data":{"state":"running"}}"#.utf8))
-    #expect(try client.nextEvent() == Data(#"{"type":"capability_invoked","session_id":"runtime-session-1","data":{}}"#.utf8))
-    #expect(try client.nextEvent() == Data(#"{"type":"capability_result","session_id":"runtime-session-1","data":{"output":{}}}"#.utf8))
-    #expect(try client.nextEvent() == nil)
+    // The real `runtime-wasm-bridge/1.0.0` guest (crates/traverse-runtime-wasm)
+    // hosts a *nested* capability itself, so `traverse_init`'s payload is not
+    // bare JSON: a 4-byte little-endian header length, that many bytes of
+    // JSON metadata, then the raw nested-capability WASM artifact (spec 1402
+    // FR-003/FR-011). This nested capability echoes stdin to stdout, then
+    // emits one declared domain event — matching
+    // `crates/traverse-runtime/tests/native_bridge_conformance.rs`'s fixture
+    // exactly, so all host profiles exercise the same lifecycle transcript.
+    let nestedCapability = try wat2wasm(nestedConformanceCapabilityWAT)
+    let header: [String: Any] = [
+        "capability_id": "swift.conformance.echo",
+        "capability_version": "1.0.0",
+        "service_type": "subscribable",
+        "emits": [["event_id": "conformance.echoed", "version": "1.0.0"]],
+        "host_placement_target": "local",
+        "permitted_targets": ["local"],
+    ]
+    let headerBytes = try JSONSerialization.data(withJSONObject: header)
+    var initPayload = Data()
+    var headerLength = UInt32(headerBytes.count).littleEndian
+    withUnsafeBytes(of: &headerLength) { initPayload.append(contentsOf: $0) }
+    initPayload.append(headerBytes)
+    initPayload.append(Data(nestedCapability))
+
+    let initResponse = try jsonObject(from: client.initialize(configJSON: initPayload))
+    #expect(initResponse["status"] as? String == "ready")
+
+    let submitResponse = try jsonObject(from: client.submit(requestJSON: Data(#"{"hello":"swift-conformance"}"#.utf8)))
+    #expect(submitResponse["status"] as? String == "accepted")
+
+    var eventTypes: [String] = []
+    while let event = try client.nextEvent() {
+        eventTypes.append(try jsonObject(from: event)["type"] as? String ?? "")
+    }
+    #expect(eventTypes == ["capability_invoked", "conformance.echoed", "capability_result"])
+
     #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
 }
 
@@ -241,6 +280,42 @@ private let clientBridgeWAT = #"""
       (func (export "traverse_shutdown") (param i32) (result i32)
         local.get 0 i32.const 704 i32.const 20 call $result))
     """#
+
+/// A WASI-command capability that echoes stdin to stdout, then calls
+/// `traverse_host::emit_event` with a fixed declared domain event — byte-
+/// identical to `crates/traverse-runtime/tests/native_bridge_conformance.rs`'s
+/// `NESTED_CAPABILITY_WAT`, so every host profile's conformance run exercises
+/// the same nested-capability behavior.
+private let nestedConformanceCapabilityWAT = #"""
+    (module
+      (import "wasi_snapshot_preview1" "fd_read"
+        (func $fd_read (param i32 i32 i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "fd_write"
+        (func $fd_write (param i32 i32 i32 i32) (result i32)))
+      (import "traverse_host" "emit_event"
+        (func $emit_event (param i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 5000) "{\22event_id\22:\22conformance.echoed\22,\22version\22:\221.0.0\22,\22payload\22:{\22ok\22:true}}")
+      (func (export "_start")
+        (i32.store (i32.const 0) (i32.const 8))
+        (i32.store (i32.const 4) (i32.const 1024))
+        (drop (call $fd_read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 4100)))
+        (i32.store (i32.const 0) (i32.const 8))
+        (i32.store (i32.const 4) (i32.load (i32.const 4100)))
+        (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4104)))
+        (drop (call $emit_event (i32.const 5000) (i32.const 73)))
+      )
+    )
+    """#
+
+private struct NotAJSONObject: Error {}
+
+private func jsonObject(from data: Data) throws -> [String: Any] {
+    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw NotAJSONObject()
+    }
+    return object
+}
 
 private func fixtureBundle(wasm: [UInt8], declaredDigest: String? = nil) throws -> TraverseBundle {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

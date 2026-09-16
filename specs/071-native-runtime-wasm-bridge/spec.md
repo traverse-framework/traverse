@@ -3,8 +3,21 @@
 **Feature Branch**: `071-native-runtime-wasm-bridge`  
 **Created**: 2026-07-15  
 **Status**: Approved  
-**Version**: 1.0.0  
+**Version**: 1.1.0  
 **Input**: Decision 23, ADR-0007, and Traverse #712.
+
+**Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**:
+Spec `1402` FR-011 (Decision 87/88) gave `runtime.wasm`'s `traverse_init` a
+length-prefixed binary payload (a 4-byte header length, that many bytes of
+JSON metadata, then a raw nested-capability WASM artifact) so the orchestrator
+can host a second, nested capability module inside itself. That has been in
+direct conflict with this spec's original FR-005 ("Inputs are caller-owned
+UTF-8 JSON bytes") since `#1407` merged, undetected until `#1420` drove the
+real artifact through the Swift and Kotlin native host wrappers instead of a
+JSON-only fixture. Resolved via Decision 90 (`docs/decision-log.md`): FR-005
+now carves out `init` on a `runtime.wasm` orchestrator instance as the one
+exception to "UTF-8 JSON bytes," which stays the rule for every other
+operation. No other requirement changed.
 
 ## Purpose
 
@@ -31,10 +44,17 @@ public application operations.
 
 ## ABI and Ownership Contract
 
-- **FR-005**: Inputs are caller-owned UTF-8 JSON bytes at `(pointer, length)`.
-  Outputs are runtime-owned UTF-8 JSON referenced by an eight-byte
-  little-endian descriptor `{ pointer: u32, length: u32 }` written at a
-  caller-owned descriptor address.
+- **FR-005**: Inputs are caller-owned UTF-8 JSON bytes at `(pointer, length)`,
+  with one exception: `traverse_init` on a `runtime.wasm` orchestrator
+  instance (spec `1402` FR-011) instead carries a 4-byte little-endian header
+  length, that many bytes of UTF-8 JSON metadata, then a raw nested-capability
+  WASM artifact appended — not itself JSON — because that instance hosts a
+  second, nested capability module inside itself and the artifact bytes must
+  cross this same boundary. Every other operation (`submit`, `next_event`,
+  `cancel`, `compatible_*`, `shutdown`) is unaffected. Outputs are
+  runtime-owned UTF-8 JSON referenced by an eight-byte little-endian
+  descriptor `{ pointer: u32, length: u32 }` written at a caller-owned
+  descriptor address.
 - **FR-006**: The module MUST export `traverse_bridge_abi_version`,
   `traverse_alloc`, `traverse_dealloc`, `traverse_init`, `traverse_submit`,
   `traverse_next_event`, `traverse_cancel`, and `traverse_shutdown` with the

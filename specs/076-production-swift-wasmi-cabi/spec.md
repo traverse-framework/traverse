@@ -3,8 +3,16 @@
 **Feature Branch**: `codex/issue-776-production-cabi`
 **Created**: 2026-07-20
 **Status**: Approved
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Input**: ADR-0015, Traverse #776, and the approved production profile.
+
+**Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**: FR-005's
+"caller-owned bounded UTF-8 buffers" is equally broken by spec `1402` FR-011's
+`traverse_init` binary framing (a length-prefixed JSON header followed by a raw,
+non-UTF-8 nested-capability WASM artifact) as spec `071` FR-005's "UTF-8 JSON
+bytes" was — resolved by the same Decision 90 (`docs/decision-log.md`): `init`
+on a `runtime.wasm` orchestrator instance is the one exception to the UTF-8
+requirement. No other requirement changed.
 
 ## Purpose
 
@@ -57,8 +65,12 @@ codes and bounded JSON details without a sidecar or ambient authority.
   input, output/event, and queued-event resources; no value may mean unlimited.
 - **FR-004**: Invocation MUST allow only the governed bridge 1.1 operation
   set and preserve runtime-owned lifecycle, event, and error semantics.
-- **FR-005**: Inputs and outputs MUST be caller-owned bounded UTF-8 buffers;
-  insufficient output capacity MUST report the exact retry size.
+- **FR-005**: Inputs and outputs MUST be caller-owned bounded UTF-8 buffers,
+  with one exception: `traverse_init` on a `runtime.wasm` orchestrator
+  instance (spec `1402` FR-011) carries a raw, non-UTF-8 nested-capability
+  WASM artifact appended after its UTF-8 JSON header, per spec `071` FR-005's
+  matching exception. Insufficient output capacity MUST report the exact
+  retry size.
 - **FR-006**: The boundary MUST return stable numeric statuses and bounded
   structured UTF-8 JSON errors for all expected failures.
 - **FR-007**: Unsafe code MUST be restricted to the audited host file and

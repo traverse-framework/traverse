@@ -4,104 +4,125 @@
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::expect_used,
-    clippy::format_collect,
-    clippy::format_push_string,
     clippy::unwrap_used
 )]
+
+//! Proves the real, built `crates/traverse-runtime-wasm` `wasm32-unknown-
+//! unknown` artifact — the one `crates/traverse-native-bridge` ships — is a
+//! conformant `runtime-wasm-bridge/1.0.0` guest (spec 071 FR-006): its ABI
+//! version, alloc/dealloc, and `init/submit/next_event/shutdown` lifecycle
+//! transcript match what every native host adapter (Swift/wasmi,
+//! Kotlin/Chicory, .NET/Wasmtime) drives independently (issue #1420, spec
+//! 1402 FR-004). Unlike `tests/runtime_wasm_host_tests.rs`, this test drives
+//! the ABI with its own minimal Wasmtime calls rather than the production
+//! `RuntimeWasmHost` driver — the same "roll your own thin ABI client"
+//! posture every native package takes, so a bug in `RuntimeWasmHost` itself
+//! could never mask a real bridge nonconformance.
+
+use std::path::PathBuf;
+use std::process::Command;
 
 use serde_json::{Value, json};
 use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc};
 
-const INIT: &str = r#"{"status":"ready","error":null}"#;
-const SUBMIT: &str = r#"{"session_id":"fixture-session","status":"accepted","error":null}"#;
-const STATE: &str =
-    r#"{"type":"state_changed","session_id":"fixture-session","data":{"state":"running"}}"#;
-const INVOKED: &str = r#"{"type":"capability_invoked","session_id":"fixture-session","data":{"capability_id":"fixture.echo"}}"#;
-const RESULT: &str = r#"{"type":"capability_result","session_id":"fixture-session","data":{"output":{"message":"hello"}}}"#;
-const STOPPED: &str = r#"{"status":"stopped"}"#;
+/// A WASI-command capability that echoes stdin to stdout, then calls
+/// `traverse_host::emit_event` with a fixed declared domain event — the same
+/// fixture shape `tests/runtime_wasm_host_tests.rs` uses, so both
+/// conformance paths exercise identical nested-capability behavior.
+const NESTED_CAPABILITY_WAT: &str = r#"
+  (module
+    (import "wasi_snapshot_preview1" "fd_read"
+      (func $fd_read (param i32 i32 i32 i32) (result i32)))
+    (import "wasi_snapshot_preview1" "fd_write"
+      (func $fd_write (param i32 i32 i32 i32) (result i32)))
+    (import "traverse_host" "emit_event"
+      (func $emit_event (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 5000) "{\"event_id\":\"conformance.echoed\",\"version\":\"1.0.0\",\"payload\":{\"ok\":true}}")
+    (func (export "_start")
+      (i32.store (i32.const 0) (i32.const 8))
+      (i32.store (i32.const 4) (i32.const 1024))
+      (drop (call $fd_read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 4100)))
+      (i32.store (i32.const 0) (i32.const 8))
+      (i32.store (i32.const 4) (i32.load (i32.const 4100)))
+      (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4104)))
+      (drop (call $emit_event (i32.const 5000) (i32.const 73)))
+    )
+  )
+"#;
 
-fn wat_string(value: &str) -> String {
-    value
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("\\{byte:02x}"))
-        .collect()
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ parent")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
 }
 
-fn fixture_module() -> String {
-    let values = [INIT, SUBMIT, STATE, INVOKED, RESULT, STOPPED];
-    let mut offset = 8192_u32;
-    let mut regions = Vec::new();
-    let mut data = String::new();
-    for value in values {
-        regions.push((offset, value.len()));
-        data.push_str(&format!(
-            "(data (i32.const {offset}) \"{}\")\n",
-            wat_string(value)
-        ));
-        offset += value.len() as u32;
-    }
-    let [
-        (init_p, init_l),
-        (submit_p, submit_l),
-        (state_p, state_l),
-        (invoked_p, invoked_l),
-        (result_p, result_l),
-        (stopped_p, stopped_l),
-    ] = regions.as_slice()
-    else {
-        unreachable!("fixture regions are fixed")
-    };
+/// Builds `crates/traverse-runtime-wasm` for `wasm32-unknown-unknown` and
+/// returns the path to the resulting `.wasm` cdylib. Shares
+/// `tests/runtime_wasm_host_tests.rs`'s dedicated target directory (cargo's
+/// own locking serializes concurrent builds against it safely, and a shared
+/// directory lets a build already done for that test satisfy this one too)
+/// rather than whatever `CARGO_TARGET_DIR` the outer `cargo test` invocation
+/// has — sharing that one races the outer build's own lock.
+fn build_runtime_wasm_artifact() -> PathBuf {
+    let target_dir = workspace_root().join("target/runtime-wasm-host-test");
 
-    format!(
-        r#"(module
-          (memory (export "memory") 1 8)
-          (global $heap (mut i32) (i32.const 4096))
-          (global $event (mut i32) (i32.const 0))
-          {data}
-          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10000)
-          (func (export "traverse_alloc") (param $len i32) (result i32)
-            (local $ptr i32)
-            global.get $heap local.set $ptr
-            global.get $heap local.get $len i32.add global.set $heap
-            local.get $ptr)
-          (func (export "traverse_dealloc") (param i32 i32))
-          (func $descriptor (param $out i32) (param $ptr i32) (param $len i32)
-            local.get $out local.get $ptr i32.store
-            local.get $out i32.const 4 i32.add local.get $len i32.store)
-          (func (export "traverse_init") (param i32 i32 i32) (result i32)
-            local.get 2 i32.const {init_p} i32.const {init_l} call $descriptor
-            i32.const 0)
-          (func (export "traverse_submit") (param i32 i32 i32) (result i32)
-            i32.const 0 global.set $event
-            local.get 2 i32.const {submit_p} i32.const {submit_l} call $descriptor
-            i32.const 0)
-          (func (export "traverse_next_event") (param $out i32) (result i32)
-            global.get $event i32.const 0 i32.eq
-            if
-              local.get $out i32.const {state_p} i32.const {state_l} call $descriptor
-              i32.const 1 global.set $event
-              i32.const 1 return
-            end
-            global.get $event i32.const 1 i32.eq
-            if
-              local.get $out i32.const {invoked_p} i32.const {invoked_l} call $descriptor
-              i32.const 2 global.set $event
-              i32.const 1 return
-            end
-            global.get $event i32.const 2 i32.eq
-            if
-              local.get $out i32.const {result_p} i32.const {result_l} call $descriptor
-              i32.const 3 global.set $event
-              i32.const 1 return
-            end
-            i32.const 0)
-          (func (export "traverse_cancel") (param i32 i32 i32) (result i32)
-            i32.const 0)
-          (func (export "traverse_shutdown") (param i32) (result i32)
-            local.get 0 i32.const {stopped_p} i32.const {stopped_l} call $descriptor
-            i32.const 0))"#
-    )
+    // Nested wasm32 builds must not inherit the outer llvm-cov /
+    // instrument-coverage RUSTFLAGS — the wasm32 target has no
+    // `profiler_builtins`, so coverage instrumentation fails the compile.
+    // Likewise clear wrapper env that only applies to the host triple.
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "traverse-runtime-wasm",
+            "--target",
+            "wasm32-unknown-unknown",
+        ])
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .current_dir(workspace_root())
+        .status()
+        .expect("cargo build -p traverse-runtime-wasm must run");
+    assert!(status.success(), "building traverse-runtime-wasm failed");
+
+    let artifact = target_dir
+        .join("wasm32-unknown-unknown")
+        .join("debug")
+        .join("traverse_runtime_wasm.wasm");
+    assert!(
+        artifact.is_file(),
+        "expected built artifact at {}",
+        artifact.display()
+    );
+    artifact
+}
+
+/// Builds `traverse_init`'s wire payload: a 4-byte little-endian header
+/// length, that many bytes of JSON metadata, then the raw nested-capability
+/// artifact bytes (`crates/traverse-runtime-wasm/src/lib.rs`'s documented
+/// `parse_init_payload` layout).
+fn init_payload_bytes(capability_id: &str, service_type: &str, artifact: &[u8]) -> Vec<u8> {
+    let header = json!({
+        "capability_id": capability_id,
+        "capability_version": "1.0.0",
+        "service_type": service_type,
+        "emits": [{"event_id": "conformance.echoed", "version": "1.0.0"}],
+        "host_placement_target": "local",
+        "permitted_targets": ["local"],
+    });
+    let header_bytes = serde_json::to_vec(&header).expect("serialize init header");
+    let header_len = u32::try_from(header_bytes.len()).expect("header fits in u32");
+    let mut payload = header_len.to_le_bytes().to_vec();
+    payload.extend_from_slice(&header_bytes);
+    payload.extend_from_slice(artifact);
+    payload
 }
 
 struct Bridge {
@@ -115,26 +136,28 @@ struct Bridge {
 }
 
 impl Bridge {
-    fn call_json(&mut self, function: &str, input: &Value) -> Value {
-        let bytes = serde_json::to_vec(input).expect("serialize fixture request");
+    /// Writes `payload` into the guest, calls `function` with
+    /// `(ptr, len, out_descriptor)`, and returns the decoded JSON response —
+    /// the same calling convention every native host adapter uses.
+    fn call_raw(&mut self, function: &str, payload: &[u8]) -> Value {
         let pointer = self
             .alloc
-            .call(&mut self.store, bytes.len() as i32)
+            .call(&mut self.store, payload.len() as i32)
             .expect("allocate request");
         self.memory
-            .write(&mut self.store, pointer as usize, &bytes)
+            .write(&mut self.store, pointer as usize, payload)
             .expect("write request");
         let status = match function {
             "init" => self
                 .init
-                .call(&mut self.store, (pointer, bytes.len() as i32, 1024)),
+                .call(&mut self.store, (pointer, payload.len() as i32, 1024)),
             "submit" => self
                 .submit
-                .call(&mut self.store, (pointer, bytes.len() as i32, 1024)),
+                .call(&mut self.store, (pointer, payload.len() as i32, 1024)),
             _ => unreachable!("known fixture call"),
         }
         .expect("bridge call");
-        assert_eq!(status, 0);
+        assert_eq!(status, 0, "guest rejected {function}");
         self.read_json(1024)
     }
 
@@ -143,14 +166,18 @@ impl Bridge {
         let pointer = u32::from_le_bytes(data[descriptor..descriptor + 4].try_into().unwrap());
         let length = u32::from_le_bytes(data[descriptor + 4..descriptor + 8].try_into().unwrap());
         serde_json::from_slice(&data[pointer as usize..(pointer + length) as usize])
-            .expect("valid fixture JSON")
+            .expect("valid response JSON")
     }
 }
 
 #[test]
 fn core_wasm_bridge_produces_the_cross_platform_lifecycle_transcript() {
+    let runtime_wasm_bytes =
+        std::fs::read(build_runtime_wasm_artifact()).expect("read built runtime.wasm");
+    let nested_capability = wat::parse_str(NESTED_CAPABILITY_WAT).expect("wat parses");
+
     let engine = Engine::default();
-    let module = Module::new(&engine, fixture_module()).expect("compile bridge fixture");
+    let module = Module::new(&engine, &runtime_wasm_bytes).expect("compile real runtime.wasm");
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &module, &[]).expect("instantiate without WASI");
     let version = instance
@@ -158,7 +185,7 @@ fn core_wasm_bridge_produces_the_cross_platform_lifecycle_transcript() {
         .expect("version export")
         .call(&mut store, ())
         .expect("read ABI version");
-    assert_eq!(version, 10000);
+    assert_eq!(version, 10_100);
 
     let mut bridge = Bridge {
         memory: instance
@@ -182,15 +209,10 @@ fn core_wasm_bridge_produces_the_cross_platform_lifecycle_transcript() {
         store,
     };
 
+    let init_payload = init_payload_bytes("conformance.echo", "subscribable", &nested_capability);
+    assert_eq!(bridge.call_raw("init", &init_payload)["status"], "ready");
     assert_eq!(
-        bridge.call_json("init", &json!({"workspace_id": "fixture"}))["status"],
-        "ready"
-    );
-    assert_eq!(
-        bridge.call_json(
-            "submit",
-            &json!({"target_id": "fixture.echo", "input": {"message": "hello"}})
-        )["status"],
+        bridge.call_raw("submit", br#"{"hello":"conformance"}"#)["status"],
         "accepted"
     );
 
@@ -208,7 +230,11 @@ fn core_wasm_bridge_produces_the_cross_platform_lifecycle_transcript() {
     }
     assert_eq!(
         event_types,
-        ["state_changed", "capability_invoked", "capability_result"]
+        [
+            "capability_invoked",
+            "conformance.echoed",
+            "capability_result"
+        ]
     );
 
     assert_eq!(bridge.shutdown.call(&mut bridge.store, 1024).unwrap(), 0);
