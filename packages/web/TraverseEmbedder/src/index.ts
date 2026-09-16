@@ -192,3 +192,13 @@ export type {
   VerifiedEntrypointRequest,
   VerifiedEntrypointResponse,
 } from "./verifiedEntrypoint.js";
+
+export {
+  ExactModelBrowserHost,
+  ExactModelError,
+  ModelIoStore,
+  MODEL_EXECUTE_EXPORT,
+  MODEL_GUEST_ABI_VERSION,
+  encodeGuestFrame,
+} from "./exactModel.js";
+export type { ExactModelPin, ModelPackageManifest } from "./exactModel.js";
