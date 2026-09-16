@@ -2706,7 +2706,10 @@ dependencies = [
 name = "traverse-native-bridge"
 version = "0.10.2"
 dependencies = [
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
+ "traverse-registry",
 ]
 
 [[package]]

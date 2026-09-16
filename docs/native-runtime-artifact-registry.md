@@ -54,6 +54,27 @@ under a new version rather than overwriting one. The index is written
 atomically to `runtime/native-runtime-registry.json`, alongside the
 `runtime.wasm` and `runtime-release.json` outputs from #756.
 
+## Publishing in practice
+
+`crates/traverse-native-bridge`'s `publish_native_runtime_artifact` binary
+(#1421) is the concrete tool that performs the publish above, once a real
+artifact has been built and certified end to end (#1420's
+`scripts/ci/native_artifact_certification.sh`):
+
+```bash
+cargo run -p traverse-native-bridge --bin publish_native_runtime_artifact -- \
+  <runtime_dir>              # contains runtime.wasm + runtime-release.json
+  <host_certifications.json> # [{"host","engine_name","engine_version","conformance_passed"}, ...]
+  <artifact_url>              # where the published runtime.wasm bytes are fetchable
+  [workspace_root]            # default "."; writes runtime/native-runtime-registry.json here
+```
+
+`supported_bridge_range` is derived automatically from `bridge_version`'s
+major component (e.g. `1.1.0` -> `>=1.1.0,<2.0.0`), matching spec 071's own
+major-version-is-the-only-breaking-change contract. This is a deliberate,
+occasional release step — not part of the routine per-PR conformance run —
+since FR-007 rejects republishing an unchanged `runtime_version`.
+
 ## Resolution
 
 Swift, Kotlin, and .NET packages resolve through the same function and the
