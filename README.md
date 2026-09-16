@@ -310,6 +310,7 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 - [docs/releases/v0.10.2.md](docs/releases/v0.10.2.md) — prior release notes
 - [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — prior release notes
 - [docs/releases/v0.10.0.md](docs/releases/v0.10.0.md) — prior release notes
+- [docs/releases/v0.8.1.md](docs/releases/v0.8.1.md) — prior release notes
 
 ### Consumer and packaging paths
 
