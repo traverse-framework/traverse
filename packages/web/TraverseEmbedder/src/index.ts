@@ -169,7 +169,11 @@ export {
   HOST_CONNECTOR_RESULT_KIND,
   MODEL_EXECUTE_OPERATION,
   MODEL_RUNTIME_CONNECTOR,
+  MODEL_RUNTIME_GOVERNING_SPEC,
+  PLACEMENT_WASM_CPU,
   audioCaptureCommand,
+  modelExecuteCommand,
+  normalizeModelExecuteEvidence,
 } from "./hostConnectorCommand.js";
 export type {
   HostConnectorAppCommand,
@@ -178,6 +182,8 @@ export type {
   HostConnectorEvent,
   HostConnectorEventName,
   HostConnectorTargetFamily,
+  ModelExecutePayload,
+  ModelRef,
 } from "./hostConnectorCommand.js";
 
 export { executeVerifiedEntrypoint, VerifiedEntrypointError } from "./verifiedEntrypoint.js";

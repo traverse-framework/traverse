@@ -2,7 +2,8 @@
 
 **Feature Branch**: `044-application-bundle-manifest`
 **Created**: 2026-06-12
-**Status**: Approved
+**Status**: Approved — `exact_model_dependencies` amend approved 2026-09-16
+  (Decisions 91–92 / Spec 138)
 **Input**: Downstream knowledge-app MVP requirements and approval decisions from Traverse team review on 2026-06-12. The downstream app provides an app manifest, concrete WASM component manifests, app configuration, and dependency declarations. Traverse validates, registers, executes, and exposes the app through public runtime, HTTP/JSON, and MCP surfaces.
 
 ## Purpose
@@ -11,12 +12,12 @@ This spec defines the first Traverse application bundle manifest model for downs
 
 The manifest model has two layers:
 
-1. **Application manifest**: Declares the downstream app identity, workspace defaults, required workflows, concrete WASM component dependencies, selectable model dependency references, governed configuration schema, safe defaults, public surface needs, and placement policy.
+1. **Application manifest**: Declares the downstream app identity, workspace defaults, required workflows, concrete WASM component dependencies, selectable Spec 045 model dependency references, exact Spec 138 model pins (`exact_model_dependencies`), governed configuration schema, safe defaults, public surface needs, and placement policy.
 2. **WASM component manifest**: Declares one executable component package, including capability identity, contract identity, WASM binary path and digest, runtime constraints, permitted targets, required dependencies, connectors, and validation evidence.
 
 Pure business capabilities are concrete. If an app declares a WASM microservice component, Traverse MUST validate and execute that concrete component; Traverse MUST NOT substitute another implementation unless the app manifest is changed and revalidated.
 
-AI/model dependencies are not owned by this spec. Application manifests MAY reference model dependency requirements, but selectable model candidate semantics, availability checks, and inference selection are governed by `045-governed-model-dependency-resolution`.
+AI/model dependency **selection** is not owned by this spec. Application manifests MAY reference Spec 045 `model_dependencies` (candidate/LLM resolution). Exact signed model package pins for Spec 138 execution MUST be declared in `exact_model_dependencies` and are governed by `138-governed-exact-model-execution`.
 
 ## User Scenarios and Testing
 
@@ -93,7 +94,7 @@ As a local-first app operator, I want app manifests to declare governed defaults
 
 ### Functional Requirements
 
-- **FR-001**: Traverse MUST define an application manifest schema with at minimum: `app_id`, `version`, `schema_version`, `workspace_defaults`, `components`, `workflows`, `model_dependencies`, `config_schema`, `default_config`, `placement_policy`, and `public_surfaces`.
+- **FR-001**: Traverse MUST define an application manifest schema with at minimum: `app_id`, `version`, `schema_version`, `workspace_defaults`, `components`, `workflows`, `model_dependencies`, `exact_model_dependencies`, `config_schema`, `default_config`, `placement_policy`, and `public_surfaces`.
 - **FR-002**: Traverse MUST define a WASM component manifest schema with at minimum: `component_id`, `version`, `capability_id`, `capability_version`, `contract_path`, `wasm_binary_path`, `wasm_digest`, `runtime_constraints`, `permitted_targets`, `dependencies`, `connector_requirements`, and `validation_evidence`.
 - **FR-003**: Application manifest component dependencies for pure WASM microservices MUST be concrete references to component id, version, and digest; version ranges are not permitted for pure component substitution in this slice.
 - **FR-004**: Traverse MUST validate that every component manifest referenced by an app manifest exists, is schema-valid, and references an existing capability contract.
@@ -109,7 +110,8 @@ As a local-first app operator, I want app manifests to declare governed defaults
 - **FR-014**: `traverse-cli app new <app-id>` MUST generate a repo-local app bundle structure with schema-valid manifest/config files and no fake product behavior.
 - **FR-015**: `traverse-cli component new <component-id>` MUST generate a component package structure with manifest and contract files suitable for real WASM implementation, but the generated component MUST NOT be considered executable until real implementation metadata and digest are supplied.
 - **FR-016**: `traverse-cli app new <app-id> --register --workspace <workspace-id>` MUST attempt registration only after validation; incomplete generated bundles MUST fail registration with a clear machine-readable validation result.
-- **FR-017**: Application manifests MAY reference model dependencies, but candidate selection, availability checks, inference provider validation, and model placement heuristics MUST be governed by `045-governed-model-dependency-resolution`.
+- **FR-017**: Application manifests MAY reference Spec 045 `model_dependencies`, but candidate selection, availability checks, inference provider validation, and model placement heuristics MUST be governed by `045-governed-model-dependency-resolution`.
+- **FR-017a**: Application manifests MUST use `exact_model_dependencies` for Spec 138 exact signed model package pins (`model_id`, semantic `version`, package/pair `digest`, Registry reference, offline-allowed flag as required by Spec 138). Spec 137 `model.execute` `model_ref` values MUST match a declared pin. Candidate/fallback semantics MUST NOT apply to this array.
 - **FR-018**: App bundle validation MUST produce readiness evidence that separates app manifest validity, component validity, workflow validity, config validity, and delegated model dependency readiness.
 - **FR-019**: App bundle validation and registration MUST be exposed through public Traverse surfaces and MUST NOT require downstream apps to call private crate internals.
 - **FR-020**: App bundle manifest and component manifest schemas MUST be versioned and governed by the spec-alignment gate.
@@ -134,7 +136,7 @@ As a local-first app operator, I want app manifests to declare governed defaults
 
 ### Key Entities
 
-- **Application Manifest**: The app-owned governed artifact declaring app identity, components, workflows, model dependencies, config schema, defaults, and public surface needs.
+- **Application Manifest**: The app-owned governed artifact declaring app identity, components, workflows, Spec 045 model dependencies, Spec 138 exact model pins, config schema, defaults, and public surface needs.
 - **WASM Component Manifest**: The component-owned governed artifact declaring one concrete executable WASM package and its contract, digest, constraints, dependencies, and validation evidence.
 - **Application Bundle**: The complete set of app manifest, component manifests, capability contracts, event contracts, workflow definitions, WASM binaries, and config schema submitted for validation or registration.
 - **Workspace-Local Config**: Runtime-local configuration values for one workspace, including paths, local provider endpoints, browser origins, preferences, and secrets.

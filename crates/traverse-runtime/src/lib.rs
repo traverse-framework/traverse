@@ -9,6 +9,12 @@ pub mod capability_metadata;
 pub mod component_wit;
 /// Spec `137` app-command host connector dispatch.
 pub mod host_connector_dispatch;
+/// Spec `138` exact-ref model packages, staging I/O, and wasm-cpu execute.
+pub mod exact_model;
+pub use exact_model::{
+    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelIoStore, ModelPackageManifest,
+    ModelPackageStore, PLACEMENT_WASM_CPU, VerifiedModelPackage, digest_hex, encode_guest_frame,
+};
 pub use capability_metadata::{
     CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,

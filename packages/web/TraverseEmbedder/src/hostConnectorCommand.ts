@@ -26,7 +26,81 @@ export type HostConnectorErrorCode =
   | "cancelled"
   | "idempotency_conflict"
   | "policy_denied"
-  | "unavailable";
+  | "unavailable"
+  | "invalid_input"
+  | "model_unavailable"
+  | "model_incompatible"
+  | "resource_exhausted"
+  | "timeout"
+  | "execution_failed";
+
+/** Spec 138 exact model pin carried on `model.execute`. */
+export interface ModelRef {
+  readonly model_id: string;
+  readonly version: string;
+  readonly digest: string;
+}
+
+/** Spec 138 `model.execute` request payload (tensors via host-staged refs). */
+export interface ModelExecutePayload {
+  readonly model_ref: ModelRef;
+  readonly input_ref: string;
+  readonly policy_ref: string;
+  readonly data_classification: string;
+  readonly input_schema_ref: string;
+  readonly input_schema_version: string;
+  readonly max_output_bytes: number;
+  readonly max_memory_bytes?: number;
+  readonly max_fuel?: number;
+  readonly timeout_ms?: number;
+  readonly feature_metadata?: Record<string, unknown>;
+}
+
+export const MODEL_RUNTIME_GOVERNING_SPEC =
+  "138-governed-exact-model-execution" as const;
+export const PLACEMENT_WASM_CPU = "wasm-cpu" as const;
+
+/**
+ * Normalize a Spec 138 model.execute success/failure for cross-target compare.
+ * Strips host-private fields; keeps status-bearing public codes and identity.
+ */
+export function normalizeModelExecuteEvidence(input: {
+  readonly status?: string;
+  readonly error_code?: HostConnectorErrorCode;
+  readonly model_ref?: ModelRef;
+  readonly placement?: string;
+  readonly output_ref?: string;
+  readonly artifact_ref?: string;
+}): Record<string, unknown> {
+  return {
+    governing_spec: MODEL_RUNTIME_GOVERNING_SPEC,
+    status: input.status ?? (input.error_code ? "failed" : "ok"),
+    error_code: input.error_code ?? null,
+    model_ref: input.model_ref ?? null,
+    placement: input.placement ?? PLACEMENT_WASM_CPU,
+    has_output_ref: Boolean(input.output_ref ?? input.artifact_ref),
+  };
+}
+
+export function modelExecuteCommand(
+  commandId: string,
+  correlationId: string,
+  idempotencyKey: string,
+  targetFamily: HostConnectorTargetFamily,
+  payload: ModelExecutePayload,
+): HostConnectorAppCommand {
+  return {
+    kind: HOST_CONNECTOR_COMMAND_KIND,
+    schema_version: HOST_CONNECTOR_COMMAND_SCHEMA_VERSION,
+    command: "run_local_model",
+    command_id: commandId,
+    correlation_id: correlationId,
+    idempotency_key: idempotencyKey,
+    target_family: targetFamily,
+    cancel_requested: false,
+    payload: { ...payload },
+  };
+}
 
 export type HostConnectorEventName =
   | "accepted"

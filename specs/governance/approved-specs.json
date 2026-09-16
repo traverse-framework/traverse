@@ -1877,7 +1877,7 @@
     },
     {
       "id": "137-host-connector-command-dispatch",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/137-host-connector-command-dispatch/spec.md",
@@ -1890,7 +1890,24 @@
         "packages/swift/TraverseEmbedder/",
         "specs/137-host-connector-command-dispatch/",
         "docs/adr/0071-host-connector-command-dispatch.md",
-        "docs/host-connector-command-dispatch.md"
+        "docs/host-connector-command-dispatch.md",
+        "docs/adr/0074-governed-exact-model-execution.md",
+        "specs/138-governed-exact-model-execution/"
+      ]
+    },
+    {
+      "id": "138-governed-exact-model-execution",
+      "version": "0.1.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/138-governed-exact-model-execution/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-embedder/",
+        "contracts/connectors/traverse.model-runtime/",
+        "specs/138-governed-exact-model-execution/",
+        "docs/adr/0074-governed-exact-model-execution.md",
+        "fixtures/models/"
       ]
     },
     {

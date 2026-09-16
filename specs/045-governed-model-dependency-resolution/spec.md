@@ -173,3 +173,7 @@ As a UI or auditor, I want public trace evidence to show which model/provider wa
 - Model weight distribution, native installers, or package-manager installation.
 - Embedding-specific interfaces unless added by a later approved spec.
 - Product-level answer quality scoring beyond model selection and traceability.
+- Exact-ref signed WASM model package execution, host-staged tensor I/O, and
+  CPU-WASM conformance — those are governed by
+  `138-governed-exact-model-execution` (Decision 91). This spec remains the
+  candidate/LLM resolution track and does not satisfy Spec 138’s DoD.

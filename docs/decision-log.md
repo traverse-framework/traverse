@@ -4337,3 +4337,129 @@ lifecycle transcript.
 Accepted per this org's spec-approval policy: generated post-investigation,
 aligned with the owner-selected "full fix now, this PR" option in this
 session's direct `AskUserQuestion` exchange with the owner (2026-09-15).
+
+## Decision 91: Portable Governed Exact-Ref Model Execution (Callweave Slice)
+
+- **Date**: 2026-09-16
+- **Status**: Accepted (brainstorm); governing artifacts Draft pending approval
+- **Governing specs**: `138-governed-exact-model-execution` (new, Draft);
+  `137-host-connector-command-dispatch` (amend for `model.execute`);
+  `044-application-bundle-manifest` (`exact_model_dependencies` amend);
+  `045-governed-model-dependency-resolution` (non-normative pointer);
+  `526-embedded-verified-cache-lifecycle` (reuse);
+  `1259-portable-authority-contracts`; ADR-0060
+- **Related ADRs**: ADR-0074 (Draft); ADR-0071; ADR-0060
+- **Related issues**: #1435 (governance), #1436 (native wasm-cpu),
+  #1437 (browser cross-target)
+- **Origin**: Owner-directed `/brainstorm` on Callweave
+  `MODEL_EXECUTION_SLICE_REQUEST.md` (2026-09-16)
+
+### Context
+
+Callweave’s remaining atomic Traverse slice is portable governed model
+execution: application manifest → exact signed model reference → resolver
+and content-addressed cache → bounded provider-neutral executor → typed
+result and trace evidence. Traverse already has Spec 045 (candidate/Ollama)
+and Spec 137 / Decision 84 (`traverse.model-runtime` / `model.execute`).
+Exact-ref / CPU-WASM / offline DoD must not invent a second registry or
+Callweave-specific API.
+
+### Decision
+
+1. **Exact-ref track, not Spec 045 unification.** Spec 138 + ADR-0074;
+   Spec 137 is the public port; Spec 045 stays the LLM/candidate track.
+2. **App-command only for v1.** Spec 137 `model.execute` only; no guest
+   `model_invoke` (Decision 84 stands).
+3. **Artifact = Traverse-ABI WASM model guest**, placement `wasm-cpu` first.
+4. **Must-match `model_ref`** on the request (id, version, digest = app pin).
+5. **Cache = Spec 526** active generation for model packages; offline warm
+   OK; miss → `model_unavailable`.
+6. **Native CPU-WASM first**; browser cross-target = same-spec follow-on.
+7. **Fail closed** on unknown envelope/manifest fields.
+8. **Governing packaging:** Spec 138 owns manifest/guest ABI/envelopes/cache
+   binding; Spec 137 amend is port payload-only; ADR-0074 records the split.
+9. **Host owns public envelopes;** guest is import-denied pure binary execute.
+10. **Package = sidecar manifest + WASM** under a package/pair digest.
+11. **Spec/governance PR path first;** Ready impl tickets after approval.
+
+### Alternatives considered
+
+Unify under Spec 045; guest ABI or dual entry points in v1; weights+shared
+executor as v1; opaque `artifact_ref`-only identity; model-specific cache;
+browser+native in one first ticket; ignore-unknown compatibility; fold into
+Spec 137 or ADR-only; guest speaks full public envelopes; embed manifest in
+WASM or Registry-metadata-only — all rejected or deferred as recorded in the
+2026-09-16 brainstorm.
+
+### Explicitly deferred (product)
+
+Guest `model_invoke`; ONNX/GGUF weight-pack executor; browser DoD in ticket 1;
+production Callweave model selection; mic/UI/workflow; cloud LMM; training.
+
+### Approval
+
+Approved by Enrico in owner-directed `/brainstorm` (2026-09-16).
+
+## Decision 92: Exact-Ref Model Wire, Staging, and Ticket Closure
+
+- **Date**: 2026-09-16
+- **Status**: Accepted
+- **Governing specs**: same as Decision 91; plus connector contract
+  `traverse.model-runtime` breaking schema bump in the governance PR
+- **Related ADRs**: ADR-0074 (Draft)
+- **Related issues**: #1435, #1436, #1437
+- **Origin**: Decision 91 gap-close `/brainstorm` continuation (2026-09-16)
+
+### Context
+
+Decision 91 left wire and packaging gaps: Spec 137 is JSON-shaped but
+tensors are binary; app-manifest pin home was unspecified; `policy_ref` on
+the existing model-runtime contract was undefined relative to `model_ref`.
+
+### Decision
+
+1. **Binary I/O via opaque refs.** Host-staged `input_ref` and always
+   opaque `output_ref`; no unbounded JSON base64.
+2. **Staging APIs are host-embedder calls**, not Spec 137 command kinds:
+   `stage_model_input` → `input_ref`; `read_model_output` ← `output_ref`.
+3. **App pins:** Spec 138 defines the pin schema; Spec 044 gets a narrow
+   normative `exact_model_dependencies` amend. Spec 045 gets a
+   non-normative pointer only.
+4. **Ref lifetime:** `input_ref` single-consume (until execute/cancel/drop);
+   `output_ref` host-TTL / explicit drop / shutdown. Neither is a Spec 526
+   entry.
+5. **Guest frames:** versioned little-endian length-prefixed custom binary
+   (`abi_version`, dtype, rank, dims, payload_len, payload).
+6. **`policy_ref` retained** as opaque execution-policy handle (ceilings,
+   redaction profile, allowed classes)—not model identity.
+7. **`data_classification` required** on every `model.execute` request;
+   policy enforces allow/deny and redaction.
+8. **Three tickets:** #1435 governance (Ready), #1436 native impl (Blocked /
+   needs-spec), #1437 browser follow-on (Blocked / needs-spec).
+9. **Connector contract updates in the governance PR** (breaking version
+   bump on existing `traverse.model-runtime` to 2.0.0, not a new connector
+   id).
+
+### Alternatives considered
+
+Length-prefixed companion on the command port; bounded base64; Spec 045
+candidate reuse for pins; Spec 526 as tensor store; reusable input refs;
+FlatBuffers/protobuf guest codec; four-ticket or mega-ticket packaging;
+drop `policy_ref`; classification only inside policy; new connector id —
+rejected as recorded in the gap-close brainstorm.
+
+### Safe to author without further brainstorm
+
+Exact `data_classification` enum values; SPDX license string rules; guest
+export symbol name; digest algorithm (inherit Registry); per-field JSON
+Schema documents; fixture model contents.
+
+### Outcome
+
+No further product decisions required before authoring ADRs/specs and filing
+tickets. Drafts authored on `main` working tree; tickets #1435–#1437 filed.
+
+### Approval
+
+Approved by Enrico in owner-directed `/brainstorm` continuation
+(2026-09-16); each recommendation accepted.

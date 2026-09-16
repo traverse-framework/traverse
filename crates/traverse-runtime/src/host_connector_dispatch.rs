@@ -31,7 +31,7 @@ pub const MODEL_EXECUTE_OPERATION: &str = "model.execute";
 const MAX_DURATION_MS: u64 = 60_000;
 const MAX_AUDIO_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
-const MAX_MODEL_OUTPUT_BYTES: u64 = 64 * 1024;
+const MAX_MODEL_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_EVENTS: usize = 8;
 
 /// Stable public failure codes (FR-011).
@@ -58,6 +58,18 @@ pub enum HostConnectorErrorCode {
     PolicyDenied,
     /// Host cannot complete the operation now.
     Unavailable,
+    /// Request payload is invalid for Spec 138.
+    InvalidInput,
+    /// Exact model pin or verified package is missing.
+    ModelUnavailable,
+    /// Model package or ABI/schema is incompatible.
+    ModelIncompatible,
+    /// Memory, fuel, I/O, or output ceilings were exceeded.
+    ResourceExhausted,
+    /// Execution exceeded the configured timeout.
+    Timeout,
+    /// Model guest trapped or the executor failed.
+    ExecutionFailed,
 }
 
 impl HostConnectorErrorCode {
@@ -75,6 +87,12 @@ impl HostConnectorErrorCode {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::PolicyDenied => "policy_denied",
             Self::Unavailable => "unavailable",
+            Self::InvalidInput => "invalid_input",
+            Self::ModelUnavailable => "model_unavailable",
+            Self::ModelIncompatible => "model_incompatible",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::Timeout => "timeout",
+            Self::ExecutionFailed => "execution_failed",
         }
     }
 }
@@ -755,11 +773,31 @@ fn confirm_operation_payload(
         Ok(())
     } else {
         let output_bytes = required_u64(object, "max_output_bytes")?;
-        if object.get("artifact_ref").and_then(Value::as_str).is_none()
-            || object.get("policy_ref").and_then(Value::as_str).is_none()
-        {
+        let model_ref_ok = object
+            .get("model_ref")
+            .and_then(Value::as_object)
+            .is_some_and(|model_ref| {
+                model_ref.get("model_id").and_then(Value::as_str).is_some()
+                    && model_ref.get("version").and_then(Value::as_str).is_some()
+                    && model_ref.get("digest").and_then(Value::as_str).is_some()
+            });
+        let required_refs_ok = object.get("input_ref").and_then(Value::as_str).is_some()
+            && object.get("policy_ref").and_then(Value::as_str).is_some()
+            && object
+                .get("data_classification")
+                .and_then(Value::as_str)
+                .is_some()
+            && object
+                .get("input_schema_ref")
+                .and_then(Value::as_str)
+                .is_some()
+            && object
+                .get("input_schema_version")
+                .and_then(Value::as_str)
+                .is_some();
+        if !model_ref_ok || !required_refs_ok {
             return Err(limit_error(
-                "model.execute requires artifact_ref, policy_ref, and max_output_bytes",
+                "model.execute requires model_ref, input_ref, policy_ref, data_classification, input_schema_ref, input_schema_version, and max_output_bytes",
             ));
         }
         if output_bytes == 0 || output_bytes > MAX_MODEL_OUTPUT_BYTES {
@@ -771,6 +809,7 @@ fn confirm_operation_payload(
             || object.contains_key("model_id")
             || object.contains_key("endpoint")
             || object.contains_key("credential")
+            || object.contains_key("artifact_ref")
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Incompatible,

@@ -159,6 +159,22 @@ fn audio_command(target_family: &str) -> HostConnectorAppCommand {
     }
 }
 
+fn model_execute_payload() -> serde_json::Value {
+    json!({
+        "model_ref": {
+            "model_id": "fixture.model",
+            "version": "1.0.0",
+            "digest": "sha256:fixture"
+        },
+        "input_ref": "input-1",
+        "policy_ref": "policy-1",
+        "data_classification": "sensitive",
+        "input_schema_ref": "schema:fixture-in",
+        "input_schema_version": "1.0.0",
+        "max_output_bytes": 4096
+    })
+}
+
 fn model_command() -> HostConnectorAppCommand {
     HostConnectorAppCommand {
         kind: COMMAND_KIND.to_string(),
@@ -169,11 +185,7 @@ fn model_command() -> HostConnectorAppCommand {
         idempotency_key: "idem-00000002".to_string(),
         target_family: "macos".to_string(),
         cancel_requested: false,
-        payload: json!({
-            "artifact_ref": "model-artifact-1",
-            "policy_ref": "policy-1",
-            "max_output_bytes": 4096
-        }),
+        payload: model_execute_payload(),
     }
 }
 
@@ -480,12 +492,9 @@ fn model_execute_uses_the_same_port() -> Result<(), String> {
     assert_no_leak(&json!(dispatch));
 
     let mut forbidden = model_command();
-    forbidden.payload = json!({
-        "artifact_ref": "model-artifact-1",
-        "policy_ref": "policy-1",
-        "max_output_bytes": 4096,
-        "provider": "ollama"
-    });
+    let mut forbidden_payload = model_execute_payload();
+    forbidden_payload["provider"] = json!("ollama");
+    forbidden.payload = forbidden_payload;
     forbidden.idempotency_key = "idem-forbidden".to_string();
     let failed = require_err(
         &forbidden,
@@ -698,11 +707,9 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
         HostConnectorErrorCode::InputLimitExceeded
     );
     let mut huge_model = model_command();
-    huge_model.payload = json!({
-        "artifact_ref": "model-artifact-1",
-        "policy_ref": "policy-1",
-        "max_output_bytes": 0
-    });
+    let mut zero_payload = model_execute_payload();
+    zero_payload["max_output_bytes"] = json!(0);
+    huge_model.payload = zero_payload;
     huge_model.idempotency_key = "idem-model-zero".to_string();
     assert_eq!(
         require_err(
@@ -861,12 +868,19 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
         HostConnectorErrorCode::InputLimitExceeded
     );
 
-    let mut missing_artifact = model_command();
-    missing_artifact.payload = json!({"policy_ref": "policy-1", "max_output_bytes": 8});
-    missing_artifact.idempotency_key = "idem-missing-artifact".to_string();
+    let mut missing_model_ref = model_command();
+    missing_model_ref.payload = json!({
+        "input_ref": "input-1",
+        "policy_ref": "policy-1",
+        "data_classification": "sensitive",
+        "input_schema_ref": "schema:fixture-in",
+        "input_schema_version": "1.0.0",
+        "max_output_bytes": 8
+    });
+    missing_model_ref.idempotency_key = "idem-missing-model-ref".to_string();
     assert_eq!(
         require_err(
-            &missing_artifact,
+            &missing_model_ref,
             &combined,
             &model_activations,
             &mut host,
@@ -877,7 +891,12 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
         HostConnectorErrorCode::InputLimitExceeded
     );
     let mut missing_policy = model_command();
-    missing_policy.payload = json!({"artifact_ref": "model-artifact-1", "max_output_bytes": 8});
+    let mut missing_policy_payload = model_execute_payload();
+    missing_policy_payload
+        .as_object_mut()
+        .expect("payload object")
+        .remove("policy_ref");
+    missing_policy.payload = missing_policy_payload;
     missing_policy.idempotency_key = "idem-missing-policy".to_string();
     assert_eq!(
         require_err(
@@ -892,11 +911,9 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
         HostConnectorErrorCode::InputLimitExceeded
     );
     let mut huge_output = model_command();
-    huge_output.payload = json!({
-        "artifact_ref": "model-artifact-1",
-        "policy_ref": "policy-1",
-        "max_output_bytes": 64 * 1024 + 1
-    });
+    let mut huge_payload = model_execute_payload();
+    huge_payload["max_output_bytes"] = json!(16 * 1024 * 1024 + 1);
+    huge_output.payload = huge_payload;
     huge_output.idempotency_key = "idem-huge-output".to_string();
     assert_eq!(
         require_err(
@@ -910,13 +927,9 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
         .code,
         HostConnectorErrorCode::InputLimitExceeded
     );
-    for forbidden_field in ["model_id", "endpoint", "credential"] {
+    for forbidden_field in ["model_id", "endpoint", "credential", "artifact_ref"] {
         let mut forbidden = model_command();
-        let mut payload = json!({
-            "artifact_ref": "model-artifact-1",
-            "policy_ref": "policy-1",
-            "max_output_bytes": 4096,
-        });
+        let mut payload = model_execute_payload();
         payload[forbidden_field] = json!("blocked");
         forbidden.payload = payload;
         forbidden.idempotency_key = format!("idem-forbidden-{forbidden_field}");
@@ -982,6 +995,12 @@ fn public_codes_are_stable_and_guest_paths_are_unused() {
         HostConnectorErrorCode::IdempotencyConflict,
         HostConnectorErrorCode::PolicyDenied,
         HostConnectorErrorCode::Unavailable,
+        HostConnectorErrorCode::InvalidInput,
+        HostConnectorErrorCode::ModelUnavailable,
+        HostConnectorErrorCode::ModelIncompatible,
+        HostConnectorErrorCode::ResourceExhausted,
+        HostConnectorErrorCode::Timeout,
+        HostConnectorErrorCode::ExecutionFailed,
     ] {
         assert!(!code.as_str().is_empty());
         assert!(!code.as_str().contains("connector_invoke"));

@@ -2,7 +2,7 @@
   "kind": "connector_contract",
   "schema_version": "1.0.0",
   "connector_id": "traverse.model-runtime",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "capabilities_provided": [
     "traverse.model-runtime.execute"
   ],
@@ -24,21 +24,76 @@
       "request_schema": {
         "type": "object",
         "required": [
-          "artifact_ref",
+          "model_ref",
+          "input_ref",
           "policy_ref",
+          "data_classification",
+          "input_schema_ref",
+          "input_schema_version",
           "max_output_bytes"
         ],
         "properties": {
-          "artifact_ref": {
-            "type": "string"
+          "model_ref": {
+            "type": "object",
+            "required": ["model_id", "version", "digest"],
+            "properties": {
+              "model_id": { "type": "string", "minLength": 1 },
+              "version": { "type": "string", "minLength": 1 },
+              "digest": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          },
+          "input_ref": {
+            "type": "string",
+            "minLength": 1
           },
           "policy_ref": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
+          },
+          "data_classification": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_schema_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_schema_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "feature_metadata": {
+            "type": "object",
+            "properties": {
+              "dtype": { "type": "string" },
+              "layout": { "type": "string" },
+              "shape": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 0 }
+              },
+              "sample_rate": { "type": "integer", "minimum": 1 },
+              "channel_count": { "type": "integer", "minimum": 1 },
+              "app_correlation_id": { "type": "string" }
+            },
+            "additionalProperties": false
           },
           "max_output_bytes": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 65536
+            "maximum": 16777216
+          },
+          "max_memory_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_fuel": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1
           }
         },
         "additionalProperties": false
@@ -46,15 +101,53 @@
       "success_schema": {
         "type": "object",
         "required": [
-          "artifact_ref",
+          "status",
+          "output_ref",
+          "output_schema_ref",
+          "model_ref",
+          "placement",
           "result_class"
         ],
         "properties": {
-          "artifact_ref": {
-            "type": "string"
+          "status": {
+            "type": "string",
+            "enum": ["ok"]
+          },
+          "output_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "output_schema_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model_ref": {
+            "type": "object",
+            "required": ["model_id", "version", "digest"],
+            "properties": {
+              "model_id": { "type": "string" },
+              "version": { "type": "string" },
+              "digest": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "placement": {
+            "type": "string",
+            "minLength": 1
           },
           "result_class": {
             "type": "string"
+          },
+          "resource_usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input_bytes": { "type": "integer", "minimum": 0 },
+              "output_bytes": { "type": "integer", "minimum": 0 },
+              "memory_peak_bytes": { "type": "integer", "minimum": 0 },
+              "fuel_consumed": { "type": "integer", "minimum": 0 },
+              "duration_ms": { "type": "integer", "minimum": 0 }
+            }
           }
         },
         "additionalProperties": false
@@ -68,11 +161,24 @@
         "cancelled",
         "idempotency_conflict",
         "policy_denied",
-        "unavailable"
+        "unavailable",
+        "invalid_input",
+        "model_unavailable",
+        "model_incompatible",
+        "resource_exhausted",
+        "timeout",
+        "execution_failed"
       ]
     }
   ],
   "supported_placement_targets": [
-    "local"
+    "local",
+    "macos",
+    "browser"
+  ],
+  "notes": [
+    "Breaking bump from 1.0.0 per Decision 92 / Spec 138: artifact_ref model picker replaced by must-match model_ref + host-staged input_ref/output_ref.",
+    "Binary tensors MUST NOT appear as unbounded JSON base64 on this operation; use host stage_model_input / read_model_output.",
+    "policy_ref is an execution-policy handle, not model identity."
   ]
 }
