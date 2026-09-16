@@ -84,6 +84,10 @@ pub struct ModelPackageManifest {
 
 impl ModelPackageManifest {
     /// Fail closed if required governance fields are missing or empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_incompatible` when required fields or limits are invalid.
     pub fn validate(&self) -> Result<(), HostConnectorError> {
         let required = [
             ("license_id", self.license_id.as_str()),
@@ -172,6 +176,10 @@ impl ModelPackageStore {
     }
 
     /// Resolve by package digest without network.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_unavailable` when the digest is not in the store.
     pub fn resolve_offline(
         &self,
         digest: &str,
@@ -224,6 +232,10 @@ impl ModelIoStore {
     }
 
     /// Consume an `input_ref` (single-use).
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_input` when the ref is missing or already consumed.
     pub fn take_input(&mut self, input_ref: &str) -> Result<Vec<u8>, HostConnectorError> {
         self.inputs
             .remove(input_ref)
@@ -355,6 +367,7 @@ struct ModelExecutePayload {
 }
 
 impl HostConnectorPort for ExactModelHostConnector {
+    #[allow(clippy::too_many_lines)]
     fn invoke(
         &mut self,
         request: &HostConnectorHostRequest,
@@ -583,6 +596,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(feature = "wasmtime-executor")]
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::unwrap_used
+)]
 fn execute_wasm_cpu_model(
     wasm: &[u8],
     input: &[u8],
@@ -603,7 +621,10 @@ fn execute_wasm_cpu_model(
         message: "model wasm failed validation".to_string(),
     })?;
 
-    let memory_pages = ((max_memory_bytes.max(65_536) + 65_535) / 65_536).min(u64::from(u32::MAX));
+    let _memory_pages = max_memory_bytes
+        .max(65_536)
+        .div_ceil(65_536)
+        .min(u64::from(u32::MAX));
     let limits = StoreLimitsBuilder::new()
         .memory_size(usize::try_from(max_memory_bytes).unwrap_or(usize::MAX))
         .build();
@@ -640,9 +661,11 @@ fn execute_wasm_cpu_model(
     let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
     let out_cap =
         i32::try_from(max_output_bytes.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
-    let end = out_ptr as usize + out_cap as usize;
-    let current_pages = (memory.data_size(&store) as u64) / 65_536;
-    let needed_pages = (end as u64 + 65_535) / 65_536;
+    let end = usize::try_from(out_ptr).unwrap_or(0) + usize::try_from(out_cap).unwrap_or(0);
+    let current_pages = u64::try_from(memory.data_size(&store))
+        .unwrap_or(0)
+        .div_ceil(65_536);
+    let needed_pages = u64::try_from(end).unwrap_or(0).div_ceil(65_536);
     if needed_pages > current_pages {
         memory
             .grow(&mut store, needed_pages - current_pages)
@@ -651,9 +674,8 @@ fn execute_wasm_cpu_model(
                 message: "model memory grow failed".to_string(),
             })?;
     }
-    let _ = memory_pages;
     memory
-        .write(&mut store, in_ptr as usize, input)
+        .write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input)
         .map_err(|_| HostConnectorError {
             code: HostConnectorErrorCode::ExecutionFailed,
             message: "failed to write model input".to_string(),
@@ -673,15 +695,15 @@ fn execute_wasm_cpu_model(
             code: HostConnectorErrorCode::ExecutionFailed,
             message: "model_execute trap or fuel exhausted".to_string(),
         })?;
-    if out_len < 0 || out_len as u64 > max_output_bytes {
+    if out_len < 0 || u64::try_from(out_len).unwrap_or(u64::MAX) > max_output_bytes {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::ResourceExhausted,
             message: "model returned invalid output length".to_string(),
         });
     }
-    let mut output = vec![0_u8; out_len as usize];
+    let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
     memory
-        .read(&store, out_ptr as usize, &mut output)
+        .read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output)
         .map_err(|_| HostConnectorError {
             code: HostConnectorErrorCode::ExecutionFailed,
             message: "failed to read model output".to_string(),
@@ -728,6 +750,7 @@ pub const FIXTURE_ECHO_WAT: &str = r#"
 "#;
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::host_connector_dispatch::{

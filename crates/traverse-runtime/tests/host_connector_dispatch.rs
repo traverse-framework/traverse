@@ -892,10 +892,9 @@ fn remaining_fail_closed_branches_are_covered() -> Result<(), String> {
     );
     let mut missing_policy = model_command();
     let mut missing_policy_payload = model_execute_payload();
-    missing_policy_payload
-        .as_object_mut()
-        .expect("payload object")
-        .remove("policy_ref");
+    if let Some(object) = missing_policy_payload.as_object_mut() {
+        object.remove("policy_ref");
+    }
     missing_policy.payload = missing_policy_payload;
     missing_policy.idempotency_key = "idem-missing-policy".to_string();
     assert_eq!(
