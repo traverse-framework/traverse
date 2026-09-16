@@ -24,7 +24,7 @@ are rejected deterministically at `init`.
 **Migration (Phase 3 / FR-010):** the interim TypeScript `emit_event` host
 (#1404), `wasi.ts`, and per-capability Host ABI import gating are removed.
 Bundles without `runtime/runtime.wasm` fail closed at `init`. This breaking
-embedder change ships in lockstep cut **`0.11.0`**.
+embedder change ships in lockstep cut **`0.12.0`**.
 
 ```ts
 import { BundleEmbedder, FetchBundleLoader } from "traverse-embedder-web";
@@ -159,7 +159,7 @@ npm test   # builds with tsc, then runs the node:test suite
 ## Publishing
 
 Published to npm as [`traverse-embedder-web`](https://www.npmjs.com/package/traverse-embedder-web)
-(currently `0.11.0`; verify with `npm view traverse-embedder-web version`):
+(currently `0.12.0`; verify with `npm view traverse-embedder-web version`):
 
 ```bash
 npm install traverse-embedder-web

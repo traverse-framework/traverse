@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.12.0 — 2026-09-16
+
+### Exact-ref model execution (Spec 138)
+
+- Host-staged `traverse.model-runtime` / `model.execute` with exact pin /
+  digest / policy fail-closed checks (native `ExactModelHostConnector` +
+  browser wasm-cpu helpers).
+- Connector contract `2.0.0`; Specs 044 / 045 / 137 amended; ADR-0074.
+- Echo fixture under `fixtures/models/fixture-echo-1.0.0/`.
+
+See [docs/releases/v0.12.0.md](docs/releases/v0.12.0.md).
+
 ## v0.11.0 — 2026-09-16
 
 ### Real `runtime.wasm` orchestrator (spec 1402)
