@@ -105,4 +105,8 @@ v0.11.0). After publish is live:
 ### 3. Announcement
 
 - [ ] GitHub Release notes from `docs/releases/vX.Y.Z.md`.
+      Use absolute `https://github.com/traverse-framework/traverse/blob/main/...`
+      links for Changelog / release-process / other docs in the Release body —
+      relative paths like `../../CHANGELOG.md` break on the Release page
+      (they resolve against `/releases/tag/...`, not the repo tree).
 - [ ] Org Discussion (or linked announcement) when the cut is public.
