@@ -16,7 +16,7 @@ trap cleanup EXIT
 # install that target by default. Idempotent no-op if already present.
 rustup target add wasm32-unknown-unknown
 
-cargo run -q -p traverse-native-bridge -- "${artifact_root}/runtime"
+cargo run -q -p traverse-native-bridge --bin traverse-native-bridge -- "${artifact_root}/runtime"
 
 python3 - "${artifact_root}/runtime" <<'PY'
 import hashlib
