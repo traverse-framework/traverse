@@ -5,6 +5,7 @@ import com.dylibso.chicory.runtime.ExecutionListener
 import com.dylibso.chicory.wasm.Parser
 import com.dylibso.chicory.wasm.types.ExternalType
 import com.dylibso.chicory.wasm.types.FunctionType
+import com.dylibso.chicory.wasm.types.MemoryLimits
 import com.dylibso.chicory.wasm.types.ValType
 import java.io.File
 import java.security.MessageDigest
@@ -64,12 +65,31 @@ class ChicoryRuntimeBridge(
         val memory = module.memorySection().orElseThrow {
             TraverseBundleException("runtime/runtime.wasm must declare bridge memory")
         }.getMemory(0)
-        if (memory.limits().maximumPages() > maximumMemoryPages) {
+        val declaredLimits = memory.limits()
+        // A module that declares no explicit maximum (the normal case for any
+        // plain rustc/clang-compiled wasm32 module — nothing sets one unless a
+        // linker flag asks for it) reports Chicory's MemoryLimits.MAX_PAGES
+        // sentinel (65536 pages / 4 GiB), not "unbounded". That alone isn't a
+        // violation: withMemoryLimits below makes the host — not the guest's
+        // own declaration — the actual authority on how far memory may grow,
+        // mirroring how crates/traverse-swift-host (wasmi StoreLimits) and the
+        // .NET bridge (Wasmtime store.SetLimits) already enforce this
+        // dynamically. Only a module that explicitly declares a smaller, but
+        // still too-large, maximum is rejected up front.
+        if (declaredLimits.maximumPages() != MemoryLimits.MAX_PAGES &&
+            declaredLimits.maximumPages() > maximumMemoryPages
+        ) {
             throw TraverseBundleException("runtime/runtime.wasm exceeds the configured memory limit")
+        }
+        val hostMemoryLimits = try {
+            MemoryLimits(declaredLimits.initialPages(), maximumMemoryPages)
+        } catch (error: RuntimeException) {
+            throw TraverseBundleException("runtime/runtime.wasm exceeds the configured memory limit", error)
         }
 
         instance = try {
             Instance.builder(module)
+                .withMemoryLimits(hostMemoryLimits)
                 .withUnsafeExecutionListener(executionBudget.listener)
                 .build()
         } catch (error: RuntimeException) {
