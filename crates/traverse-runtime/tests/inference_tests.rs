@@ -858,7 +858,7 @@ fn bridge_reports_ollama_provider_execution_failure_with_evidence() {
 
     let error = execute_governed_bridged_model_dependency(
         &dependency,
-        &governed_model_request("traverse.inference.generate", &base_url),
+        &governed_model_request_with_timeout("traverse.inference.generate", &base_url, 5_000),
         std::slice::from_ref(&pin),
         &activated,
         &mut host,
@@ -969,7 +969,8 @@ fn bridge_falls_back_to_ollama_when_exact_ref_binding_not_activated() {
         exact_ref_candidate("exact-ref-unavailable", &pin, 30, 8192),
         model_candidate("ollama-fallback", "llama3.2:3b", 10, 8192),
     ]);
-    let request = governed_model_request("traverse.inference.generate", &base_url);
+    let request =
+        governed_model_request_with_timeout("traverse.inference.generate", &base_url, 5_000);
     let activated: BTreeSet<(String, String)> = BTreeSet::new();
 
     let outcome = execute_governed_bridged_model_dependency(
@@ -1013,7 +1014,8 @@ fn bridge_platform_aware_resolution_skips_ollama_on_non_local_placement() {
     let mut ollama = model_candidate("ollama-local-only", "llama3.2:3b", 30, 8192);
     ollama.placement_target = ExecutionTarget::Local;
     let dependency = model_dependency(vec![ollama, exact_ref]);
-    let mut request = governed_model_request("traverse.inference.generate", &base_url);
+    let mut request =
+        governed_model_request_with_timeout("traverse.inference.generate", &base_url, 5_000);
     request.requested_placement = ExecutionTarget::Browser;
     let activated: BTreeSet<(String, String)> =
         [(pin.model_id.clone(), pin.version.clone())].into();
@@ -1424,10 +1426,23 @@ fn model_candidate(
 }
 
 fn governed_model_request(interface_id: &str, base_url: &str) -> GovernedModelExecutionRequest {
+    governed_model_request_with_timeout(interface_id, base_url, 1_000)
+}
+
+/// Bridge tests chain up to three real loopback round-trips per resolution +
+/// execution call (resolution-time availability, execution-time
+/// `check_model_available`, then `generate`); a longer timeout than the
+/// single-round-trip default gives them headroom under CI runner load
+/// without weakening what the assertions verify.
+fn governed_model_request_with_timeout(
+    interface_id: &str,
+    base_url: &str,
+    timeout_ms: u64,
+) -> GovernedModelExecutionRequest {
     let mut provider_configs = BTreeMap::new();
     provider_configs.insert(
         "ollama.local.generate".to_string(),
-        provider_config(base_url, 1_000),
+        provider_config(base_url, timeout_ms),
     );
     GovernedModelExecutionRequest {
         interface_id: interface_id.to_string(),
