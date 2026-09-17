@@ -4547,3 +4547,134 @@ remains an open, deliberately-deferred question — worth a fresh
 
 Approved by Enrico in `/brainstorm` session (2026-09-16); each
 recommendation accepted as given.
+
+## Decision 94: Bridge Spec 045 (Candidate Resolution) and Spec 138 (Exact-Ref Execution) at the `traverse.inference.generate` Interface
+
+- **Date**: 2026-09-17
+- **Status**: Accepted
+- **Governing specs**: 045-governed-model-dependency-resolution (amended —
+  new FRs for the `exact-ref.wasm-cpu` candidate kind, `trust_class`
+  evidence, and platform-aware resolution); 138-governed-exact-model-execution
+  (untouched — `model.execute`'s wire contract is not modified)
+- **Related ADRs**: none new
+- **Related issues**: to be filed (two tickets, per this decision)
+- **Origin**: `/brainstorm` session (2026-09-17), explicitly picking up the
+  bridge Decision 93 deliberately deferred
+
+### Context
+
+Decision 93 shipped a real (fixture-scale) inference proof for Spec 138
+alone, but left the two "real AI" tracks disconnected: Spec 045's
+`OllamaProvider` (`crates/traverse-runtime/src/inference.rs`) does real,
+working, native-only candidate-resolved local inference with no digest
+concept; Spec 138's `traverse.model-runtime` / `model.execute`
+(`contracts/connectors/traverse.model-runtime/connector_contract.json`,
+v2.0.0) hard-requires a signed-package `model_ref.digest` and already
+proves native wasm-cpu + browser cross-target execution. The app-facing
+`traverse.inference.generate` capability contract
+(`contracts/inference/traverse.inference.generate/contract.json`, v1.0.0)
+is already documented as "provider-neutral" but today is satisfied only by
+Ollama.
+
+### Decision
+
+1. **Bridge lives at `traverse.inference.generate`, not at `model.execute`.**
+   Spec 138's wire contract and its mandatory-digest trust model are never
+   touched. The app-facing generate interface becomes satisfiable by either
+   an Ollama candidate (as today) or a Spec 138 exact-ref WASM package,
+   transparently to the app.
+2. **Candidate discriminator: reuse `provider_implementation_id`.** Add a
+   new recognized value `exact-ref.wasm-cpu` alongside the existing
+   `ollama.local.generate`; the candidate object becomes polymorphic on
+   which id is set, rather than introducing a new top-level candidate-kind
+   shape.
+3. **Exact-ref candidates reference an existing Spec 044 pin by
+   `model_id`+`version`** — they do not carry their own digest. The digest
+   stays declared in exactly one place (`exact_model_dependencies`),
+   avoiding a second, potentially-diverging source of truth for the same
+   pin.
+4. **Evidence gains a required `trust_class` enum**
+   (`verified_signed_package` | `local_unverified_daemon`), populated for
+   every response regardless of backend, so callers can tell what assurance
+   backs an answer without inspecting `provider_implementation_id` strings.
+   This is a breaking change to the evidence shape (currently
+   `additionalProperties: false`), so `traverse.inference.generate` bumps
+   **1.0.0 → 2.0.0** — matching the precedent Decision 92 already set for
+   `traverse.model-runtime`'s own breaking bump.
+5. **Resolution becomes platform-aware.** An Ollama candidate is skipped
+   (falls through to the next candidate) when the current placement target
+   can't run it (wasm32/browser), reusing the existing placement-router
+   signal (`crates/traverse-runtime/src/router/mod.rs`) rather than
+   inventing new plumbing. Today's platform-blind behavior (resolve, then
+   fail at execution time) was rejected as leaving the fallback story
+   broken cross-target — exactly the asymmetry the original critique named.
+6. **Governance: amend Spec 045, not a new connecting spec.** Since
+   `model.execute` is untouched and Spec 045 already governs the runtime
+   code that changes (`crates/traverse-runtime/`, contracts, cli,
+   registry, mcp), the new candidate kind is new FRs on 045, not a
+   standalone spec. Spec 138 is never reopened.
+7. **Prove it end-to-end with a real (fixture-scale) text-generating
+   exact-ref package**, not routing plumbing tested only against fakes.
+   Same "genuinely computed, not passthrough" bar Decision 93 set for the
+   classifier fixture, applied to `generate`'s text shape this time.
+8. **Fixture behavior: keyword-triggered canned response.** The guest scans
+   prompt bytes for a fixed keyword and returns one of a small set of fixed
+   responses (plus a default fallback) — real conditional logic producing
+   genuinely different output per input, hand-writable in WAT at the same
+   difficulty as the linear classifier, and closer to what "generate"
+   implies than a mechanical byte transform (e.g. uppercasing).
+9. **Two tickets, not one.** Ticket 1: the Spec 045 amendment + candidate
+   schema/evidence changes + platform-aware resolver logic (the bridge
+   mechanism itself). Ticket 2: the text-generating exact-ref fixture +
+   end-to-end conformance test proving it, started once ticket 1's schema
+   is settled — mirroring how Spec 138's own rollout was split across
+   #1435–#1437.
+
+### Alternatives considered
+
+Extending `model.execute`'s wire contract to accept non-digest candidate
+identities (rejected: dilutes Spec 138's entire verified-package trust
+model, breaking change to an already-shipped v2.0.0 connector); a distinct
+top-level candidate-kind schema instead of overloading
+`provider_implementation_id` (rejected: more visible schema churn for no
+clear benefit over a polymorphic discriminator); letting exact-ref
+candidates carry their own digest independently of Spec 044 pins
+(rejected: reintroduces the duplicate-source-of-truth problem Spec 138 was
+designed to avoid); an optional `digest` field on evidence instead of a
+named `trust_class` enum (rejected: pushes "what does absence mean" onto
+every caller instead of naming it); leaving resolution platform-blind
+(rejected: leaves the cross-target fallback story broken, the exact gap
+being closed); a brand-new connecting spec instead of amending 045
+(rejected: more governance overhead than a contained, one-candidate-kind
+change warrants); shipping routing plumbing only, tested against fakes
+instead of a real fixture (rejected: repeats the "not proven end-to-end"
+gap one level up the stack); redesigning a broader, non-text capability
+interface instead of using `generate` (rejected: contradicts the
+seam decision and is materially more scope than this round needs); a
+deterministic byte-transform fixture instead of keyword-triggered
+responses (rejected: reads as mechanical/echo-like rather than anything
+resembling generation); an optional, non-breaking `trust_class` addition
+staying on v1.x (rejected: leaves the same evidence ambiguity the field
+was meant to resolve); one combined ticket (rejected: much larger diff to
+review at once than either half needs to be).
+
+### Safe to author without further brainstorm
+
+Exact `exact-ref.wasm-cpu` naming details relative to `PLACEMENT_WASM_CPU`
+conventions; the fixture's exact keyword(s) and canned response text;
+priority-ordering mechanics across mixed candidate types (existing Spec
+045 priority logic applies uniformly); validation that an exact-ref
+candidate's referenced pin also has an activated `traverse.model-runtime`
+binding (fail closed if not, consistent with Spec 138's existing
+behavior).
+
+### Outcome
+
+No further product decisions required before filing the two tickets under
+an amended Spec 045. Governance amendment happens in the same PR that
+implements ticket 1, per this repo's immutable-spec-conflict convention.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` session (2026-09-17); each
+recommendation accepted as given.
