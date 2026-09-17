@@ -1163,6 +1163,142 @@ fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
     (host, pin)
 }
 
+const RESPONDER_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/models/fixture-responder-1.0.0"
+);
+
+/// Spec 045/138 bridge end-to-end proof (#1455): loads the checked-in,
+/// keyword-triggered exact-ref text fixture from disk (not an inline WAT
+/// constant), proving the real published artifact — not just the mechanism
+/// — resolves and executes through `execute_governed_bridged_model_dependency`.
+fn seeded_responder_host() -> (ExactModelHostConnector, ExactModelPin) {
+    let wasm = fs::read(format!("{RESPONDER_FIXTURE_DIR}/model.wasm")).expect("read fixture wasm");
+    let digest = digest_hex(&wasm);
+    let manifest = ModelPackageManifest {
+        schema_version: "1.0.0".to_string(),
+        model_id: "fixture.responder".to_string(),
+        version: "1.0.0".to_string(),
+        wasm_digest: digest.clone(),
+        package_digest: digest.clone(),
+        registry_ref: "registry:fixture.responder@1.0.0".to_string(),
+        executable_format: "traverse-model-wasm".to_string(),
+        abi_version: 1,
+        input_schema_ref: "schema:bridged-generate-in".to_string(),
+        input_schema_version: "1.0.0".to_string(),
+        output_schema_ref: "schema:bridged-generate-out".to_string(),
+        output_schema_version: "1.0.0".to_string(),
+        license_id: "Apache-2.0".to_string(),
+        attribution: "Traverse Spec 045/138 bridge conformance fixture".to_string(),
+        redistribution: "test-only; not for production redistribution claims".to_string(),
+        supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
+        max_memory_bytes: 131_072,
+        max_fuel: 1_000_000,
+        max_input_bytes: 4096,
+        max_output_bytes: 4096,
+        max_execution_ms: 5_000,
+        offline_allowed: true,
+    };
+    let pin = ExactModelPin {
+        model_id: manifest.model_id.clone(),
+        version: manifest.version.clone(),
+        digest: digest.clone(),
+        offline_allowed: true,
+    };
+    let mut host = ExactModelHostConnector::new(vec![pin.clone()]);
+    host.packages
+        .insert_verified(VerifiedModelPackage { manifest, wasm })
+        .expect("package should verify");
+    host.policies.insert(
+        "policy-1".to_string(),
+        ExecutionPolicy {
+            policy_ref: "policy-1".to_string(),
+            allowed_classifications: vec!["sensitive".to_string()],
+            max_output_bytes: 4096,
+        },
+    );
+    (host, pin)
+}
+
+#[test]
+fn responder_fixture_manifest_digest_matches_checked_in_wasm() {
+    let wasm = fs::read(format!("{RESPONDER_FIXTURE_DIR}/model.wasm")).expect("read fixture wasm");
+    let manifest_text = fs::read_to_string(format!("{RESPONDER_FIXTURE_DIR}/model.manifest.json"))
+        .expect("read fixture manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
+    assert_eq!(
+        manifest["wasm_digest"].as_str().expect("wasm_digest"),
+        digest_hex(&wasm)
+    );
+}
+
+#[test]
+fn bridge_resolves_and_executes_real_responder_fixture_on_keyword_match() {
+    let (mut host, pin) = seeded_responder_host();
+    let dependency = model_dependency(vec![exact_ref_candidate(
+        "responder-choice",
+        &pin,
+        20,
+        8192,
+    )]);
+    let mut request = governed_model_request("traverse.inference.generate", "unused");
+    request.provider_configs.clear();
+    request.prompt = "hi there, how are you?".to_string();
+    let activated: BTreeSet<(String, String)> =
+        [(pin.model_id.clone(), pin.version.clone())].into();
+
+    let outcome = execute_governed_bridged_model_dependency(
+        &dependency,
+        &request,
+        std::slice::from_ref(&pin),
+        &activated,
+        &mut host,
+        "policy-1",
+        "sensitive",
+    )
+    .expect("keyword-matching prompt should resolve and execute against the real fixture");
+
+    assert_eq!(outcome.output.response, "hi there");
+    assert_eq!(
+        outcome.output.evidence.trust_class,
+        InferenceTrustClass::VerifiedSignedPackage
+    );
+}
+
+#[test]
+fn bridge_resolves_and_executes_real_responder_fixture_on_keyword_fallback() {
+    let (mut host, pin) = seeded_responder_host();
+    let dependency = model_dependency(vec![exact_ref_candidate(
+        "responder-choice",
+        &pin,
+        20,
+        8192,
+    )]);
+    let mut request = governed_model_request("traverse.inference.generate", "unused");
+    request.provider_configs.clear();
+    request.prompt = "what is the weather today".to_string();
+    let activated: BTreeSet<(String, String)> =
+        [(pin.model_id.clone(), pin.version.clone())].into();
+
+    let outcome = execute_governed_bridged_model_dependency(
+        &dependency,
+        &request,
+        std::slice::from_ref(&pin),
+        &activated,
+        &mut host,
+        "policy-1",
+        "sensitive",
+    )
+    .expect("non-matching prompt should still resolve and execute against the real fixture");
+
+    assert_eq!(outcome.output.response, "hmm");
+    assert_eq!(
+        outcome.output.evidence.trust_class,
+        InferenceTrustClass::VerifiedSignedPackage
+    );
+}
+
 fn exact_ref_candidate(
     candidate_id: &str,
     pin: &ExactModelPin,

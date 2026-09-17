@@ -17,6 +17,13 @@ const FIXTURE_WASM_B64 =
 const FIXTURE_CLASSIFIER_WASM_B64 =
   "AGFzbQEAAAABCQFgBH9/f38BfwMCAQAFAwEAAgcaAgZtZW1vcnkCAA1tb2RlbF9leGVjdXRlAAAKrAEBqQEBBn0gAUEcSQRAQX8PCyADQRRJBEBBfw8LIAAqAgwhBCAAKgIQIQUgACoCFCEGIAAqAhghByAEQwAAAD+UIAVDAACAvpSSIAZDAACAP5QgB0MAAEA/lJKSQwAAAD+TIQhDAACAP0MAAAAAIAhDAAAAAGAbIQkgAkEBOwEAIAJBAzoAAiACQQE6AAMgAkECNgIEIAJBCDYCCCACIAg4AgwgAiAJOAIQQRQL";
 
+// fixtures/models/fixture-responder-1.0.0/model.wasm (Spec 045/138 bridge,
+// #1455) — scans the prompt payload for the keyword "hi" and returns one of
+// two fixed text responses; proves the real, checked-in bridge fixture
+// resolves end-to-end through the same browser wasm-cpu guest path.
+const FIXTURE_RESPONDER_WASM_B64 =
+  "AGFzbQEAAAABCQFgBH9/f38BfwMCAQAFAwEAAgcaAgZtZW1vcnkCAA1tb2RlbF9leGVjdXRlAAAK9AEB8QEBB38gAUEMSQRAQX8PCyAAKAIIIQQgAEEMaiEFQQwgBGogAUsEQEF/DwtBACEIQQAhBgJAA0AgBkECaiAESw0BIAUgBmotAABB6ABGIAUgBkEBamotAABB6QBGcQRAQQEhCAwCCyAGQQFqIQYMAAsLIAhBAUYEQEHKuAIhCUEIIQoFQd64AiEJQQMhCgtBDCAKaiADSwRAQX8PCyACQQE7AQAgAkEEOgACIAJBAToAAyACIAo2AgQgAiAKNgIIQQAhBwJAA0AgByAKTw0BIAJBDGogB2ogCSAHai0AADoAACAHQQFqIQcMAAsLQQwgCmoLCyMDAEHAuAILAmhpAEHKuAILCGhpIHRoZXJlAEHeuAILA2htbQ==";
+
 function b64ToBytes(value) {
   return Uint8Array.from(Buffer.from(value, "base64"));
 }
@@ -149,6 +156,68 @@ test("browser wasm-cpu classifier fixture computes real inference, not a pass-th
   // 0.5*1.0 - 0.25*2.0 + 1.0*-1.0 + 0.75*4.0 - 0.5 == 1.5
   assert.ok(Math.abs(view.getFloat32(12, true) - 1.5) < 1e-6);
   assert.ok(Math.abs(view.getFloat32(16, true) - 1.0) < 1e-6);
+});
+
+async function runResponderPrompt(promptText) {
+  const wasm = b64ToBytes(FIXTURE_RESPONDER_WASM_B64);
+  const digest = await sha256Hex(wasm);
+  const host = new ExactModelBrowserHost([
+    {
+      model_id: "fixture.responder",
+      version: "1.0.0",
+      digest,
+      offline_allowed: true,
+    },
+  ]);
+  await host.insertVerified(
+    {
+      model_id: "fixture.responder",
+      version: "1.0.0",
+      wasm_digest: digest,
+      package_digest: digest,
+      input_schema_ref: "schema:bridged-generate-in",
+      input_schema_version: "1.0.0",
+      max_memory_bytes: 131072,
+      max_fuel: 1_000_000,
+      max_input_bytes: 4096,
+      max_output_bytes: 4096,
+      offline_allowed: true,
+      supported_profiles: [PLACEMENT_WASM_CPU],
+      license_id: "Apache-2.0",
+      abi_version: 1,
+    },
+    wasm,
+  );
+
+  const promptBytes = new TextEncoder().encode(promptText);
+  const frame = encodeGuestFrame(4, [promptBytes.length], promptBytes);
+  const input_ref = host.io.stageModelInput(frame, 4096);
+  const result = await host.execute({
+    model_ref: { model_id: "fixture.responder", version: "1.0.0", digest },
+    input_ref,
+    policy_ref: "policy-1",
+    data_classification: "sensitive",
+    input_schema_ref: "schema:bridged-generate-in",
+    input_schema_version: "1.0.0",
+    max_output_bytes: 4096,
+    allowed_classifications: ["sensitive"],
+  });
+  assert.equal(result.placement, PLACEMENT_WASM_CPU);
+  const output = host.io.readModelOutput(result.output_ref, 4096);
+  const view = new DataView(output.buffer, output.byteOffset, output.byteLength);
+  const respLen = view.getUint32(8, true);
+  const response = new TextDecoder().decode(output.slice(12, 12 + respLen));
+  return response;
+}
+
+test("browser wasm-cpu bridge fixture (#1455) returns the keyword-matched response", async () => {
+  const response = await runResponderPrompt("hi there, how are you?");
+  assert.equal(response, "hi there");
+});
+
+test("browser wasm-cpu bridge fixture (#1455) returns the fallback response", async () => {
+  const response = await runResponderPrompt("what is the weather today");
+  assert.equal(response, "hmm");
 });
 
 test("browser offline cache miss is model_unavailable", async () => {
