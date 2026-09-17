@@ -4548,7 +4548,40 @@ remains an open, deliberately-deferred question — worth a fresh
 Approved by Enrico in `/brainstorm` session (2026-09-16); each
 recommendation accepted as given.
 
-## Decision 94: Bridge Spec 045 (Candidate Resolution) and Spec 138 (Exact-Ref Execution) at the `traverse.inference.generate` Interface
+## Decision 94: CLI Surfaces Registry Spec 025 Licensing Fields Without Merging Rights
+
+- **Date**: 2026-09-16
+- **Status**: Accepted
+- **Governing specs**: `081-registry-browse-search` (Traverse); Registry `025-capability-licensing-metadata`
+- **Related issues**: `traverse-framework/traverse#1450`; Registry `#557` / `#558`
+
+### Context
+
+Registry now projects capability licensing onto the public index. App developers
+need CLI discovery/inspect to filter and display those fields without inventing
+an "effective permission" rollup across capability vs model/dataset rights.
+
+### Decision
+
+Bump `traverse-registry` to `0.23.0` and extend `registry search` with
+`--commercial-use` / `--redistribution` exact-match filters plus JSON/table
+projection of licensing fields. `capability inspect` prints a separate
+`licenses:` block. `unknown|conditional|forbidden` remain non-permissions.
+
+### Alternatives considered
+
+Omitting CLI filters until a full legal/compliance product surface exists
+(rejected: blocks the app-dev gap the Registry activation already closed);
+merging capability and model rights into one effective field (rejected by
+Registry spec 025 trust model).
+
+### Outcome
+
+Issue `#1450` implements the consumer UX against published crate `0.23.0`.
+Catalog backfill of older contracts remains optional/deferred on the Registry
+side.
+
+## Decision 95: Bridge Spec 045 (Candidate Resolution) and Spec 138 (Exact-Ref Execution) at the `traverse.inference.generate` Interface
 
 - **Date**: 2026-09-17
 - **Status**: Accepted

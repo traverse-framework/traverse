@@ -839,6 +839,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: "active".to_string(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         };
         let older = PublicRegistryCapabilityRecord {
             namespace: "demo".to_string(),
@@ -856,6 +860,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: "active".to_string(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),
@@ -1378,6 +1386,10 @@ mod tests {
                 permitted_targets: Vec::new(),
                 lifecycle: String::new(),
                 provenance: None,
+                commercial_use: "unknown".to_string(),
+                redistribution: "unknown".to_string(),
+                verification_status: "unknown".to_string(),
+                license_expression: None,
             },
         );
         let evidence = prepare(&cache, &snapshot, &reference, &fetcher).expect("prepare");
@@ -1475,6 +1487,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: String::new(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),
@@ -1529,6 +1545,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: String::new(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),
