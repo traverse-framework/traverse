@@ -259,6 +259,10 @@ mod search_tests {
             permitted_targets: vec!["wasm".to_string()],
             lifecycle: "active".to_string(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         }
     }
 

@@ -122,6 +122,8 @@ enum Command {
         query: String,
         workspace_id: String,
         namespace: Option<String>,
+        commercial_use: Option<String>,
+        redistribution: Option<String>,
         json_output: bool,
     },
     RegistryMaterialize {
@@ -553,8 +555,17 @@ fn run_registry_command(command: Command) -> Result<String, CliError> {
             query,
             workspace_id,
             namespace,
+            commercial_use,
+            redistribution,
             json_output,
-        } => registry_search(&query, &workspace_id, namespace.as_deref(), json_output),
+        } => registry_search(
+            &query,
+            &workspace_id,
+            namespace.as_deref(),
+            commercial_use.as_deref(),
+            redistribution.as_deref(),
+            json_output,
+        ),
         Command::RegistryMaterialize {
             registry_state_path,
             output_dir,
@@ -1462,11 +1473,15 @@ fn help_registry_list() -> String {
 }
 
 fn help_registry_search() -> String {
-    "traverse-cli registry search <query> --workspace <workspace-id> [--namespace <value>] [--json]
+    "traverse-cli registry search <query> --workspace <workspace-id> [--namespace <value>] [--commercial-use <value>] [--redistribution <value>] [--json]
 
   Purpose:
     Search capability namespace and ID fields in the locally synced public
     registry index. This command never fetches contracts or contacts the network.
+    Licensing filters match the Registry index projection
+    (traverse-framework/registry specs/025-capability-licensing-metadata);
+    values unknown|conditional|forbidden are declarative metadata and are
+    never treated as permission.
 
   Required arguments and flags:
     <query>            Case-insensitive substring to search.
@@ -1474,10 +1489,14 @@ fn help_registry_search() -> String {
 
   Optional flags:
     --namespace <id>   Restrict results to one namespace.
+    --commercial-use <allowed|forbidden|conditional|unknown>
+                       Filter by capability commercial-use rights.
+    --redistribution <allowed|forbidden|conditional|unknown>
+                       Filter by capability redistribution rights.
     --json             Emit machine-readable discovery evidence.
 
   Example:
-    traverse-cli registry search process --workspace local-default --json"
+    traverse-cli registry search process --workspace local-default --commercial-use allowed --json"
         .to_string()
 }
 
@@ -1904,8 +1923,11 @@ fn help_capability_inspect() -> String {
 
   Purpose:
     Parse and validate a capability contract file. Prints contract metadata
-    including id, version, lifecycle, input/output schema references, and
-    provenance information.
+    including id, version, lifecycle, input/output schema references,
+    provenance, and a separate licenses block for capability artifact rights
+    (Registry spec 025). Model/dataset rights are not merged into an
+    effective-permission field; unknown|conditional|forbidden are never
+    treated as allowed.
 
   Required arguments:
     <contract-path>   Path to the capability contract JSON file.
@@ -2187,10 +2209,29 @@ fn parse_registry_search_command(args: &[String]) -> Result<Command, String> {
         .ok_or_else(|| "registry search requires <query>".to_string())?;
     let workspace_id = parse_string_flag(args, "--workspace")
         .ok_or_else(|| "registry search requires --workspace <workspace-id>".to_string())?;
+    let commercial_use = parse_string_flag(args, "--commercial-use");
+    let redistribution = parse_string_flag(args, "--redistribution");
+    for (name, value) in [
+        ("--commercial-use", commercial_use.as_deref()),
+        ("--redistribution", redistribution.as_deref()),
+    ] {
+        if let Some(v) = value {
+            match v {
+                "allowed" | "forbidden" | "conditional" | "unknown" => {}
+                _ => {
+                    return Err(format!(
+                        "{name} must be one of allowed|forbidden|conditional|unknown, got {v:?}"
+                    ));
+                }
+            }
+        }
+    }
     Ok(Command::RegistrySearch {
         query,
         workspace_id,
         namespace: parse_string_flag(args, "--namespace"),
+        commercial_use,
+        redistribution,
         json_output: args.iter().any(|arg| arg == "--json"),
     })
 }
@@ -4198,16 +4239,34 @@ fn registry_list(
     id_prefix: Option<&str>,
     json_output: bool,
 ) -> Result<String, CliError> {
-    registry_discover(workspace_id, namespace, id_prefix, None, json_output)
+    registry_discover(
+        workspace_id,
+        namespace,
+        id_prefix,
+        None,
+        None,
+        None,
+        json_output,
+    )
 }
 
 fn registry_search(
     query: &str,
     workspace_id: &str,
     namespace: Option<&str>,
+    commercial_use: Option<&str>,
+    redistribution: Option<&str>,
     json_output: bool,
 ) -> Result<String, CliError> {
-    registry_discover(workspace_id, namespace, None, Some(query), json_output)
+    registry_discover(
+        workspace_id,
+        namespace,
+        None,
+        Some(query),
+        commercial_use,
+        redistribution,
+        json_output,
+    )
 }
 
 fn registry_discover(
@@ -4215,6 +4274,8 @@ fn registry_discover(
     namespace: Option<&str>,
     id_prefix: Option<&str>,
     query: Option<&str>,
+    commercial_use: Option<&str>,
+    redistribution: Option<&str>,
     json_output: bool,
 ) -> Result<String, CliError> {
     let base_dir = env::current_dir().map_err(|error| {
@@ -4234,6 +4295,8 @@ fn registry_discover(
                     || record.id.to_lowercase().contains(value)
             })
         })
+        .filter(|record| commercial_use.is_none_or(|value| record.commercial_use == value))
+        .filter(|record| redistribution.is_none_or(|value| record.redistribution == value))
         .collect::<Vec<_>>();
     records.sort_by(registry_record_order);
 
@@ -4253,6 +4316,10 @@ fn registry_discover(
                 "digest": record.digest,
                 "yanked": false,
                 "deprecated": record.deprecated,
+                "license_expression": record.license_expression,
+                "commercial_use": record.commercial_use,
+                "redistribution": record.redistribution,
+                "verification_status": record.verification_status,
             })).collect::<Vec<_>>(),
         }))
         .map_err(|error| {
@@ -4262,12 +4329,18 @@ fn registry_discover(
         });
     }
 
-    let mut output = String::from("NAMESPACE\tID\tVERSION\tDEPRECATED\n");
+    let mut output =
+        String::from("NAMESPACE\tID\tVERSION\tDEPRECATED\tCOMMERCIAL_USE\tREDISTRIBUTION\n");
     for record in records {
         writeln!(
             output,
-            "{}\t{}\t{}\t{}",
-            record.namespace, record.id, record.version, record.deprecated
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            record.namespace,
+            record.id,
+            record.version,
+            record.deprecated,
+            record.commercial_use,
+            record.redistribution
         )
         .map_err(|error| {
             CliError::IoError(format!(
@@ -6501,9 +6574,13 @@ fn inspect_capability(contract_path: &Path) -> Result<String, CliError> {
         ))
     })?;
 
+    let licensing_raw = serde_json::from_str::<Value>(&contents)
+        .ok()
+        .and_then(|value| value.get("licensing").cloned());
     Ok(render_capability_summary(
         contract_path,
         &validated.normalized,
+        licensing_raw.as_ref(),
     ))
 }
 
@@ -6800,7 +6877,11 @@ fn render_bundle_registration_summary(
     lines.join("\n")
 }
 
-fn render_capability_summary(path: &Path, contract: &CapabilityContract) -> String {
+fn render_capability_summary(
+    path: &Path,
+    contract: &CapabilityContract,
+    licensing: Option<&Value>,
+) -> String {
     let input_properties = schema_property_count(&contract.inputs.schema);
     let output_properties = schema_property_count(&contract.outputs.schema);
     let mut lines = vec![
@@ -6829,6 +6910,45 @@ fn render_capability_summary(path: &Path, contract: &CapabilityContract) -> Stri
         )
         .to_lowercase(),
     );
+    lines.push("licenses:".to_string());
+    if let Some(Value::Object(obj)) = licensing {
+        lines.push(format!(
+            "  spdx_expression: {}",
+            obj.get("spdx_expression")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        ));
+        lines.push(format!(
+            "  commercial_use: {}",
+            obj.get("commercial_use")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ));
+        lines.push(format!(
+            "  redistribution: {}",
+            obj.get("redistribution")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ));
+        let status = obj
+            .get("verification")
+            .and_then(Value::as_object)
+            .and_then(|v| v.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        lines.push(format!("  verification_status: {status}"));
+        lines.push(
+            "  note: capability artifact rights only; model/dataset rights do not inherit"
+                .to_string(),
+        );
+    } else {
+        lines.push("  commercial_use: unknown".to_string());
+        lines.push("  redistribution: unknown".to_string());
+        lines.push("  verification_status: unknown".to_string());
+        lines.push(
+            "  note: no licensing block declared; treat as unknown (deny-by-default)".to_string(),
+        );
+    }
     lines.join("\n")
 }
 
@@ -8289,7 +8409,7 @@ mod tests {
         load_registered_bundle_with_public_records, load_runtime_request,
         materialize_ed25519_signature, materialize_registry_artifacts, parse_command,
         prepare_public_registry_bundle, publish_file_sha256_digest, register_bundle,
-        register_generated_app_bundle, registry_record_order, registry_sync_at,
+        register_generated_app_bundle, registry_record_order, registry_search, registry_sync_at,
         registry_sync_default_or_override, registry_sync_failure_json,
         reject_private_contract_scope, replace_prepared_bundle, run_command, run_serve,
         safe_artifact_path_component, sha256_hex, signature_sibling_url,
@@ -8302,6 +8422,7 @@ mod tests {
     use crate::capability_packages::fnv1a64;
     use serde_json::Value;
     use std::cell::RefCell;
+    use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command as ProcessCommand;
@@ -8709,11 +8830,111 @@ mod tests {
             "process".to_string(),
             "--workspace".to_string(),
             "local-default".to_string(),
+            "--commercial-use".to_string(),
+            "allowed".to_string(),
+            "--redistribution".to_string(),
+            "allowed".to_string(),
         ];
         assert!(matches!(
             parse_command(&search),
-            Ok(Command::RegistrySearch { query, .. }) if query == "process"
+            Ok(Command::RegistrySearch {
+                query,
+                commercial_use: Some(ref commercial),
+                redistribution: Some(ref redistribution),
+                ..
+            }) if query == "process"
+                && commercial == "allowed"
+                && redistribution == "allowed"
         ));
+    }
+
+    #[test]
+    fn parse_registry_search_rejects_unknown_licensing_filter_values() {
+        let args = vec![
+            "traverse-cli".to_string(),
+            "registry".to_string(),
+            "search".to_string(),
+            "process".to_string(),
+            "--workspace".to_string(),
+            "local-default".to_string(),
+            "--commercial-use".to_string(),
+            "permit".to_string(),
+        ];
+        let err = parse_command(&args).expect_err("invalid commercial-use must fail");
+        assert!(err.contains("--commercial-use must be one of"));
+    }
+
+    #[test]
+    fn registry_search_filters_by_licensing_rights_without_treating_unknown_as_allowed() {
+        let state_root = unique_temp_dir();
+        let mut allowed = registry_record_fixture("demo", "price-allowed", "1.0.0");
+        allowed.commercial_use = "allowed".to_string();
+        allowed.redistribution = "allowed".to_string();
+        allowed.license_expression = Some("MIT".to_string());
+        allowed.verification_status = "declared".to_string();
+
+        let mut forbidden = registry_record_fixture("demo", "price-forbidden", "1.0.0");
+        forbidden.commercial_use = "forbidden".to_string();
+        forbidden.redistribution = "forbidden".to_string();
+
+        let mut conditional = registry_record_fixture("demo", "price-conditional", "1.0.0");
+        conditional.commercial_use = "conditional".to_string();
+        conditional.redistribution = "conditional".to_string();
+
+        let unknown = registry_record_fixture("demo", "price-unknown", "1.0.0");
+
+        write_synced_public_registry_state(
+            &state_root,
+            "local-default",
+            "fixture-registry",
+            "fixture-v1",
+            "2026-09-16T00:00:00Z",
+            PublicRegistryIndex {
+                index_version: 1,
+                generated_at: "2026-09-16T00:00:00Z".to_string(),
+                source_commit: None,
+                capabilities: vec![allowed, forbidden, conditional, unknown],
+                events: Vec::new(),
+            },
+        )
+        .expect("synced licensing fixture should persist");
+
+        let previous = env::current_dir().expect("current dir");
+        env::set_current_dir(&state_root).expect("chdir into fixture root");
+        let output = registry_search(
+            "price",
+            "local-default",
+            None,
+            Some("allowed"),
+            Some("allowed"),
+            true,
+        );
+        env::set_current_dir(&previous).expect("restore cwd");
+        let output = output.expect("filtered search should succeed");
+        let json: Value = serde_json::from_str(&output).expect("json discovery output");
+        let records = json["records"].as_array().expect("records array");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["id"], "price-allowed");
+        assert_eq!(records[0]["commercial_use"], "allowed");
+        assert_eq!(records[0]["redistribution"], "allowed");
+        assert_eq!(records[0]["license_expression"], "MIT");
+        assert_eq!(records[0]["verification_status"], "declared");
+
+        env::set_current_dir(&state_root).expect("chdir into fixture root");
+        let human = registry_search(
+            "price",
+            "local-default",
+            None,
+            Some("forbidden"),
+            None,
+            false,
+        );
+        env::set_current_dir(&previous).expect("restore cwd");
+        let human = human.expect("forbidden filter should succeed");
+        assert!(human.contains("price-forbidden"));
+        assert!(!human.contains("price-allowed"));
+        assert!(!human.contains("price-unknown"));
+        assert!(!human.contains("price-conditional"));
     }
 
     #[test]
@@ -10204,6 +10425,10 @@ mod tests {
                     permitted_targets: Vec::new(),
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: Vec::new(),
             },
@@ -10467,6 +10692,10 @@ mod tests {
                     permitted_targets: Vec::new(),
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: Vec::new(),
             },
@@ -10615,6 +10844,10 @@ mod tests {
                     permitted_targets: vec!["local".to_string(), "browser".to_string()],
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: Vec::new(),
             },
@@ -11960,6 +12193,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: "active".to_string(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         };
 
         let registered = load_registered_bundle_with_public_records(&manifest_path, &[public])
@@ -12775,6 +13012,8 @@ mod tests {
         assert!(output.contains("input_schema_properties:"));
         assert!(output.contains("output_schema_properties:"));
         assert!(output.contains("host_api_access:"));
+        assert!(output.contains("licenses:"));
+        assert!(output.contains("commercial_use:"));
     }
 
     #[test]
@@ -13130,7 +13369,7 @@ mod tests {
                 deprecated: false,
                 summary: String::new(), description: String::new(), use_cases: Vec::new(),
                 service_type: "stateless".to_string(), permitted_targets: Vec::new(),
-                lifecycle: "active".to_string(), provenance: None,
+                lifecycle: "active".to_string(), provenance: None, commercial_use: "unknown".to_string(), redistribution: "unknown".to_string(), verification_status: "unknown".to_string(), license_expression: None,
             }],
             events: Vec::new(),
         }
@@ -13157,6 +13396,10 @@ mod tests {
             permitted_targets: Vec::new(),
             lifecycle: "active".to_string(),
             provenance: None,
+            commercial_use: "unknown".to_string(),
+            redistribution: "unknown".to_string(),
+            verification_status: "unknown".to_string(),
+            license_expression: None,
         }
     }
 
@@ -14089,6 +14332,10 @@ mod tests {
                     permitted_targets: Vec::new(),
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: Vec::new(),
             },
@@ -14134,6 +14381,10 @@ mod tests {
                     permitted_targets: Vec::new(),
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: Vec::new(),
             },
@@ -14204,6 +14455,10 @@ mod tests {
                     permitted_targets: Vec::new(),
                     lifecycle: "active".to_string(),
                     provenance: None,
+                    commercial_use: "unknown".to_string(),
+                    redistribution: "unknown".to_string(),
+                    verification_status: "unknown".to_string(),
+                    license_expression: None,
                 }],
                 events: vec![PublicRegistryEventRecord {
                     namespace: "fixture".to_string(),
@@ -14446,6 +14701,10 @@ mod tests {
                 permitted_targets: Vec::new(),
                 lifecycle: "active".to_string(),
                 provenance: None,
+                commercial_use: "unknown".to_string(),
+                redistribution: "unknown".to_string(),
+                verification_status: "unknown".to_string(),
+                license_expression: None,
             });
         }
         let obsolete = capabilities[0].clone();
