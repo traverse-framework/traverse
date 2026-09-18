@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse.dev/embedder-api/1.1.0",
+  "title": "Traverse Platform Embedder API",
+  "version": "1.1.0",
+  "description": "Uniform thin platform embedder contract. Same semantics on iOS, Android, web, Windows, Linux, and CLI. Governs spec 057-embeddable-runtime-host; app-command submit envelopes governed by spec 139-embedder-app-state-machine-execution.",
+  "operations": {
+    "runtime.init": {
+      "input": {
+        "manifest_bundle_path": "string — app-bundled manifests + wasm artifacts root",
+        "workspace_id": "string — default local-default"
+      },
+      "output": { "status": "ready | error", "error": "string | null" }
+    },
+    "runtime.shutdown": {
+      "input": {},
+      "output": { "status": "stopped" }
+    },
+    "runtime.submit": {
+      "input_forms": [
+        {
+          "name": "workflow_or_capability",
+          "fields": {
+            "target_id": "string — workflow_id or capability_id (see spec 058)",
+            "input": "object — JSON payload"
+          }
+        },
+        {
+          "name": "app_command",
+          "fields": {
+            "kind": "const app_command",
+            "command": "string — state-machine on value (specs 052 / 059 / 139)",
+            "payload": "object — defaults to {}",
+            "session_id": "string | null — optional; omitted starts a new session"
+          }
+        }
+      ],
+      "discrimination": "Fail closed if the payload is ambiguous between forms.",
+      "output": { "session_id": "string", "status": "accepted | rejected", "error": "string | null" }
+    },
+    "runtime.subscribe": {
+      "input": { "callback": "function(event_json)" },
+      "events": [
+        "state_changed",
+        "capability_invoked",
+        "capability_result",
+        "host_connector_succeeded",
+        "host_connector_failed",
+        "host_connector_cancelled",
+        "host_connector_timeout",
+        "error",
+        "heartbeat"
+      ],
+      "note": "Event data JSON MUST match 033-http-json-api SSE data payload shape where applicable. Saga terminal events follow spec 139."
+    },
+    "compatible.start": {
+      "input": { "capability_id": "string", "input": "object" },
+      "output": { "instance_id": "string", "status": "started | error", "error": "string | null" }
+    },
+    "compatible.stop": {
+      "input": { "capability_id": "string", "instance_id": "string | null" },
+      "output": { "status": "stopped | error" }
+    },
+    "compatible.kill": {
+      "input": { "capability_id": "string", "instance_id": "string | null" },
+      "output": { "status": "killed | error" }
+    }
+  },
+  "rules": [
+    "No platform-specific operations beyond this set.",
+    "No business logic in embedder implementations.",
+    "JSON wire format for all payloads in v1.",
+    "App state-machine transitions execute inside runtime.wasm (spec 139); embedder forwards commands and events only.",
+    "Conformance suite in scripts/ci/embedder_conformance/ MUST pass for certification."
+  ]
+}

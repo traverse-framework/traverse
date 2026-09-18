@@ -3,8 +3,15 @@
 **Feature Branch**: `059-http-command-dispatch`
 **Created**: 2026-07-06
 **Status**: Approved
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Input**: Traverse issue #527, spec **052-app-state-machine**, **033-http-json-api** SSE slice.
+
+**Amendment (2026-09-18, version 1.0.0 -> 1.1.0, approved 2026-09-18)**: Decision 96 /
+Spec `139-embedder-app-state-machine-execution` require **semantic parity** between
+this HTTP command path and embedder `runtime.submit` app-command envelopes:
+same command names, payload mapping, session rules, and transition/saga meaning
+(including Spec 139 Process Manager waits). HTTP status codes remain
+transport-only and MUST NOT be required on the embedder surface.
 
 ## Purpose
 
@@ -18,7 +25,7 @@ Clients send **commands**; runtime owns transitions and capability invocation. C
 |------|----------------|
 | **033-http-json-api** | SSE `/apps/{app_id}/events` delivers state; this spec adds POST `/apps/{app_id}/commands`. |
 | **052-app-state-machine** | Commands map to transition `on` values; invalid commands return 422. |
-| **057-embeddable-runtime-host** | Embedded apps use embedder `runtime.submit` instead of HTTP; same command names and payload shapes. |
+| **057-embeddable-runtime-host** / **139** | Embedded apps use embedder `runtime.submit` app-command envelopes instead of HTTP; same command names, payload shapes, and saga/transition semantics (Spec 139). |
 
 **No conflict with 033 execute/poll**: execute+polling remains for Phase 1 clients until migrated; command dispatch is the Phase 2 client path for state-machine apps.
 
@@ -53,6 +60,7 @@ Responses:
 - **FR-005**: Clients MUST NOT require polling `/executions/{id}` when using command + SSE path.
 - **FR-006**: Problem Details (RFC 9457) for 409/422 errors.
 - **FR-007**: OpenAPI artifact updated in repo with this endpoint.
+- **FR-008**: `serve` command dispatch MUST share Spec 139 saga / dual-deadline / fail-closed semantics with the embedder `runtime.wasm` path. Transport-specific status codes (202/409/422/404) remain HTTP-only.
 
 ## Definition of Done (implementation — #527)
 
