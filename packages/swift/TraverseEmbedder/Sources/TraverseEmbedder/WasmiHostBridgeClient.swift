@@ -91,7 +91,14 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
     public func compatibleKill(requestJSON: Data) throws -> Data { try invoke("compatible_kill", input: requestJSON) }
     public func nextEvent() throws -> Data? {
         let result = try invoke("next_event", input: Data("{}".utf8))
-        return result.isEmpty ? nil : result
+        // Guest `traverse_next_event` returns status 0 when the queue is empty.
+        // The current released TraverseSwiftHost still copies a stale descriptor
+        // in that case (often NUL padding). Treat empty / non-JSON payloads as
+        // end-of-stream so RuntimeTraverseEmbedder can drain cleanly; #1370
+        // rebuilds the XCFramework to return an empty buffer for status 0.
+        guard !result.isEmpty, result.contains(where: { $0 != 0 }) else { return nil }
+        guard (try? JSONSerialization.jsonObject(with: result)) != nil else { return nil }
+        return result
     }
     public func shutdown() throws -> Data { try invoke("shutdown", input: Data("{}".utf8)) }
 

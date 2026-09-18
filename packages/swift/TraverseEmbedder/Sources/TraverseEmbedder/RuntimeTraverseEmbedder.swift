@@ -87,10 +87,24 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     }
 
     private func object(_ data: Data) throws -> [String: Any] {
-        guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let json: Any
+        do {
+            json = try JSONSerialization.jsonObject(with: data)
+        } catch {
             throw TraverseBridgeError(status: -2, message: "bridge_invalid_json")
         }
-        return value
+        if let value = json as? [String: Any] {
+            return value
+        }
+        if let dict = json as? NSDictionary {
+            var result: [String: Any] = [:]
+            for (key, value) in dict {
+                guard let key = key as? String else { continue }
+                result[key] = value
+            }
+            return result
+        }
+        throw TraverseBridgeError(status: -2, message: "bridge_invalid_json")
     }
 
     private func requiredString(_ name: String, in value: [String: Any]) throws -> String {
@@ -101,10 +115,13 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     }
 
     private func requiredInt(_ name: String, in value: [String: Any]) throws -> Int {
-        guard let result = value[name] as? Int else {
-            throw TraverseBridgeError(status: -2, message: "bridge result is missing \(name)")
+        if let result = value[name] as? Int {
+            return result
         }
-        return result
+        if let number = value[name] as? NSNumber {
+            return number.intValue
+        }
+        throw TraverseBridgeError(status: -2, message: "bridge result is missing \(name)")
     }
 
     private func optionalString(_ name: String, in value: [String: Any]) -> String? {

@@ -487,6 +487,12 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
     if status < 0 {
         return Err(HostError::new(status, "bridge_runtime_error"));
     }
+    // `traverse_next_event` returns 0 when the queue is empty; do not surface a
+    // stale descriptor payload as a fake event (Swift WasmiHostBridgeClient
+    // treats empty as end-of-stream).
+    if operation == "next_event" && status == 0 {
+        return Ok(Vec::new());
+    }
     Ok(result)
 }
 
