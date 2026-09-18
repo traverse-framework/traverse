@@ -27,7 +27,9 @@ const WASI_ERRNO_SUCCESS: i32 = 0;
 const WASI_ERRNO_BADF: i32 = 8;
 const WASI_ERRNO_INVAL: i32 = 28;
 const FUEL: u64 = 10_000_000;
-const MAX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+/// Keep the spike ceiling aligned with production nested wasmi
+/// (`traverse-runtime-wasm`, Spec 1402 FR-012).
+const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 
 struct WasiState {
     stdin: Vec<u8>,

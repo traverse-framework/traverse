@@ -18,7 +18,13 @@ const WASI_ERRNO_SUCCESS: i32 = 0;
 const WASI_ERRNO_BADF: i32 = 8;
 const WASI_ERRNO_INVAL: i32 = 28;
 const FUEL: u64 = 10_000_000;
-const MAX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+/// Default nested linear-memory ceiling (Spec 1402 FR-012 / Spec 139 FR-018).
+///
+/// Matches native `WasmExecutor` / issue `#1336` so certified registry
+/// planners that reserve ~273 pages (~17 MiB) initial memory can instantiate
+/// inside `runtime.wasm` (for example
+/// `core.create-audio-capture-request-plan@1.0.0`).
+const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 
 /// One capability-declared event, accepted by the shared validation core
 /// during a nested execution. The caller (`lib.rs`) turns these into
@@ -410,6 +416,27 @@ mod tests {
         let outcome =
             execute_nested_capability(&artifact, b"{}", &ServiceType::Subscribable, &declared())?;
         assert!(outcome.stdout.is_empty());
+        Ok(())
+    }
+
+    /// Regression for Spec 1402 FR-012 / issue #1467: modules that reserve
+    /// ~273 pages (~17.8 MiB) of initial memory — the released
+    /// `core.create-audio-capture-request-plan@1.0.0` shape — must instantiate
+    /// under the nested wasmi ceiling (32 MiB), not the old 16 MiB denial.
+    #[test]
+    fn nested_executor_instantiates_modules_with_273_page_initial_memory() -> Result<(), String> {
+        const LARGE_INITIAL_MEMORY_WAT: &str = r#"
+          (module
+            (memory (export "memory") 273)
+            (func (export "_start"))
+          )
+        "#;
+        let artifact =
+            wat::parse_str(LARGE_INITIAL_MEMORY_WAT).map_err(|error| format!("wat: {error}"))?;
+        let outcome =
+            execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
+        assert!(outcome.stdout.is_empty());
+        assert!(outcome.emitted_events.is_empty());
         Ok(())
     }
 }
