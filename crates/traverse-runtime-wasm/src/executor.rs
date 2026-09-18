@@ -433,8 +433,7 @@ mod tests {
         "#;
         let artifact =
             wat::parse_str(LARGE_INITIAL_MEMORY_WAT).map_err(|error| format!("wat: {error}"))?;
-        let outcome =
-            execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
+        let outcome = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
         assert!(outcome.stdout.is_empty());
         assert!(outcome.emitted_events.is_empty());
         Ok(())
