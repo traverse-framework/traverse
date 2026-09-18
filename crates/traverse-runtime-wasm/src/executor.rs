@@ -470,8 +470,7 @@ mod tests {
         "#;
         let artifact = wat::parse_str(WRITE_THEN_PROC_EXIT_ZERO_WAT)
             .map_err(|error| format!("wat: {error}"))?;
-        let outcome =
-            execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
+        let outcome = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
         if outcome.stdout != br#"{"valid":true}"# {
             return Err("stdout mismatch after proc_exit(0)".to_string());
         }
@@ -492,8 +491,7 @@ mod tests {
         "#;
         let artifact =
             wat::parse_str(PROC_EXIT_NONZERO_WAT).map_err(|error| format!("wat: {error}"))?;
-        let result =
-            execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[]);
+        let result = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[]);
         let Err(error) = result else {
             return Err("non-zero proc_exit must fail the call".to_string());
         };
@@ -504,5 +502,4 @@ mod tests {
         }
         Ok(())
     }
-
 }
