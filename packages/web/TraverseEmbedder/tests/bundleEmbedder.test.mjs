@@ -93,7 +93,7 @@ test("capability submit surfaces invalid stdout via runtime.wasm capability_resu
   assert.equal(events[1].data.output, "not-json");
 });
 
-test("capability submit tolerates nested proc_exit without trapping", async () => {
+test("capability submit surfaces a non-zero nested proc_exit as an execution failure", async () => {
   const nonzero = await compileWat(NONZERO_EXIT_WAT);
   const manifestPath = await writeBundleFixture({
     appId: "fixture-app",
@@ -103,11 +103,15 @@ test("capability submit tolerates nested proc_exit without trapping", async () =
   const events = collectEvents(embedder);
 
   embedder.submit("fixture.exits", {});
-  // Nested runtime.wasm's WASI proc_exit is a no-op (mirrors Phase-2 guest);
-  // empty stdout becomes a completed string/null-ish result, not execution_failed.
+  // Nested runtime.wasm's WASI proc_exit now actually halts execution (a real
+  // registry incident: it used to be a no-op, so every capability that calls
+  // proc_exit even on success — every one built on the shared
+  // wasi-capability-runtime crate — trapped with an unrelated `unreachable`
+  // error instead of running). A non-zero exit is correctly a failure, not a
+  // silently "completed" result.
   assert.equal(events[0].event_type, "capability_invoked");
-  assert.equal(events[1].event_type, "capability_result");
-  assert.equal(events[1].data.status, "completed");
+  assert.equal(events[1].event_type, "error");
+  assert.match(events[1].data.error.code, /execution_failed/);
 });
 
 // --- workflow (multi-node linear pipeline) ---
