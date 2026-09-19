@@ -103,6 +103,23 @@ interface WasmExecutionResult {
   readonly message: string;
 }
 
+/** A host-owned response for one Spec 139 connector wait. */
+export interface HostConnectorAdapterResult {
+  readonly resultClass: "succeeded" | "failed" | "cancelled" | "timeout";
+  readonly payload?: JsonValue;
+}
+
+/**
+ * Browser host authority. It runs outside `runtime.wasm`; the orchestrator
+ * receives only the correlated, typed terminal envelope.
+ */
+export type HostConnectorAdapter = (request: {
+  readonly command: string;
+  readonly commandId: string;
+  readonly sessionId: string;
+  readonly payload: JsonValue;
+}) => Promise<HostConnectorAdapterResult>;
+
 type WorkflowStepStatus = "completed" | "failed";
 
 interface WorkflowStepRecord {
@@ -291,6 +308,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private appHost: RuntimeWasmHost | null = null;
   /** Host-owned monotonic deadline handles for outstanding Spec 139 waits. */
   private readonly appDeadlineTimers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly hostConnectorAdapters = new Map<string, HostConnectorAdapter>();
 
   private constructor(
     core: EmbedderCore,
@@ -679,8 +697,76 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     }
     this.emitAppEvents(drained, sessionId);
     this.registerAppDeadlines(host, responseRecord);
+    this.dispatchPendingHostConnector(host, responseRecord, sessionId);
 
     return { sessionId, status: "accepted", error: null };
+  }
+
+  /**
+   * Registers a target-neutral host authority by its manifest command name.
+   * The returned disposer prevents an old page integration retaining authority
+   * after it has been replaced.
+   */
+  registerHostConnectorAdapter(command: string, adapter: HostConnectorAdapter): () => void {
+    if (command.trim() === "") throw new TypeError("host connector command must be non-empty");
+    this.hostConnectorAdapters.set(command, adapter);
+    return () => {
+      if (this.hostConnectorAdapters.get(command) === adapter) {
+        this.hostConnectorAdapters.delete(command);
+      }
+    };
+  }
+
+  private dispatchPendingHostConnector(
+    host: RuntimeWasmHost,
+    response: { readonly [key: string]: RuntimeWasmJson } | null,
+    fallbackSessionId: string,
+  ): void {
+    const pending = response?.pending_host_connector;
+    if (!Array.isArray(pending)) return;
+    for (const item of pending) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+      const command = typeof item.command === "string" ? item.command : null;
+      const commandId = typeof item.command_id === "string" ? item.command_id : null;
+      const sessionId = typeof item.session_id === "string" ? item.session_id : fallbackSessionId;
+      const adapter = command === null ? undefined : this.hostConnectorAdapters.get(command);
+      if (commandId === null) continue;
+      if (command === null || adapter === undefined) {
+        this.completeHostConnector(host, commandId, sessionId, {
+          resultClass: "failed",
+          payload: { code: "target_incompatible" },
+        });
+        continue;
+      }
+      const payload = (item.payload ?? {}) as JsonValue;
+      void adapter({ command, commandId, sessionId, payload })
+        .then((result) => this.completeHostConnector(host, commandId, sessionId, result))
+        .catch(() => this.completeHostConnector(host, commandId, sessionId, {
+          resultClass: "failed",
+          payload: { code: "execution_failed" },
+        }));
+    }
+  }
+
+  private completeHostConnector(
+    host: RuntimeWasmHost,
+    commandId: string,
+    sessionId: string,
+    result: HostConnectorAdapterResult,
+  ): void {
+    if (this.core.stopped || this.appHost !== host) return;
+    try {
+      host.submit(new TextEncoder().encode(JSON.stringify({
+        kind: "host_connector_result",
+        command_id: commandId,
+        session_id: sessionId,
+        result_class: result.resultClass,
+        payload: result.payload ?? {},
+      })));
+      this.emitAppEvents(host.drainEvents(), sessionId);
+    } catch {
+      // Shutdown and first-terminal-wins are runtime-owned; no UI retry path.
+    }
   }
 
   /**

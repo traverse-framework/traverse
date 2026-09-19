@@ -62,7 +62,11 @@ export {
 export type { BundleCompatibility, BundleComponentSummary, BundleWorkflowSummary } from "./bundleValidation.js";
 
 export { BundleEmbedder } from "./bundleEmbedder.js";
-export type { BundleEmbedderConfig } from "./bundleEmbedder.js";
+export type {
+  BundleEmbedderConfig,
+  HostConnectorAdapter,
+  HostConnectorAdapterResult,
+} from "./bundleEmbedder.js";
 
 export {
   BROWSER_PLAN_MAX_CANDIDATES,
