@@ -1365,6 +1365,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn host_connector_wait_returns_pending_and_first_terminal_wins() {
         let machine = parse_state_machine(&serde_json::json!({
             "initial_state": "idle",
