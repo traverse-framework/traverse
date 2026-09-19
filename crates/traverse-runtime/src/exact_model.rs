@@ -483,7 +483,8 @@ impl HostConnectorPort for ExactModelHostConnector {
 
         let output_ref = self.io.put_output(output);
         Ok(HostConnectorHostResult {
-            artifact_ref: output_ref,
+            artifact_ref: Some(output_ref),
+            permission_state: None,
         })
     }
 }
@@ -1308,7 +1309,7 @@ mod tests {
             .expect("execute");
         let output = host
             .io
-            .read_model_output(&result.artifact_ref, 4096)
+            .read_model_output(result.artifact_ref.as_deref().expect("artifact_ref"), 4096)
             .expect("read");
         assert_eq!(output, frame);
 
@@ -1678,7 +1679,7 @@ mod tests {
             .expect("execute");
         let output = host
             .io
-            .read_model_output(&result.artifact_ref, 4096)
+            .read_model_output(result.artifact_ref.as_deref().expect("artifact_ref"), 4096)
             .expect("read");
         assert_ne!(output, frame, "classifier output must not echo the input");
         let (dtype, dims, payload) = decode_guest_frame(&output).expect("decode output");
@@ -1702,7 +1703,7 @@ mod tests {
             .expect("execute");
         let output = host
             .io
-            .read_model_output(&result.artifact_ref, 4096)
+            .read_model_output(result.artifact_ref.as_deref().expect("artifact_ref"), 4096)
             .expect("read");
         let (_, _, payload) = decode_guest_frame(&output).expect("decode output");
         let score = f32::from_le_bytes(payload[0..4].try_into().expect("score bytes"));

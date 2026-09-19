@@ -670,9 +670,13 @@ fn execute_exact_ref_candidate(
     let result = host
         .invoke(&host_request)
         .map_err(|error| error.to_string())?;
+    let output_ref = result
+        .artifact_ref
+        .as_deref()
+        .ok_or_else(|| "exact-ref host returned no artifact_ref".to_string())?;
     let output_bytes = host
         .io
-        .read_model_output(&result.artifact_ref, EXACT_REF_MAX_OUTPUT_BYTES)
+        .read_model_output(output_ref, EXACT_REF_MAX_OUTPUT_BYTES)
         .map_err(|error| error.to_string())?;
     let (_, _, payload) = decode_guest_frame(&output_bytes).map_err(|error| error.to_string())?;
     let text = String::from_utf8(payload)

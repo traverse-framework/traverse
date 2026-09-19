@@ -4,7 +4,8 @@
   "connector_id": "traverse.audio-input",
   "version": "1.0.0",
   "capabilities_provided": [
-    "traverse.audio-input.capture"
+    "traverse.audio-input.capture",
+    "traverse.audio-input.permission"
   ],
   "required_config_schema": {
     "type": "object",
@@ -19,6 +20,46 @@
     "additionalProperties": false
   },
   "operation_envelopes": [
+    {
+      "operation_id": "audio.permission.request",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "success_schema": {
+        "type": "object",
+        "required": [
+          "permission_state",
+          "result_class"
+        ],
+        "properties": {
+          "permission_state": {
+            "type": "string",
+            "enum": [
+              "granted",
+              "denied",
+              "prompt_required",
+              "unavailable"
+            ]
+          },
+          "result_class": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "failure_classes": [
+        "unbound",
+        "incompatible",
+        "unconfigured",
+        "target_incompatible",
+        "input_limit_exceeded",
+        "cancelled",
+        "idempotency_conflict",
+        "policy_denied",
+        "unavailable"
+      ]
+    },
     {
       "operation_id": "audio.capture",
       "request_schema": {
@@ -71,6 +112,7 @@
     }
   ],
   "supported_placement_targets": [
-    "local"
+    "local",
+    "browser"
   ]
 }

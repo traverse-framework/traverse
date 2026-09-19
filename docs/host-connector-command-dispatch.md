@@ -27,10 +27,10 @@ adapters. Those packages only share the command/event types.
 
 ## When to use this port
 
-Use it when an application command must start `audio.capture` or
-`model.execute` (`local-model-runtime`) through an activated Spec 103
-binding. Do not add device, codec, provider, endpoint, or credential fields
-to the public payload.
+Use it when an application command must start `audio.permission.request`,
+`audio.capture`, or `model.execute` (`local-model-runtime`) through an
+activated Spec 103 binding. Do not add device, codec, provider, endpoint, or
+credential fields to the public payload.
 
 ## Command
 
@@ -48,8 +48,10 @@ to the public payload.
 }
 ```
 
-`target_family` is `macos`, `browser`, or `local`. `traverse.audio-input` is
-native-only: `browser` fails with `target_incompatible` before capture.
+`target_family` is `macos`, `browser`, or `local`. Bindings declare supported
+target families via `placement_targets`; a family the activated binding does
+not claim fails with `target_incompatible` before the adapter runs. There is
+no native-only connector classification.
 
 ## Version / migration
 

@@ -23,10 +23,39 @@ pub const EVENT_KIND: &str = "host_connector_event";
 pub const AUDIO_INPUT_CONNECTOR: &str = "traverse.audio-input";
 /// First bounded operation.
 pub const AUDIO_CAPTURE_OPERATION: &str = "audio.capture";
+/// Permission request on [`AUDIO_INPUT_CONNECTOR`] (Spec 137 0.3.0 / Spec 140).
+pub const AUDIO_PERMISSION_REQUEST_OPERATION: &str = "audio.permission.request";
 /// Same-port model-runtime connector.
 pub const MODEL_RUNTIME_CONNECTOR: &str = "traverse.model-runtime";
 /// Same-port model-runtime operation (`local-model-runtime`).
 pub const MODEL_EXECUTE_OPERATION: &str = "model.execute";
+
+/// Non-secret permission outcome from `audio.permission.request`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostConnectorPermissionState {
+    /// Permission is granted.
+    Granted,
+    /// Permission was denied.
+    Denied,
+    /// Host needs an additional user gesture/prompt.
+    PromptRequired,
+    /// Permission status cannot be determined.
+    Unavailable,
+}
+
+impl HostConnectorPermissionState {
+    /// Stable `snake_case` wire value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::PromptRequired => "prompt_required",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
 
 const MAX_DURATION_MS: u64 = 60_000;
 const MAX_AUDIO_BYTES: u64 = 10 * 1024 * 1024;
@@ -244,11 +273,15 @@ pub struct HostConnectorHostRequest {
     pub cancel_requested: bool,
 }
 
-/// Adapter success: opaque reference only.
+/// Adapter success payload (opaque artifact and/or permission state).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostConnectorHostResult {
-    /// Host-managed opaque artifact reference.
-    pub artifact_ref: String,
+    /// Host-managed opaque artifact reference (capture / model.execute).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_ref: Option<String>,
+    /// Non-secret permission outcome (`audio.permission.request`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_state: Option<HostConnectorPermissionState>,
 }
 
 /// Host-owned adapter. Production native/browser drivers implement this.
@@ -289,6 +322,9 @@ pub struct HostConnectorEvent {
     /// Opaque artifact reference, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_ref: Option<String>,
+    /// Non-secret permission state, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_state: Option<HostConnectorPermissionState>,
     /// Public error code, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
@@ -359,6 +395,9 @@ pub struct HostConnectorDispatch {
     /// Opaque artifact reference on success.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_ref: Option<String>,
+    /// Non-secret permission state on permission success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_state: Option<HostConnectorPermissionState>,
     /// Public error on failure/cancellation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<HostConnectorError>,
@@ -404,6 +443,7 @@ pub fn dispatch_host_connector_command(
         &mut events,
         command,
         "accepted",
+        None,
         None,
         None,
         None,
@@ -536,6 +576,7 @@ fn invoke_authorized(
         Some(&authorized.binding.binding_id),
         None,
         None,
+        None,
     );
     let host_request = HostConnectorHostRequest {
         connector_id: authorized.binding.connector_id.clone(),
@@ -569,7 +610,29 @@ fn complete_host_success(
     mut events: Vec<HostConnectorEvent>,
     resolved: &ResolvedRefs,
 ) -> Result<HostConnectorDispatch, Box<HostConnectorFailure>> {
-    if looks_leaky(&host_result.artifact_ref) {
+    if authorized.route.operation == AUDIO_PERMISSION_REQUEST_OPERATION {
+        return complete_permission_success(
+            command,
+            ctx,
+            authorized,
+            host_result,
+            events,
+            resolved,
+        );
+    }
+    let Some(artifact_ref) = host_result
+        .artifact_ref
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(fail(
+            command,
+            HostConnectorErrorCode::Unavailable,
+            "host adapter returned an empty artifact reference",
+            events,
+            Some(resolved),
+        ));
+    };
+    if looks_leaky(&artifact_ref) {
         return Err(fail(
             command,
             HostConnectorErrorCode::Unavailable,
@@ -585,14 +648,16 @@ fn complete_host_success(
         Some(&authorized.binding.connector_id),
         Some(&authorized.route.operation),
         Some(&authorized.binding.binding_id),
-        Some(&host_result.artifact_ref),
+        Some(&artifact_ref),
+        None,
         None,
     );
     let dispatch = success_dispatch(
         command,
         &authorized.binding,
         &authorized.route,
-        host_result.artifact_ref,
+        Some(artifact_ref),
+        None,
         events,
     );
     ctx.idempotency.entries.insert(
@@ -603,6 +668,71 @@ fn complete_host_success(
         },
     );
     Ok(dispatch)
+}
+
+fn complete_permission_success(
+    command: &HostConnectorAppCommand,
+    ctx: &mut HostConnectorDispatchContext<'_>,
+    authorized: &AuthorizedCommand,
+    host_result: HostConnectorHostResult,
+    events: Vec<HostConnectorEvent>,
+    resolved: &ResolvedRefs,
+) -> Result<HostConnectorDispatch, Box<HostConnectorFailure>> {
+    let Some(permission_state) = host_result.permission_state else {
+        return Err(fail(
+            command,
+            HostConnectorErrorCode::Unavailable,
+            "host adapter returned no permission_state",
+            events,
+            Some(resolved),
+        ));
+    };
+    match permission_state {
+        HostConnectorPermissionState::Denied => Err(fail(
+            command,
+            HostConnectorErrorCode::PolicyDenied,
+            "audio permission was denied",
+            events,
+            Some(resolved),
+        )),
+        HostConnectorPermissionState::Unavailable => Err(fail(
+            command,
+            HostConnectorErrorCode::Unavailable,
+            "audio permission is unavailable",
+            events,
+            Some(resolved),
+        )),
+        HostConnectorPermissionState::Granted | HostConnectorPermissionState::PromptRequired => {
+            let mut events = events;
+            push_event(
+                &mut events,
+                command,
+                "completed",
+                Some(&authorized.binding.connector_id),
+                Some(&authorized.route.operation),
+                Some(&authorized.binding.binding_id),
+                None,
+                Some(permission_state),
+                None,
+            );
+            let dispatch = success_dispatch(
+                command,
+                &authorized.binding,
+                &authorized.route,
+                None,
+                Some(permission_state),
+                events,
+            );
+            ctx.idempotency.entries.insert(
+                command.idempotency_key.clone(),
+                IdempotencyEntry {
+                    fingerprint: authorized.fingerprint.clone(),
+                    result: dispatch.clone(),
+                },
+            );
+            Ok(dispatch)
+        }
+    }
 }
 
 fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), HostConnectorError> {
@@ -665,7 +795,8 @@ fn resolve_route(
     match matches.as_slice() {
         [route] => {
             if (route.connector_id == AUDIO_INPUT_CONNECTOR
-                && route.operation == AUDIO_CAPTURE_OPERATION)
+                && (route.operation == AUDIO_CAPTURE_OPERATION
+                    || route.operation == AUDIO_PERMISSION_REQUEST_OPERATION))
                 || (route.connector_id == MODEL_RUNTIME_CONNECTOR
                     && route.operation == MODEL_EXECUTE_OPERATION)
             {
@@ -736,10 +867,12 @@ fn confirm_target(
     binding: &HostConnectorBinding,
     target_family: &str,
 ) -> Result<(), HostConnectorError> {
-    if binding.connector_id == AUDIO_INPUT_CONNECTOR && target_family == "browser" {
+    // Spec 137 FR-006 / Spec 140: target neutrality is binding-declared.
+    // A family with no declared/activated adapter fails before the host runs.
+    if binding.placement_targets.is_empty() {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::TargetIncompatible,
-            message: "traverse.audio-input is native-only and cannot run on browser".to_string(),
+            message: "activated binding does not declare any supported target families".to_string(),
         });
     }
     let matches = binding.placement_targets.iter().any(|target| {
@@ -762,7 +895,14 @@ fn confirm_operation_payload(
     let Some(object) = payload.as_object() else {
         return Err(limit_error("payload must be a JSON object"));
     };
-    if route.operation == AUDIO_CAPTURE_OPERATION {
+    if route.operation == AUDIO_PERMISSION_REQUEST_OPERATION {
+        if !object.is_empty() {
+            return Err(limit_error(
+                "audio.permission.request payload must be an empty object",
+            ));
+        }
+        Ok(())
+    } else if route.operation == AUDIO_CAPTURE_OPERATION {
         let duration = required_u64(object, "max_duration_ms")?;
         let bytes = required_u64(object, "max_bytes")?;
         if duration == 0 || duration > MAX_DURATION_MS || bytes == 0 || bytes > MAX_AUDIO_BYTES {
@@ -871,6 +1011,7 @@ fn push_event(
     operation: Option<&str>,
     binding_id: Option<&str>,
     artifact_ref: Option<&str>,
+    permission_state: Option<HostConnectorPermissionState>,
     error_code: Option<&str>,
 ) {
     if events.len() == MAX_EVENTS {
@@ -887,6 +1028,7 @@ fn push_event(
         binding_id: binding_id.map(ToOwned::to_owned),
         target_family: command.target_family.clone(),
         artifact_ref: artifact_ref.map(ToOwned::to_owned),
+        permission_state,
         error_code: error_code.map(ToOwned::to_owned),
     });
 }
@@ -900,6 +1042,7 @@ pub fn bound_host_connector_event_queue(command: &HostConnectorAppCommand) -> us
             &mut events,
             command,
             "accepted",
+            None,
             None,
             None,
             None,
@@ -939,6 +1082,7 @@ fn fail(
         resolved.map(|r| r.operation.as_str()),
         resolved.map(|r| r.binding_id.as_str()),
         None,
+        None,
         Some(code.as_str()),
     );
     let evidence = HostConnectorEvidence {
@@ -965,6 +1109,7 @@ fn fail(
             binding_id: resolved.map(|r| r.binding_id.clone()),
             target_family: command.target_family.clone(),
             artifact_ref: None,
+            permission_state: None,
             error: Some(error.clone()),
             events,
             evidence,
@@ -977,7 +1122,8 @@ fn success_dispatch(
     command: &HostConnectorAppCommand,
     binding: &HostConnectorBinding,
     route: &HostConnectorCommandRoute,
-    artifact_ref: String,
+    artifact_ref: Option<String>,
+    permission_state: Option<HostConnectorPermissionState>,
     events: Vec<HostConnectorEvent>,
 ) -> HostConnectorDispatch {
     HostConnectorDispatch {
@@ -990,7 +1136,8 @@ fn success_dispatch(
         operation: Some(route.operation.clone()),
         binding_id: Some(binding.binding_id.clone()),
         target_family: command.target_family.clone(),
-        artifact_ref: Some(artifact_ref),
+        artifact_ref,
+        permission_state,
         error: None,
         events,
         evidence: HostConnectorEvidence {
