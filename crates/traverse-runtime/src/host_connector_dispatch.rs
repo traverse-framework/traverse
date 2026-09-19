@@ -615,7 +615,7 @@ fn complete_host_success(
             command,
             ctx,
             authorized,
-            host_result,
+            &host_result,
             events,
             resolved,
         );
@@ -674,7 +674,7 @@ fn complete_permission_success(
     command: &HostConnectorAppCommand,
     ctx: &mut HostConnectorDispatchContext<'_>,
     authorized: &AuthorizedCommand,
-    host_result: HostConnectorHostResult,
+    host_result: &HostConnectorHostResult,
     events: Vec<HostConnectorEvent>,
     resolved: &ResolvedRefs,
 ) -> Result<HostConnectorDispatch, Box<HostConnectorFailure>> {
