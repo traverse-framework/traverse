@@ -8,15 +8,16 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
 [![Version](https://img.shields.io/badge/version-v0.12.0-blue)](https://github.com/traverse-framework/traverse/releases)
-[![Registry](https://img.shields.io/badge/registry-92%20capabilities-6f42c1)](https://registry.traverse-framework.com/)
+[![Registry](https://img.shields.io/badge/registry-live%20catalog-6f42c1)](https://registry.traverse-framework.com/)
 
 **Define once. Run anywhere.**
 
 Traverse is a contract-driven WebAssembly runtime for portable business
-capabilities. You write a piece of business logic once — as a capability with a
-machine-readable contract — and the same signed WASM binary runs on Linux,
-macOS, and Windows, on iOS and Android, in the browser, and inside an AI agent
-— producing a verifiable execution trace every time.
+capabilities. **What you get:** discover a governed capability → execute known
+behavior → produce a verifiable trace. You define a piece of business logic
+once — as a capability with a machine-readable contract — and the same signed
+WASM binary runs on Linux, macOS, and Windows, on iOS and Android, in the
+browser, and inside an AI agent.
 
 No reimplementation per environment. No agent free-handing your pricing rules.
 One behavior, governed, everywhere it needs to run.
@@ -51,11 +52,11 @@ buried in a framework.
 
 ## Reuse instead of regenerate
 
-The [public registry](https://registry.traverse-framework.com/) currently holds
-**92 capabilities across 33 domains** (213 signed versions; 175 non-deprecated) — pricing,
-authorization, escalation, deadline pressure, completion-quality scoring,
-classification, summarization, and more. Every record is contract-defined,
-semver'd, signed, and CI-validated before it merges.
+The [public registry](https://registry.traverse-framework.com/) is the catalog
+to search before you invent a rule — pricing, authorization, escalation,
+deadline pressure, scoring, classification, summarization, and more. Every
+record is contract-defined, semver'd, and signed before it merges. Live counts
+belong on the registry site; they are not the product pitch.
 
 Before an agent (or a developer) writes a rule, it can check whether that rule
 already exists:
@@ -190,9 +191,9 @@ real, running, tested code.
 |---|---|
 | **Runtime crates** | 10 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.12.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates; `traverse-nested-wasm-spike` is historical. |
 | **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.12.0`) and Web/TypeScript (npm `traverse-embedder-web@0.12.0`) published and aligned on the same app-owned `runtime.wasm` orchestrator; Swift/iOS+macOS (wasmi), Kotlin/Android (Chicory), and .NET/Windows (Wasmtime) in `packages/` with production runtime bridges, not yet on SwiftPM/Maven/NuGet. |
-| **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` `0.21.0` on crates.io; **92 capabilities / 213 signed versions / 33 domains** (175 non-deprecated) in the live catalog, all signed and CI-validated. |
-| **Governance** | **150 approved, immutable specs** gate the runtime, contracts, registry, MCP surface, WASM execution, native embedding, event delivery, and durable local storage. `jq -r '.specs[].id' specs/governance/approved-specs.json` |
-| **Quality bar** | 100% line coverage enforced on the core crates (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`); `traverse-cli-rs` 87%, `traverse-mcp` 98%. Spec-alignment and supply-chain gates on every PR. 5-target CI matrix: Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64. |
+| **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` on crates.io; live catalog at [registry.traverse-framework.com](https://registry.traverse-framework.com). |
+| **Governance** | Specs keep us honest (approved, immutable, merge-gating) — not the headline. List: `jq -r '.specs[].id' specs/governance/approved-specs.json` |
+| **Quality bar** | Core crates keep a hard coverage gate; every PR runs spec-alignment and a multi-OS CI matrix. Details live in CI, not in the pitch. |
 | **Reference apps** | Web, iOS, macOS, Android, Windows, Linux, and CLI clients live in [`traverse-framework/reference-apps`](https://github.com/traverse-framework/reference-apps). |
 | **Latency** | No container runtime; one binary per platform. Measured cold-start and steady-state methodology in [docs/benchmarks.md](docs/benchmarks.md). |
 
