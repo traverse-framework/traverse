@@ -114,5 +114,11 @@
   "supported_placement_targets": [
     "local",
     "browser"
-  ]
+  ],
+  "host_adapter_wit": {
+    "package": "traverse:audio-input",
+    "version": "1.0.0",
+    "path": "wit/capture.wit",
+    "interface": "capture"
+  }
 }

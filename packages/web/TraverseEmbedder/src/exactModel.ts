@@ -73,8 +73,10 @@ export function encodeGuestFrame(dtype: number, dims: readonly number[], payload
 export class ModelIoStore {
   private inputs = new Map<string, Uint8Array>();
   private outputs = new Map<string, Uint8Array>();
+  private artifacts = new Map<string, Uint8Array>();
   private nextInput = 0;
   private nextOutput = 0;
+  private nextArtifact = 0;
 
   stageModelInput(bytes: Uint8Array, maxBytes: number): string {
     if (bytes.length === 0 || bytes.length > maxBytes) {
@@ -111,6 +113,47 @@ export class ModelIoStore {
       throw new ExactModelError("input_limit_exceeded", "output exceeds read ceiling");
     }
     return bytes;
+  }
+
+  /**
+   * Stage bounded bytes as a multi-read opaque `artifact_ref` (Spec 140 /
+   * Spec 138 0.2.0). Readable until `dropRef` or `shutdown`; model
+   * `input_ref` keeps its single-consume rule.
+   */
+  stageArtifact(bytes: Uint8Array, maxBytes: number): string {
+    if (bytes.length === 0 || bytes.length > maxBytes) {
+      throw new ExactModelError("input_limit_exceeded", "staged artifact empty or exceeds ceiling");
+    }
+    this.nextArtifact += 1;
+    const id = `artifact-${this.nextArtifact}`;
+    this.artifacts.set(id, new Uint8Array(bytes));
+    return id;
+  }
+
+  /** Runtime-mediated bounded read of an `artifact_ref`. Repeatable. */
+  readArtifact(artifactRef: string, maxBytes: number): Uint8Array {
+    const bytes = this.artifacts.get(artifactRef);
+    if (!bytes) {
+      throw new ExactModelError("unavailable", "artifact_ref missing or expired");
+    }
+    if (bytes.length > maxBytes) {
+      throw new ExactModelError("input_limit_exceeded", "artifact exceeds read ceiling");
+    }
+    return new Uint8Array(bytes);
+  }
+
+  /** Drop an input, output, or artifact ref. */
+  dropRef(reference: string): void {
+    this.inputs.delete(reference);
+    this.outputs.delete(reference);
+    this.artifacts.delete(reference);
+  }
+
+  /** Invalidate every staged ref (runtime shutdown). */
+  shutdown(): void {
+    this.inputs.clear();
+    this.outputs.clear();
+    this.artifacts.clear();
   }
 }
 

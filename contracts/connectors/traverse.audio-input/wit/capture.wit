@@ -1,0 +1,29 @@
+package traverse:audio-input@1.0.0;
+
+interface capture {
+  enum permission-state { granted, denied, prompt-required, unavailable }
+
+  enum failure-class {
+    unbound, incompatible, unconfigured, policy-denied,
+    target-incompatible, limit-exceeded, cancelled, unavailable
+  }
+
+  record failure { class: failure-class, code: string }
+
+  record capture-request {
+    correlation-id: string,
+    max-duration-ms: u32,
+    max-bytes: u32,
+  }
+
+  record capture-result {
+    artifact-ref: string,
+    duration-ms: u32,
+    size-bytes: u32,
+  }
+
+  permission-status: func() -> permission-state;
+  request-permission: func() -> result<permission-state, failure>;
+  capture: func(request: capture-request) -> result<capture-result, failure>;
+  cancel: func(correlation-id: string);
+}

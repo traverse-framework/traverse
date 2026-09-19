@@ -198,8 +198,10 @@ impl ModelPackageStore {
 pub struct ModelIoStore {
     inputs: HashMap<String, Vec<u8>>,
     outputs: HashMap<String, Vec<u8>>,
+    artifacts: HashMap<String, Vec<u8>>,
     next_input: u64,
     next_output: u64,
+    next_artifact: u64,
 }
 
 impl ModelIoStore {
@@ -279,10 +281,71 @@ impl ModelIoStore {
         Ok(bytes.clone())
     }
 
-    /// Drop an input or output ref.
+    /// Stage bounded bytes → multi-read `artifact_ref` (Spec 140 / Spec 138 0.2.0).
+    ///
+    /// The ref is opaque (never a path or URL) and stays readable until
+    /// [`Self::drop_ref`] or [`Self::shutdown`], so runtime-owned retries can
+    /// re-read it. Model `input_ref` keeps its single-consume rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `input_limit_exceeded` when empty or over `max_bytes`.
+    pub fn stage_artifact(
+        &mut self,
+        bytes: &[u8],
+        max_bytes: usize,
+    ) -> Result<String, HostConnectorError> {
+        if bytes.is_empty() || bytes.len() > max_bytes {
+            return Err(HostConnectorError {
+                code: HostConnectorErrorCode::InputLimitExceeded,
+                message: "staged artifact empty or exceeds ceiling".to_string(),
+            });
+        }
+        self.next_artifact = self.next_artifact.saturating_add(1);
+        let id = format!("artifact-{}", self.next_artifact);
+        self.artifacts.insert(id.clone(), bytes.to_vec());
+        Ok(id)
+    }
+
+    /// Runtime-mediated bounded read of an `artifact_ref`. Repeatable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unavailable` when missing, dropped, or invalidated by
+    /// shutdown; `input_limit_exceeded` when the artifact exceeds `max_bytes`.
+    pub fn read_artifact(
+        &self,
+        artifact_ref: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, HostConnectorError> {
+        let bytes = self
+            .artifacts
+            .get(artifact_ref)
+            .ok_or_else(|| HostConnectorError {
+                code: HostConnectorErrorCode::Unavailable,
+                message: "artifact_ref missing or expired".to_string(),
+            })?;
+        if bytes.len() > max_bytes {
+            return Err(HostConnectorError {
+                code: HostConnectorErrorCode::InputLimitExceeded,
+                message: "artifact exceeds read ceiling".to_string(),
+            });
+        }
+        Ok(bytes.clone())
+    }
+
+    /// Drop an input, output, or artifact ref.
     pub fn drop_ref(&mut self, reference: &str) {
         self.inputs.remove(reference);
         self.outputs.remove(reference);
+        self.artifacts.remove(reference);
+    }
+
+    /// Invalidate every staged ref (runtime shutdown).
+    pub fn shutdown(&mut self) {
+        self.inputs.clear();
+        self.outputs.clear();
+        self.artifacts.clear();
     }
 }
 
@@ -1068,6 +1131,56 @@ mod tests {
             store.resolve_offline("missing").expect_err("offline").code,
             HostConnectorErrorCode::ModelUnavailable
         );
+    }
+
+    #[test]
+    fn artifact_refs_are_multi_read_bounded_and_opaque() {
+        let mut io = ModelIoStore::new();
+        assert_eq!(
+            io.stage_artifact(b"", 8).expect_err("empty").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        assert_eq!(
+            io.stage_artifact(b"abcdef", 4).expect_err("over").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        let artifact_ref = io.stage_artifact(b"abc", 8).expect("stage");
+        assert_eq!(artifact_ref, "artifact-1");
+        assert!(!artifact_ref.contains('/') && !artifact_ref.contains(':'));
+        // Multi-read: repeated reads (runtime-owned retries) all succeed.
+        assert_eq!(io.read_artifact(&artifact_ref, 8).expect("first"), b"abc");
+        assert_eq!(io.read_artifact(&artifact_ref, 8).expect("retry"), b"abc");
+        assert_eq!(
+            io.read_artifact(&artifact_ref, 2).expect_err("cap").code,
+            HostConnectorErrorCode::InputLimitExceeded
+        );
+        assert_eq!(
+            io.read_artifact("artifact-9", 8).expect_err("missing").code,
+            HostConnectorErrorCode::Unavailable
+        );
+        // Model refs live in separate namespaces: input_ref stays single-consume
+        // and is never readable through the artifact path.
+        let input_ref = io.stage_model_input(b"abc", 8).expect("input");
+        assert_eq!(
+            io.read_artifact(&input_ref, 8).expect_err("ns").code,
+            HostConnectorErrorCode::Unavailable
+        );
+        io.take_input(&input_ref).expect("consume once");
+        assert_eq!(io.read_artifact(&artifact_ref, 8).expect("still"), b"abc");
+        io.drop_ref(&artifact_ref);
+        assert!(io.read_artifact(&artifact_ref, 8).is_err());
+    }
+
+    #[test]
+    fn shutdown_invalidates_every_staged_ref() {
+        let mut io = ModelIoStore::new();
+        let artifact_ref = io.stage_artifact(b"abc", 8).expect("artifact");
+        let input_ref = io.stage_model_input(b"abc", 8).expect("input");
+        let output_ref = io.put_output(b"abc".to_vec());
+        io.shutdown();
+        assert!(io.read_artifact(&artifact_ref, 8).is_err());
+        assert!(io.take_input(&input_ref).is_err());
+        assert!(io.read_model_output(&output_ref, 8).is_err());
     }
 
     #[test]

@@ -1,0 +1,966 @@
+{
+  "kind": "host_authority_conformance_fixture",
+  "fixture_version": "1.0.0",
+  "authority": {
+    "connector_id": "traverse.audio-input",
+    "connector_version": "1.0.0",
+    "wit_package": "traverse:audio-input@1.0.0",
+    "wit_path": "contracts/connectors/traverse.audio-input/wit/capture.wit"
+  },
+  "governing_specs": [
+    "140-host-authority-wit-adapters",
+    "137-host-connector-command-dispatch"
+  ],
+  "operations": {
+    "request_permission": "audio.permission.request",
+    "capture_audio": "audio.capture"
+  },
+  "binding": {
+    "binding_id": "default-audio",
+    "config_ref": "audio-default"
+  },
+  "target_roles": {
+    "activated": "Every target family for which the embedder under test has activated an adapter. Run the case once per family, substituting the family into each command's target_family.",
+    "unadapted": "A target family with no activated adapter. Use the reserved value `unadapted`."
+  },
+  "binding_setups": {
+    "activated_compatible": "One binding, compatible version, non-empty config_ref, explicitly activated.",
+    "missing": "The manifest declares no binding for the connector.",
+    "incompatible_version": "One binding whose version is not compatible with the installed connector.",
+    "unconfigured": "One activated binding with an empty config_ref.",
+    "unactivated": "One compatible, configured binding that the host never activated."
+  },
+  "adapter_failure_class_mapping": {
+    "unbound": "unbound",
+    "incompatible": "incompatible",
+    "unconfigured": "unconfigured",
+    "policy-denied": "policy_denied",
+    "target-incompatible": "target_incompatible",
+    "limit-exceeded": "input_limit_exceeded",
+    "cancelled": "cancelled",
+    "unavailable": "unavailable"
+  },
+  "adapter_call_rules": [
+    "adapter_calls lists the WIT functions the dispatcher must invoke, in order; an empty list means the adapter MUST NOT be invoked.",
+    "permission-status is host-internal (Spec 140); a dispatcher MAY call it for fail-fast evidence and runners MUST NOT assert on it.",
+    "A capture call with cancelled_by_host true is interrupted by cancel(correlation-id) while in flight.",
+    "host_private_diagnostic is injected by the adapter test double as native detail; it is not part of the WIT failure record."
+  ],
+  "compared_event_fields": [
+    "kind",
+    "schema_version",
+    "event",
+    "command_id",
+    "correlation_id",
+    "connector_id",
+    "operation",
+    "binding_id",
+    "artifact_ref",
+    "error_code"
+  ],
+  "cross_target_equivalence": {
+    "rule": "For every case with target_role activated, the ordered events and result fields on every activated target family MUST be identical after removing target_family.",
+    "ignored_fields": [
+      "target_family"
+    ]
+  },
+  "redaction": {
+    "forbidden_public_substrings": [
+      "/Users/",
+      "/tmp/",
+      "://",
+      "device 0x",
+      "Built-In",
+      "token=",
+      "abc123",
+      "Library/Audio"
+    ],
+    "applies_to": [
+      "events",
+      "result",
+      "error.message",
+      "evidence"
+    ]
+  },
+  "fr_013_categories": [
+    "success",
+    "binding_missing",
+    "binding_incompatible",
+    "binding_unconfigured",
+    "binding_unactivated",
+    "unsupported_target",
+    "permission_granted",
+    "permission_denied",
+    "permission_unavailable",
+    "limits",
+    "cancellation",
+    "idempotency",
+    "redaction",
+    "cross_target_ordered_events"
+  ],
+  "cases": [
+    {
+      "id": "success_permission_then_capture",
+      "fr_013": [
+        "success",
+        "permission_granted",
+        "cross_target_ordered_events"
+      ],
+      "description": "Permission is granted, then capture returns an opaque artifact_ref. The ordered events and result fields are identical on every activated target family.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "request_permission",
+            "command_id": "cmd-00000001",
+            "correlation_id": "corr-00000001",
+            "idempotency_key": "idem-perm-1",
+            "payload": {}
+          },
+          "adapter_calls": [
+            {
+              "function": "request-permission",
+              "returns": {
+                "ok": "granted"
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "succeeded",
+            "permission_state": "granted",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "completed"
+              }
+            ]
+          }
+        },
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000002",
+            "correlation_id": "corr-00000002",
+            "idempotency_key": "idem-cap-1",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "ok": {
+                  "artifact-ref": "audio-ref-1",
+                  "duration-ms": 1200,
+                  "size-bytes": 48000
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "succeeded",
+            "artifact_ref": "audio-ref-1",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "completed",
+                "artifact_ref": "audio-ref-1"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "binding_missing",
+      "fr_013": [
+        "binding_missing"
+      ],
+      "description": "The app manifest declares no binding for the routed connector. The adapter is never invoked.",
+      "target_role": "activated",
+      "binding_setup": "missing",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000003",
+            "correlation_id": "corr-00000003",
+            "idempotency_key": "idem-binding_missing",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unbound",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "unbound"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "binding_incompatible",
+      "fr_013": [
+        "binding_incompatible"
+      ],
+      "description": "The declared binding version is not compatible with the installed connector version. The adapter is never invoked.",
+      "target_role": "activated",
+      "binding_setup": "incompatible_version",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000004",
+            "correlation_id": "corr-00000004",
+            "idempotency_key": "idem-binding_incompatible",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "incompatible",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "incompatible"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "binding_unconfigured",
+      "fr_013": [
+        "binding_unconfigured"
+      ],
+      "description": "The binding has an empty config_ref. The adapter is never invoked.",
+      "target_role": "activated",
+      "binding_setup": "unconfigured",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000005",
+            "correlation_id": "corr-00000005",
+            "idempotency_key": "idem-binding_unconfigured",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unconfigured",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "unconfigured"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "binding_unactivated",
+      "fr_013": [
+        "binding_unactivated"
+      ],
+      "description": "The binding is declared but the host never activated it; registry presence grants nothing. The adapter is never invoked.",
+      "target_role": "activated",
+      "binding_setup": "unactivated",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000006",
+            "correlation_id": "corr-00000006",
+            "idempotency_key": "idem-binding_unactivated",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unbound",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "unbound"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "unsupported_target",
+      "fr_013": [
+        "unsupported_target"
+      ],
+      "description": "The target family has no activated adapter for the bound authority. Dispatch fails target_incompatible before any capture.",
+      "target_role": "unadapted",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000007",
+            "correlation_id": "corr-00000007",
+            "idempotency_key": "idem-unsupported",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "target_incompatible",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "target_incompatible"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "permission_denied",
+      "fr_013": [
+        "permission_denied"
+      ],
+      "description": "request-permission resolves denied. The command completes as a typed policy_denied failure, never a hang.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "request_permission",
+            "command_id": "cmd-00000008",
+            "correlation_id": "corr-00000008",
+            "idempotency_key": "idem-perm-denied",
+            "payload": {}
+          },
+          "adapter_calls": [
+            {
+              "function": "request-permission",
+              "returns": {
+                "ok": "denied"
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "policy_denied",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "policy_denied"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "permission_unavailable",
+      "fr_013": [
+        "permission_unavailable"
+      ],
+      "description": "request-permission resolves unavailable. The command completes as a typed unavailable failure.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "request_permission",
+            "command_id": "cmd-00000009",
+            "correlation_id": "corr-00000009",
+            "idempotency_key": "idem-perm-unavailable",
+            "payload": {}
+          },
+          "adapter_calls": [
+            {
+              "function": "request-permission",
+              "returns": {
+                "ok": "unavailable"
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unavailable",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "unavailable"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "capture_after_permission_denied",
+      "fr_013": [
+        "permission_denied"
+      ],
+      "description": "After a denied permission, capture_audio reaches the adapter, which refuses with policy-denied; the state machine sees policy_denied.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "request_permission",
+            "command_id": "cmd-00000010",
+            "correlation_id": "corr-00000010",
+            "idempotency_key": "idem-perm-denied-2",
+            "payload": {}
+          },
+          "adapter_calls": [
+            {
+              "function": "request-permission",
+              "returns": {
+                "ok": "denied"
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "policy_denied",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "policy_denied"
+              }
+            ]
+          }
+        },
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000011",
+            "correlation_id": "corr-00000011",
+            "idempotency_key": "idem-cap-denied",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "err": {
+                  "class": "policy-denied",
+                  "code": "permission_denied"
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "policy_denied",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "policy_denied"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "limit_exceeded_request",
+      "fr_013": [
+        "limits"
+      ],
+      "description": "max_duration_ms above the published ceiling is rejected by dispatch without invoking the adapter.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000012",
+            "correlation_id": "corr-00000012",
+            "idempotency_key": "idem-limit-request",
+            "payload": {
+              "max_duration_ms": 60001,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "input_limit_exceeded",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "input_limit_exceeded"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "limit_exceeded_adapter",
+      "fr_013": [
+        "limits"
+      ],
+      "description": "The adapter stops capture at the requested max_bytes and reports limit-exceeded.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000013",
+            "correlation_id": "corr-00000013",
+            "idempotency_key": "idem-limit-adapter",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "err": {
+                  "class": "limit-exceeded",
+                  "code": "max_bytes_exceeded"
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "input_limit_exceeded",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "input_limit_exceeded"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cancel_before_invoke",
+      "fr_013": [
+        "cancellation"
+      ],
+      "description": "cancel_requested is observed before invoke: cancelled result, no adapter call, no side effects.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000014",
+            "correlation_id": "corr-00000014",
+            "idempotency_key": "idem-cancel-pre",
+            "cancel_requested": true,
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "cancelled",
+            "error_code": "cancelled",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "cancelled",
+                "error_code": "cancelled"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cancel_during_capture",
+      "fr_013": [
+        "cancellation"
+      ],
+      "description": "The host delivers cancel(correlation-id) while capture is in flight; the adapter returns the cancelled failure class.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000015",
+            "correlation_id": "corr-00000015",
+            "idempotency_key": "idem-cancel-mid",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "cancelled_by_host": true,
+              "returns": {
+                "err": {
+                  "class": "cancelled",
+                  "code": "capture_cancelled"
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "cancelled",
+            "error_code": "cancelled",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "cancelled",
+                "error_code": "cancelled"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "idempotent_replay",
+      "fr_013": [
+        "idempotency"
+      ],
+      "description": "The same idempotency_key with an equivalent command returns the original result and does not invoke the adapter a second time.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000016",
+            "correlation_id": "corr-00000016",
+            "idempotency_key": "idem-replay",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "ok": {
+                  "artifact-ref": "audio-ref-1",
+                  "duration-ms": 1200,
+                  "size-bytes": 48000
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "succeeded",
+            "artifact_ref": "audio-ref-1",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "completed",
+                "artifact_ref": "audio-ref-1"
+              }
+            ]
+          }
+        },
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000016",
+            "correlation_id": "corr-00000016",
+            "idempotency_key": "idem-replay",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "same_as_step": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "idempotency_conflict",
+      "fr_013": [
+        "idempotency"
+      ],
+      "description": "The same idempotency_key with a different payload fails idempotency_conflict without invoking the adapter.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000017",
+            "correlation_id": "corr-00000017",
+            "idempotency_key": "idem-conflict",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "ok": {
+                  "artifact-ref": "audio-ref-1",
+                  "duration-ms": 1200,
+                  "size-bytes": 48000
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "succeeded",
+            "artifact_ref": "audio-ref-1",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "completed",
+                "artifact_ref": "audio-ref-1"
+              }
+            ]
+          }
+        },
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000099",
+            "correlation_id": "corr-00000099",
+            "idempotency_key": "idem-conflict",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 2097152
+            }
+          },
+          "adapter_calls": [],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "idempotency_conflict",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "failed",
+                "error_code": "idempotency_conflict"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "redaction_adapter_diagnostic",
+      "fr_013": [
+        "redaction"
+      ],
+      "description": "The adapter fails with a host-private native diagnostic. Only the stable failure code crosses the public contract; the diagnostic text must not appear in any event, result, error message, or evidence.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000018",
+            "correlation_id": "corr-00000018",
+            "idempotency_key": "idem-redact-diag",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "err": {
+                  "class": "unavailable",
+                  "code": "capture_unavailable"
+                }
+              },
+              "host_private_diagnostic": "open failed: /Users/example/Library/Audio/Built-In Mic (device 0x1f) token=abc123"
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unavailable",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "unavailable"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "redaction_non_opaque_artifact_ref",
+      "fr_013": [
+        "redaction"
+      ],
+      "description": "An adapter that returns a path-shaped artifact-ref violates FR-011. Dispatch fails unavailable and never publishes the reference.",
+      "target_role": "activated",
+      "binding_setup": "activated_compatible",
+      "steps": [
+        {
+          "command": {
+            "command": "capture_audio",
+            "command_id": "cmd-00000019",
+            "correlation_id": "corr-00000019",
+            "idempotency_key": "idem-redact-ref",
+            "payload": {
+              "max_duration_ms": 5000,
+              "max_bytes": 1048576
+            }
+          },
+          "adapter_calls": [
+            {
+              "function": "capture",
+              "returns": {
+                "ok": {
+                  "artifact-ref": "/tmp/capture-0001.wav",
+                  "duration-ms": 1200,
+                  "size-bytes": 48000
+                }
+              }
+            }
+          ],
+          "expected": {
+            "result_class": "failed",
+            "error_code": "unavailable",
+            "events": [
+              {
+                "event": "accepted"
+              },
+              {
+                "event": "started"
+              },
+              {
+                "event": "failed",
+                "error_code": "unavailable"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

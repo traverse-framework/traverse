@@ -300,6 +300,23 @@ pub struct ConnectorContract {
     pub operation_envelopes: Vec<ConnectorOperationEnvelope>,
     #[serde(default = "default_connector_targets")]
     pub supported_placement_targets: Vec<ExecutionTarget>,
+    /// Version pin for the authority's WIT host-adapter interface
+    /// (Spec `140-host-authority-wit-adapters` FR-007).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_adapter_wit: Option<HostAdapterWit>,
+}
+
+/// Pin to a WIT host-adapter package committed beside the connector contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostAdapterWit {
+    /// WIT package name without the version, e.g. `traverse:audio-input`.
+    pub package: String,
+    /// WIT package version.
+    pub version: String,
+    /// Path of the `.wit` file relative to the connector contract directory.
+    pub path: String,
+    /// Name of the adapter interface declared in the package.
+    pub interface: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -607,6 +624,7 @@ fn reference_connector_contract(
         required_config_schema,
         operation_envelopes,
         supported_placement_targets: default_connector_targets(),
+        host_adapter_wit: None,
     }
 }
 
@@ -1190,12 +1208,142 @@ pub fn validate_connector_contract(
             "supported_placement_targets must be unique",
         ));
     }
+    if let Some(pin) = &contract.host_adapter_wit {
+        validate_host_adapter_wit_pin(pin, &mut errors);
+    }
 
     if !errors.is_empty() {
         return Err(ValidationFailure { errors });
     }
 
     Ok(contract)
+}
+
+/// Identifier segments a host-adapter WIT interface must never contain
+/// (Spec `140-host-authority-wit-adapters` FR-005): device identities, paths,
+/// credentials, endpoints, vendor names, and application workflow fields.
+const FORBIDDEN_WIT_SEGMENTS: &[&str] = &[
+    "device",
+    "path",
+    "filename",
+    "url",
+    "uri",
+    "endpoint",
+    "credential",
+    "credentials",
+    "password",
+    "secret",
+    "token",
+    "apikey",
+    "apple",
+    "google",
+    "microsoft",
+    "amazon",
+    "openai",
+    "coreaudio",
+    "avfoundation",
+    "mediarecorder",
+    "getusermedia",
+    "workflow",
+    "callweave",
+];
+
+fn validate_host_adapter_wit_pin(pin: &HostAdapterWit, errors: &mut Vec<ValidationError>) {
+    let package_valid = pin
+        .package
+        .split_once(':')
+        .is_some_and(|(namespace, name)| is_valid_name(namespace) && is_valid_name(name));
+    if !package_valid {
+        errors.push(error(
+            ValidationErrorCode::InvalidConnectorContract,
+            "$.host_adapter_wit.package",
+            "package must be a kebab-case namespace:name pair",
+        ));
+    }
+    validate_semver(&pin.version, "$.host_adapter_wit.version", errors);
+    let path_valid = pin.path.starts_with("wit/")
+        && std::path::Path::new(&pin.path)
+            .extension()
+            .is_some_and(|extension| extension == "wit")
+        && !pin.path.contains("..")
+        && !pin.path.contains('\\');
+    if !path_valid {
+        errors.push(error(
+            ValidationErrorCode::InvalidConnectorContract,
+            "$.host_adapter_wit.path",
+            "path must be a relative .wit file under wit/",
+        ));
+    }
+    if !is_valid_name(&pin.interface) {
+        errors.push(error(
+            ValidationErrorCode::InvalidConnectorContract,
+            "$.host_adapter_wit.interface",
+            "interface must be a kebab-case name",
+        ));
+    }
+}
+
+/// Validates a host-adapter WIT source against its connector-contract pin.
+///
+/// The source must declare the pinned package and interface and must not
+/// contain any identifier segment from the forbidden set (Spec
+/// `140-host-authority-wit-adapters` FR-005).
+///
+/// # Errors
+///
+/// Returns [`ValidationFailure`] when the pinned package or interface is not
+/// declared, or when a forbidden identifier segment appears.
+pub fn validate_host_adapter_wit(
+    pin: &HostAdapterWit,
+    wit_source: &str,
+) -> Result<(), ValidationFailure> {
+    let mut errors = Vec::new();
+    let package_declaration = format!("package {}@{};", pin.package, pin.version);
+    if !wit_source
+        .lines()
+        .any(|line| line.trim() == package_declaration)
+    {
+        errors.push(error(
+            ValidationErrorCode::InvalidConnectorContract,
+            "$.wit.package",
+            "wit source must declare the pinned package and version",
+        ));
+    }
+    let identifiers: Vec<&str> = wit_source
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+        .filter(|identifier| !identifier.is_empty())
+        .collect();
+    if !identifiers
+        .windows(2)
+        .any(|pair| pair[0] == "interface" && pair[1] == pin.interface)
+    {
+        errors.push(error(
+            ValidationErrorCode::InvalidConnectorContract,
+            "$.wit.interface",
+            "wit source must declare the pinned interface",
+        ));
+    }
+    for (index, line) in wit_source.lines().enumerate() {
+        let forbidden = line
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+            .find(|segment| FORBIDDEN_WIT_SEGMENTS.contains(&segment.as_str()));
+        if let Some(segment) = forbidden {
+            errors.push(error(
+                ValidationErrorCode::InvalidConnectorContract,
+                &format!("$.wit.line[{}]", index + 1),
+                &format!(
+                    "wit interface must not contain device, path, credential, endpoint, vendor, or workflow identifiers (found `{segment}`)"
+                ),
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationFailure { errors })
+    }
 }
 
 fn validate_connector_operation_envelopes(
