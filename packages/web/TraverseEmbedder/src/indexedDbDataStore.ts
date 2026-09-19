@@ -113,6 +113,11 @@ function validateDatabaseName(databaseName: string): void {
 }
 
 function validateKey(key: string, operation: "read" | "write" | "delete"): void {
+  // JavaScript hosts are unchecked: reject non-string keys before the pattern
+  // test, which would otherwise coerce them into keys the envelope rejects.
+  if (typeof key !== "string") {
+    throw dataStoreError("invalid_key", operation, "invalid_state_key");
+  }
   if (!/^[A-Za-z0-9_-]+$/.test(key)) {
     throw dataStoreError("invalid_key", operation, "invalid_state_key");
   }
