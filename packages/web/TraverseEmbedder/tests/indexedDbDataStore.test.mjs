@@ -68,6 +68,31 @@ async function mutateRecord(factory, databaseName, mutate) {
   database.close();
 }
 
+async function storedKeys(factory, databaseName) {
+  const database = await new Promise((resolve, reject) => {
+    const request = factory.open(databaseName, 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  const keys = await new Promise((resolve, reject) => {
+    const transaction = database.transaction("records", "readonly");
+    const request = transaction.objectStore("records").getAllKeys();
+    request.onerror = () => reject(request.error);
+    transaction.onerror = () => reject(transaction.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+  database.close();
+  return keys;
+}
+
+const NON_STRING_KEYS = [
+  ["number", 7],
+  ["boolean", true],
+  ["null", null],
+  ["array", ["draft"]],
+  ["object", { key: "draft" }],
+];
+
 test("browser conformance: public records persist across reopen", async () => {
   const factory = new IDBFactory();
   const locks = new ConformanceLockManager();
@@ -183,6 +208,93 @@ test("browser conformance: quota failures are typed and never silently succeed",
     await assert.rejects(() => store.write(record()), isCode("quota_exceeded"));
   } finally {
     IDBObjectStore.prototype.put = originalPut;
+    store.close();
+  }
+});
+
+test("browser conformance: non-string keys are rejected without storing state", async () => {
+  const factory = new IDBFactory();
+  const store = await IndexedDbDataStore.open(
+    config("non-string-keys", { indexedDB: factory }),
+  );
+  try {
+    for (const [label, key] of NON_STRING_KEYS) {
+      await assert.rejects(
+        () => store.write({ ...record(), key }),
+        isCode("invalid_key", "invalid_state_key"),
+        `write should reject a ${label} key`,
+      );
+      await assert.rejects(
+        () => store.read(key),
+        isCode("invalid_key", "invalid_state_key"),
+        `read should reject a ${label} key`,
+      );
+      await assert.rejects(
+        () => store.delete(key),
+        isCode("invalid_key", "invalid_state_key"),
+        `delete should reject a ${label} key`,
+      );
+    }
+    assert.deepEqual(await storedKeys(factory, "non-string-keys"), []);
+  } finally {
+    store.close();
+  }
+});
+
+test("browser conformance: key validation never coerces host objects", async () => {
+  const store = await IndexedDbDataStore.open(config("no-key-coercion"));
+  let coercions = 0;
+  const coercible = {
+    toString() {
+      coercions += 1;
+      return "draft";
+    },
+    valueOf() {
+      coercions += 1;
+      return "draft";
+    },
+  };
+  try {
+    await assert.rejects(
+      () => store.read(coercible),
+      isCode("invalid_key", "invalid_state_key"),
+    );
+    await assert.rejects(
+      () => store.write({ ...record(), key: coercible }),
+      isCode("invalid_key", "invalid_state_key"),
+    );
+    await assert.rejects(
+      () => store.delete(coercible),
+      isCode("invalid_key", "invalid_state_key"),
+    );
+    assert.equal(coercions, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test("browser conformance: numeric-looking string keys still round-trip", async () => {
+  const store = await IndexedDbDataStore.open(config("numeric-string-key"));
+  try {
+    const numericKey = { ...record(), key: "7" };
+    await store.write(numericKey);
+    assert.deepEqual(await store.read("7"), numericKey);
+    await store.delete("7");
+    assert.equal(await store.read("7"), null);
+  } finally {
+    store.close();
+  }
+});
+
+test("browser conformance: invalid deletes leave existing records intact", async () => {
+  const store = await IndexedDbDataStore.open(config("invalid-delete"));
+  try {
+    await store.write(record());
+    for (const [, key] of NON_STRING_KEYS) {
+      await assert.rejects(() => store.delete(key), isCode("invalid_key"));
+    }
+    assert.deepEqual(await store.read("draft"), record());
+  } finally {
     store.close();
   }
 });
