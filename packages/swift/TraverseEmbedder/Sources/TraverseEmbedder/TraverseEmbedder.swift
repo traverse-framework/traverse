@@ -3,6 +3,8 @@ import Foundation
 /// Public Swift surface for `embedder-api/1.1.0`.
 public enum TraverseEmbedder {
     public static let apiVersion = "1.1.0"
+    /// Shared conformance corpus revision (base scenarios remain 1.0.0).
+    public static let conformanceVersion = "1.0.0"
 }
 
 public struct TraverseBundle: Sendable, Equatable {
@@ -42,7 +44,7 @@ public struct TraverseReleaseEvidence: Sendable, Equatable {
     public init(
         packageVersion: String,
         runtimeWasmDigest: String,
-        conformanceVersion: String = TraverseEmbedder.apiVersion,
+        conformanceVersion: String = TraverseEmbedder.conformanceVersion,
         supportedHostVersions: [String]
     ) throws {
         guard !packageVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
