@@ -5,11 +5,18 @@
 **Status**: Approved (2026-09-14); **0.2.0 amend approved** 2026-09-16
   (Decisions 91–92 / Spec 138)
 **Canonical governing ID**: `137-host-connector-command-dispatch`
-**Version**: 0.2.0
+**Version**: 0.3.0
 **Extends**: `059-http-command-dispatch`, `103-application-connector-binding`,
 `104-mediated-connector-invocation`, `135-component-model-wit-host-capabilities`,
 `1259-portable-authority-contracts`, and (for `model.execute` semantics)
 `138-governed-exact-model-execution`.
+**Amendment (2026-09-18, version 0.2.0 -> 0.3.0, approved 2026-09-18)**: Decision 97 /
+Spec `140-host-authority-wit-adapters`. FR-006 no longer treats
+`traverse.audio-input` as native-only: a target with an activated adapter
+succeeds; a target with none fails `target_incompatible`. Adds operation
+`audio.permission.request`. The exclusion of Spec 135 applies to the *guest*
+WIT profile; host-adapter interfaces are WIT-defined per Spec 140.
+
 **Decision evidence**: Traverse #1384; Decision 84; ADR-0071; Decisions 91–92;
 ADR-0074 (Draft).
 **Input**: Callweave recording-to-analysis workflow contract, commit `0acc2e8`;
@@ -28,7 +35,8 @@ only WASM guest-to-host connector ABI (Spec 104) and is out of this surface.
 The Component Model `component-wit-v1` recording-host fake (Spec 135) is a
 distinct profile and MUST NOT be used here.
 
-The first bounded operation is `audio.capture` on `traverse.audio-input`.
+The first bounded operations are `audio.permission.request` and
+`audio.capture` on `traverse.audio-input` (Spec 140).
 `traverse.model-runtime` (`model.execute`, the `local-model-runtime` port)
 uses the same request/result/event/error **kinds**. Exact-ref model package
 manifests, guest ABI, Spec 526 package binding, host stage/read APIs, and
@@ -87,10 +95,11 @@ inference field semantics are governed by Spec 138.
   activated by the host/application. An unactivated binding fails with
   `unbound` before the adapter runs.
 - **FR-006 — Target neutrality**: Command, result, and event field names
-  are identical for `browser` and `macos`. `traverse.audio-input` is
-  native-only: a `browser` target with a local/native binding MUST fail
-  with `target_incompatible` before capture. Host adapters remain
-  target-specific implementations behind this contract.
+  are identical for `browser` and `macos`. A target
+  family with no activated adapter for the bound connector (or a binding that
+  does not declare that family) MUST fail with `target_incompatible` before
+  capture. Host adapters remain target-specific implementations of the
+  Spec 140 WIT interface behind this contract.
 - **FR-007 — Limits**: Runtime MUST reject oversized payloads and
   out-of-range duration/size fields with `input_limit_exceeded` without
   invoking the adapter. Audio capture payload MUST declare
@@ -176,8 +185,12 @@ inference field semantics are governed by Spec 138.
    through a fake host and returns an opaque `artifact_ref`.
 2. The same command with a missing, incompatible, unconfigured, or
    unactivated binding fails before the fake host runs.
-3. A `browser` target with a native-only audio binding fails with
-   `target_incompatible`. The command/event field names match macos.
+3. A target family with no activated `traverse.audio-input` adapter fails
+   with `target_incompatible`. Command/event field names match on every
+   target.
+3a. `audio.permission.request` returns `granted`, `denied`, or
+   `unavailable` as a non-secret `permission_state`; `denied`/`unavailable`
+   complete as typed failures (Spec 140 FR-010).
 4. Oversized duration/bytes/payload fail with `input_limit_exceeded`.
 5. `cancel_requested` and idempotent replay/conflict behave as specified.
 6. Structured events and errors contain no host-private leakage.

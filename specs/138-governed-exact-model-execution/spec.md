@@ -4,10 +4,15 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
+**Amendment (2026-09-18, version 0.1.0 -> 0.2.0, approved 2026-09-18)**: Decision 97 /
+Spec `140-host-authority-wit-adapters`. Host staging is generalized from
+model input/output to bounded host artifacts, including audio produced by
+`traverse.audio-input`. Model-named APIs remain valid.
+
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
 (`MODEL_EXECUTION_SLICE_REQUEST.md`).
@@ -101,6 +106,19 @@ Unknown fields fail closed.
 - `stage_model_input(bytes, limits) -> input_ref`
 - `read_model_output(output_ref) -> bytes` (size-capped)
 - Optional explicit drop APIs MAY exist; shutdown MUST invalidate refs.
+
+### Generalized bounded artifacts (Spec 140)
+
+- `stage_artifact(bytes, limits) -> artifact_ref` and
+  `read_artifact(artifact_ref) -> bytes` (size-capped) are the generic
+  spellings; `stage_model_input` / `read_model_output` remain for models.
+- A host adapter (for example `traverse.audio-input`) MAY stage its own
+  result and return the opaque `artifact_ref`; the ref is not a path or URL.
+- The runtime resolves an `artifact_ref` to a bounded capability input
+  **only through runtime-mediated staging**; guests never read host storage.
+- An adapter-produced `artifact_ref` is **multi-read** until explicit drop,
+  host TTL, or runtime shutdown, so runtime-owned retries can re-read it.
+  Model `input_ref` keeps its single-consume rule below.
 
 **Lifetime:**
 

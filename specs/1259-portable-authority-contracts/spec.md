@@ -2,9 +2,18 @@
 
 **Status**: Approved (2026-09-07)
 **Canonical governing ID**: `1259-portable-authority-contracts`
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Extends**: `039-connector-plugin-architecture`, `103-application-connector-binding`, and `104-mediated-connector-invocation`.
 **Decision evidence**: Traverse #1259 decision records (2026-09-07).
+
+**Amendment (2026-09-18, version 0.1.0 -> 0.2.0, approved 2026-09-18)**: Decision 97 /
+Spec `140-host-authority-wit-adapters`. "Native-only" is no longer a contract
+classification. `traverse.audio-input` is a target-neutral authority: bindings
+declare supported target families, and a target with no activated adapter fails
+closed with `target_incompatible`. Host adapters are defined by a WIT interface
+(Spec 140). FR-001/FR-002 and acceptance scenario 1 are amended below; the
+"browser emulation of native authority" non-goal now means only that a host
+MUST NOT fake an adapter it cannot honor.
 
 ## Purpose and boundary
 
@@ -20,15 +29,17 @@ cross-application evidence justifies a distinct typed authority.
 
 ## Requirements
 
-- **FR-001**: `traverse.audio-input` MUST be a native-only connector with
-  bounded generic capture requests. Its request/response envelope MUST declare
+- **FR-001**: `traverse.audio-input` MUST be a target-neutral connector with
+  bounded generic capture requests (Spec 140). Its request/response envelope MUST declare
   duration/size limits, correlation, cancellation, and a content reference or
   host-mediated result; it MUST NOT contain device IDs, microphone names,
   codec vendors, paths, credentials, or application workflow fields.
 - **FR-002**: Audio-input discovery, permission prompts, device selection, and
-  byte capture MUST remain host-owned. Browser activation of a native-only
-  binding MUST reject deterministically before invocation with a stable,
-  secret-free target-incompatible error.
+  byte capture MUST remain host-owned. Activation of a binding on a target
+  family it does not declare, or for which the host supplies no adapter, MUST
+  reject deterministically before invocation with a stable, secret-free
+  target-incompatible error. Adapters on every supported target implement the
+  Spec 140 WIT interface.
 - **FR-003**: `traverse.model-runtime` MUST be a vendor-neutral connector for
   activating and executing a declared model artifact. Its typed envelope MUST
   cover artifact identity, licence/policy reference, resource limits, label
@@ -61,8 +72,9 @@ cross-application evidence justifies a distinct typed authority.
 ## Acceptance scenarios
 
 1. A native host activates `traverse.audio-input` with a compatible private
-   binding and processes a bounded capture request; a browser rejects that
-   binding before invocation without exposing host details.
+   binding and processes a bounded capture request; a target that supplies no
+   adapter rejects that binding before invocation without exposing host
+   details.
 2. A declared model artifact runs through a compatible `traverse.model-runtime`
    binding under policy and resource limits; an untrusted or incompatible
    binding fails closed with a stable redacted error.

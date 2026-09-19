@@ -1729,13 +1729,15 @@
     },
     {
       "id": "1259-portable-authority-contracts",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/1259-portable-authority-contracts/spec.md",
       "governs": [
         "specs/1259-portable-authority-contracts/",
-        "docs/adr/0060-portable-audio-and-model-runtime-authority.md"
+        "docs/adr/0060-portable-audio-and-model-runtime-authority.md",
+        "specs/140-host-authority-wit-adapters/",
+        "docs/adr/0076-target-neutral-host-authorities-wit-adapters.md"
       ]
     },
     {
@@ -1884,7 +1886,7 @@
     },
     {
       "id": "137-host-connector-command-dispatch",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/137-host-connector-command-dispatch/spec.md",
@@ -1899,12 +1901,14 @@
         "docs/adr/0071-host-connector-command-dispatch.md",
         "docs/host-connector-command-dispatch.md",
         "docs/adr/0074-governed-exact-model-execution.md",
-        "specs/138-governed-exact-model-execution/"
+        "specs/138-governed-exact-model-execution/",
+        "specs/140-host-authority-wit-adapters/",
+        "docs/adr/0076-target-neutral-host-authorities-wit-adapters.md"
       ]
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1917,7 +1921,9 @@
         "fixtures/models/",
         "docs/exact-ref-model-execution.md",
         "docs/decision-log.md",
-        "packages/web/TraverseEmbedder/"
+        "packages/web/TraverseEmbedder/",
+        "specs/140-host-authority-wit-adapters/",
+        "docs/adr/0076-target-neutral-host-authorities-wit-adapters.md"
       ]
     },
     {
@@ -1941,6 +1947,30 @@
         "docs/adr/0075-embedder-app-state-machine-saga.md",
         "docs/decision-log.md",
         "contracts/app-runtime/"
+      ]
+    },
+    {
+      "id": "140-host-authority-wit-adapters",
+      "version": "0.1.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/140-host-authority-wit-adapters/spec.md",
+      "governs": [
+        "crates/traverse-runtime/",
+        "crates/traverse-embedder/",
+        "crates/traverse-runtime-wasm/",
+        "contracts/connectors/",
+        "packages/web/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/TraverseEmbedder/",
+        "packages/dotnet/TraverseEmbedder/",
+        "scripts/ci/embedder_conformance/",
+        "specs/140-host-authority-wit-adapters/",
+        "specs/137-host-connector-command-dispatch/",
+        "specs/138-governed-exact-model-execution/",
+        "specs/1259-portable-authority-contracts/",
+        "docs/adr/0076-target-neutral-host-authorities-wit-adapters.md",
+        "docs/decision-log.md"
       ]
     },
     {
