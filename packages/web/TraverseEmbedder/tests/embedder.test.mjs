@@ -350,3 +350,15 @@ test("artifact digest verification accepts matching bytes and rejects mismatches
     },
   );
 });
+
+test("embedder-api 1.1.0: test double accepts app_command envelopes", () => {
+  const double = new EmbedderTestDouble()
+    .withTargetOutput("app_command:submit", { ok: true });
+  const events = [];
+  double.subscribe((event) => events.push(event));
+  const outcome = double.submit({ kind: "app_command", command: "submit", payload: { n: 1 } });
+  assert.equal(outcome.status, "accepted");
+  assert.ok(outcome.sessionId);
+  assert.equal(events.some((e) => e.event_type === "state_changed"), true);
+  assert.equal(EMBEDDER_API_VERSION, "1.1.0");
+});

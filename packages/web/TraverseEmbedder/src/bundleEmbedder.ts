@@ -42,6 +42,8 @@ import type {
   EventCallback,
   JsonValue,
   ShutdownOutcome,
+  AppCommandEnvelope,
+  EmbedderEvent,
   SubmitOutcome,
   TraverseEmbedderApi,
 } from "./types.js";
@@ -224,6 +226,58 @@ function asJsonValue(value: RuntimeWasmJson): JsonValue {
   return value as JsonValue;
 }
 
+
+
+function mapAppLifecycleEventType(
+  rawType: string,
+): EmbedderEvent["event_type"] {
+  switch (rawType) {
+    case "state_changed":
+    case "capability_invoked":
+    case "capability_result":
+    case "capability_event":
+    case "capability_succeeded":
+    case "capability_failed":
+    case "host_connector_succeeded":
+    case "host_connector_failed":
+    case "host_connector_cancelled":
+    case "host_connector_timeout":
+    case "error":
+    case "heartbeat":
+      return rawType;
+    default:
+      return "error";
+  }
+}
+
+function primaryInvokeWasmTarget(
+  stateMachine: JsonValue,
+  wasmTargets: ReadonlyMap<string, WasmTarget>,
+): WasmTarget | null {
+  const record = asRecord(stateMachine);
+  const states = record?.["states"];
+  if (Array.isArray(states)) {
+    for (const entry of states) {
+      const state = asRecord(entry);
+      const invoke = state ? asRecord(state["invoke"]) : null;
+      const capabilityId =
+        invoke && typeof invoke["capability_id"] === "string"
+          ? invoke["capability_id"]
+          : null;
+      if (capabilityId !== null) {
+        const target = wasmTargets.get(capabilityId);
+        if (target !== undefined) {
+          return target;
+        }
+      }
+    }
+  }
+  for (const target of wasmTargets.values()) {
+    return target;
+  }
+  return null;
+}
+
 export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly core: EmbedderCore;
   private readonly runtimeModule: WebAssembly.Module;
@@ -231,7 +285,10 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly wasmTargets: ReadonlyMap<string, WasmTarget>;
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
   private readonly wasmComponentEvidence: readonly JsonValue[];
+  private readonly stateMachine: JsonValue | null;
   private indexedDbDataStore: IndexedDbDataStore | null = null;
+  /** Long-lived Spec 139 app orchestrator instance (process-local sessions). */
+  private appHost: RuntimeWasmHost | null = null;
 
   private constructor(
     core: EmbedderCore,
@@ -240,6 +297,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     wasmTargets: ReadonlyMap<string, WasmTarget>,
     workflowTargets: ReadonlyMap<string, WorkflowTarget>,
     wasmComponentEvidence: readonly JsonValue[],
+    stateMachine: JsonValue | null,
   ) {
     this.core = core;
     this.runtimeModule = runtimeModule;
@@ -247,6 +305,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     this.wasmTargets = wasmTargets;
     this.workflowTargets = workflowTargets;
     this.wasmComponentEvidence = wasmComponentEvidence;
+    this.stateMachine = stateMachine;
   }
 
   /**
@@ -481,10 +540,26 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       wasmTargets,
       workflowTargets,
       wasmComponentEvidence,
+      summary.stateMachine,
     );
   }
 
-  submit(targetId: string, input: JsonValue): SubmitOutcome {
+  submit(targetId: string, input: JsonValue): SubmitOutcome;
+  submit(envelope: AppCommandEnvelope): SubmitOutcome;
+  submit(
+    targetIdOrEnvelope: string | AppCommandEnvelope,
+    input?: JsonValue,
+  ): SubmitOutcome {
+    if (typeof targetIdOrEnvelope !== "string") {
+      return this.submitAppCommand(targetIdOrEnvelope);
+    }
+    const targetId = targetIdOrEnvelope;
+    if (input === undefined) {
+      return this.core.rejectedSubmit(
+        targetId,
+        embedderError("invalid_app_command", "workflow/capability submit requires an input object"),
+      );
+    }
     if (this.core.stopped) {
       return this.core.rejectedSubmit(targetId, runtimeStoppedError());
     }
@@ -512,7 +587,141 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     );
   }
 
+  private submitAppCommand(envelope: AppCommandEnvelope): SubmitOutcome {
+    if (this.core.stopped) {
+      return this.core.rejectedSubmit("app_command", runtimeStoppedError());
+    }
+    if (envelope.kind !== "app_command") {
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError("invalid_app_command", "app command envelope requires kind 'app_command'"),
+      );
+    }
+    if (typeof envelope.command !== "string" || envelope.command.trim() === "") {
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError("invalid_app_command", "app_command requires a non-empty command"),
+      );
+    }
+    if (this.stateMachine === null) {
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError(
+          "app_state_machine_unavailable",
+          "application bundle does not declare a state_machine",
+        ),
+      );
+    }
+    let host: RuntimeWasmHost;
+    try {
+      host = this.ensureAppHost();
+    } catch (error) {
+      const message =
+        error instanceof RuntimeWasmHostError
+          ? error.message
+          : `app orchestrator init failed: ${String(error)}`;
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError("app_state_machine_unavailable", message),
+      );
+    }
+
+    const wire: Record<string, JsonValue> = {
+      kind: "app_command",
+      command: envelope.command,
+      payload: envelope.payload ?? {},
+    };
+    if (envelope.sessionId !== undefined && envelope.sessionId !== null) {
+      wire.session_id = envelope.sessionId;
+    }
+
+    let response: RuntimeWasmJson;
+    try {
+      response = host.submit(new TextEncoder().encode(JSON.stringify(wire)));
+    } catch (error) {
+      const message =
+        error instanceof RuntimeWasmHostError
+          ? error.message
+          : `app_command submit failed: ${String(error)}`;
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError("invalid_app_command", message),
+      );
+    }
+
+    const responseRecord =
+      typeof response === "object" && response !== null && !Array.isArray(response)
+        ? response
+        : null;
+    const sessionId =
+      responseRecord && typeof responseRecord.session_id === "string"
+        ? responseRecord.session_id
+        : this.core.nextSessionId();
+    const status = responseRecord?.status === "rejected" ? "rejected" : "accepted";
+    if (status === "rejected") {
+      const errorMessage =
+        typeof responseRecord?.error === "string"
+          ? responseRecord.error
+          : "app_command rejected";
+      return this.core.rejectedSubmit(
+        "app_command",
+        embedderError("invalid_app_command", errorMessage),
+      );
+    }
+
+    let drained: RuntimeWasmJson[] = [];
+    try {
+      drained = host.drainEvents();
+    } catch {
+      drained = [];
+    }
+    for (const event of drained) {
+      if (typeof event !== "object" || event === null || Array.isArray(event)) {
+        continue;
+      }
+      const rawType = typeof event.type === "string" ? event.type : "error";
+      const eventType = mapAppLifecycleEventType(rawType);
+      const eventSession =
+        typeof event.session_id === "string" ? event.session_id : sessionId;
+      const data = (event.data ?? {}) as JsonValue;
+      this.core.emit(eventType, eventSession, data);
+    }
+
+    return { sessionId, status: "accepted", error: null };
+  }
+
+  private ensureAppHost(): RuntimeWasmHost {
+    if (this.appHost !== null) {
+      return this.appHost;
+    }
+    if (this.stateMachine === null) {
+      throw new RuntimeWasmHostError("state_machine missing");
+    }
+    const nested = primaryInvokeWasmTarget(this.stateMachine, this.wasmTargets);
+    if (nested === null) {
+      throw new RuntimeWasmHostError(
+        "state_machine invoke capability is not present in the bundle",
+      );
+    }
+    const host = RuntimeWasmHost.fromModule(this.runtimeModule);
+    host.init(
+      {
+        capabilityId: this.core.appId,
+        capabilityVersion: this.core.appVersion,
+        serviceType: mapServiceType(nested.serviceType),
+        emits: nested.emits,
+        hostPlacementTarget: "browser",
+        permittedTargets: ["browser"],
+        stateMachine: this.stateMachine as RuntimeWasmJson,
+      },
+      nested.wasmBytes,
+    );
+    this.appHost = host;
+    return host;
+  }
+
   private submitCapability(targetId: string, input: JsonValue): SubmitOutcome {
+
     const target = this.wasmTargets.get(targetId);
     if (target === undefined) {
       return this.core.rejectedSubmit(
@@ -775,6 +984,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   }
 
   shutdown(): ShutdownOutcome {
+    if (this.appHost !== null) {
+      try {
+        this.appHost.shutdown();
+      } catch {
+        // Best-effort; core.shutdown remains authoritative for the public surface.
+      }
+      this.appHost = null;
+    }
+
     return this.core.shutdown();
   }
 

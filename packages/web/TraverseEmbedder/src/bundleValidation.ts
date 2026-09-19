@@ -40,6 +40,8 @@ export interface BundleCompatibility {
   readonly components: readonly BundleComponentSummary[];
   readonly workflowIds: readonly string[];
   readonly workflows: readonly BundleWorkflowSummary[];
+  /** Spec 139 app state machine document when declared on the manifest. */
+  readonly stateMachine: JsonValue | null;
 }
 
 export function asRecord(value: JsonValue | undefined): { [key: string]: JsonValue } | null {
@@ -193,7 +195,16 @@ export function validateBundleCompatibility(
     }
   }
 
-  return { appId, appVersion, schemaVersion, components, workflowIds, workflows };
+  const stateMachineValue = manifest["state_machine"];
+  const stateMachine =
+    stateMachineValue !== undefined &&
+    stateMachineValue !== null &&
+    typeof stateMachineValue === "object" &&
+    !Array.isArray(stateMachineValue)
+      ? stateMachineValue
+      : null;
+
+  return { appId, appVersion, schemaVersion, components, workflowIds, workflows, stateMachine };
 }
 
 /**

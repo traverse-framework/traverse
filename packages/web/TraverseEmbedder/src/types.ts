@@ -1,12 +1,12 @@
 /**
- * Shared wire types for the `embedder-api/1.0.0` boundary (spec 057). These
- * are wire-identical in field naming to the Rust `traverse-embedder` crate
- * so every platform observes the same operations, event envelope, and error
- * codes (spec 057 FR-003).
+ * Shared wire types for the `embedder-api/1.1.0` boundary (spec 057, amended
+ * by Spec 139). These are wire-identical in field naming to the Rust
+ * `traverse-embedder` crate so every platform observes the same operations,
+ * event envelope, and error codes (spec 057 FR-003).
  */
 
 /** Implemented embedder API version (spec 057 IDL `$id` suffix). */
-export const EMBEDDER_API_VERSION = "1.0.0";
+export const EMBEDDER_API_VERSION = "1.1.0";
 
 /** Conformance suite revision this package certifies against (spec 057). */
 export const EMBEDDER_CONFORMANCE_VERSION = "1.0.0";
@@ -37,7 +37,10 @@ export type EmbedderErrorCode =
   | "capability_not_compatible"
   | "platform_not_supported"
   | "instance_not_found"
-  | "instance_not_running";
+  | "instance_not_running"
+  | "app_state_machine_unavailable"
+  | "ambiguous_submit"
+  | "invalid_app_command";
 
 /** A structured embedder-boundary error. */
 export interface EmbedderError {
@@ -50,6 +53,17 @@ export interface SubmitOutcome {
   readonly sessionId: string | null;
   readonly status: "accepted" | "rejected";
   readonly error: EmbedderError | null;
+}
+
+/**
+ * Spec 139 / embedder-api `1.1.0` app-command submit envelope.
+ * Discriminated from workflow/capability submit by `kind: "app_command"`.
+ */
+export interface AppCommandEnvelope {
+  readonly kind: "app_command";
+  readonly command: string;
+  readonly payload?: JsonValue;
+  readonly sessionId?: string | null;
 }
 
 /** `compatible.start` output. */
@@ -153,7 +167,14 @@ export interface EmbedderEvent {
     | "capability_invoked"
     | "capability_result"
     | "capability_event"
-    | "error";
+    | "capability_succeeded"
+    | "capability_failed"
+    | "host_connector_succeeded"
+    | "host_connector_failed"
+    | "host_connector_cancelled"
+    | "host_connector_timeout"
+    | "error"
+    | "heartbeat";
   readonly workspace_id: string;
   readonly app_id: string;
   readonly session_id: string | null;
@@ -164,15 +185,24 @@ export interface EmbedderEvent {
 export type EventCallback = (event: EmbedderEvent) => void;
 
 /**
- * The uniform `embedder-api/1.0.0` operation surface (spec 057 FR-003).
+ * The uniform `embedder-api/1.1.0` operation surface (spec 057 FR-003,
+ * Spec 139 app-command amendment).
  *
  * `EmbedderTestDouble` is the deterministic in-memory implementation
  * required by spec 068 FR-006; `BundleEmbedder` is the production
  * runtime-WASM implementation. Both implement this identical boundary.
  */
 export interface TraverseEmbedderApi {
-  /** `runtime.submit`: execute a bundled workflow or WASM capability. */
+  /**
+   * `runtime.submit` workflow/capability form: execute a bundled workflow or
+   * WASM capability by target id.
+   */
   submit(targetId: string, input: JsonValue): SubmitOutcome;
+  /**
+   * `runtime.submit` app-command form (Spec 139): dispatch a state-machine
+   * command into the process-local app session owned by `runtime.wasm`.
+   */
+  submit(envelope: AppCommandEnvelope): SubmitOutcome;
   /**
    * `runtime.subscribe`: register an ordered event callback. Previously
    * emitted events are replayed to the new subscriber first, so late

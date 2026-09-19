@@ -15,6 +15,7 @@ import type {
   EmbeddedTraceDetail,
   EmbeddedTracePage,
   EventCallback,
+  AppCommandEnvelope,
   JsonValue,
   ShutdownOutcome,
   SubmitOutcome,
@@ -65,7 +66,44 @@ export class EmbedderTestDouble implements TraverseEmbedderApi, EmbeddedTraceApi
     return this;
   }
 
-  submit(targetId: string, input: JsonValue): SubmitOutcome {
+  submit(targetId: string, input: JsonValue): SubmitOutcome;
+  submit(envelope: AppCommandEnvelope): SubmitOutcome;
+  submit(
+    targetIdOrEnvelope: string | AppCommandEnvelope,
+    input?: JsonValue,
+  ): SubmitOutcome {
+    if (typeof targetIdOrEnvelope !== "string") {
+      const envelope = targetIdOrEnvelope;
+      if (this.core.stopped) {
+        return this.core.rejectedSubmit("app_command", runtimeStoppedError());
+      }
+      const key = `app_command:${envelope.command}`;
+      const result = this.scripted.get(key) ?? this.scripted.get("app_command");
+      if (result === undefined) {
+        return this.core.rejectedSubmit(
+          "app_command",
+          embedderError(
+            "target_not_found",
+            `no scripted result for app_command '${envelope.command}'`,
+          ),
+        );
+      }
+      const sessionId = this.core.nextSessionId();
+      if (result.kind === "error") {
+        this.core.emit("error", sessionId, {
+          status: "error",
+          error: { code: result.code, message: result.message, details: {} },
+        });
+        return { sessionId, status: "accepted", error: null };
+      }
+      this.core.emit("state_changed", sessionId, {
+        command: envelope.command,
+        payload: envelope.payload ?? {},
+        output: result.output,
+      });
+      return { sessionId, status: "accepted", error: null };
+    }
+    const targetId = targetIdOrEnvelope;
     void input;
     if (this.core.stopped) {
       return this.core.rejectedSubmit(targetId, runtimeStoppedError());

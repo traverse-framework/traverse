@@ -2,7 +2,7 @@
 
 Public Traverse platform embedder SDK for Web/TypeScript clients — the Web
 row of spec `068-public-platform-embedder-packages`, exposing the
-[`embedder-api/1.0.0`](../../../specs/057-embeddable-runtime-host/embedder-api-1.0.0.json)
+[`embedder-api/1.1.0`](../../../specs/057-embeddable-runtime-host/embedder-api-1.0.0.json)
 operation surface. Production execution requires no `traverse-cli serve`
 sidecar and no `.traverse/server.json` discovery.
 
@@ -44,7 +44,7 @@ executes it with no `traverse-cli serve` process running.
 
 ## Operations
 
-| `embedder-api/1.0.0` | TypeScript surface |
+| `embedder-api/1.1.0` | TypeScript surface |
 | --- | --- |
 | `runtime.submit` | `TraverseEmbedderApi.submit(targetId, input)` |
 | `runtime.subscribe` | `TraverseEmbedderApi.subscribe(callback)` (ordered, replayed) |
@@ -135,7 +135,7 @@ stable snake_case codes. Secrets never appear in events, errors, or evidence
 
 ## Compatibility and upgrade policy
 
-- Embedder API `1.0.0`; a new IDL version requires a new conformance suite
+- Embedder API `1.1.0`; a new IDL version requires a new conformance suite
   revision and a release stating the new version in its evidence.
 - Supported bundle schema versions: `1.0.0`.
 - Semantic versioning; the package versions in lockstep with the Traverse
