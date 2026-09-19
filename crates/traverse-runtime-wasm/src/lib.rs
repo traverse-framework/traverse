@@ -292,6 +292,7 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
     submit_capability(state, request)
 }
 
+#[allow(clippy::too_many_lines)]
 fn submit_app_command(
     state: &mut RuntimeState,
     envelope: app_sm::AppCommandEnvelope,
@@ -307,11 +308,10 @@ fn submit_app_command(
     state.execution_counter = state.execution_counter.saturating_add(1);
     let (session_id, previous_state) = match envelope.session_id {
         Some(session_id) => {
-            let current = state
-                .app_sessions
-                .get(&session_id)
-                .map(|session| session.state.clone())
-                .unwrap_or_else(|| machine.initial_state.clone());
+            let current = state.app_sessions.get(&session_id).map_or_else(
+                || machine.initial_state.clone(),
+                |session| session.state.clone(),
+            );
             (session_id, current)
         }
         None => (
@@ -541,6 +541,7 @@ fn run_capability_invoke_wait(
 }
 
 /// Capability / workflow stdin path (pre-Spec-139 submit shape).
+#[allow(clippy::too_many_lines)]
 fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
     state.execution_counter += 1;
     let session_id = format!("{}-exec-{}", state.capability_id, state.execution_counter);

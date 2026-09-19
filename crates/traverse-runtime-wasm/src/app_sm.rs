@@ -21,6 +21,7 @@ pub(crate) struct AppState {
 pub(crate) enum AppInvoke {
     Capability {
         capability_id: String,
+        #[allow(dead_code)]
         input_from: String,
     },
     HostConnector {
@@ -36,6 +37,7 @@ pub(crate) struct AppTransition {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppSession {
+    #[allow(dead_code)]
     pub(crate) session_id: String,
     pub(crate) state: String,
     pub(crate) wait: Option<AppWait>,
@@ -273,6 +275,8 @@ pub(crate) fn resolve_lifecycle_transition(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::{
         SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
         resolve_lifecycle_transition,
