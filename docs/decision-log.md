@@ -4849,3 +4849,59 @@ Approved by Enrico in `/brainstorm` (2026-09-18): one generic capability plus
 WIT; WIT for the host-adapter interface; explicit permission step; Spec 138
 staging; generic, not platform-split, scope. Recast as project-wide rules at
 Enrico's direction.
+
+## Decision 98: Backlog Triage — Release Gate, Planner Ordering Contract, Durable-Session Parking
+
+- **Date**: 2026-09-19
+- **Status**: Accepted
+- **Governing specs**: `136-native-embedder-publication` (release gate);
+  `1277-browser-local-workflow-composition` (planner ordering, spec amendment
+  when implemented); builds on Decisions 9, 96, and 97
+- **Related issues**: `#1504`, `#1370`, `#1371`, `#1372`, `#1399`, `#1470`,
+  `#1492`, `#1494`, `#1495`, `#1497`, `#1499`, `#1502`, `#1503`, `#1471`
+- **Origin**: `/brainstorm` on tickets that need Enrico or need a spec.
+
+### Context
+
+Eight tickets (`#1471`, `#1492`, `#1494`, `#1495`, `#1497`, `#1499`, `#1502`,
+`#1503`) were blocked on the Spec 140 / ADR-0076 governance change, which was
+approved in a local commit but never pushed or opened as a PR. Separately,
+the v0.13.0 release carries the Spec 139/140 work but is gated on hardware
+evidence and org credentials only Enrico can provide.
+
+### Decision
+
+1. **Spec 140 governance change lands first.** The
+   `docs/spec-140-host-authority-wit-adapters` branch is rebased on `main` and
+   opened as a PR under the standing spec-approval policy (it aligns with
+   Decision 97). This unblocks the eight tickets above.
+2. **Release gate: keep the one-tag rule (Decision 9).** v0.13.0 ships all
+   channels (crates, web, Swift, Maven, NuGet) on one tag. The Swift
+   XCFramework waits on Enrico's physical iOS + macOS wasmi 2.0.0 evidence
+   (`#1370`). This is a target-tooling constraint, not a scope split, per
+   Decision 97 rule 5.
+3. **Maven Central and nuget.org credentials are not yet provisioned.**
+   Enrico owns setup; `#1371` and `#1372` stay Blocked until then. A setup
+   checklist is to be attached to those tickets.
+4. **Planner proposal ordering (`#1399`) becomes a stated contract:** return
+   all valid proposals up to `BROWSER_PLAN_MAX_CANDIDATES`, ordered
+   shortest-chain-first; ties broken lexicographically by the ordered
+   capability-id chain. The TypeScript `browserLocalPlan` and Rust
+   `build_chains` twins must both satisfy it, with a conformance test. No
+   caller-supplied preference is added.
+5. **Durable app state-machine session recovery (`#1470`) is parked:** remove
+   `needs-spec`, keep `future`. Revisit when a real app requires crash
+   recovery; it must stay layered apart from Spec 1285 DataStore rehydration.
+
+### Alternatives considered
+
+- Release: ship v0.13.0 without Swift; Swift from CI-only evidence; per-family
+  tags (all rejected: break Decision 9/97 rule 5 or Spec 074 device fixtures).
+- Planner order: caller preference (unneeded API surface); unordered (conflicts
+  with the determinism rule); registry-snapshot tie-break (twin drift risk).
+- `#1470`: brainstorm now (speculative, embedder parity still in flight).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-19): every recommended option
+chosen; credentials confirmed as not yet set up and owned by Enrico.
