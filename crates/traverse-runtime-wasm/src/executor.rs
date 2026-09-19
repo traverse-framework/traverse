@@ -12,13 +12,21 @@
 //! not a second implementation of that logic (spec `1402` FR-005).
 
 use traverse_contracts::{EventReference, ServiceType, validate_emit_event};
-use wasmi::{Caller, Config, Engine, Extern, Linker, Module, Store, StoreLimitsBuilder};
+use wasmi::{
+    Caller, Config, Engine, Error as WasmiError, Extern, Linker, Module, Store, StoreLimitsBuilder,
+};
 
 const WASI_ERRNO_SUCCESS: i32 = 0;
 const WASI_ERRNO_BADF: i32 = 8;
 const WASI_ERRNO_INVAL: i32 = 28;
 const FUEL: u64 = 10_000_000;
-const MAX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+/// Default nested linear-memory ceiling (Spec 1402 FR-012 / Spec 139 FR-018).
+///
+/// Matches native `WasmExecutor` / issue `#1336` so certified registry
+/// planners that reserve ~273 pages (~17 MiB) initial memory can instantiate
+/// inside `runtime.wasm` (for example
+/// `core.create-audio-capture-request-plan@1.0.0`).
+const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 
 /// One capability-declared event, accepted by the shared validation core
 /// during a nested execution. The caller (`lib.rs`) turns these into
@@ -161,9 +169,13 @@ fn wasi_fd_write(
     WASI_ERRNO_SUCCESS
 }
 
-fn wasi_proc_exit(_caller: Caller<'_, NestedStoreState>, _code: i32) {
-    // Matches the native executor: a non-zero guest exit does not itself
-    // fail the host call — the caller inspects stdout/exit status separately.
+/// WASI's `proc_exit` never returns to its caller. A wasm32 command binary's
+/// compiler relies on that contract: LLVM emits `unreachable` after the call.
+/// A host stub that returns `()` therefore traps on every guest that calls
+/// `proc_exit` (including success/`exit(0)`). Returning `Err(i32_exit(code))`
+/// halts the way native Wasmtime's `I32Exit` does — status `0` is success.
+fn wasi_proc_exit(_caller: Caller<'_, NestedStoreState>, code: i32) -> Result<(), WasmiError> {
+    Err(WasmiError::i32_exit(code))
 }
 
 /// `traverse_host::emit_event` as seen by the *nested* capability — same
@@ -245,9 +257,13 @@ pub fn execute_nested_capability(
     let start = instance
         .get_typed_func::<(), ()>(&store, "_start")
         .map_err(|error| format!("missing _start: {error}"))?;
-    start
-        .call(&mut store, ())
-        .map_err(|error| format!("execution: {error}"))?;
+    if let Err(error) = start.call(&mut store, ()) {
+        // Guest `proc_exit` surfaces as `i32_exit` (see `wasi_proc_exit`);
+        // status `0` is successful completion, matching native Wasmtime.
+        if error.i32_exit_status() != Some(0) {
+            return Err(format!("execution: {error}"));
+        }
+    }
 
     let final_state = store.into_data();
     Ok(NestedExecutionOutcome {
@@ -410,6 +426,80 @@ mod tests {
         let outcome =
             execute_nested_capability(&artifact, b"{}", &ServiceType::Subscribable, &declared())?;
         assert!(outcome.stdout.is_empty());
+        Ok(())
+    }
+
+    /// Regression for Spec 1402 FR-012 / issue #1467: modules that reserve
+    /// ~273 pages (~17.8 MiB) of initial memory — the released
+    /// `core.create-audio-capture-request-plan@1.0.0` shape — must instantiate
+    /// under the nested wasmi ceiling (32 MiB), not the old 16 MiB denial.
+    #[test]
+    fn nested_executor_instantiates_modules_with_273_page_initial_memory() -> Result<(), String> {
+        const LARGE_INITIAL_MEMORY_WAT: &str = r#"
+          (module
+            (memory (export "memory") 273)
+            (func (export "_start"))
+          )
+        "#;
+        let artifact =
+            wat::parse_str(LARGE_INITIAL_MEMORY_WAT).map_err(|error| format!("wat: {error}"))?;
+        let outcome = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
+        assert!(outcome.stdout.is_empty());
+        assert!(outcome.emitted_events.is_empty());
+        Ok(())
+    }
+
+    /// Real registry capabilities call `proc_exit(0)` after writing stdout;
+    /// the host must halt (not fall through to `unreachable`) and succeed.
+    #[test]
+    fn capability_calling_proc_exit_zero_after_output_succeeds() -> Result<(), String> {
+        const WRITE_THEN_PROC_EXIT_ZERO_WAT: &str = r#"
+          (module
+            (import "wasi_snapshot_preview1" "fd_write"
+              (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 5000) "{\"valid\":true}")
+            (func (export "_start")
+              (i32.store (i32.const 0) (i32.const 5000))
+              (i32.store (i32.const 4) (i32.const 14))
+              (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 100)))
+              (call $proc_exit (i32.const 0))
+            )
+          )
+        "#;
+        let artifact = wat::parse_str(WRITE_THEN_PROC_EXIT_ZERO_WAT)
+            .map_err(|error| format!("wat: {error}"))?;
+        let outcome = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[])?;
+        if outcome.stdout != br#"{"valid":true}"# {
+            return Err("stdout mismatch after proc_exit(0)".to_string());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn capability_calling_proc_exit_nonzero_is_a_distinct_execution_failure() -> Result<(), String>
+    {
+        const PROC_EXIT_NONZERO_WAT: &str = r#"
+          (module
+            (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (func (export "_start")
+              (call $proc_exit (i32.const 2))
+            )
+          )
+        "#;
+        let artifact =
+            wat::parse_str(PROC_EXIT_NONZERO_WAT).map_err(|error| format!("wat: {error}"))?;
+        let result = execute_nested_capability(&artifact, b"{}", &ServiceType::Stateless, &[]);
+        let Err(error) = result else {
+            return Err("non-zero proc_exit must fail the call".to_string());
+        };
+        if error.contains("unreachable") {
+            return Err(format!(
+                "must not be misreported as the unrelated unreachable trap: {error}"
+            ));
+        }
         Ok(())
     }
 }

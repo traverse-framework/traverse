@@ -2,7 +2,7 @@
 
 **Status**: Approved
 **Canonical governing ID**: `1402-runtime-wasm-orchestrator-convergence`
-**Version**: 1.2.0
+**Version**: 1.3.0
 **Extends**: `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
 `098-capability-event-host-abi`, `995-local-executor-event-emission`
 **Amends**: `1277-browser-local-workflow-composition` (its composed-execution
@@ -46,7 +46,14 @@ code. Building the first production host-side driver that loads `runtime.wasm`
 for real dispatch and publishes its drained events to a real `EventBroker`
 remains open work, tracked as a new, separately-scoped issue (not #1419's).
 
-## Purpose
+**Amendment (2026-09-18, version 1.2.0 -> 1.3.0, approved 2026-09-18)**: Decision 96 /
+Spec `139-embedder-app-state-machine-execution` / ADR-0075: (1) nested wasmi
+linear-memory default ceiling MUST be **32 MiB**, matching native `WasmExecutor`
+(`#1336`), so certified planners reserving ~17 MiB initial memory instantiate;
+requires rebuild + re-certify of published `runtime.wasm`. (2) `runtime.wasm`
+MUST execute application `state_machine` command sessions (Spec 139), including
+Process Manager waits and Spec 137 host-connector bridge requests with
+host-provided monotonic deadline callbacks — not capability-only submit.
 
 `runtime.wasm` (built by `crates/traverse-native-bridge`) is a hand-authored
 WAT fixture that returns hardcoded canned JSON for a fixed 3-event sequence.
@@ -187,6 +194,11 @@ question, out of scope here as it was for the originating investigation).
   `traverse-embedder-web` consumers without a documented major-version bump
   and migration note, given the package is already in production use
   (`1277`, npm `0.9.0+`).
+- **FR-012**: Nested capability execution inside `runtime.wasm` MUST default to a
+  32 MiB linear-memory ceiling (Spec 139 FR-018), matching native `WasmExecutor`.
+- **FR-013**: `runtime.wasm` MUST execute Spec 139 app state-machine command
+  sessions, including host-connector bridge emits and host monotonic deadline
+  callbacks for dual-deadline saga waits.
 
 ## Acceptance Scenarios
 

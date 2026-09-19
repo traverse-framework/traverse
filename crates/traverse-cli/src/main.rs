@@ -3,6 +3,7 @@
 mod app_availability;
 mod app_events_websocket;
 mod app_runtime_events;
+mod app_state_machine_validate;
 pub mod authoring_telemetry;
 mod capability_packages;
 mod federation_operator;
@@ -3318,6 +3319,23 @@ fn app_validate_at(
 
     if let Some(error) = validate_app_manifest_metadata_for_cli(manifest_path)? {
         return render_app_validation_failure(manifest_path, vec![error]);
+    }
+
+    let raw_manifest = read_json_file(manifest_path)?;
+    let route_violations =
+        app_state_machine_validate::validate_state_machine_invoke_routes(&raw_manifest);
+    if !route_violations.is_empty() {
+        return render_app_validation_failure(
+            manifest_path,
+            route_violations
+                .into_iter()
+                .map(|violation| AppValidationError {
+                    code: violation.code.to_string(),
+                    path: violation.path,
+                    message: violation.message,
+                })
+                .collect(),
+        );
     }
 
     let manifest = if let Some(workspace_id) = workspace_id {
@@ -9916,6 +9934,39 @@ mod tests {
             .map(|error| error["code"].as_str().unwrap_or_default())
             .collect::<Vec<_>>();
         assert!(codes.contains(&"app_state_machine_undefined_capability"));
+    }
+
+    #[test]
+    fn app_validate_rejects_invoke_missing_unhappy_routes() {
+        let temp_dir = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &temp_dir,
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            None,
+        );
+        let mut manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).expect("manifest must read"))
+                .expect("manifest must parse");
+        // Drop capability_failed — Spec 052 FR-013 / Spec 139 FR-014.
+        manifest["state_machine"]["states"][1]["transitions"] = serde_json::json!([
+            { "on": "capability_succeeded", "to": "results" }
+        ]);
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest must serialize"),
+        )
+        .expect("manifest must write");
+
+        let output =
+            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
+        let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(
+            json["errors"][0]["code"],
+            "app_state_machine_missing_unhappy_routes"
+        );
     }
 
     #[test]

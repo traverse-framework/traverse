@@ -4711,3 +4711,76 @@ implements ticket 1, per this repo's immutable-spec-conflict convention.
 
 Approved by Enrico in `/brainstorm` session (2026-09-17); each
 recommendation accepted as given.
+
+## Decision 96: Standalone Embedder App State Machine (Generic Platform Package)
+
+- **Date**: 2026-09-18
+- **Status**: Accepted
+- **Governing specs**: `139-embedder-app-state-machine-execution` (new, Approved);
+  amendments to `052-app-state-machine` (1.1.0), `057-embeddable-runtime-host`
+  (1.1.0), `059-http-command-dispatch` (1.1.0),
+  `1402-runtime-wasm-orchestrator-convergence` (1.3.0); embedder-api `1.1.0`
+- **Related ADRs**: ADR-0075 (Accepted); ADR-0071; ADR-0072
+- **Related issues**: `#1466` (governance), `#1467` (nested 32 MiB),
+  `#1468` (SM/saga/`serve` parity), `#1469` (Swift wasmi-only),
+  `#1470` (durable SM follow-up), `#1471` (browser audio authority deferred);
+  `#1370` remains separate wasmi 2.0.0 XCFramework re-pin
+- **Origin**: `/brainstorm` on standalone embedder gaps surfaced by downstream
+  integration attempts (forcing customer, not product scope)
+
+### Context
+
+Production standalone apps need a runtime-owned application `state_machine`
+inside embedders (Spec 057 FR-016) without `traverse-cli serve`. As of v0.12.0,
+command dispatch existed on `serve` only; `runtime.wasm` nested wasmi capped
+memory at 16 MiB (blocking ~17.8 MiB certified planners); Swift’s production
+wasmi path was still packaged behind a hard WasmKit dependency. Spec 1259
+native-only audio remains unchanged this package.
+
+### Decision
+
+1. **Generic platform work** — not app-specific; downstream apps are acceptance
+   customers only.
+2. **Objective = embedder core first** — SM execution + nested 32 MiB + Swift
+   wasmi packaging; defer new host authorities (including browser mic).
+3. **SM executes inside `runtime.wasm`** (not per-embedder hosts).
+4. **Spec 137 via bridge host-import** from the SM; authority stays host-owned.
+5. **Process Manager / Saga** for post-emit unhappy paths, with correlated
+   terminal events.
+6. **Dual deadlines** — host may finish first; runtime hard ceiling via
+   **host-provided monotonic timer callbacks**; first correlated terminal
+   event wins.
+7. **Extend `runtime.submit`** with typed `app_command` envelope (fail-closed
+   discrimination); no new `runtime.command` verb this cut.
+8. **Process-local SM sessions**; Stateful capability rehydration remains a
+   separate host DataStore / Spec 1285 layer.
+9. **Governance packaging** — new Spec 139 + ADR-0075; surgical amendments
+   elsewhere; Swift WasmKit removal is packaging under 074/076.
+10. **Nested memory = 32 MiB** matching `#1336` / native `WasmExecutor`, with
+    `runtime.wasm` recertification.
+11. **Swift production package is wasmi-only**; remove WasmKit from the
+    production target; `#1370` remains a separate wasmi 2.0.0 XCFramework
+    re-pin.
+12. **Semantic parity** between `serve` and embedder SM meaning.
+13. **Validate required unhappy routes + runtime fail-closed** if a terminal
+    event has no matching transition.
+14. **Four implementation tickets** after governance: memory recert; SM/saga/
+    serve parity; Swift wasmi-only; plus deferred follow-ups.
+15. **Manifest**: mutually exclusive `invoke.capability_id` vs
+    `invoke.host_connector`; distinct `host_connector_*` completion events.
+
+### Alternatives considered
+
+Full browser-audio parity in the same package (deferred); per-embedder SM
+hosts; embedder pre-dispatch of connectors; request/reply without timeout
+states; transactional outbox durability now; fuel- or guest-wall-clock
+timeouts; new `runtime.command` operation; durable SM sessions now; coupling
+SM resume to Stateful rehydration; umbrella single mega-spec; keeping WasmKit
+as default; lowering planner artifacts instead of raising nested memory;
+reusing `capability_*` events for connectors.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` session (2026-09-18); each recommendation
+accepted as given (`ok`). Spec 139 and ADR-0075 are Approved under this
+decision.

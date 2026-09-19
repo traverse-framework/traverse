@@ -3,8 +3,15 @@
 **Feature Branch**: `057-embeddable-runtime-host`
 **Created**: 2026-07-06
 **Status**: Approved
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Input**: App-References Phase 3 architecture, Traverse issue #553, product decisions recorded 2026-07-06.
+
+**Amendment (2026-09-18, version 1.0.0 -> 1.1.0, approved 2026-09-18)**: Decision 96 /
+Spec `139-embedder-app-state-machine-execution` makes FR-016 executable:
+app state machines run inside `runtime.wasm`; `runtime.submit` accepts a typed
+`app_command` envelope in addition to workflow/capability targets; embedder-api
+documents the additive submit shapes as `1.1.0`. Saga/host-connector and timer
+port details live in Spec 139 and ADR-0075.
 
 ## Purpose
 
@@ -65,7 +72,7 @@ All platforms implement **`embedder-api/1.0.0`** with identical semantics. Versi
 |-----------|---------|
 | `runtime.init(manifest_bundle)` | Load embedded runtime WASM + bundled app manifest/WASM artifacts |
 | `runtime.shutdown()` | Tear down runtime and all compatible capabilities |
-| `runtime.submit(workflow_or_capability_id, input_json)` | Start execution (see 058 for pipeline ids) |
+| `runtime.submit(...)` | Start workflow/capability execution **or** submit an app state-machine command envelope (Spec 139); discriminator fail-closed |
 | `runtime.subscribe(callback)` | Deliver runtime state/output/error events to UI shell |
 | `compatible.start(capability_id, input_json)` | Start a compatible-mode capability instance |
 | `compatible.stop(capability_id)` | Graceful stop |
@@ -119,7 +126,9 @@ This spec extends **044** component manifests with:
 
 - **FR-001**: Traverse MUST ship a WASM build of the orchestrator suitable for embedding in downstream apps.
 - **FR-002**: Downstream apps MUST embed the orchestrator WASM; they MUST NOT require a user-started `traverse-cli serve` process in production.
-- **FR-003**: Platform embedders MUST implement `embedder-api/1.0.0` without platform-specific operation additions.
+- **FR-003**: Platform embedders MUST implement `embedder-api/1.1.0` (additive
+  submit command envelopes; supersedes `1.0.0` documentation) without
+  platform-specific operation additions.
 - **FR-004**: Embedder implementations MUST pass the cross-platform conformance suite defined in FR-015.
 - **FR-005**: WASM capabilities MUST execute under WASI sandbox via the embedded engine; embedder MUST NOT substitute custom file/network APIs for WASM modules.
 - **FR-006**: Compatible capabilities MUST be declared in app manifests with `execution_mode: compatible` and `platforms[]`.
@@ -132,7 +141,7 @@ This spec extends **044** component manifests with:
 - **FR-013**: Dev sidecar per **033** MAY be used for development and CI smoke tests; production builds MUST NOT depend on `.traverse/server.json` discovery.
 - **FR-014**: `traverse-cli app validate` MUST validate `execution_mode`, `platforms`, wrapper paths, and compatible contracts in addition to existing **044** rules.
 - **FR-015**: Traverse MUST provide `scripts/ci/embedder_conformance/` tests that every platform embedder MUST pass for a pinned embedder API version.
-- **FR-016**: Embedded runtime MUST support app state machines per **052** and pipeline workflows per **058** without client-side polling state machines.
+- **FR-016**: Embedded runtime MUST support app state machines per **052** / **139** and pipeline workflows per **058** without client-side polling state machines. App state-machine command dispatch MUST execute inside `runtime.wasm` (Spec 139); embedders MUST NOT re-implement the transition table.
 - **FR-017**: Embedded runtime event delivery to embedder `runtime.subscribe` MUST use the same JSON event shape as **033** SSE `data:` payloads where applicable, so UI clients can share parsing logic.
 - **FR-018**: Compatible wrapper contracts MUST define input/output JSON schemas identical in shape to WASM capability contracts for UI rendering consistency.
 - **FR-019**: On `runtime.shutdown`, embedder MUST kill all active compatible capabilities.
