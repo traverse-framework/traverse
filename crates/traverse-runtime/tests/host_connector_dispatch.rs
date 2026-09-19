@@ -13,6 +13,7 @@ pub struct FakeHostConnector {
     unavailable: bool,
     leaky: bool,
     cancel_on_invoke: bool,
+    empty_artifact: bool,
     permission_state: Option<HostConnectorPermissionState>,
 }
 
@@ -48,9 +49,19 @@ impl FakeHostConnector {
         self.leaky = leaky;
     }
 
+    /// Force an empty artifact reference on capture/model success.
+    pub fn set_empty_artifact(&mut self, empty: bool) {
+        self.empty_artifact = empty;
+    }
+
     /// Set the permission outcome returned for `audio.permission.request`.
     pub fn set_permission_state(&mut self, state: HostConnectorPermissionState) {
         self.permission_state = Some(state);
+    }
+
+    /// Clear the permission outcome so the adapter returns no `permission_state`.
+    pub fn clear_permission_state(&mut self) {
+        self.permission_state = None;
     }
 
     /// Number of adapter invokes (idempotent replay must not increment this).
@@ -100,6 +111,12 @@ impl HostConnectorPort for FakeHostConnector {
         if self.leaky {
             return Ok(HostConnectorHostResult {
                 artifact_ref: Some("microphone:/tmp/capture.wav".to_string()),
+                permission_state: None,
+            });
+        }
+        if self.empty_artifact {
+            return Ok(HostConnectorHostResult {
+                artifact_ref: Some(String::new()),
                 permission_state: None,
             });
         }
@@ -518,6 +535,100 @@ fn audio_permission_denied_and_unavailable_are_typed_failures() -> Result<(), St
     )?;
     assert_eq!(failed.error.code, HostConnectorErrorCode::Unavailable);
     assert_eq!(host.invoke_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn audio_permission_prompt_required_succeeds_and_payload_must_be_empty() -> Result<(), String> {
+    assert_eq!(HostConnectorPermissionState::Granted.as_str(), "granted");
+    assert_eq!(HostConnectorPermissionState::Denied.as_str(), "denied");
+    assert_eq!(
+        HostConnectorPermissionState::PromptRequired.as_str(),
+        "prompt_required"
+    );
+    assert_eq!(
+        HostConnectorPermissionState::Unavailable.as_str(),
+        "unavailable"
+    );
+
+    let activations = activated_audio();
+    let mut host = FakeHostConnector::new();
+    host.set_permission_state(HostConnectorPermissionState::PromptRequired);
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let dispatch = require_ok(
+        &permission_command("macos"),
+        &audio_manifest(),
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(
+        dispatch.permission_state,
+        Some(HostConnectorPermissionState::PromptRequired)
+    );
+
+    let mut host = FakeHostConnector::new();
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let mut bad = permission_command("macos");
+    bad.payload = json!({"gesture": "click"});
+    let failed = require_err(
+        &bad,
+        &audio_manifest(),
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(
+        failed.error.code,
+        HostConnectorErrorCode::InputLimitExceeded
+    );
+    assert_eq!(host.invoke_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn empty_placement_targets_and_missing_permission_state_fail_closed() -> Result<(), String> {
+    let activations = activated_audio();
+    let mut host = FakeHostConnector::new();
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let mut manifest = audio_manifest();
+    manifest.connector_bindings[0].placement_targets.clear();
+    let failed = require_err(
+        &audio_command("macos"),
+        &manifest,
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(
+        failed.error.code,
+        HostConnectorErrorCode::TargetIncompatible
+    );
+    assert_eq!(host.invoke_count(), 0);
+
+    let mut host = FakeHostConnector::new();
+    host.clear_permission_state();
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let failed = require_err(
+        &permission_command("macos"),
+        &audio_manifest(),
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(failed.error.code, HostConnectorErrorCode::Unavailable);
+
+    let mut host = FakeHostConnector::new();
+    host.set_empty_artifact(true);
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let failed = require_err(
+        &audio_command("macos"),
+        &audio_manifest(),
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(failed.error.code, HostConnectorErrorCode::Unavailable);
     Ok(())
 }
 
