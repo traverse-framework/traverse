@@ -35,6 +35,11 @@ export interface RuntimeWasmCapabilityInit {
     | "worker"
     | "device"
   )[];
+  /**
+   * Spec 139 app `state_machine` document. When present, `traverse_submit`
+   * accepts `kind: "app_command"` envelopes against this machine.
+   */
+  readonly stateMachine?: RuntimeWasmJson;
 }
 
 export class RuntimeWasmHostError extends Error {
@@ -214,7 +219,7 @@ export class RuntimeWasmHost {
    * (`[u32 LE header_len][JSON header][artifact]`).
    */
   init(capability: RuntimeWasmCapabilityInit, capabilityWasm: Uint8Array): RuntimeWasmJson {
-    const headerObject = {
+    const headerObject: Record<string, RuntimeWasmJson> = {
       capability_id: capability.capabilityId,
       capability_version: capability.capabilityVersion,
       service_type: capability.serviceType,
@@ -225,6 +230,10 @@ export class RuntimeWasmHost {
       host_placement_target: capability.hostPlacementTarget,
       permitted_targets: [...capability.permittedTargets],
     };
+    if (capability.stateMachine !== undefined) {
+      headerObject.state_machine = capability.stateMachine;
+      headerObject.app_id = capability.capabilityId;
+    }
     const headerBytes = encodeUtf8(JSON.stringify(headerObject));
     const headerLen = headerBytes.byteLength;
     if (headerLen > 0xffff_ffff) {

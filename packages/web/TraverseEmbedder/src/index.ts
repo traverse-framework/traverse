@@ -28,6 +28,7 @@ export {
   SUPPORTED_BUNDLE_SCHEMA_VERSIONS,
 } from "./types.js";
 export type {
+  AppCommandEnvelope,
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
   EmbedderError,

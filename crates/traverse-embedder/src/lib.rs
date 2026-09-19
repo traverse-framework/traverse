@@ -2,7 +2,7 @@
 //!
 //! This crate is the Linux GTK / CLI delivery of spec
 //! `068-public-platform-embedder-packages`: a versioned public package that
-//! implements every `embedder-api/1.0.0` operation (spec
+//! implements every `embedder-api/1.1.0` operation (spec
 //! `057-embeddable-runtime-host`) against an application-owned bundle,
 //! without any production dependency on `traverse-cli serve` or
 //! `.traverse/server.json` discovery.
@@ -19,7 +19,7 @@
 //!
 //! # Operation mapping
 //!
-//! | `embedder-api/1.0.0` operation | Rust surface |
+//! | `embedder-api/1.1.0` operation | Rust surface |
 //! | --- | --- |
 //! | `runtime.init` | [`BundleEmbedder::init`] (`Result` replaces `status: ready \| error`) |
 //! | `runtime.shutdown` | [`TraverseEmbedderApi::shutdown`] |
@@ -34,7 +34,7 @@
 //! Events are delivered synchronously, in emission order, as JSON values
 //! with a stable envelope (`kind: "embedder_event"`, `schema_version`,
 //! `event_id`, `sequence`, `event_type`, `workspace_id`, `app_id`,
-//! `session_id`, `data`). Event types are exactly the `embedder-api/1.0.0`
+//! `session_id`, `data`). Event types are exactly the `embedder-api/1.1.0`
 //! set the runtime produces here: `state_changed`, `capability_invoked`,
 //! `capability_result`, and `error`. Runtime execution errors surface inside
 //! `error` events with the runtime's stable `snake_case` error codes;
@@ -52,7 +52,7 @@
 //!
 //! # Compatibility and upgrade policy
 //!
-//! * Embedder API: `1.0.0` (`https://traverse.dev/embedder-api/1.0.0`).
+//! * Embedder API: `1.0.0` (`https://traverse.dev/embedder-api/1.1.0`).
 //!   A new IDL version requires a new conformance suite revision and a
 //!   minor (pre-1.0: patch-compatible) crate release that states the new
 //!   version in its release evidence.
@@ -125,7 +125,7 @@ use traverse_runtime::{
 };
 
 /// Implemented embedder API version (spec 057 IDL `$id` suffix).
-pub const EMBEDDER_API_VERSION: &str = "1.0.0";
+pub const EMBEDDER_API_VERSION: &str = "1.1.0";
 
 /// Conformance suite revision this package certifies against (spec 057).
 pub const EMBEDDER_CONFORMANCE_VERSION: &str = "1.0.0";
@@ -461,6 +461,12 @@ pub enum EmbedderErrorCode {
     InstanceNotFound,
     /// No running instance matches the request.
     InstanceNotRunning,
+    /// Bundle has no app state_machine or the orchestrator is not ready (Spec 139).
+    AppStateMachineUnavailable,
+    /// Submit payload is ambiguous between workflow/capability and app_command forms.
+    AmbiguousSubmit,
+    /// App-command envelope failed validation.
+    InvalidAppCommand,
 }
 
 impl EmbedderErrorCode {
@@ -479,6 +485,9 @@ impl EmbedderErrorCode {
             Self::PlatformNotSupported => "platform_not_supported",
             Self::InstanceNotFound => "instance_not_found",
             Self::InstanceNotRunning => "instance_not_running",
+            Self::AppStateMachineUnavailable => "app_state_machine_unavailable",
+            Self::AmbiguousSubmit => "ambiguous_submit",
+            Self::InvalidAppCommand => "invalid_app_command",
         }
     }
 }
@@ -568,7 +577,7 @@ pub struct ShutdownOutcome {
 /// Ordered, synchronous event subscriber.
 pub type EventCallback = Box<dyn FnMut(&Value) + Send>;
 
-/// The uniform `embedder-api/1.0.0` operation surface (spec 057 FR-003).
+/// The uniform `embedder-api/1.1.0` operation surface (spec 057 FR-003).
 ///
 /// [`BundleEmbedder`] is the production implementation;
 /// [`EmbedderTestDouble`] is the deterministic in-memory test double
@@ -1869,6 +1878,12 @@ mod tests {
                 EmbedderErrorCode::InstanceNotRunning,
                 "instance_not_running",
             ),
+            (
+                EmbedderErrorCode::AppStateMachineUnavailable,
+                "app_state_machine_unavailable",
+            ),
+            (EmbedderErrorCode::AmbiguousSubmit, "ambiguous_submit"),
+            (EmbedderErrorCode::InvalidAppCommand, "invalid_app_command"),
         ];
         for (code, expected) in codes {
             assert_eq!(code.as_str(), expected);
