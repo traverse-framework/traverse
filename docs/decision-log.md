@@ -4784,3 +4784,65 @@ reusing `capability_*` events for connectors.
 Approved by Enrico in `/brainstorm` session (2026-09-18); each recommendation
 accepted as given (`ok`). Spec 139 and ADR-0075 are Approved under this
 decision.
+
+## Decision 97: One Generic `traverse.audio-input` With a WIT Host-Adapter Interface (Browser + Native)
+
+- **Date**: 2026-09-18
+- **Status**: Accepted
+- **Governing specs**: amendments to `1259-portable-authority-contracts`
+  (FR-001/FR-002), `137-host-connector-command-dispatch` (FR-006 and the
+  Spec 135 exclusion), `138-governed-exact-model-execution` (host staging
+  covers audio artifacts); builds on `139-embedder-app-state-machine-execution`
+- **Related issues**: `#1471` (browser audio authority; superseded in scope by
+  this decision), `#1468` (embedder SM), `#1370` (Swift XCFramework, separate)
+- **Origin**: Callweave standalone browser + macOS request; `/brainstorm`
+  challenge: "why do we need a mic specific for browser?"
+
+### Context
+
+Spec 1259 made `traverse.audio-input` native-only and Spec 137 FR-006 rejects
+`browser` targets with `target_incompatible`. ADR-0060 records no technical
+browser limitation, only a non-goal of emulating native authority in the
+browser. The Spec 137 envelope is already target-neutral. A separate browser
+mic contract would force different manifests per target and break shared
+state-machine parity.
+
+### Decision
+
+1. **One generic capability**: `traverse.audio-input` is target-neutral. No
+   browser-specific connector ID. Bindings declare supported targets; an
+   activated binding with no adapter for the target still fails closed with
+   `target_incompatible`.
+2. **WIT defines the host-adapter interface** (browser and native adapters
+   implement the same interface). The SM envelope, result, and events stay the
+   Spec 137 JSON contract; the Spec 137 "MUST NOT use Spec 135" rule is amended
+   accordingly for the adapter interface only. Guests still gain no mic
+   authority.
+3. **Explicit permission step** in the WIT interface (permission status /
+   request), so the app state machine can declare a permission wait with its own
+   failure route. No gesture or permission token in the command envelope.
+4. **Storage reuses Spec 138 host staging**: the adapter writes the recording
+   to host-owned staging (OPFS/IndexedDB in browsers, file on native); the
+   analysis capability reads it via the opaque `artifact_ref`. Spec 138 is
+   amended if audio artifacts need explicit coverage. The proposed
+   `traverse.object-store` connector is not a dependency.
+5. **No platform-split sequencing**: the work is one generic contract for both
+   targets, not a macOS-first release with a browser follow-up. Independent
+   blockers (for example `#1370` device evidence for the Swift XCFramework)
+   remain separate constraints, not scope choices.
+
+### Alternatives considered
+
+Separate `traverse.browser-audio-input` connector (breaks shared manifest);
+keeping native-only with a host-injected `artifact_ref` (splits SM ownership,
+rejected by ADR-0075); permission handling hidden inside capture (gesture may
+expire, denial not deterministic); gesture token in the envelope (leaks a
+browser concept); depending on `traverse.object-store` (unapproved authority on
+the critical path); WIT replacing the Spec 137 envelope end to end (largest
+blast radius); platform-sequenced release (declined in favour of one generic
+contract).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-18): options 1-3 as recommended;
+sequencing answered as "make it generic instead" (decision 5).
