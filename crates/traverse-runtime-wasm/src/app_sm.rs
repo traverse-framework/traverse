@@ -45,9 +45,7 @@ pub(crate) struct AppSession {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppWait {
-    #[allow(dead_code)]
     pub(crate) command_id: String,
-    #[allow(dead_code)]
     pub(crate) kind: AppWaitKind,
 }
 
@@ -70,31 +68,40 @@ pub(crate) struct AppCommandEnvelope {
     pub(crate) session_id: Option<String>,
 }
 
+/// Spec 137 / 139 host-connector terminal delivered back into `runtime.wasm`
+/// over the existing `traverse_submit` ABI (no new bridge export).
+#[derive(Debug, Clone)]
+pub(crate) struct HostConnectorTerminal {
+    pub(crate) command_id: String,
+    pub(crate) session_id: String,
+    /// One of Spec 139 FR-010: `host_connector_succeeded|failed|cancelled|timeout`.
+    pub(crate) lifecycle_event: String,
+    pub(crate) payload: Value,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum SubmitDiscrimination {
     AppCommand(AppCommandEnvelope),
+    HostConnectorTerminal(HostConnectorTerminal),
     CapabilityOrWorkflow,
     Ambiguous,
     Invalid(String),
 }
 
-/// Fail-closed discrimination between Spec 068 workflow/capability submit and
-/// Spec 139 `app_command` envelopes.
+/// Fail-closed discrimination between Spec 068 workflow/capability submit,
+/// Spec 139 `app_command` envelopes, and Spec 137 host-connector terminals.
 pub(crate) fn discriminate_submit(request: &Value) -> SubmitDiscrimination {
     let Some(object) = request.as_object() else {
         return SubmitDiscrimination::Invalid("submit body must be a JSON object".to_string());
     };
-    let has_kind_app = object
-        .get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind == "app_command");
+    let kind = object.get("kind").and_then(Value::as_str);
     let has_target = object.contains_key("target_id");
     let has_command = object.contains_key("command");
 
-    if has_kind_app && has_target {
+    if kind == Some("app_command") && has_target {
         return SubmitDiscrimination::Ambiguous;
     }
-    if has_kind_app {
+    if kind == Some("app_command") {
         let command = match object.get("command").and_then(Value::as_str) {
             Some(command) if !command.trim().is_empty() => command.to_string(),
             _ => {
@@ -121,11 +128,71 @@ pub(crate) fn discriminate_submit(request: &Value) -> SubmitDiscrimination {
             session_id,
         });
     }
-    if has_command && !has_target {
+    if let Some(kind @ ("host_connector_result" | "deadline_fired")) = kind {
+        return parse_host_connector_terminal(object, kind);
+    }
+    if has_command && !has_target && kind.is_none() {
         // Bare `command` without `kind` is ambiguous with future envelopes.
         return SubmitDiscrimination::Ambiguous;
     }
     SubmitDiscrimination::CapabilityOrWorkflow
+}
+
+fn parse_host_connector_terminal(
+    object: &serde_json::Map<String, Value>,
+    kind: &str,
+) -> SubmitDiscrimination {
+    let command_id = match object.get("command_id").and_then(Value::as_str) {
+        Some(command_id) if !command_id.trim().is_empty() => command_id.to_string(),
+        _ => {
+            return SubmitDiscrimination::Invalid(
+                "host connector terminal requires a non-empty command_id".to_string(),
+            );
+        }
+    };
+    let session_id = match object.get("session_id").and_then(Value::as_str) {
+        Some(session_id) if !session_id.trim().is_empty() => session_id.to_string(),
+        _ => {
+            return SubmitDiscrimination::Invalid(
+                "host connector terminal requires a non-empty session_id".to_string(),
+            );
+        }
+    };
+    let lifecycle_event = if kind == "deadline_fired" {
+        "host_connector_timeout".to_string()
+    } else {
+        match object.get("result_class").and_then(Value::as_str) {
+            Some("succeeded") => "host_connector_succeeded".to_string(),
+            Some("failed") => "host_connector_failed".to_string(),
+            Some("cancelled") => "host_connector_cancelled".to_string(),
+            Some("timeout") => "host_connector_timeout".to_string(),
+            Some(other) => {
+                return SubmitDiscrimination::Invalid(format!(
+                    "unsupported host_connector_result result_class '{other}'"
+                ));
+            }
+            None => {
+                return SubmitDiscrimination::Invalid(
+                    "host_connector_result requires result_class".to_string(),
+                );
+            }
+        }
+    };
+    let payload = object
+        .get("payload")
+        .cloned()
+        .or_else(|| {
+            object
+                .get("artifact_ref")
+                .map(|artifact_ref| json!({ "artifact_ref": artifact_ref }))
+        })
+        .unwrap_or_else(|| json!({}));
+    SubmitDiscrimination::HostConnectorTerminal(HostConnectorTerminal {
+        command_id,
+        session_id,
+        lifecycle_event,
+        payload,
+    })
 }
 
 pub(crate) fn parse_state_machine(value: &Value) -> Result<AppStateMachine, String> {

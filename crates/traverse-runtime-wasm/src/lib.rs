@@ -27,8 +27,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 use app_sm::{
-    AppInvoke, AppSession, AppStateMachine, AppWait, AppWaitKind, SubmitDiscrimination,
-    discriminate_submit, parse_state_machine, resolve_command_transition,
+    AppInvoke, AppSession, AppStateMachine, AppWait, AppWaitKind, HostConnectorTerminal,
+    SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
     resolve_lifecycle_transition,
 };
 use executor::execute_nested_capability;
@@ -63,12 +63,10 @@ struct RuntimeState {
     /// Process-local Spec 139 sessions (FR-016).
     app_sessions: BTreeMap<String, AppSession>,
     /// Pending host-connector bridge requests awaiting host completion
-    /// (drained by the host adapter; populated on `invoke.host_connector`).
-    #[allow(dead_code)]
+    /// (returned once on the submit response; populated on `invoke.host_connector`).
     pending_host_connector: VecDeque<serde_json::Value>,
     /// Pending monotonic deadline registrations for dual-deadline waits
     /// (Spec 139 FR-012); host fires the ceiling callback.
-    #[allow(dead_code)]
     pending_deadlines: VecDeque<serde_json::Value>,
 }
 
@@ -262,6 +260,32 @@ struct SubmitResult {
     session_id: String,
     status: &'static str,
     error: Option<String>,
+    /// Spec 137 bridge requests staged during this submit (host drains once).
+    pending_host_connector: Vec<serde_json::Value>,
+    /// Dual-deadline registrations staged during this submit (host drains once).
+    pending_deadlines: Vec<serde_json::Value>,
+}
+
+impl SubmitResult {
+    fn rejected(session_id: String, error: String) -> Self {
+        Self {
+            session_id,
+            status: "rejected",
+            error: Some(error),
+            pending_host_connector: Vec::new(),
+            pending_deadlines: Vec::new(),
+        }
+    }
+
+    fn accepted(session_id: String) -> Self {
+        Self {
+            session_id,
+            status: "accepted",
+            error: None,
+            pending_host_connector: Vec::new(),
+            pending_deadlines: Vec::new(),
+        }
+    }
 }
 
 /// Runs `request` against the initialized capability / app state machine and
@@ -272,19 +296,14 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
             SubmitDiscrimination::AppCommand(envelope) => {
                 return submit_app_command(state, envelope);
             }
+            SubmitDiscrimination::HostConnectorTerminal(terminal) => {
+                return submit_host_connector_terminal(state, terminal);
+            }
             SubmitDiscrimination::Ambiguous => {
-                return SubmitResult {
-                    session_id: String::new(),
-                    status: "rejected",
-                    error: Some("ambiguous_submit".to_string()),
-                };
+                return SubmitResult::rejected(String::new(), "ambiguous_submit".to_string());
             }
             SubmitDiscrimination::Invalid(message) => {
-                return SubmitResult {
-                    session_id: String::new(),
-                    status: "rejected",
-                    error: Some(message),
-                };
+                return SubmitResult::rejected(String::new(), message);
             }
             SubmitDiscrimination::CapabilityOrWorkflow => {}
         }
@@ -298,11 +317,10 @@ fn submit_app_command(
     envelope: app_sm::AppCommandEnvelope,
 ) -> SubmitResult {
     let Some(machine) = state.app_state_machine.clone() else {
-        return SubmitResult {
-            session_id: String::new(),
-            status: "rejected",
-            error: Some("app_state_machine_not_initialized".to_string()),
-        };
+        return SubmitResult::rejected(
+            String::new(),
+            "app_state_machine_not_initialized".to_string(),
+        );
     };
 
     state.execution_counter = state.execution_counter.saturating_add(1);
@@ -333,11 +351,7 @@ fn submit_app_command(
                         "state": previous_state,
                     }),
                 ));
-                return SubmitResult {
-                    session_id,
-                    status: "rejected",
-                    error: Some("invalid_transition".to_string()),
-                };
+                return SubmitResult::rejected(session_id, "invalid_transition".to_string());
             }
         };
 
@@ -426,11 +440,101 @@ fn submit_app_command(
         }
     }
 
-    SubmitResult {
-        session_id,
-        status: "accepted",
-        error: None,
+    finish_accepted_with_pending(state, session_id)
+}
+
+fn finish_accepted_with_pending(state: &mut RuntimeState, session_id: String) -> SubmitResult {
+    let mut result = SubmitResult::accepted(session_id);
+    result.pending_host_connector = state.pending_host_connector.drain(..).collect();
+    result.pending_deadlines = state.pending_deadlines.drain(..).collect();
+    result
+}
+
+fn submit_host_connector_terminal(
+    state: &mut RuntimeState,
+    terminal: HostConnectorTerminal,
+) -> SubmitResult {
+    let Some(machine) = state.app_state_machine.clone() else {
+        return SubmitResult::rejected(
+            terminal.session_id,
+            "app_state_machine_not_initialized".to_string(),
+        );
+    };
+    let Some(session) = state.app_sessions.get(&terminal.session_id).cloned() else {
+        // Late / unknown terminal: idempotent ignore (Spec 139 first-wins).
+        return SubmitResult::accepted(terminal.session_id);
+    };
+    let Some(wait) = session.wait.as_ref() else {
+        return SubmitResult::accepted(terminal.session_id);
+    };
+    if wait.command_id != terminal.command_id {
+        return SubmitResult::accepted(terminal.session_id);
     }
+    if !matches!(wait.kind, AppWaitKind::HostConnector { .. }) {
+        return SubmitResult::rejected(
+            terminal.session_id,
+            "host_connector_terminal_for_non_host_wait".to_string(),
+        );
+    }
+
+    let invoking_state = session.state.clone();
+    let session_id = terminal.session_id.clone();
+    let command_id = terminal.command_id.clone();
+    let lifecycle_event_name = terminal.lifecycle_event.as_str();
+
+    state.pending_events.push_back(lifecycle_event(
+        lifecycle_event_name,
+        &session_id,
+        &terminal.payload,
+    ));
+
+    match resolve_lifecycle_transition(&machine, &invoking_state, lifecycle_event_name) {
+        Ok(Some(next_state)) => {
+            state.pending_events.push_back(lifecycle_event(
+                "state_changed",
+                &session_id,
+                &serde_json::json!({
+                    "state": next_state,
+                    "previous_state": invoking_state,
+                    "command_id": command_id,
+                    "on": lifecycle_event_name,
+                }),
+            ));
+            if let Some(session) = state.app_sessions.get_mut(&session_id) {
+                session.state = next_state;
+                session.wait = None;
+            }
+        }
+        Ok(None) => {
+            // Spec 139 FR-015: unmatched terminal fail-closes the session wait.
+            state.pending_events.push_back(lifecycle_event(
+                "error",
+                &session_id,
+                &serde_json::json!({
+                    "code": "no_matching_transition",
+                    "message": format!(
+                        "no {lifecycle_event_name} transition from '{invoking_state}'"
+                    ),
+                    "state": invoking_state,
+                }),
+            ));
+            if let Some(session) = state.app_sessions.get_mut(&session_id) {
+                session.wait = None;
+            }
+        }
+        Err(message) => {
+            state.pending_events.push_back(lifecycle_event(
+                "error",
+                &session_id,
+                &serde_json::json!({
+                    "code": "invalid_state",
+                    "message": message,
+                }),
+            ));
+        }
+    }
+
+    SubmitResult::accepted(session_id)
 }
 
 fn run_capability_invoke_wait(
@@ -576,11 +680,7 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
                     ),
                 }),
             ));
-            return SubmitResult {
-                session_id,
-                status: "accepted",
-                error: None,
-            };
+            return SubmitResult::accepted(session_id);
         }
         Err(PlacementError::NoEligibleTarget) => {
             state.pending_events.push_back(lifecycle_event(
@@ -596,11 +696,7 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
                     "error": "placement failed: NoEligibleTarget",
                 }),
             ));
-            return SubmitResult {
-                session_id,
-                status: "accepted",
-                error: None,
-            };
+            return SubmitResult::accepted(session_id);
         }
         Ok(decision) => {
             state.pending_events.push_back(lifecycle_event(
@@ -650,11 +746,7 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
         }
     }
 
-    SubmitResult {
-        session_id,
-        status: "accepted",
-        error: None,
-    }
+    SubmitResult::accepted(session_id)
 }
 
 /// Writes `ptr`/`len` (as two little-endian `i32`s) to the descriptor
@@ -811,18 +903,19 @@ pub extern "C" fn traverse_submit(ptr: i32, len: i32, out_descriptor: i32) -> i3
         None => serde_json::json!({"status": "error", "error": "not initialized"}),
         Some(state) => {
             let result = submit(state, &request);
-            match result.error {
-                Some(error) => serde_json::json!({
-                    "session_id": result.session_id,
-                    "status": result.status,
-                    "error": error,
-                }),
-                None => serde_json::json!({
-                    "session_id": result.session_id,
-                    "status": result.status,
-                    "error": null,
-                }),
+            let mut response = serde_json::json!({
+                "session_id": result.session_id,
+                "status": result.status,
+                "error": result.error,
+            });
+            if !result.pending_host_connector.is_empty() {
+                response["pending_host_connector"] =
+                    serde_json::Value::Array(result.pending_host_connector);
             }
+            if !result.pending_deadlines.is_empty() {
+                response["pending_deadlines"] = serde_json::Value::Array(result.pending_deadlines);
+            }
+            response
         }
     };
     let ok = response
@@ -1268,6 +1361,136 @@ mod tests {
                 .get(&result.session_id)
                 .map(|s| s.state.as_str()),
             Some("done")
+        );
+    }
+
+    #[test]
+    fn host_connector_wait_returns_pending_and_first_terminal_wins() {
+        let machine = parse_state_machine(&serde_json::json!({
+            "initial_state": "idle",
+            "states": [
+                {
+                    "id": "idle",
+                    "transitions": [{ "on": "capture", "to": "capturing" }]
+                },
+                {
+                    "id": "capturing",
+                    "invoke": { "host_connector": "capture_audio" },
+                    "transitions": [
+                        { "on": "host_connector_succeeded", "to": "done" },
+                        { "on": "host_connector_failed", "to": "error" },
+                        { "on": "host_connector_cancelled", "to": "cancelled" },
+                        { "on": "host_connector_timeout", "to": "timed_out" }
+                    ]
+                },
+                { "id": "done", "transitions": [] },
+                { "id": "error", "transitions": [] },
+                { "id": "cancelled", "transitions": [] },
+                { "id": "timed_out", "transitions": [] }
+            ]
+        }))
+        .expect("machine");
+
+        let mut state = RuntimeState {
+            capability_id: "demo.app".to_string(),
+            service_type: ServiceType::Stateless,
+            declared_emits: Vec::new(),
+            permitted_targets: vec![ExecutionTarget::Local],
+            host_placement_target: ExecutionTarget::Local,
+            target_hint: None,
+            runtime_snapshot: RuntimeSnapshot::default(),
+            wasm_artifact: Vec::new(),
+            execution_counter: 0,
+            pending_events: VecDeque::new(),
+            app_state_machine: Some(machine),
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
+        };
+
+        let accepted = submit(
+            &mut state,
+            br#"{"kind":"app_command","command":"capture","payload":{"max_duration_ms":1000}}"#,
+        );
+        assert_eq!(accepted.status, "accepted");
+        assert_eq!(accepted.pending_host_connector.len(), 1);
+        assert_eq!(accepted.pending_deadlines.len(), 1);
+        assert_eq!(
+            accepted.pending_host_connector[0]["command"],
+            "capture_audio"
+        );
+        let command_id = accepted.pending_host_connector[0]["command_id"]
+            .as_str()
+            .expect("command_id")
+            .to_string();
+        let session_id = accepted.session_id.clone();
+        assert!(
+            state
+                .app_sessions
+                .get(&session_id)
+                .and_then(|s| s.wait.as_ref())
+                .is_some()
+        );
+
+        let success = serde_json::json!({
+            "kind": "host_connector_result",
+            "schema_version": "1.0.0",
+            "result_class": "succeeded",
+            "command_id": command_id.clone(),
+            "session_id": session_id.clone(),
+            "artifact_ref": "audio-ref-1"
+        });
+        let first = submit(&mut state, success.to_string().as_bytes());
+        assert_eq!(first.status, "accepted");
+        assert_eq!(
+            state
+                .app_sessions
+                .get(&accepted.session_id)
+                .map(|s| s.state.as_str()),
+            Some("done")
+        );
+        assert!(
+            state
+                .app_sessions
+                .get(&accepted.session_id)
+                .and_then(|s| s.wait.as_ref())
+                .is_none()
+        );
+
+        let late_timeout = serde_json::json!({
+            "kind": "deadline_fired",
+            "command_id": command_id,
+            "session_id": session_id
+        });
+        let second = submit(&mut state, late_timeout.to_string().as_bytes());
+        assert_eq!(second.status, "accepted");
+        assert_eq!(
+            state
+                .app_sessions
+                .get(&accepted.session_id)
+                .map(|s| s.state.as_str()),
+            Some("done"),
+            "late deadline must not override first terminal"
+        );
+
+        let types: Vec<String> = state
+            .pending_events
+            .iter()
+            .map(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(bytes).expect("json")["type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(types.contains(&"host_connector_succeeded".to_string()));
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| *t == "host_connector_timeout")
+                .count(),
+            0,
+            "late timeout must be ignored without emitting"
         );
     }
 }
