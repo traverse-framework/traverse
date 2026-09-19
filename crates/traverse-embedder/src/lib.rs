@@ -461,11 +461,11 @@ pub enum EmbedderErrorCode {
     InstanceNotFound,
     /// No running instance matches the request.
     InstanceNotRunning,
-    /// Bundle has no app state_machine or the orchestrator is not ready (Spec 139).
+    /// Bundle has no app `state_machine` or the orchestrator is not ready (Spec 139).
     AppStateMachineUnavailable,
-    /// Submit payload is ambiguous between workflow/capability and app_command forms.
+    /// Submit payload is ambiguous between workflow/capability and `app_command` forms.
     AmbiguousSubmit,
-    /// App-command envelope failed validation.
+    /// `app_command` envelope failed validation.
     InvalidAppCommand,
 }
 
