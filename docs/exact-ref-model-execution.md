@@ -10,6 +10,7 @@ Owner-approved Decisions 91–92. Public invoke remains Spec 137
 | --- | --- |
 | App `exact_model_dependencies` | Exact pins (`model_id`, `version`, `digest`) |
 | `stage_model_input` / `read_model_output` | Host embedder I/O (opaque refs) |
+| `stage_artifact` / `read_artifact` | Generic bounded artifacts (Spec 140): opaque, multi-read until drop or shutdown; runtime `ModelIoStore`, web `ModelIoStore`, Swift `ArtifactStagingStore` |
 | `model.execute` | Command port; must-match `model_ref`, `policy_ref`, `data_classification` |
 | `ExactModelHostConnector` | Native wasm-cpu adapter (`traverse_runtime::exact_model`) |
 | Fixture | `fixtures/models/fixture-echo-1.0.0/` |

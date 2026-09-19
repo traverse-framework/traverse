@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ExactModelBrowserHost,
+  ExactModelError,
+  ModelIoStore,
   encodeGuestFrame,
   normalizeModelExecuteEvidence,
   PLACEMENT_WASM_CPU,
@@ -244,4 +246,39 @@ test("browser offline cache miss is model_unavailable", async () => {
       }),
     (error) => error.code === "model_unavailable",
   );
+});
+
+test("artifact refs are multi-read, bounded, opaque, and separate from model refs", () => {
+  const io = new ModelIoStore();
+  assert.throws(() => io.stageArtifact(new Uint8Array(0), 8), (e) => e instanceof ExactModelError && e.code === "input_limit_exceeded");
+  assert.throws(() => io.stageArtifact(new Uint8Array(6), 4), (e) => e.code === "input_limit_exceeded");
+  const bytes = Uint8Array.from([1, 2, 3]);
+  const ref = io.stageArtifact(bytes, 8);
+  assert.equal(ref, "artifact-1");
+  assert.ok(!ref.includes("/") && !ref.includes(":"));
+  // Bytes are copied in and out: caller mutation never reaches the store.
+  bytes[0] = 9;
+  const first = io.readArtifact(ref, 8);
+  first[1] = 9;
+  assert.deepEqual([...io.readArtifact(ref, 8)], [1, 2, 3]);
+  assert.throws(() => io.readArtifact(ref, 2), (e) => e.code === "input_limit_exceeded");
+  assert.throws(() => io.readArtifact("artifact-9", 8), (e) => e.code === "unavailable");
+  const inputRef = io.stageModelInput(Uint8Array.from([1]), 8);
+  assert.throws(() => io.readArtifact(inputRef, 8), (e) => e.code === "unavailable");
+  io.takeInput(inputRef);
+  assert.throws(() => io.takeInput(inputRef), (e) => e.code === "invalid_input");
+  assert.deepEqual([...io.readArtifact(ref, 8)], [1, 2, 3]);
+  io.dropRef(ref);
+  assert.throws(() => io.readArtifact(ref, 8), (e) => e.code === "unavailable");
+});
+
+test("shutdown invalidates every staged ref", () => {
+  const io = new ModelIoStore();
+  const artifactRef = io.stageArtifact(Uint8Array.from([1]), 8);
+  const inputRef = io.stageModelInput(Uint8Array.from([1]), 8);
+  const outputRef = io.putOutput(Uint8Array.from([1]));
+  io.shutdown();
+  assert.throws(() => io.readArtifact(artifactRef, 8), (e) => e.code === "unavailable");
+  assert.throws(() => io.takeInput(inputRef), (e) => e.code === "invalid_input");
+  assert.throws(() => io.readModelOutput(outputRef, 8), (e) => e.code === "unavailable");
 });
