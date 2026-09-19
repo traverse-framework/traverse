@@ -20,11 +20,17 @@
 //! scope of this exception and this crate's exact exported symbol set.
 #![allow(unsafe_code)]
 
+mod app_sm;
 mod executor;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
+use app_sm::{
+    AppInvoke, AppSession, AppStateMachine, AppWait, AppWaitKind, SubmitDiscrimination,
+    discriminate_submit, parse_state_machine, resolve_command_transition,
+    resolve_lifecycle_transition,
+};
 use executor::execute_nested_capability;
 use traverse_contracts::{
     EventReference, ExecutionTarget, PlacementConstraintEvaluator, PlacementError,
@@ -51,6 +57,19 @@ struct RuntimeState {
     wasm_artifact: Vec<u8>,
     execution_counter: u64,
     pending_events: VecDeque<Vec<u8>>,
+    /// Spec 139 app state machine (optional). When present, `app_command`
+    /// envelopes are dispatched here instead of as bare capability input.
+    app_state_machine: Option<AppStateMachine>,
+    /// Process-local Spec 139 sessions (FR-016).
+    app_sessions: BTreeMap<String, AppSession>,
+    /// Pending host-connector bridge requests awaiting host completion
+    /// (drained by the host adapter; populated on `invoke.host_connector`).
+    #[allow(dead_code)]
+    pending_host_connector: VecDeque<serde_json::Value>,
+    /// Pending monotonic deadline registrations for dual-deadline waits
+    /// (Spec 139 FR-012); host fires the ceiling callback.
+    #[allow(dead_code)]
+    pending_deadlines: VecDeque<serde_json::Value>,
 }
 
 static STATE: Mutex<Option<RuntimeState>> = Mutex::new(None);
@@ -69,6 +88,7 @@ struct InitPayload {
     target_hint: Option<ExecutionTarget>,
     runtime_snapshot: RuntimeSnapshot,
     wasm_artifact: Vec<u8>,
+    app_state_machine: Option<AppStateMachine>,
 }
 
 fn parse_execution_target(raw: &str) -> Option<ExecutionTarget> {
@@ -165,10 +185,15 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
 
     let header: serde_json::Value =
         serde_json::from_slice(header_bytes).map_err(|error| format!("init header: {error}"))?;
+    let app_state_machine = match header.get("state_machine") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(parse_state_machine(value)?),
+    };
     let capability_id = header
         .get("capability_id")
+        .or_else(|| header.get("app_id"))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "init header missing capability_id".to_string())?
+        .ok_or_else(|| "init header missing capability_id (or app_id for app mode)".to_string())?
         .to_string();
     let service_type_str = header
         .get("service_type")
@@ -219,6 +244,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         target_hint,
         runtime_snapshot,
         wasm_artifact,
+        app_state_machine,
     })
 }
 
@@ -231,13 +257,291 @@ fn lifecycle_event(kind: &str, session_id: &str, data: &serde_json::Value) -> Ve
     .unwrap_or_else(|_| b"{\"type\":\"encode_error\"}".to_vec())
 }
 
-/// Runs `request` against the initialized capability and queues the
-/// resulting lifecycle + domain events. Pure state manipulation — no
-/// pointers — kept separate from the `extern "C"` boundary for testability.
-/// Always succeeds: a nested-execution failure becomes a `"failed"`
-/// `capability_result` event, not an error return — matching the fixture's
-/// fire-and-forget submit/event-driven-completion shape.
-fn submit(state: &mut RuntimeState, request: &[u8]) -> String {
+/// Result of a `traverse_submit` dispatch.
+struct SubmitResult {
+    session_id: String,
+    status: &'static str,
+    error: Option<String>,
+}
+
+/// Runs `request` against the initialized capability / app state machine and
+/// queues the resulting lifecycle + domain events.
+fn submit(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(request) {
+        match discriminate_submit(&value) {
+            SubmitDiscrimination::AppCommand(envelope) => {
+                return submit_app_command(state, envelope);
+            }
+            SubmitDiscrimination::Ambiguous => {
+                return SubmitResult {
+                    session_id: String::new(),
+                    status: "rejected",
+                    error: Some("ambiguous_submit".to_string()),
+                };
+            }
+            SubmitDiscrimination::Invalid(message) => {
+                return SubmitResult {
+                    session_id: String::new(),
+                    status: "rejected",
+                    error: Some(message),
+                };
+            }
+            SubmitDiscrimination::CapabilityOrWorkflow => {}
+        }
+    }
+    submit_capability(state, request)
+}
+
+fn submit_app_command(
+    state: &mut RuntimeState,
+    envelope: app_sm::AppCommandEnvelope,
+) -> SubmitResult {
+    let Some(machine) = state.app_state_machine.clone() else {
+        return SubmitResult {
+            session_id: String::new(),
+            status: "rejected",
+            error: Some("app_state_machine_not_initialized".to_string()),
+        };
+    };
+
+    state.execution_counter = state.execution_counter.saturating_add(1);
+    let (session_id, previous_state) = match envelope.session_id {
+        Some(session_id) => {
+            let current = state
+                .app_sessions
+                .get(&session_id)
+                .map(|session| session.state.clone())
+                .unwrap_or_else(|| machine.initial_state.clone());
+            (session_id, current)
+        }
+        None => (
+            format!("{}-sess-{}", state.capability_id, state.execution_counter),
+            machine.initial_state.clone(),
+        ),
+    };
+
+    let accepted_state =
+        match resolve_command_transition(&machine, &previous_state, &envelope.command) {
+            Ok(state_id) => state_id,
+            Err(message) => {
+                state.pending_events.push_back(lifecycle_event(
+                    "error",
+                    &session_id,
+                    &serde_json::json!({
+                        "code": "invalid_transition",
+                        "message": message,
+                        "state": previous_state,
+                    }),
+                ));
+                return SubmitResult {
+                    session_id,
+                    status: "rejected",
+                    error: Some("invalid_transition".to_string()),
+                };
+            }
+        };
+
+    let command_id = format!("{}-cmd-{}", state.capability_id, state.execution_counter);
+    state.pending_events.push_back(lifecycle_event(
+        "state_changed",
+        &session_id,
+        &serde_json::json!({
+            "state": accepted_state,
+            "previous_state": previous_state,
+            "command": envelope.command,
+            "command_id": command_id,
+        }),
+    ));
+
+    let invoke = machine
+        .states
+        .get(&accepted_state)
+        .and_then(|state_def| state_def.invoke.clone());
+
+    match invoke {
+        Some(AppInvoke::Capability {
+            capability_id,
+            input_from: _,
+        }) => {
+            state.app_sessions.insert(
+                session_id.clone(),
+                AppSession {
+                    session_id: session_id.clone(),
+                    state: accepted_state.clone(),
+                    wait: Some(AppWait {
+                        command_id: command_id.clone(),
+                        kind: AppWaitKind::Capability {
+                            capability_id: capability_id.clone(),
+                        },
+                    }),
+                },
+            );
+            run_capability_invoke_wait(
+                state,
+                &machine,
+                &session_id,
+                &accepted_state,
+                &capability_id,
+                &command_id,
+                &envelope.payload,
+            );
+        }
+        Some(AppInvoke::HostConnector { command }) => {
+            let deadline_ms = 30_000_u64;
+            state.pending_host_connector.push_back(serde_json::json!({
+                "kind": "host_connector_command",
+                "schema_version": "1.0.0",
+                "command": command,
+                "command_id": command_id,
+                "session_id": session_id,
+                "payload": envelope.payload,
+            }));
+            state.pending_deadlines.push_back(serde_json::json!({
+                "kind": "deadline_registration",
+                "command_id": command_id,
+                "session_id": session_id,
+                "deadline_ms": deadline_ms,
+            }));
+            state.app_sessions.insert(
+                session_id.clone(),
+                AppSession {
+                    session_id: session_id.clone(),
+                    state: accepted_state,
+                    wait: Some(AppWait {
+                        command_id,
+                        kind: AppWaitKind::HostConnector { command },
+                    }),
+                },
+            );
+        }
+        None => {
+            state.app_sessions.insert(
+                session_id.clone(),
+                AppSession {
+                    session_id: session_id.clone(),
+                    state: accepted_state,
+                    wait: None,
+                },
+            );
+        }
+    }
+
+    SubmitResult {
+        session_id,
+        status: "accepted",
+        error: None,
+    }
+}
+
+fn run_capability_invoke_wait(
+    state: &mut RuntimeState,
+    machine: &AppStateMachine,
+    session_id: &str,
+    invoking_state: &str,
+    capability_id: &str,
+    command_id: &str,
+    payload: &serde_json::Value,
+) {
+    state.pending_events.push_back(lifecycle_event(
+        "capability_invoked",
+        session_id,
+        &serde_json::json!({
+            "capability_id": capability_id,
+            "command_id": command_id,
+            "state": invoking_state,
+        }),
+    ));
+
+    let input = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
+    let outcome = execute_nested_capability(
+        &state.wasm_artifact,
+        &input,
+        &state.service_type,
+        &state.declared_emits,
+    );
+
+    let (lifecycle_event_name, succeeded, output) = match outcome {
+        Ok(outcome) => {
+            for event in outcome.emitted_events {
+                state.pending_events.push_back(lifecycle_event(
+                    &event.event_type,
+                    session_id,
+                    &serde_json::json!({"version": event.version, "payload": event.data}),
+                ));
+            }
+            let stdout_json = serde_json::from_slice::<serde_json::Value>(&outcome.stdout)
+                .unwrap_or_else(|_| {
+                    serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
+                });
+            ("capability_succeeded", true, stdout_json)
+        }
+        Err(error) => (
+            "capability_failed",
+            false,
+            serde_json::json!({"error": error}),
+        ),
+    };
+
+    match resolve_lifecycle_transition(machine, invoking_state, lifecycle_event_name) {
+        Ok(Some(next_state)) => {
+            state.pending_events.push_back(lifecycle_event(
+                "state_changed",
+                session_id,
+                &serde_json::json!({
+                    "state": next_state,
+                    "previous_state": invoking_state,
+                    "command_id": command_id,
+                }),
+            ));
+            if let Some(session) = state.app_sessions.get_mut(session_id) {
+                session.state = next_state;
+                session.wait = None;
+            }
+            state.pending_events.push_back(lifecycle_event(
+                if succeeded {
+                    "capability_result"
+                } else {
+                    "error"
+                },
+                session_id,
+                &serde_json::json!({
+                    "status": if succeeded { "completed" } else { "failed" },
+                    "output": output,
+                    "capability_id": capability_id,
+                }),
+            ));
+        }
+        Ok(None) => {
+            state.pending_events.push_back(lifecycle_event(
+                "error",
+                session_id,
+                &serde_json::json!({
+                    "code": "no_matching_transition",
+                    "message": format!(
+                        "no {lifecycle_event_name} transition from '{invoking_state}'"
+                    ),
+                    "state": invoking_state,
+                }),
+            ));
+            if let Some(session) = state.app_sessions.get_mut(session_id) {
+                session.wait = None;
+            }
+        }
+        Err(message) => {
+            state.pending_events.push_back(lifecycle_event(
+                "error",
+                session_id,
+                &serde_json::json!({
+                    "code": "invalid_state",
+                    "message": message,
+                }),
+            ));
+        }
+    }
+}
+
+/// Capability / workflow stdin path (pre-Spec-139 submit shape).
+fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
     state.execution_counter += 1;
     let session_id = format!("{}-exec-{}", state.capability_id, state.execution_counter);
 
@@ -271,7 +575,11 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> String {
                     ),
                 }),
             ));
-            return session_id;
+            return SubmitResult {
+                session_id,
+                status: "accepted",
+                error: None,
+            };
         }
         Err(PlacementError::NoEligibleTarget) => {
             state.pending_events.push_back(lifecycle_event(
@@ -287,7 +595,11 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> String {
                     "error": "placement failed: NoEligibleTarget",
                 }),
             ));
-            return session_id;
+            return SubmitResult {
+                session_id,
+                status: "accepted",
+                error: None,
+            };
         }
         Ok(decision) => {
             state.pending_events.push_back(lifecycle_event(
@@ -337,7 +649,11 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> String {
         }
     }
 
-    session_id
+    SubmitResult {
+        session_id,
+        status: "accepted",
+        error: None,
+    }
 }
 
 /// Writes `ptr`/`len` (as two little-endian `i32`s) to the descriptor
@@ -450,6 +766,10 @@ pub extern "C" fn traverse_init(ptr: i32, len: i32, out_descriptor: i32) -> i32 
                 wasm_artifact: parsed.wasm_artifact,
                 execution_counter: 0,
                 pending_events: VecDeque::new(),
+                app_state_machine: parsed.app_state_machine,
+                app_sessions: BTreeMap::new(),
+                pending_host_connector: VecDeque::new(),
+                pending_deadlines: VecDeque::new(),
             });
             serde_json::json!({"status": "ready", "error": null})
         }
@@ -489,8 +809,19 @@ pub extern "C" fn traverse_submit(ptr: i32, len: i32, out_descriptor: i32) -> i3
     let response = match guard.as_mut() {
         None => serde_json::json!({"status": "error", "error": "not initialized"}),
         Some(state) => {
-            let session_id = submit(state, &request);
-            serde_json::json!({"session_id": session_id, "status": "accepted", "error": null})
+            let result = submit(state, &request);
+            match result.error {
+                Some(error) => serde_json::json!({
+                    "session_id": result.session_id,
+                    "status": result.status,
+                    "error": error,
+                }),
+                None => serde_json::json!({
+                    "session_id": result.session_id,
+                    "status": result.status,
+                    "error": null,
+                }),
+            }
         }
     };
     let ok = response
@@ -727,6 +1058,10 @@ mod tests {
             wasm_artifact: artifact,
             execution_counter: 0,
             pending_events: VecDeque::new(),
+            app_state_machine: None,
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
         };
 
         submit(&mut state, br#"{"ok":true}"#);
@@ -765,6 +1100,10 @@ mod tests {
             wasm_artifact: Vec::new(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
+            app_state_machine: None,
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
         };
 
         submit(&mut state, br"{}");
@@ -793,6 +1132,10 @@ mod tests {
             wasm_artifact: Vec::new(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
+            app_state_machine: None,
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
         };
 
         submit(&mut state, br"{}");
@@ -834,6 +1177,96 @@ mod tests {
                 .target_loads
                 .get(&ExecutionTarget::Local),
             Some(&0.2)
+        );
+    }
+
+    #[test]
+    fn app_command_submit_transitions_and_invokes_nested_capability() {
+        const ECHO_WAT: &str = r#"
+          (module
+            (import "wasi_snapshot_preview1" "fd_read"
+              (func $fd_read (param i32 i32 i32 i32) (result i32)))
+            (import "wasi_snapshot_preview1" "fd_write"
+              (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "_start")
+              (i32.store (i32.const 0) (i32.const 8))
+              (i32.store (i32.const 4) (i32.const 1024))
+              (drop (call $fd_read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 4100)))
+              (i32.store (i32.const 0) (i32.const 8))
+              (i32.store (i32.const 4) (i32.load (i32.const 4100)))
+              (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 4104)))
+            )
+          )
+        "#;
+        let artifact = wat::parse_str(ECHO_WAT).expect("wat parses");
+        let machine = parse_state_machine(&serde_json::json!({
+            "initial_state": "idle",
+            "states": [
+                {
+                    "id": "idle",
+                    "transitions": [{ "on": "submit", "to": "processing" }]
+                },
+                {
+                    "id": "processing",
+                    "invoke": {
+                        "capability_id": "example.echo",
+                        "input_from": "command.payload"
+                    },
+                    "transitions": [
+                        { "on": "capability_succeeded", "to": "done" },
+                        { "on": "capability_failed", "to": "error" }
+                    ]
+                },
+                { "id": "done", "transitions": [] },
+                { "id": "error", "transitions": [] }
+            ]
+        }))
+        .expect("machine");
+
+        let mut state = RuntimeState {
+            capability_id: "demo.app".to_string(),
+            service_type: ServiceType::Stateless,
+            declared_emits: Vec::new(),
+            permitted_targets: vec![ExecutionTarget::Local],
+            host_placement_target: ExecutionTarget::Local,
+            target_hint: None,
+            runtime_snapshot: RuntimeSnapshot::default(),
+            wasm_artifact: artifact,
+            execution_counter: 0,
+            pending_events: VecDeque::new(),
+            app_state_machine: Some(machine),
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
+        };
+
+        let result = submit(
+            &mut state,
+            br#"{"kind":"app_command","command":"submit","payload":{"hello":"sm"}}"#,
+        );
+        assert_eq!(result.status, "accepted");
+        assert!(!result.session_id.is_empty());
+
+        let types: Vec<String> = state
+            .pending_events
+            .iter()
+            .map(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(bytes).expect("json")["type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(types.contains(&"state_changed".to_string()));
+        assert!(types.contains(&"capability_invoked".to_string()));
+        assert!(types.contains(&"capability_result".to_string()));
+        assert_eq!(
+            state
+                .app_sessions
+                .get(&result.session_id)
+                .map(|s| s.state.as_str()),
+            Some("done")
         );
     }
 }
