@@ -1,8 +1,8 @@
 import Foundation
 
-/// Public Swift surface for `embedder-api/1.0.0`.
+/// Public Swift surface for `embedder-api/1.1.0`.
 public enum TraverseEmbedder {
-    public static let apiVersion = "1.0.0"
+    public static let apiVersion = "1.1.0"
 }
 
 public struct TraverseBundle: Sendable, Equatable {
@@ -75,6 +75,22 @@ public struct TraverseSubmission: Sendable, Equatable {
         }
         self.targetID = targetID
         self.inputJSON = inputJSON
+    }
+}
+
+/// Spec 139 / embedder-api `1.1.0` app-command submit envelope.
+public struct TraverseAppCommand: Sendable, Equatable {
+    public let command: String
+    public let payloadJSON: Data
+    public let sessionID: String?
+
+    public init(command: String, payloadJSON: Data = Data("{}".utf8), sessionID: String? = nil) throws {
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TraverseEmbedderError.unsupportedOperation("app_command requires a non-empty command")
+        }
+        self.command = command
+        self.payloadJSON = payloadJSON
+        self.sessionID = sessionID
     }
 }
 
@@ -171,6 +187,27 @@ public final class InMemoryTraverseEmbedder: @unchecked Sendable {
                 eventType: targetOutput == nil ? nil : "capability_result",
                 sessionID: targetOutput == nil ? nil : result.sessionID,
                 output: targetOutput
+            )
+        )
+        return result
+    }
+
+    /// Spec 139 `app_command` submit form (embedder-api `1.1.0`).
+    public func submit(_ command: TraverseAppCommand) throws -> TraverseSubmissionResult {
+        guard bundle != nil else { throw TraverseEmbedderError.notInitialized }
+        submissionSequence += 1
+        let result = TraverseSubmissionResult(
+            sessionID: command.sessionID ?? "swift-session-\(submissionSequence)",
+            status: "accepted"
+        )
+        events.append(
+            TraverseRuntimeEvent(
+                sequence: submissionSequence,
+                targetID: "app_command",
+                status: "accepted",
+                eventType: "state_changed",
+                sessionID: result.sessionID,
+                output: command.payloadJSON
             )
         )
         return result

@@ -28,6 +28,22 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         )
     }
 
+    public func submit(_ command: TraverseAppCommand) throws -> TraverseSubmissionResult {
+        var envelope: [String: Any] = [
+            "kind": "app_command",
+            "command": command.command,
+            "payload": try JSONSerialization.jsonObject(with: command.payloadJSON, options: .fragmentsAllowed),
+        ]
+        if let sessionID = command.sessionID {
+            envelope["session_id"] = sessionID
+        }
+        let result = try object(try client.submit(requestJSON: encode(envelope)))
+        return TraverseSubmissionResult(
+            sessionID: try requiredString("session_id", in: result),
+            status: try requiredString("status", in: result)
+        )
+    }
+
     public func subscribe() throws -> [TraverseRuntimeEvent] {
         var events: [TraverseRuntimeEvent] = []
         while let bytes = try client.nextEvent() {

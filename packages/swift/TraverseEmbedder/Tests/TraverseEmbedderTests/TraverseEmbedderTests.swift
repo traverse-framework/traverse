@@ -26,6 +26,22 @@ import Testing
     }
 }
 
+@Test func appCommandSubmitIsAcceptedOnEmbedderApi110() throws {
+    let harness = InMemoryTraverseEmbedder()
+    let bundle = try TraverseBundle(
+        rootURL: URL(fileURLWithPath: "/tmp/traverse-bundle"),
+        runtimeWasmDigest: "sha256:test"
+    )
+    try harness.initialize(bundle: bundle)
+    let outcome = try harness.submit(TraverseAppCommand(command: "submit", payloadJSON: Data("{\"n\":1}".utf8)))
+    #expect(outcome.status == "accepted")
+    #expect(outcome.sessionID == "swift-session-1")
+    let events = try harness.subscribe()
+    #expect(events.count == 1)
+    #expect(events[0].eventType == "state_changed")
+    #expect(events[0].targetID == "app_command")
+}
+
 @Test func incompatibleBundleIsRejectedWithoutInitializing() throws {
     let harness = InMemoryTraverseEmbedder()
     let bundle = try TraverseBundle(
@@ -35,7 +51,7 @@ import Testing
     )
 
     #expect(throws: TraverseEmbedderError.incompatibleBundle(
-        "embedder API 2.0.0 is incompatible with 1.0.0"
+        "embedder API 2.0.0 is incompatible with 1.1.0"
     )) {
         try harness.initialize(bundle: bundle)
     }
