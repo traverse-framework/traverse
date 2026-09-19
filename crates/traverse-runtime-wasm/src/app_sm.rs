@@ -275,7 +275,7 @@ pub(crate) fn resolve_lifecycle_transition(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
     use super::{
         SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
