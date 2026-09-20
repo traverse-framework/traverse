@@ -1,9 +1,9 @@
 namespace Traverse.Embedder;
 
-/// <summary>Public .NET surface for Traverse embedder-api/1.0.0.</summary>
+/// <summary>Public .NET surface for Traverse embedder-api/1.1.0.</summary>
 public static class TraverseEmbedder
 {
-    public const string ApiVersion = "1.0.0";
+    public const string ApiVersion = "1.1.0";
 }
 
 public sealed record TraverseBundle(string RootPath, string RuntimeWasmDigest)
@@ -20,7 +20,7 @@ public sealed record TraverseSubmission(string TargetId, string InputJson)
     public void Validate() => ArgumentException.ThrowIfNullOrWhiteSpace(TargetId);
 }
 
-public sealed record TraverseSubmissionResult(string SessionId, string Status);
+public sealed record TraverseSubmissionResult(string SessionId, string Status, string? Error = null);
 
 /// <summary>Traceability evidence published with a TraverseEmbedder package release.</summary>
 public sealed record TraverseReleaseEvidence(
@@ -99,6 +99,19 @@ public sealed class InMemoryTraverseEmbedder
         events.Add(new TraverseRuntimeEvent(submissionSequence, submission.TargetId, result.Status,
             EventType: targetOutput is null ? null : "capability_result",
             SessionId: targetOutput is null ? null : result.SessionId, Output: targetOutput));
+        return result;
+    }
+
+    /// <summary>Spec 139 <c>app_command</c> submit form (embedder-api 1.1.0).</summary>
+    public TraverseSubmissionResult Submit(TraverseAppCommand command)
+    {
+        EnsureInitialized();
+        command.Validate();
+        submissionSequence++;
+        var result = new TraverseSubmissionResult(
+            command.SessionId ?? $"dotnet-session-{submissionSequence}", "accepted");
+        events.Add(new TraverseRuntimeEvent(submissionSequence, "app_command", result.Status,
+            EventType: "state_changed", SessionId: result.SessionId, Output: command.PayloadJson));
         return result;
     }
 

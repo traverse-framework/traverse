@@ -8,16 +8,32 @@ namespace Traverse.Embedder;
 public sealed class RuntimeTraverseEmbedder
 {
     private readonly WasmtimeBridgeClient client;
+    private readonly AppCommandCoordinator appCommands;
 
     public RuntimeTraverseEmbedder(TraverseBundle bundle) : this(
         new WasmtimeBridgeClient(new WasmtimeRuntimeBridge(bundle)))
     {
     }
 
-    public RuntimeTraverseEmbedder(WasmtimeBridgeClient client)
+    public RuntimeTraverseEmbedder(WasmtimeBridgeClient client, ITraverseTimer? timer = null)
     {
         this.client = client;
+        appCommands = new AppCommandCoordinator(
+            request => client.Submit(request), timer ?? new SystemTraverseTimer());
     }
+
+    /// <summary>
+    /// Spec 139 <c>app_command</c> submit. The state machine runs in runtime.wasm;
+    /// registered adapters and the timer port complete host-connector waits.
+    /// </summary>
+    public TraverseSubmissionResult Submit(TraverseAppCommand command) => appCommands.Submit(command);
+
+    /// <summary>
+    /// Registers the host authority for a manifest command. Disposing removes it
+    /// only if it is still the registered adapter.
+    /// </summary>
+    public IDisposable RegisterHostConnectorAdapter(string command, HostConnectorAdapter adapter) =>
+        appCommands.Register(command, adapter);
 
     public string Initialize(string configJson) => Text(client.Initialize(Encoding.UTF8.GetBytes(configJson)));
 
@@ -73,7 +89,11 @@ public sealed class RuntimeTraverseEmbedder
     public TraverseCompatibleResult CompatibleKill(string capabilityId, string? instanceId) =>
         CompatibleResult(client.CompatibleKill(Encoding.UTF8.GetBytes(CompatibleRequest(capabilityId, instanceId))));
 
-    public string Shutdown() => Text(client.Shutdown());
+    public string Shutdown()
+    {
+        appCommands.Stop();
+        return Text(client.Shutdown());
+    }
 
     private static string CompatibleRequest(string capabilityId, string? instanceId) =>
         new JsonObject { ["capability_id"] = capabilityId, ["instance_id"] = instanceId }.ToJsonString();

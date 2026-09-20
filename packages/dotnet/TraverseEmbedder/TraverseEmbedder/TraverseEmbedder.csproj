@@ -5,8 +5,11 @@
     <Nullable>enable</Nullable>
     <PackageId>TraverseEmbedder</PackageId>
     <Version>0.1.0</Version>
-    <Description>Traverse embedder-api/1.0.0 public .NET boundary.</Description>
+    <Description>Traverse embedder-api/1.1.0 public .NET boundary.</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TraverseEmbedder.Tests" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Wasmtime" Version="44.0.0" />
   </ItemGroup>

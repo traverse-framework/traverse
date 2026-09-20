@@ -1,7 +1,7 @@
 # TraverseEmbedder for .NET/WinUI
 
 This public .NET library is the Spec-068 package foundation for
-`embedder-api/1.0.0`. It contains the stable bundle, submission, lifecycle,
+`embedder-api/1.1.0`. It contains the stable bundle, submission, lifecycle,
 and compatible-capability boundary plus `InMemoryTraverseEmbedder` for
 deterministic conformance tests. Its `Subscribe` operation returns ordered
 runtime-shaped harness events. Compatible-capability start, stop, and kill
@@ -27,6 +27,19 @@ input and descriptor allocation exactly once.
 `RuntimeTraverseEmbedder` maps the raw boundary into stable public submission,
 event, and compatible-lifecycle result records while preserving runtime-owned
 identifiers, ordering, and statuses.
+
+`RuntimeTraverseEmbedder.Submit(TraverseAppCommand)` submits Spec 139
+`app_command` envelopes (`kind`, `command`, `payload`, optional `session_id`).
+The state machine runs in `runtime.wasm`; the embedder never re-implements
+transitions. Host authorities are registered per manifest command with
+`RegisterHostConnectorAdapter` (Spec 140 WIT semantics; the returned
+`IDisposable` removes the registration). When the runtime stages a
+host-connector wait the adapter runs and its result is submitted as a
+`host_connector_result` terminal; a command with no adapter completes as
+`failed` / `target_incompatible`. The host half of the dual deadline is
+registered on the `ITraverseTimer` port (default `SystemTraverseTimer`) and
+submits `deadline_fired`. `Shutdown` cancels adapters and timers and drops any
+late completion. The first correlated terminal wins in the runtime.
 
 Request marshalling, event subscriptions, evidence publication, shared
 conformance, and WinUI reference-app integration remain tracked by Traverse #649.

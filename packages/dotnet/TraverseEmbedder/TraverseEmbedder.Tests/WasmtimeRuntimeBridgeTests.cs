@@ -148,6 +148,21 @@ public sealed class WasmtimeRuntimeBridgeTests
     }
 
     [Fact]
+    public void RuntimeEmbedderSubmitsAppCommandsThroughTheBridgeAndStopsAdapters()
+    {
+        using var bridge = new WasmtimeRuntimeBridge(FixtureBundle(fixture: TypedClientFixture).Bundle);
+        var runtime = new RuntimeTraverseEmbedder(new WasmtimeBridgeClient(bridge));
+        runtime.Initialize("{}");
+        using var registration = runtime.RegisterHostConnectorAdapter(
+            "capture_audio", (_, _) => Task.FromResult(new HostConnectorResult("succeeded")));
+
+        Assert.Equal(
+            new TraverseSubmissionResult("s1", "accepted"),
+            runtime.Submit(new TraverseAppCommand("record", "{\"max_bytes\":8}")));
+        Assert.Equal("{\"status\":\"stopped\"}", runtime.Shutdown());
+    }
+
+    [Fact]
     public void TestDoubleExposesScriptedTargetOutputPublicly()
     {
         var harness = new InMemoryTraverseEmbedder().WithTargetOutput("{\"answer\":42}");
