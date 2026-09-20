@@ -58,6 +58,22 @@ of the dual deadline is registered on the `TraverseTimer` port (default
 adapters and timers and drops any late completion. The first correlated
 terminal wins in the runtime.
 
+### Audio input adapter (Spec 140)
+
+`AppleAudioInputAdapters` implements the `traverse.audio-input` host adapter for
+Apple hosts. `requestPermission` and `captureAudio` are `HostConnectorAdapter`s to
+register for the manifest commands routed to `audio.permission.request` and
+`audio.capture`; `cancel(correlationID:)` is WIT `cancel`. Permission and capture
+are behind `AudioPermissionDriver` / `AudioCaptureDriver`; the defaults,
+`AVFoundationAudioPermissionDriver` and `AVFoundationAudioCaptureDriver`
+(`AVAudioEngine`, mono 16-bit PCM WAV), require the host app to declare
+`NSMicrophoneUsageDescription`. The capture driver never prompts: it fails
+`policy_denied` unless permission is already granted. Captured bytes are staged
+through `ArtifactStagingStore.stageArtifact`, and only the opaque `artifact_ref`
+or a non-secret `permission_state` is returned. Failures are `failed` results
+carrying `error_code` (`policy_denied`, `unavailable`, `input_limit_exceeded`) or
+a `cancelled` result; native error text is dropped.
+
 The package follows semantic versioning. Additive, backward-compatible API
 changes use minor releases; breaking public API or error-semantic changes use a
 new major version. Call `shutdown()` to clear the active bundle, submission
