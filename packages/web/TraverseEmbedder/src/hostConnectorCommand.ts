@@ -11,6 +11,8 @@ export const HOST_CONNECTOR_GOVERNING_SPEC =
   "137-host-connector-command-dispatch" as const;
 export const AUDIO_INPUT_CONNECTOR = "traverse.audio-input" as const;
 export const AUDIO_CAPTURE_OPERATION = "audio.capture" as const;
+export const AUDIO_PERMISSION_REQUEST_OPERATION =
+  "audio.permission.request" as const;
 export const MODEL_RUNTIME_CONNECTOR = "traverse.model-runtime" as const;
 export const MODEL_EXECUTE_OPERATION = "model.execute" as const;
 
@@ -157,5 +159,24 @@ export function audioCaptureCommand(
     target_family: targetFamily,
     cancel_requested: false,
     payload: { ...payload },
+  };
+}
+
+export function audioPermissionCommand(
+  commandId: string,
+  correlationId: string,
+  idempotencyKey: string,
+  targetFamily: HostConnectorTargetFamily,
+): HostConnectorAppCommand {
+  return {
+    kind: HOST_CONNECTOR_COMMAND_KIND,
+    schema_version: HOST_CONNECTOR_COMMAND_SCHEMA_VERSION,
+    command: "request_permission",
+    command_id: commandId,
+    correlation_id: correlationId,
+    idempotency_key: idempotencyKey,
+    target_family: targetFamily,
+    cancel_requested: false,
+    payload: {},
   };
 }

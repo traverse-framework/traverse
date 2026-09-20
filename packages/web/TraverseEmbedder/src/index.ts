@@ -167,6 +167,7 @@ export type { HostAbiImport } from "./hostAbi.js";
 export {
   AUDIO_CAPTURE_OPERATION,
   AUDIO_INPUT_CONNECTOR,
+  AUDIO_PERMISSION_REQUEST_OPERATION,
   HOST_CONNECTOR_COMMAND_KIND,
   HOST_CONNECTOR_COMMAND_SCHEMA_VERSION,
   HOST_CONNECTOR_EVENT_KIND,
@@ -177,6 +178,7 @@ export {
   MODEL_RUNTIME_GOVERNING_SPEC,
   PLACEMENT_WASM_CPU,
   audioCaptureCommand,
+  audioPermissionCommand,
   modelExecuteCommand,
   normalizeModelExecuteEvidence,
 } from "./hostConnectorCommand.js";
@@ -190,6 +192,19 @@ export type {
   ModelExecutePayload,
   ModelRef,
 } from "./hostConnectorCommand.js";
+
+export {
+  browserAudioPermissionStatus,
+  createBrowserAudioInputAdapters,
+} from "./browserAudioInput.js";
+export type {
+  BrowserAudioCaptureDriver,
+  BrowserAudioInputAdapters,
+  BrowserAudioPermissionDriver,
+  BrowserAudioPermissionState,
+  BrowserAudioStageArtifact,
+  CreateBrowserAudioInputAdaptersOptions,
+} from "./browserAudioInput.js";
 
 export { executeVerifiedEntrypoint, VerifiedEntrypointError } from "./verifiedEntrypoint.js";
 export type {
