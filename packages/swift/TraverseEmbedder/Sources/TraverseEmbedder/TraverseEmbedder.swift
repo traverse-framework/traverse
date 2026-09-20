@@ -99,10 +99,13 @@ public struct TraverseAppCommand: Sendable, Equatable {
 public struct TraverseSubmissionResult: Sendable, Equatable {
     public let sessionID: String
     public let status: String
+    /// Runtime rejection reason, when `status` is not `accepted`.
+    public let error: String?
 
-    public init(sessionID: String, status: String) {
+    public init(sessionID: String, status: String, error: String? = nil) {
         self.sessionID = sessionID
         self.status = status
+        self.error = error
     }
 }
 

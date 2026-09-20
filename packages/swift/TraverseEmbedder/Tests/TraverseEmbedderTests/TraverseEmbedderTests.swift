@@ -214,6 +214,21 @@ import Testing
     #expect(try runtime.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
 }
 
+@Test func runtimeEmbedderSubmitsAppCommandsThroughTheBridgeAndStopsAdapters() throws {
+    let wasm = try fixtureBytes("client_bridge.wasm")
+    let client = try WasmiHostBridgeClient(bundle: fixtureBundle(wasm: wasm))
+    let runtime = RuntimeTraverseEmbedder(client: client)
+    _ = try runtime.initialize(configJSON: Data("{}".utf8))
+    let registration = try runtime.registerHostConnectorAdapter(command: "capture_audio") { _ in
+        HostConnectorResult(resultClass: "succeeded")
+    }
+
+    #expect(try runtime.submit(try TraverseAppCommand(command: "record", payloadJSON: Data(#"{"max_bytes":8}"#.utf8))) ==
+        TraverseSubmissionResult(sessionID: "s1", status: "accepted"))
+    registration.remove()
+    #expect(try runtime.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
+}
+
 private struct NotAJSONObject: Error {}
 
 private func jsonObject(from data: Data) throws -> [String: Any] {

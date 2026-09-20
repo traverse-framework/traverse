@@ -3,13 +3,16 @@ import Foundation
 /// Typed public embedder backed exclusively by runtime-owned bridge results.
 public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     private let client: any TraverseBridgeClient
+    private let appCommands: AppCommandCoordinator
 
     public convenience init(bundle: TraverseBundle) throws {
         try self.init(client: WasmiHostBridgeClient(bundle: bundle))
     }
 
-    public init(client: any TraverseBridgeClient) {
+    public init(client: any TraverseBridgeClient, timer: any TraverseTimer = SystemTraverseTimer()) {
         self.client = client
+        self.appCommands = AppCommandCoordinator(
+            submit: { try client.submit(requestJSON: $0) }, timer: timer)
     }
 
     public func initialize(configJSON: Data) throws -> Data {
@@ -28,20 +31,19 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         )
     }
 
+    /// Spec 139 `app_command` submit. The state machine runs in `runtime.wasm`; registered
+    /// adapters and the timer port complete host-connector waits.
     public func submit(_ command: TraverseAppCommand) throws -> TraverseSubmissionResult {
-        var envelope: [String: Any] = [
-            "kind": "app_command",
-            "command": command.command,
-            "payload": try JSONSerialization.jsonObject(with: command.payloadJSON, options: .fragmentsAllowed),
-        ]
-        if let sessionID = command.sessionID {
-            envelope["session_id"] = sessionID
-        }
-        let result = try object(try client.submit(requestJSON: encode(envelope)))
-        return TraverseSubmissionResult(
-            sessionID: try requiredString("session_id", in: result),
-            status: try requiredString("status", in: result)
-        )
+        try appCommands.submit(command)
+    }
+
+    /// Registers the host authority for a manifest command (Spec 140 WIT semantics).
+    /// Removing the registration only applies while it is still the registered adapter.
+    public func registerHostConnectorAdapter(
+        command: String,
+        adapter: @escaping HostConnectorAdapter
+    ) throws -> HostConnectorRegistration {
+        try appCommands.register(command: command, adapter: adapter)
     }
 
     public func subscribe() throws -> [TraverseRuntimeEvent] {
@@ -84,7 +86,10 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         ])))
     }
 
-    public func shutdown() throws -> Data { try client.shutdown() }
+    public func shutdown() throws -> Data {
+        appCommands.stop()
+        return try client.shutdown()
+    }
 
     private func compatibleResult(_ bytes: Data) throws -> TraverseCompatibleResult {
         let result = try object(bytes)

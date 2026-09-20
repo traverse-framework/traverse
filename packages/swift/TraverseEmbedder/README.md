@@ -1,7 +1,7 @@
 # TraverseEmbedder for Swift
 
 `TraverseEmbedder` is the public iOS/macOS Swift Package foundation for
-`embedder-api/1.0.0` (Spec 068). It exposes bundle validation, lifecycle,
+`embedder-api/1.1.0` (Spec 068). It exposes bundle validation, lifecycle,
 submission, and compatible-capability operations plus `InMemoryTraverseEmbedder`
 for deterministic conformance tests. Its `subscribe(after:)` operation returns
 the ordered runtime-shaped events recorded by the harness. Compatible-capability
@@ -43,6 +43,20 @@ start a sidecar or attempt a network fallback.
 The package pins `TraverseSwiftHost` to a specific released XCFramework
 checksum (currently swift-host-v1.1.0) for the production `wasmi` bridge. The
 accompanying `dependency-review.json` records that engine selection.
+
+`RuntimeTraverseEmbedder.submit(TraverseAppCommand)` submits Spec 139
+`app_command` envelopes; the state machine runs in `runtime.wasm` and the
+embedder never re-implements transitions. Register host authorities per
+manifest command with `registerHostConnectorAdapter(command:adapter:)` (Spec 140
+WIT semantics; `HostConnectorRegistration.remove()` only removes the adapter it
+registered). When the runtime stages a host-connector wait, the adapter runs and
+its result is submitted as a `host_connector_result` terminal; a command with no
+adapter completes as `failed` / `target_incompatible`, and an adapter error
+completes as `failed` / `execution_failed` without native detail. The host half
+of the dual deadline is registered on the `TraverseTimer` port (default
+`SystemTraverseTimer`) and submits `deadline_fired`. `shutdown()` cancels
+adapters and timers and drops any late completion. The first correlated
+terminal wins in the runtime.
 
 The package follows semantic versioning. Additive, backward-compatible API
 changes use minor releases; breaking public API or error-semantic changes use a
