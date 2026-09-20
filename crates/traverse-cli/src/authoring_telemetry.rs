@@ -321,6 +321,17 @@ mod tests {
 
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Unique per process and per call so concurrent test runs never share a file.
+    fn unique_temp_path(label: &str, extension: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "traverse-authoring-telemetry-{label}-{}-{}.{extension}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     fn event() -> AuthoringOutcomeEvent {
         AuthoringOutcomeEvent {
@@ -381,10 +392,7 @@ mod tests {
 
     #[test]
     fn access_audit_is_separate_json_lines_evidence() {
-        let path = std::env::temp_dir().join(format!(
-            "traverse-audit-{}.jsonl",
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
+        let path = unique_temp_path("audit", "jsonl");
         let record = AnalyticsAccessAuditRecord {
             role: "traverse-analytics".to_string(),
             purpose: "quarterly-review".to_string(),
@@ -400,7 +408,7 @@ mod tests {
 
     #[test]
     fn host_config_defaults_off_and_records_only_after_explicit_opt_in() {
-        let path = std::env::temp_dir().join("traverse-authoring-telemetry-config-test.json");
+        let path = unique_temp_path("config", "json");
         let _ = fs::remove_file(&path);
         assert_eq!(
             load_host_config(&path),
