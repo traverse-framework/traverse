@@ -74,6 +74,25 @@ or a non-secret `permission_state` is returned. Failures are `failed` results
 carrying `error_code` (`policy_denied`, `unavailable`, `input_limit_exceeded`) or
 a `cancelled` result; native error text is dropped.
 
+#### Manual macOS run
+
+`TraverseAudioSmoke` (an executable target, not a published product) exercises the
+adapter against the real microphone and prints one paste-ready JSON report. Run it on a
+Mac from this package directory:
+
+```bash
+swift run TraverseAudioSmoke --cancel-after-ms 500
+```
+
+It requests microphone permission (the OS prompt should be attributed to the terminal app
+that launched it; grant it there), captures `--duration-ms` (default 2000) of audio,
+reads the staged artifact back twice, verifies it is a valid mono 16-bit PCM WAV that is
+not silent, and optionally cancels a long capture mid-flight. The report contains only the
+permission state, opaque artifact ref, byte count, WAV facts, and levels; it never prints a
+path, device name, or native error text. Exit code 0 means every check passed, 1 means a
+check failed, 2 means bad flags. `--dry-run` uses a synthetic driver (no prompt, no
+microphone) to check the tool itself.
+
 The package follows semantic versioning. Additive, backward-compatible API
 changes use minor releases; breaking public API or error-semantic changes use a
 new major version. Call `shutdown()` to clear the active bundle, submission

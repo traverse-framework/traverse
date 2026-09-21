@@ -18,6 +18,13 @@ let package = Package(
                 "TraverseSwiftHost",
             ]
         ),
+        // Manual macOS run for the Apple audio adapter (Spec 140, #1499). Not a product.
+        .executableTarget(
+            name: "TraverseAudioSmoke",
+            dependencies: [
+                "TraverseEmbedder",
+            ]
+        ),
         .testTarget(
             name: "TraverseEmbedderTests",
             dependencies: [
