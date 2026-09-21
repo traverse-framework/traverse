@@ -15,6 +15,38 @@ function inputs() {
   return { snapshot, identity, dependencies: [dependency("source", "a", contract("source", ["seed"], ["middle"])), dependency("sink", "b", contract("sink", ["middle"], ["result"]))] };
 }
 
+// --- typed-contract fixtures (issue #1476) -------------------------------
+// `props` maps a property name to its declared JSON type, or to `null` for a
+// declared property carrying no `type` keyword at all. `required` defaults to
+// every declared property.
+const schemaOf = (props, required) => ({
+  required: required ?? Object.keys(props),
+  properties: Object.fromEntries(Object.entries(props).map(([name, type]) => [name, type === null ? { description: "no declared type" } : { type }])),
+});
+const typedContract = (id, inputs, outputs, options = {}) => ({
+  schema_version: "1.0.0",
+  id,
+  inputs: { schema: schemaOf(inputs, options.inputRequired) },
+  outputs: { schema: schemaOf(outputs, options.outputRequired) },
+  emits: [],
+});
+
+function typedWorld(contracts) {
+  const marker = (index) => digest(String.fromCharCode(97 + index));
+  const snapshot = { releaseTag: "registry-v1", capabilities: contracts.map((value, index) => ({ namespace: "demo", id: value.id, version: "1.0.0", digest: marker(index), artifactUrl: "", contractDigest: "", contractUrl: "", deprecated: false })) };
+  const identity = { registry_snapshot_digest: sha(snapshot), source_release: snapshot.releaseTag, contract_schema_version: "1.0.0" };
+  const dependencies = contracts.map((value, index) => ({ wasmBytes: new Uint8Array(), contractBytes: new TextEncoder().encode(JSON.stringify(value)), wasmDigest: marker(index), evidence: { namespace: "demo", id: value.id, selectedVersion: "1.0.0", versionRange: "1.0.0", sourceRelease: "registry-v1", indexDigest: identity.registry_snapshot_digest, artifactDigest: marker(index), verifiedAt: 1, outcome: "prepared" } }));
+  return { snapshot, identity, dependencies };
+}
+
+async function planFor(contracts, target, facts) {
+  const { snapshot, identity, dependencies } = typedWorld(contracts);
+  return browserLocalPlan(identity, snapshot, dependencies, target, facts, "local", { app_id: "demo" });
+}
+
+const paths = (response) => response.proposals.map((proposal) => proposal.proposal.nodes.map((node) => node.capability_id));
+const SINK = { capability_id: "sink", capability_version: "1.0.0" };
+
 test("browser planner is deterministic, structural, and leaves mappings unconfirmed", async () => {
   const { snapshot, identity, dependencies } = inputs();
   const args = [identity, snapshot, dependencies, { capability_id: "sink", capability_version: "1.0.0" }, { seed: "x" }, "local", { app_id: "demo" }];
@@ -209,3 +241,149 @@ test("browser planner reports its search-call bound in a large dead search", asy
   assert.equal(result.proposals.length, 0);
   assert.equal(result.plan_search_truncated, true);
 });
+
+test("browser planner rejects a producer/consumer pair whose shared property types differ", async () => {
+  // Regression for #1476: `source` emits `middle` as an integer, `sink`
+  // requires a string `middle`. Name-only coverage chained them anyway.
+  const response = await planFor(
+    [typedContract("source", { seed: "string" }, { middle: "integer" }), typedContract("sink", { middle: "string" }, { result: "string" })],
+    SINK,
+    { seed: "x" },
+  );
+  assert.deepEqual(paths(response), []);
+  assert.equal(response.plan_search_truncated, false);
+});
+
+test("browser planner still chains a producer/consumer pair whose shared property types match", async () => {
+  const response = await planFor(
+    [typedContract("source", { seed: "string" }, { middle: "string" }), typedContract("sink", { middle: "string" }, { result: "string" })],
+    SINK,
+    { seed: "x" },
+  );
+  assert.deepEqual(paths(response), [["source", "sink"]]);
+  assert.equal(response.proposals[0].mapping_unconfirmed, true);
+  assert.deepEqual(response.proposals[0].proposal.mappings, [
+    { from_node_id: null, from_field: "seed", to_node_id: "node-1", to_field: "seed", source: "starting_facts" },
+    { from_node_id: "node-1", from_field: "middle", to_node_id: "node-2", to_field: "middle", source: "capability_output" },
+  ]);
+});
+
+test("browser planner matches the actual JSON type of each starting fact", async () => {
+  const cases = [
+    { declared: "integer", value: 3, planned: true },
+    { declared: "integer", value: "3", planned: false },
+    { declared: "integer", value: 1.5, planned: false },
+    { declared: "number", value: 1.5, planned: true },
+    { declared: "number", value: 2, planned: false },
+    { declared: "boolean", value: true, planned: true },
+    { declared: "boolean", value: "true", planned: false },
+    { declared: "null", value: null, planned: true },
+    { declared: "string", value: null, planned: false },
+    { declared: "array", value: [1, 2], planned: true },
+    { declared: "array", value: { a: 1 }, planned: false },
+    { declared: "object", value: { a: 1 }, planned: true },
+    { declared: "object", value: [1, 2], planned: false },
+  ];
+  for (const { declared, value, planned } of cases) {
+    const response = await planFor([typedContract("sink", { fact: declared }, { result: "string" })], SINK, { fact: value });
+    assert.equal(response.proposals.length, planned ? 1 : 0, `declared ${declared} against ${JSON.stringify(value)}`);
+  }
+});
+
+test("browser planner treats an absent declared property type as uncovered, not as absent from the required set", async () => {
+  // A required property with no `type` keyword can never be shown to match, so
+  // coverage fails — the name must not silently drop out of `required`.
+  const untypedOnConsumer = await planFor(
+    [typedContract("sink", { middle: "string", extra: null }, { result: "string" })],
+    SINK,
+    { middle: "m", extra: "e" },
+  );
+  assert.deepEqual(paths(untypedOnConsumer), []);
+
+  const untypedOnProducer = await planFor(
+    [typedContract("source", { seed: "string" }, { middle: null }), typedContract("sink", { middle: "string" }, { result: "string" })],
+    SINK,
+    { seed: "x" },
+  );
+  assert.deepEqual(paths(untypedOnProducer), []);
+});
+
+test("browser planner ignores type disagreement on properties the consumer does not require", async () => {
+  const response = await planFor(
+    [
+      typedContract("source", { seed: "string" }, { middle: "string", hint: "string" }),
+      typedContract("sink", { middle: "string", hint: "integer" }, { result: "string" }, { inputRequired: ["middle"] }),
+    ],
+    SINK,
+    { seed: "x" },
+  );
+  assert.deepEqual(paths(response), [["source", "sink"]]);
+  assert.deepEqual(response.proposals[0].proposal.mappings.map((mapping) => mapping.to_field), ["seed", "middle"]);
+});
+
+test("browser planner keeps typed multihop forwarding and maps each field to a type-compatible predecessor", async () => {
+  // `collect` also emits `insights`, but as a string, so it is neither a valid
+  // direct predecessor of `sink` nor a valid mapping source for it.
+  const response = await planFor(
+    [
+      typedContract("collect", { fragments: "string" }, { facts: "array", insights: "string" }),
+      typedContract("enrich", { facts: "array" }, { insights: "object" }),
+      typedContract("sink", { insights: "object" }, { result: "string" }),
+    ],
+    SINK,
+    { fragments: "[]" },
+  );
+  assert.deepEqual(paths(response), [["collect", "enrich", "sink"]]);
+  const mappings = response.proposals[0].proposal.mappings;
+  assert.deepEqual(mappings.find((mapping) => mapping.to_field === "insights"), { from_node_id: "node-2", from_field: "insights", to_node_id: "node-3", to_field: "insights", source: "capability_output" });
+  assert.deepEqual(mappings.filter((mapping) => mapping.source === "starting_facts").map((mapping) => mapping.to_field), ["fragments"]);
+});
+
+test("browser planner returns identical typed proposals for repeated identical calls", async () => {
+  const contracts = [typedContract("source", { seed: "string" }, { middle: "integer" }), typedContract("sink", { middle: "integer" }, { result: "string" })];
+  const first = await planFor(contracts, SINK, { seed: "x" });
+  const second = await planFor(contracts, SINK, { seed: "x" });
+  assert.deepEqual(first, second);
+  assert.deepEqual(paths(first), [["source", "sink"]]);
+  assert.ok(first.proposals.every((proposal) => proposal.mapping_unconfirmed === true));
+});
+
+// Non-string schema keywords must stay uncovered on either side of a match.
+// A JSON Schema union is not a supported scalar type declaration here; this
+// mirrors the native planner rather than silently choosing a union member.
+for (const type of [["string", "null"], 42]) {
+  const label = JSON.stringify(type);
+
+  test(`browser planner rejects required type ${label} against starting facts`, async () => {
+    const response = await planFor(
+      [typedContract("sink", { middle: "string", extra: type }, { result: "string" })],
+      SINK,
+      { middle: "m", extra: "e" },
+    );
+    assert.deepEqual(paths(response), []);
+    assert.equal(response.plan_search_truncated, false);
+  });
+
+  test(`browser planner rejects required type ${label} against predecessor outputs`, async () => {
+    const response = await planFor(
+      [
+        typedContract("source", { seed: "string" }, { middle: "string", extra: "string" }),
+        typedContract("sink", { middle: "string", extra: type }, { result: "string" }),
+      ],
+      SINK,
+      { seed: "x" },
+    );
+    assert.deepEqual(paths(response), []);
+    assert.equal(response.plan_search_truncated, false);
+  });
+
+  test(`browser planner rejects output type ${label} as a required mapping source`, async () => {
+    const response = await planFor(
+      [typedContract("source", { seed: "string" }, { middle: type }), typedContract("sink", { middle: "string" }, { result: "string" })],
+      SINK,
+      { seed: "x" },
+    );
+    assert.deepEqual(paths(response), []);
+    assert.equal(response.plan_search_truncated, false);
+  });
+}
