@@ -57,4 +57,14 @@ target first on `PATH`.
 | Host | Status |
 | --- | --- |
 | Rust reference (`traverse-runtime`) | this directory's test |
-| Web, Swift, .NET, Kotlin | tracked under #1502 as each embedder reaches parity |
+| Swift (`AppStateMachineConformanceTests.swift`) | bridge-client level (all 9 scenarios) and public `subscribe()` level (the 5 adapter-expressible scenarios); run when `TRAVERSE_NATIVE_ARTIFACT_ROOT` is set, which CI does |
+| Web, .NET, Kotlin | tracked under #1502 as each embedder reaches parity |
+
+## Known host differences
+
+- **Swift rejected submits:** `WasmiHostBridgeClient.submit` throws on a rejected command, so the
+  response body (`status: rejected`, `error`) is unavailable; the runner checks `guest_status`
+  and the `error` event only for those steps.
+- **Public API scope:** raw terminal injection (duplicate terminal, late deadline) and rejected
+  submits cannot be expressed through adapters and the timer port, so they are checked at the
+  bridge level only.

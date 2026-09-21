@@ -58,6 +58,11 @@ of the dual deadline is registered on the `TraverseTimer` port (default
 adapters and timers and drops any late completion. The first correlated
 terminal wins in the runtime.
 
+`subscribe()` delivers Spec 139 app lifecycle events (`state_changed`, `host_connector_*`,
+`capability_*`, `error`) as `TraverseRuntimeEvent`s with `eventType`, `sessionID`, and
+`output` (the event `data` as JSON), numbered in arrival order; unknown runtime types
+surface as `error`. Legacy bridge events keep their original shape.
+
 ### Audio input adapter (Spec 140)
 
 `AppleAudioInputAdapters` implements the `traverse.audio-input` host adapter for

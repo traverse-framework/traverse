@@ -1,9 +1,11 @@
 import Foundation
+import os
 
 /// Typed public embedder backed exclusively by runtime-owned bridge results.
 public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     private let client: any TraverseBridgeClient
     private let appCommands: AppCommandCoordinator
+    private let eventSequence = OSAllocatedUnfairLock(initialState: 0)
 
     public convenience init(bundle: TraverseBundle) throws {
         try self.init(client: WasmiHostBridgeClient(bundle: bundle))
@@ -46,10 +48,18 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         try appCommands.register(command: command, adapter: adapter)
     }
 
+    /// Drains ordered runtime events. Legacy bridge events (`sequence`, `target_id`, `status`) are
+    /// parsed as before. Spec 139 app lifecycle events (`type`, `session_id`, `data`) are mapped
+    /// to `eventType`, `sessionID`, and `output` (also `errorData` for `error`), numbered in
+    /// arrival order, so state-machine events are observable on every embedder (Spec 139 FR-004).
     public func subscribe() throws -> [TraverseRuntimeEvent] {
         var events: [TraverseRuntimeEvent] = []
         while let bytes = try client.nextEvent() {
             let event = try object(bytes)
+            if event["sequence"] == nil, let type = event["type"] as? String {
+                events.append(try lifecycleEvent(type: type, event: event))
+                continue
+            }
             events.append(TraverseRuntimeEvent(
                 sequence: try requiredInt("sequence", in: event),
                 targetID: try requiredString("target_id", in: event),
@@ -58,6 +68,32 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
             ))
         }
         return events
+    }
+
+    private static let lifecycleEventTypes: Set<String> = [
+        "state_changed", "capability_invoked", "capability_result", "capability_event",
+        "capability_succeeded", "capability_failed", "host_connector_succeeded",
+        "host_connector_failed", "host_connector_cancelled", "host_connector_timeout",
+        "error", "heartbeat",
+    ]
+
+    private func lifecycleEvent(type: String, event: [String: Any]) throws -> TraverseRuntimeEvent {
+        let data = try JSONSerialization.data(
+            withJSONObject: event["data"] ?? [String: Any](), options: [.sortedKeys, .fragmentsAllowed])
+        let eventType = Self.lifecycleEventTypes.contains(type) ? type : "error"
+        let sequence = eventSequence.withLock { value -> Int in
+            value += 1
+            return value
+        }
+        return TraverseRuntimeEvent(
+            sequence: sequence,
+            targetID: "app_command",
+            status: "emitted",
+            eventType: eventType,
+            sessionID: optionalString("session_id", in: event),
+            errorData: eventType == "error" ? data : nil,
+            output: data
+        )
     }
 
     public func cancel(sessionID: String) throws -> Data {
