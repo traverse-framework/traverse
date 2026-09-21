@@ -42,13 +42,20 @@ pushd "${repo_root}/packages/kotlin/TraverseEmbedder" >/dev/null
 "${GRADLE:-gradle}" --no-daemon :traverse-embedder:testDebugUnitTest
 popd >/dev/null
 dotnet test "${repo_root}/packages/dotnet/TraverseEmbedder/TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj"
+# The web embedder runs the same shared app state-machine golden against the generated artifact
+# (spec 139 / 140 FR-013, #1502); its checked-in test runtime.wasm predates that state machine.
+pushd "${repo_root}/packages/web/TraverseEmbedder" >/dev/null
+npm install --no-fund --no-audit
+npm run build
+node --test tests/appStateMachineConformance.test.mjs
+popd >/dev/null
 
 python3 - <<'PY'
 import json
 print(json.dumps({
     "traverse_embedder_api": "1.0.0",
     "bridge_version": "1.1.0",
-    "hosts": ["swift", "kotlin", "dotnet"],
+    "hosts": ["swift", "kotlin", "dotnet", "web"],
     "no_sidecar": True,
     "conformance_passed": True,
 }, sort_keys=True))

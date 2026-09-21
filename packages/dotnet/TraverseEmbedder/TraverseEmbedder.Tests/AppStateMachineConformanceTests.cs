@@ -245,7 +245,7 @@ public sealed class AppStateMachineConformanceTests
     private static bool Expressible(JsonNode? scenario) => scenario!["steps"]!.AsArray().All(step =>
         step!["complete"]?["command"] is null && step["fire_deadline"]?["command"] is null);
 
-    private sealed record WaitAction(string? ResultClass, string Payload);
+    private sealed record WaitAction(string ResultClass, string Payload);
 
     [Fact]
     public async Task DotNetPublicSubscribeDeliversTheGoldenAppEventsInOrder()
@@ -267,10 +267,15 @@ public sealed class AppStateMachineConformanceTests
             var steps = scenario["steps"]!.AsArray();
             var goldenSteps = golden[id]!.AsArray();
 
-            // One action per staged wait, in order: a host result, or "let the deadline win".
-            var actions = new ConcurrentQueue<WaitAction>(steps.Select(step => step!["complete"] is JsonNode complete
-                ? new WaitAction(complete["result_class"]!.GetValue<string>(), complete["payload"]!.ToJsonString())
-                : step["fire_deadline"] is not null ? new WaitAction(null, "{}") : null).OfType<WaitAction>());
+            // One gate per staged wait, in step order. An adapter holds its wait until the test
+            // reaches the matching `complete` step, so a command submitted during the wait is
+            // rejected deterministically instead of racing an eagerly completing adapter. A
+            // `fire_deadline` step never opens its gate: the deadline wins and shutdown cancels it.
+            var gates = steps.Where(step => step!["complete"] is not null || step["fire_deadline"] is not null)
+                .Select(_ => new TaskCompletionSource<WaitAction>(TaskCreationOptions.RunContinuationsAsynchronously))
+                .ToArray();
+            var waitsStarted = 0;
+            var gateIndex = 0;
             var timer = new ScriptedTimer();
             var client = NewClient(bundle);
             client.Initialize(init);
@@ -279,12 +284,8 @@ public sealed class AppStateMachineConformanceTests
             {
                 embedder.RegisterHostConnectorAdapter(command, async (_, token) =>
                 {
-                    if (actions.TryDequeue(out var next) && next.ResultClass is { } resultClass)
-                    {
-                        return new HostConnectorResult(resultClass, next.Payload);
-                    }
-                    await Task.Delay(Timeout.Infinite, token); // the deadline fires instead
-                    throw new InvalidOperationException("unreachable");
+                    var action = await gates[Interlocked.Increment(ref waitsStarted) - 1].Task.WaitAsync(token);
+                    return new HostConnectorResult(action.ResultClass, action.Payload);
                 });
             }
 
@@ -313,8 +314,14 @@ public sealed class AppStateMachineConformanceTests
                         Assert.Equal("accepted", result.Status);
                     }
                 }
+                else if (step["complete"] is JsonNode complete)
+                {
+                    gates[gateIndex++].SetResult(new WaitAction(
+                        complete["result_class"]!.GetValue<string>(), complete["payload"]!.ToJsonString()));
+                }
                 else if (step["fire_deadline"] is not null)
                 {
+                    gateIndex++;
                     Assert.True(timer.FireLatest(), $"{id} step {index}: no deadline was registered");
                 }
                 for (var attempt = 0; attempt < 500 && received.Count < expectedTotal; attempt++)
