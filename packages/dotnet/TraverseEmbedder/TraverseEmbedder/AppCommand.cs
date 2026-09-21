@@ -130,7 +130,18 @@ internal sealed class AppCommandCoordinator
 
     private TraverseSubmissionResult Dispatch(JsonObject envelope)
     {
-        using var response = JsonDocument.Parse(submit(Encoding.UTF8.GetBytes(envelope.ToJsonString())));
+        byte[] responseBytes;
+        try
+        {
+            responseBytes = submit(Encoding.UTF8.GetBytes(envelope.ToJsonString()));
+        }
+        catch (TraverseBridgeException error) when (RejectedResult(error.Message) is { } rejected)
+        {
+            // The guest reports a rejected command with a non-zero status and still writes the
+            // response body, which the bridge client surfaces as the exception message.
+            return rejected;
+        }
+        using var response = JsonDocument.Parse(responseBytes);
         var root = response.RootElement;
         var sessionId = RequiredString(root, "session_id");
         var status = RequiredString(root, "status");
@@ -244,6 +255,24 @@ internal sealed class AppCommandCoordinator
         {
             // Shutdown and first-terminal-wins are runtime-owned; there is no
             // host retry path for a terminal the runtime can no longer accept.
+        }
+    }
+
+    private static TraverseSubmissionResult? RejectedResult(string message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   OptionalString(root, "status") == "rejected" &&
+                   OptionalString(root, "session_id") is { } sessionId
+                ? new TraverseSubmissionResult(sessionId, "rejected", OptionalString(root, "error"))
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

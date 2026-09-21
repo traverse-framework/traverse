@@ -41,5 +41,12 @@ registered on the `ITraverseTimer` port (default `SystemTraverseTimer`) and
 submits `deadline_fired`. `Shutdown` cancels adapters and timers and drops any
 late completion. The first correlated terminal wins in the runtime.
 
+A command the runtime rejects (no transition, or issued during a wait) returns a
+`TraverseSubmissionResult` with `Status` `rejected` and the runtime's `Error`, like web.
+`Subscribe()` delivers Spec 139 app lifecycle events (`state_changed`, `host_connector_*`,
+`capability_*`, `error`) as `TraverseRuntimeEvent`s with `EventType`, `SessionId`, and
+`Output` (the event `data` as JSON), numbered in arrival order; unknown runtime types
+surface as `error`. Legacy bridge events keep their original shape.
+
 Request marshalling, event subscriptions, evidence publication, shared
 conformance, and WinUI reference-app integration remain tracked by Traverse #649.

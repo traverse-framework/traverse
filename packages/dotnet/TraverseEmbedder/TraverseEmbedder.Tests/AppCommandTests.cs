@@ -317,4 +317,53 @@ public sealed class AppCommandTests
                 SessionId: "dotnet-session-1", Output: "{\"k\":1}"),
             harness.Subscribe().First());
     }
+
+    [Fact]
+    public void RejectedSubmitBecomesARejectedResultInsteadOfThrowing()
+    {
+        var body = "{\"session_id\":\"s7\",\"status\":\"rejected\",\"error\":\"invalid_transition\"}";
+        var coordinator = new AppCommandCoordinator(
+            _ => throw new TraverseBridgeException(-1, body), new ManualTimer());
+        Assert.Equal(
+            new TraverseSubmissionResult("s7", "rejected", "invalid_transition"),
+            coordinator.Submit(new TraverseAppCommand("nope")));
+
+        var noError = new AppCommandCoordinator(
+            _ => throw new TraverseBridgeException(-1, "{\"session_id\":\"s8\",\"status\":\"rejected\"}"),
+            new ManualTimer());
+        Assert.Null(noError.Submit(new TraverseAppCommand("nope")).Error);
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("[1]")]
+    [InlineData("{\"status\":\"accepted\",\"session_id\":\"s1\"}")]
+    [InlineData("{\"status\":\"rejected\"}")]
+    public void OtherBridgeFailuresStillThrow(string message)
+    {
+        var coordinator = new AppCommandCoordinator(
+            _ => throw new TraverseBridgeException(-1, message), new ManualTimer());
+        Assert.Throws<TraverseBridgeException>(() => coordinator.Submit(new TraverseAppCommand("go")));
+    }
+
+    [Fact]
+    public void LifecycleEventsMapToPublicEventsAndUnknownTypesBecomeErrors()
+    {
+        static System.Text.Json.JsonElement Parse(string json) => System.Text.Json.JsonDocument.Parse(json).RootElement;
+
+        var changed = RuntimeTraverseEmbedder.MapLifecycleEvent(
+            "state_changed", Parse("{\"type\":\"state_changed\",\"session_id\":\"s1\",\"data\":{\"state\":\"ready\"}}"), 1);
+        Assert.Equal(new TraverseRuntimeEvent(1, "app_command", "emitted", EventType: "state_changed",
+            SessionId: "s1", Output: "{\"state\":\"ready\"}"), changed);
+
+        var failed = RuntimeTraverseEmbedder.MapLifecycleEvent(
+            "error", Parse("{\"type\":\"error\",\"session_id\":\"s1\",\"data\":{\"code\":\"x\"}}"), 2);
+        Assert.Equal("error", failed.EventType);
+        Assert.Equal(failed.Output, failed.ErrorData);
+
+        var unknown = RuntimeTraverseEmbedder.MapLifecycleEvent("something_new", Parse("{\"type\":\"something_new\"}"), 3);
+        Assert.Equal("error", unknown.EventType);
+        Assert.Equal("{}", unknown.Output);
+        Assert.Null(unknown.SessionId);
+    }
 }

@@ -51,6 +51,13 @@ public sealed class RuntimeTraverseEmbedder
             RequiredString(result.RootElement, "status"));
     }
 
+    /// <summary>
+    /// Drains ordered runtime events. Legacy bridge events (<c>sequence</c>, <c>target_id</c>,
+    /// <c>status</c>) are parsed as before. Spec 139 app lifecycle events (<c>type</c>,
+    /// <c>session_id</c>, <c>data</c>) map to <c>EventType</c>, <c>SessionId</c>, and
+    /// <c>Output</c> (also <c>ErrorData</c> for <c>error</c>), numbered in arrival order, so
+    /// state-machine events are observable on every embedder (Spec 139 FR-004).
+    /// </summary>
     public IReadOnlyList<TraverseRuntimeEvent> Subscribe()
     {
         var events = new List<TraverseRuntimeEvent>();
@@ -58,6 +65,11 @@ public sealed class RuntimeTraverseEmbedder
         {
             using var result = Result(bytes);
             var value = result.RootElement;
+            if (!value.TryGetProperty("sequence", out _) && OptionalString(value, "type") is { } type)
+            {
+                events.Add(MapLifecycleEvent(type, value, Interlocked.Increment(ref eventSequence)));
+                continue;
+            }
             events.Add(new TraverseRuntimeEvent(
                 RequiredInt(value, "sequence"),
                 RequiredString(value, "target_id"),
@@ -65,6 +77,30 @@ public sealed class RuntimeTraverseEmbedder
                 OptionalString(value, "instance_id")));
         }
         return events;
+    }
+
+    private static readonly HashSet<string> LifecycleEventTypes =
+    [
+        "state_changed", "capability_invoked", "capability_result", "capability_event",
+        "capability_succeeded", "capability_failed", "host_connector_succeeded",
+        "host_connector_failed", "host_connector_cancelled", "host_connector_timeout",
+        "error", "heartbeat",
+    ];
+
+    private int eventSequence;
+
+    internal static TraverseRuntimeEvent MapLifecycleEvent(string type, JsonElement value, int sequence)
+    {
+        var data = value.TryGetProperty("data", out var payload) ? payload.GetRawText() : "{}";
+        var eventType = LifecycleEventTypes.Contains(type) ? type : "error";
+        return new TraverseRuntimeEvent(
+            sequence,
+            "app_command",
+            "emitted",
+            EventType: eventType,
+            SessionId: OptionalString(value, "session_id"),
+            ErrorData: eventType == "error" ? data : null,
+            Output: data);
     }
 
     public string Cancel(string sessionId)
