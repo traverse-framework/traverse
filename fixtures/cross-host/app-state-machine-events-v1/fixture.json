@@ -1,0 +1,144 @@
+{
+  "kind": "app_state_machine_conformance_fixture",
+  "fixture_version": "1.0.0",
+  "governing_specs": [
+    "139-embedder-app-state-machine-execution",
+    "140-host-authority-wit-adapters"
+  ],
+  "init_header": {
+    "app_id": "conformance.app",
+    "host_placement_target": "local",
+    "permitted_targets": ["local"],
+    "state_machine": {
+      "initial_state": "idle",
+      "states": [
+        {
+          "id": "idle",
+          "transitions": [{ "on": "request_permission", "to": "requesting_permission" }]
+        },
+        {
+          "id": "requesting_permission",
+          "invoke": { "host_connector": "request_permission" },
+          "transitions": [
+            { "on": "host_connector_succeeded", "to": "ready" },
+            { "on": "host_connector_failed", "to": "error" },
+            { "on": "host_connector_cancelled", "to": "error" },
+            { "on": "host_connector_timeout", "to": "error" }
+          ]
+        },
+        {
+          "id": "ready",
+          "transitions": [
+            { "on": "capture_audio", "to": "capturing" },
+            { "on": "capture_audio_strict", "to": "capturing_strict" }
+          ]
+        },
+        {
+          "id": "capturing",
+          "invoke": { "host_connector": "capture_audio" },
+          "transitions": [
+            { "on": "host_connector_succeeded", "to": "recorded" },
+            { "on": "host_connector_failed", "to": "error" },
+            { "on": "host_connector_cancelled", "to": "error" },
+            { "on": "host_connector_timeout", "to": "error" }
+          ]
+        },
+        {
+          "id": "capturing_strict",
+          "invoke": { "host_connector": "capture_audio" },
+          "transitions": [{ "on": "host_connector_succeeded", "to": "recorded" }]
+        },
+        { "id": "recorded", "transitions": [{ "on": "reset", "to": "idle" }] },
+        { "id": "error", "transitions": [{ "on": "reset", "to": "idle" }] }
+      ]
+    }
+  },
+  "step_kinds": {
+    "submit": "app_command envelope {command, payload, session}; session is null (new) or a $S<n> placeholder",
+    "complete": "host_connector_result for a pending wait: {command: $C<n> or omitted for the latest, result_class, payload}",
+    "fire_deadline": "deadline_fired for a pending wait: {command: $C<n> or omitted for the latest}"
+  },
+  "placeholders": "Runtime-assigned session and command ids are normalized to $S<n> / $C<n> by first appearance",
+  "scenarios": [
+    {
+      "id": "happy_path",
+      "description": "permission granted, then capture succeeds",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } },
+        { "submit": { "command": "capture_audio", "payload": { "max_duration_ms": 5000, "max_bytes": 1048576 }, "session": "$S1" } },
+        { "complete": { "result_class": "succeeded", "payload": { "artifact_ref": "artifact-1" } } }
+      ]
+    },
+    {
+      "id": "permission_denied",
+      "description": "the permission wait fails; the session takes the declared failure route",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "failed", "payload": { "error_code": "policy_denied" } } }
+      ]
+    },
+    {
+      "id": "permission_timeout",
+      "description": "the runtime deadline fires before the host answers",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "fire_deadline": {} }
+      ]
+    },
+    {
+      "id": "capture_cancelled",
+      "description": "capture is cancelled by the host",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } },
+        { "submit": { "command": "capture_audio", "payload": { "max_duration_ms": 5000, "max_bytes": 1048576 }, "session": "$S1" } },
+        { "complete": { "result_class": "cancelled", "payload": { "error_code": "cancelled" } } }
+      ]
+    },
+    {
+      "id": "late_deadline_after_success",
+      "description": "first terminal wins; a later deadline for the same wait is ignored",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } },
+        { "fire_deadline": { "command": "$C1" } }
+      ]
+    },
+    {
+      "id": "duplicate_terminal",
+      "description": "a duplicate correlated terminal is ignored idempotently",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } },
+        { "complete": { "command": "$C1", "result_class": "succeeded", "payload": { "permission_state": "granted" } } }
+      ]
+    },
+    {
+      "id": "undeclared_terminal",
+      "description": "a terminal with no matching transition fails closed with a session error",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } },
+        { "submit": { "command": "capture_audio_strict", "payload": { "max_duration_ms": 5000, "max_bytes": 1048576 }, "session": "$S1" } },
+        { "complete": { "result_class": "cancelled", "payload": { "error_code": "cancelled" } } }
+      ]
+    },
+    {
+      "id": "command_rejected_while_waiting",
+      "description": "a UI command during a wait is rejected; the wait is unaffected",
+      "steps": [
+        { "submit": { "command": "request_permission", "payload": {}, "session": null } },
+        { "submit": { "command": "capture_audio", "payload": {}, "session": "$S1" } },
+        { "complete": { "result_class": "succeeded", "payload": { "permission_state": "granted" } } }
+      ]
+    },
+    {
+      "id": "unknown_command",
+      "description": "a command with no transition is rejected",
+      "steps": [
+        { "submit": { "command": "no_such_command", "payload": {}, "session": null } }
+      ]
+    }
+  ]
+}

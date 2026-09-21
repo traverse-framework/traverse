@@ -1,0 +1,852 @@
+{
+  "golden_version": "1.0.0",
+  "scenarios": {
+    "capture_cancelled": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "previous_state": "ready",
+              "state": "capturing"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C2",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "kind": "host_connector_command",
+              "payload": {
+                "max_bytes": 1048576,
+                "max_duration_ms": 5000
+              },
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "error_code": "cancelled"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_cancelled"
+          },
+          {
+            "data": {
+              "command_id": "$C2",
+              "on": "host_connector_cancelled",
+              "previous_state": "capturing",
+              "state": "error"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 3
+      }
+    ],
+    "command_rejected_while_waiting": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "code": "invalid_transition",
+              "message": "session is waiting in state 'requesting_permission' and does not accept command 'capture_audio'",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "error"
+          }
+        ],
+        "guest_status": -1,
+        "kind": "submit",
+        "response": {
+          "error": "invalid_transition",
+          "session_id": "$S1",
+          "status": "rejected"
+        },
+        "step": 1
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      }
+    ],
+    "duplicate_terminal": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      }
+    ],
+    "happy_path": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "previous_state": "ready",
+              "state": "capturing"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C2",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "kind": "host_connector_command",
+              "payload": {
+                "max_bytes": 1048576,
+                "max_duration_ms": 5000
+              },
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "artifact_ref": "artifact-1"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C2",
+              "on": "host_connector_succeeded",
+              "previous_state": "capturing",
+              "state": "recorded"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 3
+      }
+    ],
+    "late_deadline_after_success": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [],
+        "guest_status": 0,
+        "kind": "fire_deadline",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      }
+    ],
+    "permission_denied": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "error_code": "policy_denied"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_failed"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_failed",
+              "previous_state": "requesting_permission",
+              "state": "error"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      }
+    ],
+    "permission_timeout": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {},
+            "session_id": "$S1",
+            "type": "host_connector_timeout"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_timeout",
+              "previous_state": "requesting_permission",
+              "state": "error"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "fire_deadline",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      }
+    ],
+    "undeclared_terminal": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "command": "capture_audio_strict",
+              "command_id": "$C2",
+              "previous_state": "ready",
+              "state": "capturing_strict"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C2",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "kind": "host_connector_command",
+              "payload": {
+                "max_bytes": 1048576,
+                "max_duration_ms": 5000
+              },
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "error_code": "cancelled"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_cancelled"
+          },
+          {
+            "data": {
+              "code": "no_matching_transition",
+              "message": "no host_connector_cancelled transition from 'capturing_strict'",
+              "state": "capturing_strict"
+            },
+            "session_id": "$S1",
+            "type": "error"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 3
+      }
+    ],
+    "unknown_command": [
+      {
+        "events": [
+          {
+            "data": {
+              "code": "invalid_transition",
+              "message": "no transition for command 'no_such_command' from 'idle'",
+              "state": "idle"
+            },
+            "session_id": "$S1",
+            "type": "error"
+          }
+        ],
+        "guest_status": -1,
+        "kind": "submit",
+        "response": {
+          "error": "invalid_transition",
+          "session_id": "$S1",
+          "status": "rejected"
+        },
+        "step": 0
+      }
+    ]
+  }
+}
