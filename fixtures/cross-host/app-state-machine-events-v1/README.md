@@ -59,7 +59,8 @@ target first on `PATH`.
 | Rust reference (`traverse-runtime`) | this directory's test |
 | Swift (`AppStateMachineConformanceTests.swift`) | bridge-client level (all 9 scenarios) and public `subscribe()` level (the 5 adapter-expressible scenarios); run when `TRAVERSE_NATIVE_ARTIFACT_ROOT` is set, which CI does |
 | .NET (`AppStateMachineConformanceTests.cs`) | bridge-client level (all 9 scenarios, including rejected response bodies) and public `Subscribe()` level (the 7 scenarios expressible through adapters and the timer port); run when `TRAVERSE_NATIVE_ARTIFACT_ROOT` is set, which CI does |
-| Web, Kotlin | tracked under #1502 as each embedder reaches parity |
+| Web (`packages/web/TraverseEmbedder/tests/appStateMachineConformance.test.mjs`) | bridge-client level via `RuntimeWasmHost` (all 9 scenarios); run when `TRAVERSE_NATIVE_ARTIFACT_ROOT` is set, which the `native-artifact-certification` CI job does. Public `BundleEmbedder` level is not run yet (see below) |
+| Kotlin | tracked under #1500 |
 
 ## Known host differences
 
@@ -69,6 +70,15 @@ target first on `PATH`.
 - **.NET rejected submits:** `WasmtimeBridgeClient.Submit` throws `TraverseBridgeException`
   with the response JSON as its message; `RuntimeTraverseEmbedder.Submit(TraverseAppCommand)`
   maps that to a `rejected` result (with `Error`), matching web.
+- **Web host status codes:** `RuntimeWasmHost.submit` throws on a rejected command and reports only
+  "non-zero"; the runner records `guest_status: -1` and reads the response body from the error
+  message.
+- **Web public level:** `BundleEmbedder.ensureAppHost` requires at least one bundled wasm
+  component even for a machine that only uses host connectors (it throws `state_machine invoke
+  capability is not present in the bundle`), so a host-connector-only app cannot yet be driven
+  through the public web API. The web runner therefore checks the bridge level only. The checked-in
+  `tests/fixtures/runtime.wasm` also predates the app state machine, so the runner needs the
+  generated artifact.
 - **Public API scope:** raw terminal injection (duplicate terminal, late deadline) and rejected
   submits cannot be expressed through adapters and the timer port, so they are checked at the
   bridge level only.

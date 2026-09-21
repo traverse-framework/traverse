@@ -253,6 +253,11 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Certify generated artifact across native packages
         run: bash scripts/ci/native_artifact_certification.sh
 
