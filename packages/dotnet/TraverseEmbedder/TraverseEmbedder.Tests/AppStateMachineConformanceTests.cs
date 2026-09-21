@@ -189,12 +189,11 @@ public sealed class AppStateMachineConformanceTests
             }
             for (var index = 0; index < want.Count; index++)
             {
-                foreach (var field in new[] { "kind", "guest_status", "response" })
+                var step = index;
+                foreach (var field in new[] { "kind", "guest_status", "response" }
+                             .Where(field => !JsonNode.DeepEquals(actual[step]![field], want[step]![field])))
                 {
-                    if (!JsonNode.DeepEquals(actual[index]![field], want[index]![field]))
-                    {
-                        divergences.Add($"scenario {id} step {index} {field}: expected {want[index]![field]?.ToJsonString()}, got {actual[index]![field]?.ToJsonString()}");
-                    }
+                    divergences.Add($"scenario {id} step {step} {field}: expected {want[step]![field]?.ToJsonString()}, got {actual[step]![field]?.ToJsonString()}");
                 }
                 var got = actual[index]!["events"]!.AsArray();
                 var wanted = want[index]!["events"]!.AsArray();
