@@ -25,6 +25,8 @@ const MIGRATION_SPEC: &str = "092-datastore-v2-migration-ownership";
 const BACKUP_MANIFEST_VERSION: &str = "1";
 const BACKUP_MANIFEST_MEMBER: &str = "manifest.json";
 const BACKUP_RECORDS_PREFIX: &str = "records/";
+const MAX_BACKUP_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_BACKUP_MEMBER_BYTES: u64 = 16 * 1024 * 1024;
 const HEXADECIMAL_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 /// Host retention knobs for prune (FR-002).
@@ -916,9 +918,12 @@ fn read_and_validate_manifest_header(
                     message: "backup_verify_failed".to_string(),
                     details: json!({ "reason": "missing_manifest" }),
                 })?;
-        manifest_file
-            .read_to_end(&mut manifest_bytes)
-            .map_err(|error| read_manifest_bytes_error(&error))?;
+        read_zip_member_bounded(
+            &mut manifest_file,
+            MAX_BACKUP_MANIFEST_BYTES,
+            &mut manifest_bytes,
+        )
+        .map_err(|error| read_manifest_bytes_error(&error))?;
     }
     let manifest: BackupManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|_| MaintenanceError {
@@ -969,7 +974,7 @@ fn verify_manifest_member_payloads(
                     message: "backup_verify_failed".to_string(),
                     details: json!({ "reason": "missing_member", "path": entry.member_path }),
                 })?;
-            file.read_to_end(&mut bytes)
+            read_zip_member_bounded(&mut file, MAX_BACKUP_MEMBER_BYTES, &mut bytes)
                 .map_err(|error| read_member_bytes_error(&error))?;
         }
         if sha256_hex(&bytes) != entry.envelope_digest {
@@ -1029,13 +1034,28 @@ fn materialize_archive_to_root(archive: &Path, root: &Path) -> Result<(), Mainte
             let mut member = zip
                 .by_name(&entry.member_path)
                 .map_err(|_| restore_missing_member_error(&entry.member_path))?;
-            member
-                .read_to_end(&mut bytes)
+            read_zip_member_bounded(&mut member, MAX_BACKUP_MEMBER_BYTES, &mut bytes)
                 .map_err(|error| maintenance_io("extract member", &error))?;
         }
         let dest = root.join(format!("{key}.json"));
         fs::write(&dest, bytes)
             .map_err(|error| maintenance_io("write restored envelope", &error))?;
+    }
+    Ok(())
+}
+
+fn read_zip_member_bounded(
+    member: &mut zip::read::ZipFile<'_, File>,
+    maximum_bytes: u64,
+    output: &mut Vec<u8>,
+) -> Result<(), std::io::Error> {
+    if member.size() > maximum_bytes {
+        return Err(std::io::Error::other("member_too_large"));
+    }
+    let mut limited = member.take(maximum_bytes.saturating_add(1));
+    limited.read_to_end(output)?;
+    if output.len() as u64 > maximum_bytes {
+        return Err(std::io::Error::other("member_too_large"));
     }
     Ok(())
 }
@@ -1129,7 +1149,10 @@ fn read_manifest_bytes_error(error: &std::io::Error) -> MaintenanceError {
     MaintenanceError {
         code: MaintenanceErrorCode::BackupVerifyFailed,
         message: "backup_verify_failed".to_string(),
-        details: json!({ "reason": "read_manifest", "cause": error.to_string() }),
+        details: json!({
+            "reason": if error.to_string() == "member_too_large" { "member_too_large" } else { "read_manifest" },
+            "cause": error.to_string()
+        }),
     }
 }
 
@@ -1137,7 +1160,10 @@ fn read_member_bytes_error(error: &std::io::Error) -> MaintenanceError {
     MaintenanceError {
         code: MaintenanceErrorCode::BackupVerifyFailed,
         message: "backup_verify_failed".to_string(),
-        details: json!({ "reason": "read_member", "cause": error.to_string() }),
+        details: json!({
+            "reason": if error.to_string() == "member_too_large" { "member_too_large" } else { "read_member" },
+            "cause": error.to_string()
+        }),
     }
 }
 
@@ -1986,6 +2012,33 @@ mod tests {
             archive_digest.details["reason"],
             "archive_content_digest_mismatch"
         );
+    }
+
+    #[test]
+    fn verify_backup_archive_rejects_oversized_member_before_digest_read() {
+        let oversized = vec![0_u8; (MAX_BACKUP_MEMBER_BYTES + 1) as usize];
+        let archive = write_zip_with_manifest(
+            &temp_root("oversized-backup-member"),
+            &json!({
+                "manifest_format_version": BACKUP_MANIFEST_VERSION,
+                "created_as_of": "2026-07-29T00:00:00Z",
+                "record_count": 1,
+                "archive_content_digest": "sha256:00",
+                "records": [{
+                    "key": "k00",
+                    "classification": "public",
+                    "envelope_digest": "sha256:00",
+                    "member_path": "records/k00.json"
+                }],
+                "store_format": LOCAL_DATA_STORE_FORMAT,
+                "writer_tool": "test",
+                "writer_semver": "0.0.0"
+            }),
+            &[("records/k00.json", oversized.as_slice())],
+        );
+        let failure = verify_backup_archive(&archive).expect_err("oversized member");
+        assert_eq!(failure.code, MaintenanceErrorCode::BackupVerifyFailed);
+        assert_eq!(failure.details["reason"], "member_too_large");
     }
 
     #[test]
