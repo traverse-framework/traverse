@@ -1017,7 +1017,7 @@
     },
     {
       "id": "518-durable-local-datastore",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/518-durable-local-datastore/spec.md",
@@ -1076,7 +1076,7 @@
     },
     {
       "id": "083-datastore-retention-backup",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/526-datastore-retention-backup/spec.md",
@@ -1990,7 +1990,7 @@
     },
     {
       "id": "1402-runtime-wasm-orchestrator-convergence",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/1402-runtime-wasm-orchestrator-convergence/spec.md",
