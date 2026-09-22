@@ -4,13 +4,18 @@
 **Created**: 2026-09-18
 **Status**: Approved (2026-09-18)
 **Canonical governing ID**: `139-embedder-app-state-machine-execution`
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Extends**: `052-app-state-machine`, `057-embeddable-runtime-host`,
 `059-http-command-dispatch`, `068-public-platform-embedder-packages`,
 `137-host-connector-command-dispatch`, `1402-runtime-wasm-orchestrator-convergence`
 **Amends**: `052-app-state-machine`, `057-embeddable-runtime-host`,
 `059-http-command-dispatch`, `1402-runtime-wasm-orchestrator-convergence`,
 `embedder-api/1.0.0` → documented additive `1.1.0` submit shapes
+**Amendment (2026-09-21, version 0.1.0 -> 0.2.0, approved 2026-09-21)**: Decision 99.
+`invoke.input_from` gains `host_connector_result.<field>`, a generic
+key lookup into the most recently completed host-connector wait's result,
+resolved through Spec 138 runtime-mediated staging into a bounded
+capability input. Unblocks `#1502` / `#1503`.
 **Decision evidence**: Decision 96; ADR-0075 (Accepted).
 **Approval**: Owner-approved in `/brainstorm` session 2026-09-18 (Decision 96).
 
@@ -46,6 +51,7 @@ customers, not the product scope.
 | 137-host-connector-command-dispatch | Host-connector invoke from SM wait via bridge; adapters unchanged |
 | 1402 | `runtime.wasm` owns SM orchestration; nested wasmi memory ceiling 32 MiB |
 | 1285 / 085 | Stateful capability partitions rehydrate independently of SM sessions |
+| 138-governed-exact-model-execution | `input_from: host_connector_result.<field>` resolves through Spec 138's runtime-mediated artifact staging (FR-020) |
 
 ## Architecture
 
@@ -112,6 +118,23 @@ UI shell  --submit(app_command)-->  Platform embedder
 - **FR-013**: Fuel/instruction budgets MUST NOT be used as the I/O wait
   timeout mechanism for host-connector sagas.
 
+### Capability input from host-connector artifacts (Decision 99)
+
+- **FR-019**: `invoke.input_from` MAY additionally be
+  `host_connector_result.<field>`: a generic key lookup into the payload of
+  the **most recently completed** host-connector wait in this session.
+  Addressing any wait other than the one immediately preceding this invoke
+  is out of scope for this slice and MUST be rejected (see FR-021).
+- **FR-020**: When the looked-up field names a runtime-staged artifact
+  reference (for example `artifact_ref`, `output_ref`), the runtime MUST
+  resolve it into bounded bytes only through Spec 138 runtime-mediated
+  staging (`stage_artifact` / `read_artifact`; Spec 138 FR-017), then invoke
+  the capability with those bytes base64-encoded inside a well-known
+  single-key JSON object (for example `{"artifact_base64": "..."}`) as its
+  **entire** input. Guests MUST NOT receive the raw ref, a path, or a URL.
+  `input_from` names a single reference; it MUST NOT merge the resolved
+  value with `command.payload` or any other source.
+
 ### Validation and fail-closed recovery
 
 - **FR-014**: `traverse-cli app validate` MUST reject manifests whose
@@ -121,6 +144,16 @@ UI shell  --submit(app_command)-->  Platform embedder
   transition, the runtime MUST fail closed: emit a deterministic session
   `error` (stable reason code) and leave no silent hang. It MUST NOT push
   recovery ownership to the UI.
+- **FR-021**: `traverse-cli app validate` MUST reject a manifest where a
+  state's `input_from` references `host_connector_result` but no reachable
+  predecessor state declares an `invoke.host_connector`.
+- **FR-022**: At runtime, if the referenced field is absent from the
+  completed wait's result, the session MUST fail closed with the same
+  deterministic session `error` behavior as FR-015 (stable reason code,
+  capability never invoked). If the resolved artifact exceeds the lesser of
+  its originally staged ceiling and the capability's declared input limit,
+  dispatch MUST fail with `input_limit_exceeded` before invoking the
+  capability.
 
 ### Session durability boundary
 
@@ -159,6 +192,15 @@ UI shell  --submit(app_command)-->  Platform embedder
 6. Given process restart, when Stateful capability data exists in the host
    store, then capability state rehydrates while the app SM session does
    not silently resume a prior wait.
+7. Given a state with `invoke.capability_id` and `input_from:
+   "host_connector_result.artifact_ref"` immediately after a successful
+   `capture_audio` wait, when the capability invokes, then it receives
+   `{"artifact_base64": ...}` resolved via Spec 138 staging and never a path,
+   URL, or raw ref.
+8. Given a manifest where a state's `input_from` references
+   `host_connector_result` but no reachable predecessor declares
+   `invoke.host_connector`, when validated, then `app validate` rejects it
+   (FR-021).
 
 ## Out of scope
 
@@ -175,3 +217,5 @@ UI shell  --submit(app_command)-->  Platform embedder
   submit-envelope decisions.
 - Implementation tickets MUST NOT be `Ready` until this spec and ADR-0075
   are approved (this document + Decision 96).
+- FR-019 through FR-022 (Decision 99) are elaboration under the existing
+  ADR-0075 / ADR-0076 evidence trail; no new ADR is required.
