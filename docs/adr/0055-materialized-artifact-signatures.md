@@ -1,7 +1,7 @@
 # ADR-0055: Signature Evidence Travels Through Host-Owned Artifact State
 
-- Status: Proposed
-- Governing spec: `124-materialized-artifact-signatures` (Draft)
+- Status: Accepted
+- Governing spec: `124-materialized-artifact-signatures` (Approved, `#1208`)
 - Extends: ADR-0051 and Spec 030
 - Related issues: #1203; `traverse-framework/registry` #331, #333, #334, #335
 
