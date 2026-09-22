@@ -2016,7 +2016,9 @@ mod tests {
 
     #[test]
     fn verify_backup_archive_rejects_oversized_member_before_digest_read() {
-        let oversized = vec![0_u8; (MAX_BACKUP_MEMBER_BYTES + 1) as usize];
+        let oversized_size = usize::try_from(MAX_BACKUP_MEMBER_BYTES + 1)
+            .expect("governed member ceiling fits usize");
+        let oversized = vec![0_u8; oversized_size];
         let archive = write_zip_with_manifest(
             &temp_root("oversized-backup-member"),
             &json!({
