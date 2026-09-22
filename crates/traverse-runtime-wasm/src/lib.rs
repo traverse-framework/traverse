@@ -1619,7 +1619,10 @@ mod tests {
         });
         submit(&mut state, terminal.to_string().as_bytes());
         assert_eq!(
-            state.app_sessions.get(&session_id).map(|s| s.state.as_str()),
+            state
+                .app_sessions
+                .get(&session_id)
+                .map(|s| s.state.as_str()),
             Some("recorded")
         );
 
@@ -1636,7 +1639,9 @@ mod tests {
             .map(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).expect("json"))
             .collect();
         assert!(
-            events.iter().any(|event| event["type"] == "capability_invoked"),
+            events
+                .iter()
+                .any(|event| event["type"] == "capability_invoked"),
             "resolved input_from must reach the invoke path: {events:?}"
         );
         // The bundled artifact is empty, so nested execution itself fails
@@ -1645,12 +1650,10 @@ mod tests {
         // fail-closed path (a `code` of invalid_input/invalid_input_from)
         // was never taken.
         assert!(
-            !events
-                .iter()
-                .any(|event| matches!(
-                    event["data"]["code"].as_str(),
-                    Some("invalid_input" | "invalid_input_from")
-                )),
+            !events.iter().any(|event| matches!(
+                event["data"]["code"].as_str(),
+                Some("invalid_input" | "invalid_input_from")
+            )),
             "{events:?}"
         );
     }
@@ -1732,7 +1735,9 @@ mod tests {
                 .contains("no host-connector wait")
         );
         assert!(
-            !events.iter().any(|event| event["type"] == "capability_invoked"),
+            !events
+                .iter()
+                .any(|event| event["type"] == "capability_invoked"),
             "the capability must never be invoked: {events:?}"
         );
     }

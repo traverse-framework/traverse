@@ -504,8 +504,9 @@ mod tests {
 
     #[test]
     fn fails_closed_when_no_host_connector_wait_has_completed() {
-        let error = resolve_capability_input("host_connector_result.artifact_base64", &json!({}), None)
-            .expect_err("no prior wait");
+        let error =
+            resolve_capability_input("host_connector_result.artifact_base64", &json!({}), None)
+                .expect_err("no prior wait");
         assert_eq!(error.code, "invalid_input");
         assert!(error.message.contains("no host-connector wait"));
     }
