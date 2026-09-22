@@ -5012,3 +5012,149 @@ cross-platform golden event conformance.
 Approved by Enrico in `/brainstorm` (2026-09-21): every recommended option
 accepted as given. Unblocks `#1502`'s `analyze` step and `#1503`'s example
 apps once the Spec 139 / Spec 138 amendments are drafted and approved.
+
+## Decision 100: Security Remediation Specs — Backup Decompression-Bomb Caps and RuntimeWasmHost Resource Limits
+
+- **Date**: 2026-09-22
+- **Status**: Accepted
+- **Governing specs**: amendments to `083-datastore-retention-backup`
+  (`specs/526-datastore-retention-backup`) and `518-durable-local-datastore`
+  (backup/restore and write-path size caps); amendment to
+  `1402-runtime-wasm-orchestrator-convergence` (`RuntimeWasmHost` fuel/memory/
+  response-length bounds)
+- **Related issues**: `#1523` (decompression bomb), `#1524` (RuntimeWasmHost
+  resource limits) — the only two `needs-spec` tickets in the repo
+- **Origin**: `/brainstorm` on the two remaining spec-blocked security
+  findings, following the same session's Decision 99
+
+### Context
+
+Both `#1523` and `#1524` are security findings whose own Definition of Done
+requires a governing-spec amendment before they can move to Ready. Neither
+spec currently states any size or resource ceiling in the affected area:
+Spec 526/518 have no per-member or per-record byte cap anywhere in the
+backup/restore or ordinary write path; Spec 1402 documents
+`RuntimeWasmHost` as production but its `instantiate` runs the real
+`runtime.wasm` bridge with a default `Engine`, a bare `Store<()>`, and no
+bounds check on a guest-supplied response length before host allocation.
+Reading the code first resolved two sub-questions without asking:
+`MaintenanceErrorCode`/`DataStoreErrorCode` already only had generic-bucket
+vs. dedicated-variant conventions respectively (no design choice needed,
+just following each enum's own existing shape), and `RuntimeWasmHost::
+instantiate` has zero production call sites in this repo today (only its
+own test), so any signature change here breaks nothing in-repo.
+
+### Decision — `#1523` (decompression bomb)
+
+1. **Fixed governed constants**, not a manifest field or a host-configurable
+   policy — this is a security floor, not an operational knob.
+2. **`manifest.json` gets its own, smaller cap**, separate from record
+   members — it is bounded index metadata and should never approach
+   record-member size.
+3. **16 MiB per record member; 4 MiB for `manifest.json`.** The 16 MiB
+   figure reuses this codebase's own existing precedent
+   (`MAX_MODEL_OUTPUT_BYTES` in `host_connector_dispatch.rs`, Spec 138)
+   rather than a new invented number.
+4. **The same 16 MiB cap also applies to ordinary DataStore writes**
+   (Spec 518), not just backup/restore — today's write path has no size
+   limit at all, so a record that writes fine could otherwise produce a
+   backup that can never verify or restore. Closes a correctness gap
+   alongside the security one.
+5. **No new `MaintenanceErrorCode` variant.** `verify_backup_archive` /
+   `materialize_archive_to_root` failures reuse `BackupVerifyFailed` /
+   `RestoreVerifyFailed` with a new `details.reason: "member_too_large"`,
+   matching every other zip-verification sub-case already expressed that
+   way (`invalid_zip`, `missing_manifest`, `member_digest_mismatch`, …).
+6. **New `DataStoreErrorCode::InputLimitExceeded`
+   (`"input_limit_exceeded"`) for the write path** — that enum's own
+   convention is one dedicated variant per concern (twenty-plus already),
+   unlike `MaintenanceErrorCode`'s generic-bucket shape, and
+   `input_limit_exceeded` is the exact stable string this codebase already
+   uses everywhere else for a size-ceiling violation (Spec 137/138's
+   host-connector dispatch; the Swift/.NET/web `ArtifactStagingStore` this
+   same rollout added), so DataStore does not invent a synonym.
+7. **Amends Spec 526 and Spec 518, minor version bumps, no new ADR** — rides
+   under the existing `docs/adr/0021-datastore-retention-backup.md`
+   evidence; neither fix changes the backup/restore or write architecture,
+   only adds the bound each was always supposed to have. Neither spec file
+   currently has a `**Version**:` header line (both predate that
+   convention); the amendment adds one, starting at `1.0.0 -> 1.1.0`
+   (matching `approved-specs.json`'s already-tracked `1.0.0`).
+
+### Decision — `#1524` (`RuntimeWasmHost` resource limits)
+
+8. **Amends Spec 1402 only** (`1.3.0 -> 1.4.0`), not Spec 071 — 1402 already
+   normatively owns `RuntimeWasmHost` (its own module doc cites "1402
+   FR-003, Decision 89"), and this is a property of that specific host
+   driver, not the wire ABI or envelope Spec 071 owns; the other three
+   bridge clients (Swift/Kotlin/.NET) already independently enforce their
+   own limits in production.
+9. **Fuel ceiling: 50,000,000 per call**, matching the number this same
+   session's Swift (`#1521`) and .NET (`#1522`) real-artifact tests already
+   independently converged on and proved sufficient against the real
+   artifact — not a fresh guess, and not the capability-only
+   `DEFAULT_FUEL_BUDGET` of 5,000,000, which is known too low for the
+   heavier orchestrator.
+10. **Outer memory ceiling: 128 MiB** — four times the nested capability's
+    own 32 MiB budget (which lives inside `runtime.wasm`'s linear memory
+    alongside its own interpreter and session state), a considered starting
+    point pending real usage evidence, not a benchmarked figure.
+11. **The `response_len` pre-allocation bug gets its own FR**, separate from
+    the fuel/memory ceilings — a `StoreLimits` memory cap bounds the
+    guest's own linear memory, not a host-side `Vec` the driver allocates
+    from a length it read out of that memory; conflating the two risks a
+    future reader assuming the memory cap alone already covers it.
+12. **`RuntimeWasmHostError` gains stable codes**, not just its current bare
+    `String` — three new ones only (`timeout` for fuel exhaustion,
+    `resource_exhausted` for the memory ceiling, `invalid_response` for the
+    `response_len` bounds violation), matching the issue's own proposed
+    wording; every other existing failure path (module load, missing
+    export, ABI mismatch) keeps sharing a generic code for now rather than
+    a full taxonomy redesign in the same PR.
+13. **`instantiate` takes the resource limits as a required parameter**, no
+    `Default` impl. With zero production callers today there is nothing to
+    break; requiring the choice up front is the direct fix for "nobody set
+    a ceiling," where a defaulted convenience risks reproducing exactly
+    that failure mode for the next caller who never thinks about it.
+14. **No new ADR** — rides under `1402`'s existing `ADR-0072` evidence; the
+    orchestrator design itself is unchanged, only bounded.
+
+### Alternatives considered
+
+- `#1523`: a manifest field declaring each member's expected size (rejected:
+  a backup-format change, more invasive than the vulnerability needs); a
+  host-configurable size policy (rejected: a security floor should not be an
+  operational knob); one shared cap for `manifest.json` and records
+  (rejected: manifest.json never legitimately needs record-sized headroom);
+  smaller (4 MiB/1 MiB) or larger (64 MiB/16 MiB) cap values (rejected:
+  either no more grounded than the recommended figures, or wide enough that
+  a bounded attack still produces a large legitimate-looking spike);
+  scoping the write-path cap out entirely (rejected: leaves a silent
+  correctness trap where a record accepted at write time cannot be backed
+  up or restored); naming the write-path code `RecordTooLarge` (rejected:
+  a DataStore-specific synonym for a concept this codebase already names
+  consistently elsewhere).
+- `#1524`: amending Spec 071 instead of or in addition to 1402 (rejected:
+  071 owns the wire envelope, not host-side resource policy, and would be
+  documenting behavior three of four bridge clients already have while
+  enforcing it for only the fourth); reusing the 5,000,000 capability-only
+  fuel default (rejected: already shown insufficient for this artifact);
+  64 MiB or 256 MiB memory ceilings (rejected: too little headroom over the
+  nested budget, or wide enough to undercut the ceiling's purpose);
+  bundling the `response_len` fix into the same FR as the ceilings
+  (rejected: a materially different mechanism); keeping `RuntimeWasmHostError`
+  a bare string (rejected: leaves the issue's own stated goal — distinguishing
+  timeout from resource exhaustion — unmet); a full error-code taxonomy for
+  every existing failure path (rejected: real scope growth unrelated to this
+  ticket); a defaulted `instantiate` convenience (rejected: reproduces the
+  exact silent-acceptance failure mode this ticket exists to close); a new
+  ADR for either fix (rejected: neither changes an architectural decision,
+  both only add a bound the existing architecture was always supposed to
+  have).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-22): every recommended option
+accepted as given. Unblocks `#1523` and `#1524` once the Spec 526/518 and
+Spec 1402 amendments are drafted and approved — the two tickets can then
+move from `needs-spec` to Ready.

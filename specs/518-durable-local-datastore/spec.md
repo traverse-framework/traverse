@@ -3,7 +3,13 @@
 **Feature Branch**: `518-durable-local-datastore`  
 **Created**: 2026-07-21  
 **Status**: Approved
+**Version**: 1.1.0
 **Input**: Define the reachability, integrity, atomic-write, recovery, and compatibility boundary for Traverse's local `DataStore` adapter.
+**Amendment (2026-09-22, version 1.0.0 -> 1.1.0, approved 2026-09-22)**: Decision
+100 / `#1523`. A write MUST reject a record whose canonical serialized content
+exceeds a governed size ceiling, closing a gap where an unbounded write could
+later produce a backup (Spec 526) that can never verify or restore. FR-013 and
+the `input_limit_exceeded` failure are added; FR-012 is amended to list it.
 
 ## Purpose
 
@@ -23,6 +29,7 @@ As an embedder developer, I can explicitly create a local state store at an appl
 
 1. **Given** an embedder has explicitly selected a local root, **When** it creates the local adapter and writes valid state, **Then** a new adapter at that root reads the same record.
 2. **Given** ordinary runtime execution has no explicitly supplied DataStore, **When** it executes a capability, **Then** it does not create, choose, or write a local state directory.
+3. **Given** a record's canonical serialized content exceeds the governed size ceiling (FR-013), **When** the write is attempted, **Then** it fails with `input_limit_exceeded` and no record is committed.
 
 ---
 
@@ -86,7 +93,8 @@ As an embedder developer, I receive a stable contention failure rather than allo
 - **FR-009**: The adapter documentation and integration proof MUST state that the embedding application owns root selection, retention, backup, and deletion policy.
 - **FR-010**: CI MUST verify durable reopen, integrity rejection, legacy-file rejection, interrupted-write recovery, deterministic key enumeration, and no implicit runtime directory creation.
 - **FR-011**: The local-file adapter MUST enforce exclusive single-process ownership of an embedder root. Contention with another process MUST fail without a write as `store_locked`; multi-process coordination is out of scope.
-- **FR-012**: The adapter MUST expose stable machine-readable failures for integrity (`integrity_check_failed`), schema validation (`schema_validation_error`), lock contention (`store_locked`), storage I/O (`storage_io_failed`), and a failed durability commit (`durability_commit_failed`). Each failure MUST carry a non-secret machine-readable reason.
+- **FR-012**: The adapter MUST expose stable machine-readable failures for integrity (`integrity_check_failed`), schema validation (`schema_validation_error`), lock contention (`store_locked`), storage I/O (`storage_io_failed`), a failed durability commit (`durability_commit_failed`), and an oversized write (`input_limit_exceeded`, FR-013). Each failure MUST carry a non-secret machine-readable reason.
+- **FR-013**: A write MUST reject a record whose canonical serialized content exceeds a governed per-record size ceiling (16 MiB) with `input_limit_exceeded`, before any temporary sibling record is created (FR-004). This keeps every committed record within the ceiling Spec 526 backup/restore also enforces (Decision 100), so a record accepted here can always later be backed up and restored.
 
 ### Key Entities
 

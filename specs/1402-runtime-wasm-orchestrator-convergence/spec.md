@@ -2,7 +2,7 @@
 
 **Status**: Approved
 **Canonical governing ID**: `1402-runtime-wasm-orchestrator-convergence`
-**Version**: 1.3.0
+**Version**: 1.4.0
 **Extends**: `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
 `098-capability-event-host-abi`, `995-local-executor-event-emission`
 **Amends**: `1277-browser-local-workflow-composition` (its composed-execution
@@ -54,6 +54,17 @@ requires rebuild + re-certify of published `runtime.wasm`. (2) `runtime.wasm`
 MUST execute application `state_machine` command sessions (Spec 139), including
 Process Manager waits and Spec 137 host-connector bridge requests with
 host-provided monotonic deadline callbacks — not capability-only submit.
+
+**Amendment (2026-09-22, version 1.3.0 -> 1.4.0, approved 2026-09-22)**: Decision
+100 / `#1524`. `RuntimeWasmHost::instantiate` ran the real `runtime.wasm`
+bridge with a default `Engine`, a bare `Store<()>` (no fuel budget, no
+`StoreLimits` memory cap), and sized a host allocation from a guest-written
+response length before validating it against the actual memory region — a
+wrong or tampered artifact, or a guest bug, could spin forever or grow memory
+unbounded. FR-014, FR-015, and FR-016 close this; `RuntimeWasmHostError`
+gains stable `timeout` / `resource_exhausted` / `invalid_response` codes
+alongside its existing message. Rides under this spec's existing `ADR-0072`
+evidence — the orchestrator design is unchanged, only bounded.
 
 `runtime.wasm` (built by `crates/traverse-native-bridge`) is a hand-authored
 WAT fixture that returns hardcoded canned JSON for a fixed 3-event sequence.
@@ -199,6 +210,26 @@ question, out of scope here as it was for the originating investigation).
 - **FR-013**: `runtime.wasm` MUST execute Spec 139 app state-machine command
   sessions, including host-connector bridge emits and host monotonic deadline
   callbacks for dual-deadline saga waits.
+- **FR-014**: `RuntimeWasmHost` MUST bound every `init`/`submit`/`shutdown`
+  call against a required, caller-supplied fuel budget (50,000,000, matching
+  the ceiling this spec's own Swift and .NET real-artifact conformance tests
+  already use in production) and a `StoreLimits` outer memory ceiling
+  (128 MiB — four times the 32 MiB nested capability budget FR-012 already
+  requires, to hold that budget plus interpreter and session-state
+  overhead). `instantiate` MUST take these limits as a required parameter;
+  it MUST NOT default them, so a caller cannot silently accept unbounded
+  execution.
+- **FR-015**: `RuntimeWasmHost` MUST validate a guest-reported response
+  length against the actual accessible range of the guest's linear memory
+  **before** allocating a host buffer of that length. A length outside the
+  guest's own memory bounds MUST fail closed with `invalid_response` rather
+  than attempt the allocation.
+- **FR-016**: `RuntimeWasmHostError` MUST carry a stable code alongside its
+  existing secret-free message for the failures FR-014/FR-015 introduce:
+  `timeout` (fuel exhausted), `resource_exhausted` (memory ceiling
+  exceeded), `invalid_response` (FR-015). Other existing failure paths
+  (module load, missing export, ABI mismatch) MAY continue to share one
+  generic code; this FR does not require a full error-code taxonomy.
 
 ## Acceptance Scenarios
 
@@ -228,6 +259,11 @@ question, out of scope here as it was for the originating investigation).
    completed, when a developer inspects `composedWorkflow.ts` or
    `bundleEmbedder.ts`, then a code comment identifies the `emit_event`
    implementation there as temporary and references this spec.
+6. Given a `runtime.wasm` bridge module whose guest code loops indefinitely
+   or reports a response length outside its own memory bounds, when
+   `RuntimeWasmHost` drives it (FR-014/FR-015), then the call fails closed
+   with `timeout` or `invalid_response` instead of hanging or attempting an
+   unbounded host allocation.
 
 ## Out of Scope
 

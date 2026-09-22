@@ -4,8 +4,15 @@
 **Created**: 2026-07-29  
 **Status**: Approved  
 **Canonical governing ID**: `083-datastore-retention-backup`  
+**Version**: 1.1.0  
 **Extends**: `518-durable-local-datastore`, `519-embedder-owned-datastore-integration`  
 **Input**: Project 1 Specify retention ticket; planning locks recorded in Decision 39.
+**Amendment (2026-09-22, version 1.0.0 -> 1.1.0, approved 2026-09-22)**: Decision
+100 / `#1523`. Backup verify and restore MUST bound every zip member read
+against a governed size ceiling before decompressing it, closing a
+decompression-bomb gap where an unbounded `read_to_end` could exhaust host
+memory before any digest check runs. FR-011 is added; FR-010's failure list
+is amended.
 
 ## Purpose
 
@@ -69,6 +76,17 @@ adapters, browser backends, and multi-writer coordination are out of scope.
 - **FR-010**: Stable errors MUST include at least: `store_locked`,
   `invalid_retention_policy`, `backup_verify_failed`, `restore_verify_failed`,
   `unsupported_store_format`, `maintenance_io_failed`.
+- **FR-011**: `backup` verify and `restore` MUST bound every zip member read
+  against a governed size ceiling before the member is fully decompressed:
+  4 MiB for the `manifest.json` member, 16 MiB (matching Spec 518 FR-013's
+  write-path ceiling) for each record member. A member's declared
+  uncompressed size MUST be checked before reading it, AND the actual read
+  MUST be bounded (for example `Read::take(limit + 1)`) so a member whose
+  declared size understates its real content still fails closed rather than
+  fully decompressing. Exceeding either ceiling MUST fail with the existing
+  `backup_verify_failed` / `restore_verify_failed` code and a
+  `details.reason` of `member_too_large`, matching every other zip
+  verification sub-case's existing `reason` convention (no new error code).
 
 ## Acceptance Scenarios
 
@@ -83,6 +101,10 @@ adapters, browser backends, and multi-writer coordination are out of scope.
    prior root is atomically replaced by the verified temp root with no merged
    keys.
 5. Given an empty store, when backup and restore run, then both succeed.
+6. Given a zip archive whose `manifest.json` or a record member decompresses
+   past its governed ceiling (FR-011), when backup verify or restore reads
+   that member, then it fails closed with `member_too_large` before the
+   member is fully decompressed into memory.
 
 ## Out of Scope
 
