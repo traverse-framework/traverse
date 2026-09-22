@@ -10,8 +10,12 @@ ordered runtime events on every published embedder.
 
 Scope: the permission and host-connector flow (`request_permission` then `capture_audio`,
 with timeout, cancel, denied, duplicate, late-deadline, undeclared-terminal, and rejected
-paths). The `analyze` step is intentionally absent: the state machine cannot yet pass a
-captured `artifact_ref` to a capability (`input_from` supports only `command.payload`).
+paths), plus one `analyze` scenario (`analyze_after_capture`, Decision 99) proving
+`input_from: host_connector_result.artifact_base64` reaches the capability-invoke path. The
+bundled fixture carries no capability artifact, so that scenario's nested execution fails
+closed identically on every host (`capability_invoked` still fires, proving resolution
+succeeded, before it fails); a scenario with a real capability artifact and
+`capability_succeeded` is tracked separately, alongside the example apps in `#1503`.
 
 ## How a host runs it
 

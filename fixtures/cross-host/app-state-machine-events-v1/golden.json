@@ -1,6 +1,201 @@
 {
   "golden_version": "1.0.0",
   "scenarios": {
+    "analyze_after_capture": [
+      {
+        "events": [
+          {
+            "data": {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "previous_state": "idle",
+              "state": "requesting_permission"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C1",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "request_permission",
+              "command_id": "$C1",
+              "kind": "host_connector_command",
+              "payload": {},
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 0
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "permission_state": "granted"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C1",
+              "on": "host_connector_succeeded",
+              "previous_state": "requesting_permission",
+              "state": "ready"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 1
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "previous_state": "ready",
+              "state": "capturing"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "pending_deadlines": [
+            {
+              "command_id": "$C2",
+              "deadline_ms": 30000,
+              "kind": "deadline_registration",
+              "session_id": "$S1"
+            }
+          ],
+          "pending_host_connector": [
+            {
+              "command": "capture_audio",
+              "command_id": "$C2",
+              "kind": "host_connector_command",
+              "payload": {
+                "max_bytes": 1048576,
+                "max_duration_ms": 5000
+              },
+              "schema_version": "1.0.0",
+              "session_id": "$S1"
+            }
+          ],
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 2
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "artifact_base64": "QUFB",
+              "artifact_ref": "audio-ref-1"
+            },
+            "session_id": "$S1",
+            "type": "host_connector_succeeded"
+          },
+          {
+            "data": {
+              "command_id": "$C2",
+              "on": "host_connector_succeeded",
+              "previous_state": "capturing",
+              "state": "recorded"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "complete",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 3
+      },
+      {
+        "events": [
+          {
+            "data": {
+              "command": "analyze",
+              "command_id": "$C3",
+              "previous_state": "recorded",
+              "state": "analyzing"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          },
+          {
+            "data": {
+              "capability_id": "conformance.analyze",
+              "command_id": "$C3",
+              "state": "analyzing"
+            },
+            "session_id": "$S1",
+            "type": "capability_invoked"
+          },
+          {
+            "data": {
+              "command_id": "$C3",
+              "previous_state": "analyzing",
+              "state": "error"
+            },
+            "session_id": "$S1",
+            "type": "state_changed"
+          },
+          {
+            "data": {
+              "capability_id": "conformance.analyze",
+              "output": {
+                "error": "module: unexpected end-of-file (at offset 0x0)"
+              },
+              "status": "failed"
+            },
+            "session_id": "$S1",
+            "type": "error"
+          }
+        ],
+        "guest_status": 0,
+        "kind": "submit",
+        "response": {
+          "error": null,
+          "session_id": "$S1",
+          "status": "accepted"
+        },
+        "step": 4
+      }
+    ],
     "capture_cancelled": [
       {
         "events": [
