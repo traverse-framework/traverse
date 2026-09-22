@@ -4905,3 +4905,110 @@ evidence and org credentials only Enrico can provide.
 
 Approved by Enrico in `/brainstorm` (2026-09-19): every recommended option
 chosen; credentials confirmed as not yet set up and owned by Enrico.
+
+## Decision 99: Host-Connector Artifact Wiring — Runtime-Resolved `host_connector_result.<field>` Input
+
+- **Date**: 2026-09-21
+- **Status**: Accepted
+- **Governing specs**: amendments to `139-embedder-app-state-machine-execution`
+  (`input_from` syntax and `app validate` rule) and
+  `138-governed-exact-model-execution` (a formal FR for runtime-mediated
+  artifact resolution, promoting existing descriptive prose there); builds on
+  `140-host-authority-wit-adapters`, Decision 97
+- **Related issues**: `#1502`, `#1503`
+- **Origin**: `/brainstorm` following the Spec 140 rollout (Decision 97);
+  `#1502`'s `analyze` step and `#1503`'s example apps both need to pass a
+  captured host-connector artifact (`traverse.audio-input`'s `artifact_ref`)
+  into a registered analysis capability, which `input_from`'s only current
+  literal (`command.payload`) cannot express.
+
+### Context
+
+`AppInvoke::Capability`'s `input_from` supports exactly one literal today,
+`command.payload`. There is no way for a state machine to route the
+`artifact_ref` produced by a prior `host_connector_succeeded` terminal into a
+downstream capability's input. Spec 140's acceptance scenario 4 describes the
+end state ("a registered capability consumes the artifact_ref... through
+runtime-mediated staging... never receives a path or URL") but no FR specifies
+the state-machine wiring to get there. This blocks `#1503` (permission →
+capture → analyze example apps) and the `analyze` step of `#1502`'s
+cross-platform golden event conformance.
+
+### Decision
+
+1. **Runtime pre-resolves, host-side, before invoke.** The runtime reads the
+   staged bytes and hands them to the capability's guest execution before it
+   runs — the same pattern Spec 138 already uses for `model.execute` (host
+   calls `take_input`, feeds bytes into the guest). No new guest-side "read
+   artifact by ref" import is added; guests never gain an ABI to fetch host
+   storage themselves.
+2. **Delivery format is base64 in the JSON input**, reusing every capability's
+   existing JSON-schema I/O convention rather than inventing a binary framing.
+3. **Reference syntax**: `input_from: "host_connector_result.<field>"` — a
+   generic key lookup into the previous connector wait's result payload.
+   Covers `artifact_ref`, `output_ref`, and future connector fields without a
+   spec amendment per field name. Scoped to ref-shaped fields the runtime
+   knows how to stage-resolve; referencing a non-ref field (for example
+   `permission_state`) is out of scope for this decision.
+4. **`host_connector_result` always means the most recently completed
+   host-connector wait** in the session. Addressing an older or named wait is
+   deferred — no concrete need yet, and it is real added design surface
+   (naming, validation, lifetime).
+5. **Resolved value replaces the whole capability input as a wrapped object**
+   with a well-known key, for example `{"artifact_base64": "..."}` — not a
+   bare string, and not merged with `command.payload`. `input_from` stays a
+   single reference, not a composition rule.
+6. **`traverse-cli app validate` gains a static check**: reject a manifest
+   where a state's `input_from` references `host_connector_result` but no
+   reachable predecessor state declares a `host_connector` invoke, matching
+   the project's existing validate-early pattern (Spec 139 FR-014). The
+   runtime still fails closed — a deterministic session `error` with a stable
+   reason code, capability never invoked — for cases only knowable at
+   execution time, such as a field genuinely absent from one result.
+7. **FRs land in both Spec 139 and Spec 138**, each a MINOR bump (consistent
+   with every FR-adding amendment in this rollout, e.g. 137: 0.2.0 → 0.3.0,
+   138: 0.1.0 → 0.2.0). No new ADR: this is elaboration under the existing
+   ADR-0075 (Process Manager) / ADR-0076 (target-neutral host authorities)
+   evidence trail, the same way Spec 140 itself amended three specs under one
+   ADR.
+8. **Worded generically for any host-connector authority**, not
+   `traverse.audio-input`-specific, consistent with Spec 140 FR-015 ("scoped
+   by generic contract, not platform"); audio → analyze is its first user, not
+   its scope.
+9. **Size bounding**: resolved bytes stay bounded by the smaller of the
+   connector's original ceiling and the capability's own declared input
+   limit; over-limit fails closed with the existing `input_limit_exceeded`
+   code family — no new error code.
+
+### Alternatives considered
+
+- Capability fetches bytes itself at execution time via a new guest-mediated
+  "read artifact" import (rejected: net-new ABI surface with no existing
+  precedent; Spec 140's guest-never-reads-host-storage stance favors host-side
+  resolution).
+- Raw bytes via WASI stdin, matching the nested-capability echo pattern
+  (rejected: only works for WASI-command capabilities, not the JSON-schema
+  majority of the catalog).
+- Reusing `exact_model`'s binary framed ABI (rejected: its `dtype`/`dims`
+  fields are tensor-shaped and don't generalize to arbitrary artifacts without
+  forking a near-duplicate format).
+- A fixed literal per known field name, e.g. `host_connector_result.artifact_ref`
+  as its own enum value (rejected: needs a spec amendment per new field name).
+- Passing the entire prior connector-result payload through verbatim (rejected:
+  couples every consuming capability's schema to the connector's full result
+  shape).
+- Named/addressable wait history (deferred: no concrete need yet).
+- Merging `host_connector_result` with `command.payload` into one object
+  (rejected for now: turns `input_from` into a composition rule, more scope
+  than needed).
+- Amending Spec 139 only, leaving Spec 138's resolution language informal
+  (rejected: risks drift between the two documents over time).
+- Scoping the FR narrowly to `traverse.audio-input` (rejected: fights the
+  mechanism's own connector-agnostic design and this rollout's generic-contract
+  theme).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-21): every recommended option
+accepted as given. Unblocks `#1502`'s `analyze` step and `#1503`'s example
+apps once the Spec 139 / Spec 138 amendments are drafted and approved.

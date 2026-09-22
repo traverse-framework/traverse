@@ -14,6 +14,7 @@ Owner-approved Decisions 91–92. Public invoke remains Spec 137
 | `model.execute` | Command port; must-match `model_ref`, `policy_ref`, `data_classification` |
 | `ExactModelHostConnector` | Native wasm-cpu adapter (`traverse_runtime::exact_model`) |
 | Fixture | `fixtures/models/fixture-echo-1.0.0/` |
+| `input_from: host_connector_result.<field>` | Spec 139 app-state-machine capability step resolved through the FR-017 runtime-mediated path above (Decision 99) |
 
 ## Placement
 

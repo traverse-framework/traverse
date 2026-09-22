@@ -1908,7 +1908,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1928,7 +1928,7 @@
     },
     {
       "id": "139-embedder-app-state-machine-execution",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/139-embedder-app-state-machine-execution/spec.md",

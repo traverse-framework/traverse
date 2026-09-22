@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.2.0
+**Version**: 0.3.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -12,6 +12,11 @@
 Spec `140-host-authority-wit-adapters`. Host staging is generalized from
 model input/output to bounded host artifacts, including audio produced by
 `traverse.audio-input`. Model-named APIs remain valid.
+**Amendment (2026-09-21, version 0.2.0 -> 0.3.0, approved 2026-09-21)**: Decision 99.
+Formalizes the previously descriptive "runtime resolves an `artifact_ref`
+through staging" behavior as FR-017. Spec 139 defines the app-state-machine
+`input_from` syntax (`host_connector_result.<field>`) that is its first
+caller. Unblocks `#1502` / `#1503`.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -44,6 +49,7 @@ the LLM/candidate track and MUST NOT be treated as satisfying this DoD.
 | 526-embedded-verified-cache-lifecycle | Model **packages** provision into verified cache generations. Ephemeral tensor refs are not Spec 526 entries. |
 | 1259 / ADR-0060 | `traverse.model-runtime` remains vendor-neutral authority. |
 | 104 / 135 | Guest `connector_invoke` and Component WIT fakes are out of this surface. |
+| 139-embedder-app-state-machine-execution | First caller of FR-017's runtime-mediated resolution via `input_from: host_connector_result.<field>` (Spec 139 FR-019/FR-020) |
 
 ## Model
 
@@ -119,6 +125,12 @@ Unknown fields fail closed.
 - An adapter-produced `artifact_ref` is **multi-read** until explicit drop,
   host TTL, or runtime shutdown, so runtime-owned retries can re-read it.
   Model `input_ref` keeps its single-consume rule below.
+- Resolution is size-bounded by the lesser of the artifact's originally
+  staged ceiling and the consuming capability's declared input limit;
+  exceeding it fails closed with `input_limit_exceeded` before the
+  capability runs (FR-017; Decision 99). This governs the state-machine
+  `input_from: host_connector_result.<field>` path (Spec 139 FR-020) and any
+  other caller of runtime-mediated artifact resolution.
 
 **Lifetime:**
 
@@ -228,6 +240,13 @@ Traverse MUST:
 - **FR-015**: A signed example model package fixture MUST be publishable.
 - **FR-016**: The `traverse.model-runtime` connector contract MUST be updated
   in the same governance approval as this spec (breaking schema bump).
+- **FR-017**: The runtime MUST resolve an `artifact_ref` into a bounded
+  capability input only through runtime-mediated staging (`stage_artifact` /
+  `read_artifact`); guests MUST NOT read host storage directly and MUST NOT
+  receive a raw ref, a path, or a URL through this resolution. Resolution
+  MUST fail closed with `input_limit_exceeded` when the artifact exceeds the
+  lesser of its originally staged ceiling and the consuming capability's
+  declared input limit, without invoking the capability (Decision 99).
 
 ## Acceptance scenarios
 
@@ -240,6 +259,10 @@ Traverse MUST:
 4. Trace identifies model id, version, digest, placement, usage, and
    classification.
 5. (Follow-on) Acceleration reports the same public envelope as CPU baseline.
+6. A Spec 139 capability step with `input_from:
+   "host_connector_result.artifact_ref"` receives `{"artifact_base64": ...}`
+   resolved via runtime-mediated staging, never a path, URL, or raw ref
+   (FR-017).
 
 ### Unhappy paths
 
@@ -255,6 +278,10 @@ Traverse MUST:
 10. `data_classification` denied by policy → `policy_denied`.
 11. Re-use of consumed `input_ref` fails closed.
 12. Retryable vs non-retryable classification is stable.
+13. Runtime-mediated resolution of an artifact into a capability input
+    exceeds the lesser of the artifact's staged ceiling or the capability's
+    declared limit → `input_limit_exceeded` before invoke, capability never
+    runs (FR-017).
 
 ## Compatibility and non-goals
 
