@@ -21,12 +21,68 @@ pub(crate) struct AppState {
 pub(crate) enum AppInvoke {
     Capability {
         capability_id: String,
-        #[allow(dead_code)]
         input_from: String,
     },
     HostConnector {
         command: String,
     },
+}
+
+/// A fail-closed failure resolving a capability's input (Decision 99 /
+/// Spec 139 FR-022). Never invoke the capability when this is returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityInputError {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+const HOST_CONNECTOR_RESULT_PREFIX: &str = "host_connector_result.";
+
+/// Resolves an `invoke.capability_id` state's input per `input_from`
+/// (Decision 99 / Spec 139 FR-019/FR-020/FR-022).
+///
+/// `"command.payload"` (the default) uses the triggering command's payload
+/// verbatim. `"host_connector_result.<field>"` looks up `<field>` in the
+/// most recently completed host-connector wait's result and wraps it as the
+/// capability's **entire** input under that same key, e.g.
+/// `{"artifact_base64": <value>}` — the runtime never re-labels a
+/// host-connector-produced field; the adapter names it once and this lookup
+/// is a pure key match. Any other `input_from` value fails closed rather
+/// than silently falling back to `command.payload`.
+pub(crate) fn resolve_capability_input(
+    input_from: &str,
+    command_payload: &Value,
+    last_host_connector_result: Option<&Value>,
+) -> Result<Value, CapabilityInputError> {
+    if input_from == "command.payload" {
+        return Ok(command_payload.clone());
+    }
+    let Some(field) = input_from
+        .strip_prefix(HOST_CONNECTOR_RESULT_PREFIX)
+        .filter(|field| !field.trim().is_empty())
+    else {
+        return Err(CapabilityInputError {
+            code: "invalid_input_from",
+            message: format!("unsupported invoke.input_from '{input_from}'"),
+        });
+    };
+    let Some(result) = last_host_connector_result else {
+        return Err(CapabilityInputError {
+            code: "invalid_input",
+            message: format!(
+                "input_from references host_connector_result.{field} but no host-connector wait has completed in this session"
+            ),
+        });
+    };
+    let Some(value) = result.get(field) else {
+        return Err(CapabilityInputError {
+            code: "invalid_input",
+            message: format!(
+                "the most recently completed host-connector result has no field '{field}'"
+            ),
+        });
+    };
+    Ok(json!({ field: value.clone() }))
 }
 
 #[derive(Debug, Clone)]
@@ -345,8 +401,8 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
     use super::{
-        SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
-        resolve_lifecycle_transition,
+        SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_capability_input,
+        resolve_command_transition, resolve_lifecycle_transition,
     };
     use serde_json::json;
 
@@ -414,5 +470,67 @@ mod tests {
                 .expect("matched"),
             "done"
         );
+    }
+
+    #[test]
+    fn resolves_command_payload_input_from() {
+        let payload = json!({"n": 1});
+        let resolved = resolve_capability_input("command.payload", &payload, None)
+            .expect("command.payload always resolves");
+        assert_eq!(resolved, payload);
+    }
+
+    #[test]
+    fn resolves_host_connector_result_field_wrapped_under_its_own_key() {
+        let result = json!({"artifact_ref": "audio-ref-1", "artifact_base64": "QUFB"});
+        let resolved = resolve_capability_input(
+            "host_connector_result.artifact_base64",
+            &json!({}),
+            Some(&result),
+        )
+        .expect("field is present");
+        assert_eq!(resolved, json!({"artifact_base64": "QUFB"}));
+
+        // A different field name is wrapped under that same different name —
+        // the runtime never hardcodes a semantic field name (Decision 99).
+        let resolved = resolve_capability_input(
+            "host_connector_result.artifact_ref",
+            &json!({}),
+            Some(&result),
+        )
+        .expect("field is present");
+        assert_eq!(resolved, json!({"artifact_ref": "audio-ref-1"}));
+    }
+
+    #[test]
+    fn fails_closed_when_no_host_connector_wait_has_completed() {
+        let error = resolve_capability_input("host_connector_result.artifact_base64", &json!({}), None)
+            .expect_err("no prior wait");
+        assert_eq!(error.code, "invalid_input");
+        assert!(error.message.contains("no host-connector wait"));
+    }
+
+    #[test]
+    fn fails_closed_when_the_referenced_field_is_absent() {
+        let result = json!({"permission_state": "granted"});
+        let error = resolve_capability_input(
+            "host_connector_result.artifact_base64",
+            &json!({}),
+            Some(&result),
+        )
+        .expect_err("field absent");
+        assert_eq!(error.code, "invalid_input");
+        assert!(error.message.contains("artifact_base64"));
+    }
+
+    #[test]
+    fn fails_closed_on_an_unrecognized_input_from_literal() {
+        let error = resolve_capability_input("garbage", &json!({}), None)
+            .expect_err("unrecognized literal never silently uses command.payload");
+        assert_eq!(error.code, "invalid_input_from");
+
+        let error = resolve_capability_input("host_connector_result.", &json!({}), None)
+            .expect_err("empty field name is rejected");
+        assert_eq!(error.code, "invalid_input_from");
     }
 }

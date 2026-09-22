@@ -68,6 +68,12 @@ struct RuntimeState {
     /// Pending monotonic deadline registrations for dual-deadline waits
     /// (Spec 139 FR-012); host fires the ceiling callback.
     pending_deadlines: VecDeque<serde_json::Value>,
+    /// The most recently completed host-connector wait's terminal payload in
+    /// this session (Decision 99 / Spec 139 FR-019). Updated on every
+    /// matched `host_connector_result` / `deadline_fired` terminal,
+    /// regardless of outcome. `invoke.input_from:
+    /// "host_connector_result.<field>"` reads from this.
+    last_host_connector_result: Option<serde_json::Value>,
 }
 
 static STATE: Mutex<Option<RuntimeState>> = Mutex::new(None);
@@ -375,30 +381,62 @@ fn submit_app_command(
     match invoke {
         Some(AppInvoke::Capability {
             capability_id,
-            input_from: _,
+            input_from,
         }) => {
-            state.app_sessions.insert(
-                session_id.clone(),
-                AppSession {
-                    session_id: session_id.clone(),
-                    state: accepted_state.clone(),
-                    wait: Some(AppWait {
-                        command_id: command_id.clone(),
-                        kind: AppWaitKind::Capability {
-                            capability_id: capability_id.clone(),
-                        },
-                    }),
-                },
-            );
-            run_capability_invoke_wait(
-                state,
-                &machine,
-                &session_id,
-                &accepted_state,
-                &capability_id,
-                &command_id,
+            let resolved_input = app_sm::resolve_capability_input(
+                &input_from,
                 &envelope.payload,
+                state.last_host_connector_result.as_ref(),
             );
+            match resolved_input {
+                Ok(input) => {
+                    state.app_sessions.insert(
+                        session_id.clone(),
+                        AppSession {
+                            session_id: session_id.clone(),
+                            state: accepted_state.clone(),
+                            wait: Some(AppWait {
+                                command_id: command_id.clone(),
+                                kind: AppWaitKind::Capability {
+                                    capability_id: capability_id.clone(),
+                                },
+                            }),
+                        },
+                    );
+                    run_capability_invoke_wait(
+                        state,
+                        &machine,
+                        &session_id,
+                        &accepted_state,
+                        &capability_id,
+                        &command_id,
+                        &input,
+                    );
+                }
+                Err(failure) => {
+                    // Decision 99 / FR-022: fail closed the same way FR-015
+                    // does — the command itself is accepted (the transition
+                    // into `accepted_state` already happened), but the
+                    // capability is never invoked and the wait stays clear.
+                    state.pending_events.push_back(lifecycle_event(
+                        "error",
+                        &session_id,
+                        &serde_json::json!({
+                            "code": failure.code,
+                            "message": failure.message,
+                            "state": accepted_state,
+                        }),
+                    ));
+                    state.app_sessions.insert(
+                        session_id.clone(),
+                        AppSession {
+                            session_id: session_id.clone(),
+                            state: accepted_state,
+                            wait: None,
+                        },
+                    );
+                }
+            }
         }
         Some(AppInvoke::HostConnector { command }) => {
             let deadline_ms = 30_000_u64;
@@ -476,6 +514,12 @@ fn submit_host_connector_terminal(
             "host_connector_terminal_for_non_host_wait".to_string(),
         );
     }
+
+    // Decision 99 / FR-019: remember this wait's result regardless of
+    // outcome, so a later `invoke.input_from: "host_connector_result.<field>"`
+    // can read it. Only a matched (non-late, non-duplicate) terminal updates
+    // it — the checks above already discarded stale ones.
+    state.last_host_connector_result = Some(terminal.payload.clone());
 
     let invoking_state = session.state.clone();
     let session_id = terminal.session_id.clone();
@@ -863,6 +907,7 @@ pub extern "C" fn traverse_init(ptr: i32, len: i32, out_descriptor: i32) -> i32 
                 app_sessions: BTreeMap::new(),
                 pending_host_connector: VecDeque::new(),
                 pending_deadlines: VecDeque::new(),
+                last_host_connector_result: None,
             });
             serde_json::json!({"status": "ready", "error": null})
         }
@@ -1156,6 +1201,7 @@ mod tests {
             app_sessions: BTreeMap::new(),
             pending_host_connector: VecDeque::new(),
             pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
         };
 
         submit(&mut state, br#"{"ok":true}"#);
@@ -1198,6 +1244,7 @@ mod tests {
             app_sessions: BTreeMap::new(),
             pending_host_connector: VecDeque::new(),
             pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
         };
 
         submit(&mut state, br"{}");
@@ -1230,6 +1277,7 @@ mod tests {
             app_sessions: BTreeMap::new(),
             pending_host_connector: VecDeque::new(),
             pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
         };
 
         submit(&mut state, br"{}");
@@ -1333,6 +1381,7 @@ mod tests {
             app_sessions: BTreeMap::new(),
             pending_host_connector: VecDeque::new(),
             pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
         };
 
         let result = submit(
@@ -1407,6 +1456,7 @@ mod tests {
             app_sessions: BTreeMap::new(),
             pending_host_connector: VecDeque::new(),
             pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
         };
 
         let accepted = submit(
@@ -1492,6 +1542,198 @@ mod tests {
                 .count(),
             0,
             "late timeout must be ignored without emitting"
+        );
+    }
+
+    /// Decision 99 / Spec 139 FR-019/FR-020: a capability step entered by a
+    /// fresh command (there is no auto-invoke on a terminal-driven
+    /// transition) with `input_from: "host_connector_result.<field>"` reads
+    /// the most recently completed host-connector wait's result and
+    /// attempts the invoke with it wrapped under that same key. The bundled
+    /// artifact is empty, so the nested execution itself fails closed; this
+    /// test only asserts that resolution succeeded and the invoke was
+    /// actually attempted (`capability_invoked` was emitted).
+    #[test]
+    fn capability_invoke_reads_host_connector_result_field() {
+        let machine = parse_state_machine(&serde_json::json!({
+            "initial_state": "idle",
+            "states": [
+                { "id": "idle", "transitions": [{ "on": "capture", "to": "capturing" }] },
+                {
+                    "id": "capturing",
+                    "invoke": { "host_connector": "capture_audio" },
+                    "transitions": [{ "on": "host_connector_succeeded", "to": "recorded" }]
+                },
+                { "id": "recorded", "transitions": [{ "on": "analyze", "to": "analyzing" }] },
+                {
+                    "id": "analyzing",
+                    "invoke": {
+                        "capability_id": "demo.analyze",
+                        "input_from": "host_connector_result.artifact_base64"
+                    },
+                    "transitions": [
+                        { "on": "capability_succeeded", "to": "done" },
+                        { "on": "capability_failed", "to": "error" }
+                    ]
+                },
+                { "id": "done", "transitions": [] },
+                { "id": "error", "transitions": [] }
+            ]
+        }))
+        .expect("machine");
+
+        let mut state = RuntimeState {
+            capability_id: "demo.app".to_string(),
+            service_type: ServiceType::Stateless,
+            declared_emits: Vec::new(),
+            permitted_targets: vec![ExecutionTarget::Local],
+            host_placement_target: ExecutionTarget::Local,
+            target_hint: None,
+            runtime_snapshot: RuntimeSnapshot::default(),
+            wasm_artifact: Vec::new(),
+            execution_counter: 0,
+            pending_events: VecDeque::new(),
+            app_state_machine: Some(machine),
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
+        };
+
+        let accepted = submit(
+            &mut state,
+            br#"{"kind":"app_command","command":"capture","payload":{}}"#,
+        );
+        let command_id = accepted.pending_host_connector[0]["command_id"]
+            .as_str()
+            .expect("command_id")
+            .to_string();
+        let session_id = accepted.session_id.clone();
+
+        let terminal = serde_json::json!({
+            "kind": "host_connector_result",
+            "result_class": "succeeded",
+            "command_id": command_id,
+            "session_id": session_id,
+            "payload": {"artifact_ref": "audio-ref-1", "artifact_base64": "QUFB"}
+        });
+        submit(&mut state, terminal.to_string().as_bytes());
+        assert_eq!(
+            state.app_sessions.get(&session_id).map(|s| s.state.as_str()),
+            Some("recorded")
+        );
+
+        let analyze = submit(
+            &mut state,
+            format!(r#"{{"kind":"app_command","command":"analyze","session_id":"{session_id}","payload":{{}}}}"#)
+                .as_bytes(),
+        );
+        assert_eq!(analyze.status, "accepted");
+
+        let events: Vec<serde_json::Value> = state
+            .pending_events
+            .iter()
+            .map(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).expect("json"))
+            .collect();
+        assert!(
+            events.iter().any(|event| event["type"] == "capability_invoked"),
+            "resolved input_from must reach the invoke path: {events:?}"
+        );
+        // The bundled artifact is empty, so nested execution itself fails
+        // closed and pushes its own unrelated "error" summary event; what
+        // this test cares about is that FR-022's *input-resolution*
+        // fail-closed path (a `code` of invalid_input/invalid_input_from)
+        // was never taken.
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(
+                    event["data"]["code"].as_str(),
+                    Some("invalid_input" | "invalid_input_from")
+                )),
+            "{events:?}"
+        );
+    }
+
+    /// Decision 99 / Spec 139 FR-022: with no host-connector wait ever
+    /// completed in the session, entering a capability step whose
+    /// `input_from` references `host_connector_result` fails closed with a
+    /// deterministic session `error` and never invokes the capability — the
+    /// transition into the state still completes (FR-015's "no silent
+    /// hang": the session does not get stuck, it visibly errors).
+    #[test]
+    fn capability_invoke_fails_closed_when_no_host_connector_result_exists() {
+        let machine = parse_state_machine(&serde_json::json!({
+            "initial_state": "idle",
+            "states": [
+                { "id": "idle", "transitions": [{ "on": "analyze", "to": "analyzing" }] },
+                {
+                    "id": "analyzing",
+                    "invoke": {
+                        "capability_id": "demo.analyze",
+                        "input_from": "host_connector_result.artifact_base64"
+                    },
+                    "transitions": [
+                        { "on": "capability_succeeded", "to": "done" },
+                        { "on": "capability_failed", "to": "error" }
+                    ]
+                },
+                { "id": "done", "transitions": [] },
+                { "id": "error", "transitions": [] }
+            ]
+        }))
+        .expect("machine");
+
+        let mut state = RuntimeState {
+            capability_id: "demo.app".to_string(),
+            service_type: ServiceType::Stateless,
+            declared_emits: Vec::new(),
+            permitted_targets: vec![ExecutionTarget::Local],
+            host_placement_target: ExecutionTarget::Local,
+            target_hint: None,
+            runtime_snapshot: RuntimeSnapshot::default(),
+            wasm_artifact: Vec::new(),
+            execution_counter: 0,
+            pending_events: VecDeque::new(),
+            app_state_machine: Some(machine),
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
+        };
+
+        let accepted = submit(
+            &mut state,
+            br#"{"kind":"app_command","command":"analyze","payload":{}}"#,
+        );
+        assert_eq!(accepted.status, "accepted");
+        assert_eq!(
+            state
+                .app_sessions
+                .get(&accepted.session_id)
+                .map(|s| (s.state.as_str(), s.wait.is_none())),
+            Some(("analyzing", true))
+        );
+
+        let events: Vec<serde_json::Value> = state
+            .pending_events
+            .iter()
+            .map(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).expect("json"))
+            .collect();
+        let error_event = events
+            .iter()
+            .find(|event| event["type"] == "error")
+            .expect("a deterministic error event, per FR-015/FR-022");
+        assert_eq!(error_event["data"]["code"], "invalid_input");
+        assert!(
+            error_event["data"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("no host-connector wait")
+        );
+        assert!(
+            !events.iter().any(|event| event["type"] == "capability_invoked"),
+            "the capability must never be invoked: {events:?}"
         );
     }
 }
