@@ -1,0 +1,118 @@
+name: Publish Swift embedder
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Verify release tag matches Cargo workspace version
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+
+      - name: Build TraverseSwiftHost.xcframework
+        run: bash scripts/build_swift_host_xcframework.sh
+
+      - name: Zip the xcframework
+        working-directory: target/apple
+        run: zip -r -y TraverseSwiftHost.xcframework.zip TraverseSwiftHost.xcframework
+
+      - name: Compute the Swift package checksum
+        id: checksum
+        run: |
+          echo "value=$(swift package compute-checksum target/apple/TraverseSwiftHost.xcframework.zip)" >> "$GITHUB_OUTPUT"
+
+      # This release carries only the XCFramework binary asset (Decision 9:
+      # the same v<version> tag as crates.io, Maven, and NuGet). It does not
+      # replace or edit any prior swift-host-v* release, which stays
+      # immutable at whatever checksum it already shipped.
+      - name: Create the release and attach the xcframework
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" \
+              --title "Traverse ${GITHUB_REF_NAME}" --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" target/apple/TraverseSwiftHost.xcframework.zip \
+            --repo "${{ github.repository }}" --clobber
+
+      # Package.swift is a tracked, consumer-facing file: proposed as a PR
+      # rather than pushed straight to main, since updating the binary
+      # target's URL/checksum is a real decision (this repo's only prior
+      # instance of this exact change, commit 53651d0, was made by hand).
+      - name: Update Package.swift's binary target
+        run: |
+          python3 - "${TAG_VERSION}" "${{ steps.checksum.outputs.value }}" "${{ github.repository }}" <<'PY'
+          import re
+          import sys
+
+          version, checksum, repo = sys.argv[1:4]
+          path = "packages/swift/TraverseEmbedder/Package.swift"
+          with open(path, encoding="utf-8") as handle:
+              text = handle.read()
+
+          url = f"https://github.com/{repo}/releases/download/v{version}/TraverseSwiftHost.xcframework.zip"
+          text = re.sub(r'url: "[^"]*TraverseSwiftHost\.xcframework\.zip"', f'url: "{url}"', text, count=1)
+          text = re.sub(r'checksum: "[0-9a-f]+"', f'checksum: "{checksum}"', text, count=1)
+
+          with open(path, "w", encoding="utf-8") as handle:
+              handle.write(text)
+          PY
+
+      - name: Open a PR updating Package.swift
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: release/swift-host-${{ env.TAG_VERSION }}
+          commit-message: "chore(swift): point Package.swift at the v${{ env.TAG_VERSION }} xcframework"
+          title: "chore(swift): point Package.swift at the v${{ env.TAG_VERSION }} xcframework"
+          body: |
+            Rebuilt `TraverseSwiftHost.xcframework` for the `v${{ env.TAG_VERSION }}` release tag and
+            attached it to that release. Updates `Package.swift`'s binary target URL and checksum
+            to match.
+
+            ## Governing Spec
+
+            - `136-native-embedder-publication`
+
+            ## Project Item
+
+            Refs #1370
+
+            ## Validation
+
+            - `swift package compute-checksum` against the uploaded release asset (this PR's checksum).

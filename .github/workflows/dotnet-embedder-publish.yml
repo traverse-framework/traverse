@@ -1,0 +1,75 @@
+name: Publish .NET embedder
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/dotnet/TraverseEmbedder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Verify release tag matches Cargo workspace version
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      - name: Pack
+        run: dotnet pack TraverseEmbedder/TraverseEmbedder.csproj --configuration Release -p:Version=${TAG_VERSION} --output ./artifacts
+
+      # Trusted Publishing (OIDC): the id-token above is exchanged for a
+      # short-lived nuget.org API key, so no long-lived secret is stored in
+      # this repo. Requires the "dotnet-embedder-publish.yml" trusted
+      # publisher policy already configured on nuget.org for this exact
+      # workflow file name and repository.
+      - name: NuGet login (OIDC -> temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: enrico.piovesan
+
+      - name: Push (idempotent on an already-published version)
+        run: |
+          dotnet nuget push "./artifacts/TraverseEmbedder.${TAG_VERSION}.nupkg" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

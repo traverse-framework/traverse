@@ -1,0 +1,67 @@
+name: Publish Kotlin embedder
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # GitHub's macos-latest image ships a pre-installed Android SDK and
+    # Gradle, matching native-artifact-certification's own setup (no
+    # dedicated Android SDK / Gradle install step needed there either).
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: packages/kotlin/TraverseEmbedder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Verify release tag matches Cargo workspace version
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: gradle --no-daemon testDebugUnitTest
+
+      # Sonatype Central Portal credentials + an in-memory GPG signing key,
+      # already provisioned as repo secrets. publishToMavenCentral() with
+      # automaticRelease left at its default validates, uploads, and
+      # publishes in one step; a version already released is rejected by
+      # Central itself, so a rerun on an unchanged tag is a safe no-op.
+      - name: Publish to Maven Central
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_PRIVATE_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSPHRASE }}
+        run: gradle --no-daemon -Pversion=${TAG_VERSION} publishToMavenCentral
