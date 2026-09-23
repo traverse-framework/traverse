@@ -48,12 +48,21 @@ running and displays `Traverse Swift host proof passed`.
 
 ## Expected evidence
 
-- The memory-growth fixture returns zero only after `wasmi` blocks growth at
-  the configured 64 KiB limit.
-- The fuel fixture returns zero only after `wasmi` terminates the infinite
-  loop with `OutOfFuel`.
-- The app remains responsive after both fixtures. This demonstrates no
-  watchdog left untrusted execution alive.
+- The app launches, the two `precondition` checks pass (ABI version and
+  status-message mapping), and it remains responsive with no crash.
+- This proves the `wasmi`-linked `TraverseSwiftHost.xcframework` slice
+  actually links, loads, and runs on real hardware — CI's `macos-latest`
+  runner and the simulator cannot substitute for this.
+
+This runbook does not exercise `wasmi`'s memory-growth or fuel-exhaustion
+enforcement directly; those are covered by `traverse-swift-host`'s own Rust
+test suite (`cargo test -p traverse-swift-host`), which already runs the real
+`wasmi` engine with the same limits. No memory-growth or infinite-loop Swift
+fixture exists in this repo — an earlier version of this doc claimed evidence
+this runbook never actually produced. If that level of on-device evidence is
+needed later, it requires building dedicated WAT/WASM fixtures through
+`traverse_swift_host_create`/`invoke` first.
 
 Record device model, iOS version, Xcode version, `wasmi` version, commit SHA,
-and screenshots or console output in #769 before certification is claimed.
+and screenshots or console output in the tracking issue before certification
+is claimed.
