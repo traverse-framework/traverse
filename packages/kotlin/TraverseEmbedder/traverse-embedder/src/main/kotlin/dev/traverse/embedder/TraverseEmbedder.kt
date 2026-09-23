@@ -16,7 +16,21 @@ data class TraverseSubmission(val targetId: String, val inputJson: String) {
     init { require(targetId.isNotBlank()) { "target_id is required" } }
 }
 
-data class TraverseSubmissionResult(val sessionId: String, val status: String)
+/** Spec 139 `app_command` envelope. The state machine runs in `runtime.wasm`. */
+data class TraverseAppCommand(
+    val command: String,
+    val payloadJson: String = "{}",
+    val sessionId: String? = null,
+) {
+    init { require(command.isNotBlank()) { "app_command requires a non-empty command" } }
+}
+
+data class TraverseSubmissionResult(
+    val sessionId: String,
+    val status: String,
+    /** Runtime rejection reason, when [status] is not `accepted`. */
+    val error: String? = null,
+)
 
 /** Traceability evidence published with a TraverseEmbedder package release. */
 data class TraverseReleaseEvidence(

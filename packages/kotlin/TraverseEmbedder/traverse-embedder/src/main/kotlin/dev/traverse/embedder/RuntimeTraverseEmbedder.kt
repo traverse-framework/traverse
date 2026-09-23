@@ -1,5 +1,6 @@
 package dev.traverse.embedder
 
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -10,8 +11,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** Typed public embedder backed exclusively by runtime-owned bridge results. */
-class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBridgeClient) {
+class RuntimeTraverseEmbedder internal constructor(
+    private val client: ChicoryBridgeClient,
+    timer: TraverseTimer = SystemTraverseTimer(),
+) {
     constructor(bundle: TraverseBundle) : this(ChicoryBridgeClient(ChicoryRuntimeBridge(bundle)))
+
+    private val appCommands = AppCommandCoordinator(submitJson = { client.submit(it) }, timer = timer)
+    private val eventSequence = AtomicInteger(0)
 
     fun initialize(configJson: String): String = client.initialize(configJson)
 
@@ -23,9 +30,32 @@ class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBr
         return TraverseSubmissionResult(result.requiredString("session_id"), result.requiredString("status"))
     }
 
+    /**
+     * Spec 139 `app_command` submit. The state machine runs in `runtime.wasm`; registered
+     * adapters and the timer port complete host-connector waits.
+     */
+    fun submit(command: TraverseAppCommand): TraverseSubmissionResult = appCommands.submit(command)
+
+    /**
+     * Registers the host authority for a manifest command (Spec 140 WIT semantics). Removing the
+     * registration only applies while it is still the registered adapter.
+     */
+    fun registerHostConnectorAdapter(command: String, adapter: HostConnectorAdapter): HostConnectorRegistration =
+        appCommands.register(command, adapter)
+
+    /**
+     * Drains ordered runtime events. Legacy bridge events (`sequence`, `target_id`, `status`) are
+     * parsed as before. Spec 139 app lifecycle events (`type`, `session_id`, `data`) are mapped to
+     * `eventType`, `sessionId`, and `output` (also `errorData` for `error`), numbered in arrival
+     * order, so state-machine events are observable on every embedder (Spec 139 FR-004).
+     */
     fun subscribe(): List<TraverseRuntimeEvent> = buildList {
         while (true) {
             val value = resultObject(client.nextEvent() ?: break)
+            if (value["sequence"] == null && value["type"] != null) {
+                add(lifecycleEvent(value))
+                continue
+            }
             add(TraverseRuntimeEvent(
                 value.requiredInt("sequence"),
                 value.requiredString("target_id"),
@@ -33,6 +63,23 @@ class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBr
                 value.optionalString("instance_id"),
             ))
         }
+    }
+
+    private fun lifecycleEvent(event: JsonObject): TraverseRuntimeEvent {
+        val type = event.requiredString("type")
+        val data = event["data"] ?: JsonObject(emptyMap())
+        val eventType = if (type in lifecycleEventTypes) type else "error"
+        val sequence = eventSequence.incrementAndGet()
+        val dataJson = data.toString()
+        return TraverseRuntimeEvent(
+            sequence = sequence,
+            targetId = "app_command",
+            status = "emitted",
+            eventType = eventType,
+            sessionId = event.optionalString("session_id"),
+            errorData = if (eventType == "error") dataJson else null,
+            output = dataJson,
+        )
     }
 
     fun cancel(sessionId: String): String = client.cancel(buildJsonObject {
@@ -48,7 +95,10 @@ class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBr
     fun compatibleKill(capabilityId: String, instanceId: String?): TraverseCompatibleResult =
         compatibleResult(client.compatibleKill(compatibleRequest(capabilityId, instanceId = instanceId)))
 
-    fun shutdown(): String = client.shutdown()
+    fun shutdown(): String {
+        appCommands.stop()
+        return client.shutdown()
+    }
 
     private fun compatibleRequest(
         capabilityId: String,
@@ -86,4 +136,13 @@ class RuntimeTraverseEmbedder internal constructor(private val client: ChicoryBr
     private fun JsonObject.requiredInt(name: String): Int =
         this[name]?.jsonPrimitive?.int
             ?: throw TraverseBridgeException(-2, "bridge result is missing $name")
+
+    private companion object {
+        val lifecycleEventTypes = setOf(
+            "state_changed", "capability_invoked", "capability_result", "capability_event",
+            "capability_succeeded", "capability_failed", "host_connector_succeeded",
+            "host_connector_failed", "host_connector_cancelled", "host_connector_timeout",
+            "error", "heartbeat",
+        )
+    }
 }
