@@ -13,7 +13,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use serde_json::Value;
 use uuid::Uuid;
-use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc};
+use wasmtime::{
+    Config, Engine, Instance, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc,
+};
 
 use crate::events::types::{EventBroker, EventError, LifecycleStatus, TraverseEvent};
 use traverse_contracts::{EventReference, ExecutionTarget, ServiceType};
@@ -23,22 +25,93 @@ use traverse_contracts::{EventReference, ExecutionTarget, ServiceType};
 /// published to `EventBroker`.
 const LIFECYCLE_EVENT_TYPES: [&str; 2] = ["capability_invoked", "capability_result"];
 
+/// Fuel budget spec `1402` FR-014 requires `RuntimeWasmHost` to bound every
+/// `init`/`submit`/`shutdown` call against — matching the ceiling this
+/// spec's own Swift and .NET real-artifact conformance tests already use in
+/// production.
+pub const RUNTIME_WASM_HOST_FUEL_BUDGET: u64 = 50_000_000;
+
+/// Outer `StoreLimits` memory ceiling spec `1402` FR-014 requires — four
+/// times the 32 MiB nested-capability budget FR-012 requires, to hold that
+/// budget plus interpreter and session-state overhead.
+pub const RUNTIME_WASM_HOST_MEMORY_LIMIT_BYTES: usize = 128 * 1024 * 1024;
+
+/// Required resource limits for [`RuntimeWasmHost::instantiate`] (spec
+/// `1402` FR-014). Deliberately has no `Default` impl: a caller must choose
+/// these explicitly rather than silently accepting unbounded execution.
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeWasmHostLimits {
+    /// Fuel units available to each `init`/`submit`/`shutdown` call before
+    /// it fails closed with the `timeout` code.
+    pub fuel_budget: u64,
+    /// Maximum bytes for the guest's linear memory before growth fails
+    /// closed with the `resource_exhausted` code.
+    pub memory_bytes: usize,
+}
+
+/// [`Store`] data for a [`RuntimeWasmHost`] instance: only the
+/// [`StoreLimits`] Wasmtime's memory limiter needs to see.
+struct RuntimeWasmHostState {
+    limits: StoreLimits,
+}
+
 /// A failure driving `runtime.wasm`'s ABI. Carries a stable, secret-free
-/// message — never a guest panic or trap detail beyond Wasmtime's own error
-/// text.
+/// `code` (spec `1402` FR-016) alongside a message — never a guest panic or
+/// trap detail beyond Wasmtime's own error text.
 #[derive(Debug)]
-pub struct RuntimeWasmHostError(pub String);
+pub struct RuntimeWasmHostError {
+    /// One of `timeout`, `resource_exhausted`, `invalid_response`, or the
+    /// generic `internal_error` shared by every other failure path (module
+    /// load, missing export, ABI mismatch) per FR-016.
+    pub code: &'static str,
+    pub message: String,
+}
 
 impl std::fmt::Display for RuntimeWasmHostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "runtime.wasm host error: {}", self.0)
+        write!(
+            f,
+            "runtime.wasm host error [{}]: {}",
+            self.code, self.message
+        )
     }
 }
 
 impl std::error::Error for RuntimeWasmHostError {}
 
 fn err(message: impl Into<String>) -> RuntimeWasmHostError {
-    RuntimeWasmHostError(message.into())
+    RuntimeWasmHostError {
+        code: "internal_error",
+        message: message.into(),
+    }
+}
+
+fn coded_err(code: &'static str, message: impl Into<String>) -> RuntimeWasmHostError {
+    RuntimeWasmHostError {
+        code,
+        message: message.into(),
+    }
+}
+
+/// Classifies a failed Wasmtime call against `context` (spec `1402`
+/// FR-016): fuel exhaustion becomes `timeout`, a `StoreLimits`-forced
+/// growth trap becomes `resource_exhausted`, everything else keeps the
+/// generic `internal_error` code. Matches `executor/wasm.rs`'s
+/// `classify_wasm_execution_error` string-matching convention for this same
+/// Wasmtime version.
+fn classify_call_error(context: &str, error: &wasmtime::Error) -> RuntimeWasmHostError {
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    if display.contains("all fuel consumed by WebAssembly")
+        || debug.contains("all fuel consumed by WebAssembly")
+    {
+        return coded_err("timeout", format!("{context}: {error}"));
+    }
+    if display.contains("forcing trap when growing") || debug.contains("forcing trap when growing")
+    {
+        return coded_err("resource_exhausted", format!("{context}: {error}"));
+    }
+    err(format!("{context}: {error}"))
 }
 
 fn service_type_str(service_type: &ServiceType) -> &'static str {
@@ -85,7 +158,8 @@ pub struct CapabilityInit<'a> {
 /// (spec 071 FR-006). One instance corresponds to one guest module
 /// instantiation — `init` MUST be called before `submit`.
 pub struct RuntimeWasmHost {
-    store: Store<()>,
+    store: Store<RuntimeWasmHostState>,
+    fuel_budget: u64,
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     dealloc: TypedFunc<(i32, i32), ()>,
@@ -97,20 +171,40 @@ pub struct RuntimeWasmHost {
 
 impl RuntimeWasmHost {
     /// Instantiates `runtime_wasm_bytes` as a `runtime-wasm-bridge/1.0.0`
-    /// module and resolves its required exports.
+    /// module and resolves its required exports, bounded by `limits` (spec
+    /// `1402` FR-014). `limits` is required and never defaulted, so a
+    /// caller cannot silently accept unbounded execution.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeWasmHostError`] if the bytes are not a valid module,
     /// instantiation fails, or a required export is missing or has the
     /// wrong signature.
-    pub fn instantiate(runtime_wasm_bytes: &[u8]) -> Result<Self, RuntimeWasmHostError> {
-        let engine = Engine::default();
+    pub fn instantiate(
+        runtime_wasm_bytes: &[u8],
+        limits: RuntimeWasmHostLimits,
+    ) -> Result<Self, RuntimeWasmHostError> {
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config).map_err(|error| err(format!("engine: {error}")))?;
         let module = Module::new(&engine, runtime_wasm_bytes)
             .map_err(|error| err(format!("module: {error}")))?;
-        let mut store = Store::new(&engine, ());
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.memory_bytes)
+            .trap_on_grow_failure(true)
+            .build();
+        let mut store = Store::new(
+            &engine,
+            RuntimeWasmHostState {
+                limits: store_limits,
+            },
+        );
+        store.limiter(|state| &mut state.limits);
+        store
+            .set_fuel(limits.fuel_budget)
+            .map_err(|error| err(format!("set fuel: {error}")))?;
         let instance = Instance::new(&mut store, &module, &[])
-            .map_err(|error| err(format!("instantiate: {error}")))?;
+            .map_err(|error| classify_call_error("instantiate", &error))?;
 
         let memory = instance
             .get_memory(&mut store, "memory")
@@ -136,6 +230,7 @@ impl RuntimeWasmHost {
 
         Ok(Self {
             store,
+            fuel_budget: limits.fuel_budget,
             memory,
             alloc,
             dealloc,
@@ -144,6 +239,16 @@ impl RuntimeWasmHost {
             next_event_fn,
             shutdown_fn,
         })
+    }
+
+    /// Resets this call's fuel to the full budget (spec `1402` FR-014):
+    /// Wasmtime fuel is consumed cumulatively across calls on one `Store`,
+    /// so every public entrypoint re-arms it to bound *that* call, not the
+    /// instance's lifetime total.
+    fn refuel(&mut self) -> Result<(), RuntimeWasmHostError> {
+        self.store
+            .set_fuel(self.fuel_budget)
+            .map_err(|error| err(format!("set fuel: {error}")))
     }
 
     /// Writes `bytes` into a freshly guest-allocated region and returns its
@@ -155,7 +260,7 @@ impl RuntimeWasmHost {
         let ptr = self
             .alloc
             .call(&mut self.store, len)
-            .map_err(|error| err(format!("traverse_alloc: {error}")))?;
+            .map_err(|error| classify_call_error("traverse_alloc", &error))?;
         self.memory
             .write(&mut self.store, usize::try_from(ptr).unwrap_or(0), bytes)
             .map_err(|error| err(format!("memory write: {error}")))?;
@@ -181,13 +286,24 @@ impl RuntimeWasmHost {
         let response_len = i32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
         let response = if response_len > 0 && response_ptr >= 0 {
-            let mut buffer = vec![0u8; usize::try_from(response_len).unwrap_or(0)];
+            // FR-015: validate the guest-reported range against the actual
+            // accessible size of its linear memory *before* allocating a
+            // host buffer of that length, so a length outside the guest's
+            // own memory bounds fails closed instead of attempting the
+            // allocation.
+            let ptr = usize::try_from(response_ptr).unwrap_or(usize::MAX);
+            let len = usize::try_from(response_len).unwrap_or(usize::MAX);
+            let memory_size = self.memory.data_size(&self.store);
+            let end = ptr.checked_add(len);
+            if end.is_none_or(|end| end > memory_size) {
+                return Err(coded_err(
+                    "invalid_response",
+                    format!("response range {ptr}..+{len} exceeds guest memory size {memory_size}"),
+                ));
+            }
+            let mut buffer = vec![0u8; len];
             self.memory
-                .read(
-                    &self.store,
-                    usize::try_from(response_ptr).unwrap_or(0),
-                    &mut buffer,
-                )
+                .read(&self.store, ptr, &mut buffer)
                 .map_err(|error| err(format!("response read: {error}")))?;
             buffer
         } else {
@@ -211,13 +327,13 @@ impl RuntimeWasmHost {
         let out_descriptor = self
             .alloc
             .call(&mut self.store, 8)
-            .map_err(|error| err(format!("traverse_alloc (descriptor): {error}")))?;
+            .map_err(|error| classify_call_error("traverse_alloc (descriptor)", &error))?;
         let payload_ptr = self.write_bytes(payload)?;
         let payload_len = i32::try_from(payload.len()).unwrap_or(i32::MAX);
 
         let status = target
             .call(&mut self.store, (payload_ptr, payload_len, out_descriptor))
-            .map_err(|error| err(format!("call: {error}")))?;
+            .map_err(|error| classify_call_error("call", &error))?;
         self.dealloc(payload_ptr, payload_len);
 
         let response = self.read_descriptor(out_descriptor)?;
@@ -272,6 +388,7 @@ impl RuntimeWasmHost {
         payload.extend_from_slice(&header_bytes);
         payload.extend_from_slice(capability_wasm);
 
+        self.refuel()?;
         let (status, response) = self.call_json(&self.init_fn.clone(), &payload)?;
         let parsed = parse_response(&response)?;
         if status != 0 {
@@ -288,6 +405,7 @@ impl RuntimeWasmHost {
     /// Returns [`RuntimeWasmHostError`] if the guest rejects the request or
     /// any ABI call fails.
     pub fn submit(&mut self, request: &[u8]) -> Result<Value, RuntimeWasmHostError> {
+        self.refuel()?;
         let (status, response) = self.call_json(&self.submit_fn.clone(), request)?;
         let parsed = parse_response(&response)?;
         if status != 0 {
@@ -304,16 +422,17 @@ impl RuntimeWasmHost {
     /// Returns [`RuntimeWasmHostError`] if the ABI call or a response read
     /// fails.
     pub fn drain_events(&mut self) -> Result<Vec<Value>, RuntimeWasmHostError> {
+        self.refuel()?;
         let mut events = Vec::new();
         loop {
             let out_descriptor = self
                 .alloc
                 .call(&mut self.store, 8)
-                .map_err(|error| err(format!("traverse_alloc (descriptor): {error}")))?;
+                .map_err(|error| classify_call_error("traverse_alloc (descriptor)", &error))?;
             let has_event = self
                 .next_event_fn
                 .call(&mut self.store, out_descriptor)
-                .map_err(|error| err(format!("traverse_next_event: {error}")))?;
+                .map_err(|error| classify_call_error("traverse_next_event", &error))?;
             if has_event == 0 {
                 self.dealloc(out_descriptor, 8);
                 break;
@@ -331,13 +450,14 @@ impl RuntimeWasmHost {
     /// Returns [`RuntimeWasmHostError`] if the ABI call or a response read
     /// fails.
     pub fn shutdown(&mut self) -> Result<Value, RuntimeWasmHostError> {
+        self.refuel()?;
         let out_descriptor = self
             .alloc
             .call(&mut self.store, 8)
-            .map_err(|error| err(format!("traverse_alloc (descriptor): {error}")))?;
+            .map_err(|error| classify_call_error("traverse_alloc (descriptor)", &error))?;
         self.shutdown_fn
             .call(&mut self.store, out_descriptor)
-            .map_err(|error| err(format!("traverse_shutdown: {error}")))?;
+            .map_err(|error| classify_call_error("traverse_shutdown", &error))?;
         let response = self.read_descriptor(out_descriptor)?;
         parse_response(&response)
     }
@@ -414,6 +534,13 @@ mod tests {
     use crate::events::broker::InProcessBroker;
     use crate::events::catalog::{EventCatalog, EventCatalogEntry};
 
+    fn test_limits() -> RuntimeWasmHostLimits {
+        RuntimeWasmHostLimits {
+            fuel_budget: RUNTIME_WASM_HOST_FUEL_BUDGET,
+            memory_bytes: RUNTIME_WASM_HOST_MEMORY_LIMIT_BYTES,
+        }
+    }
+
     /// Minimal hand-authored fixture whose `traverse_init`/`traverse_submit`
     /// always reject (status `-1`), used to exercise the rejection paths
     /// `RuntimeWasmHost::init`/`submit` take when the guest refuses a call —
@@ -460,6 +587,39 @@ mod tests {
           i32.const 0))
     "#;
 
+    /// `traverse_shutdown` reports a response range (`ptr=0`, `len=100000`)
+    /// that exceeds this module's single 64 KiB memory page, exercising
+    /// FR-015's before-allocation bounds check.
+    const OUT_OF_BOUNDS_RESPONSE_FIXTURE_WAT: &str = r#"
+      (module
+        (memory (export "memory") 1)
+        (func (export "traverse_alloc") (param i32) (result i32) i32.const 4096)
+        (func (export "traverse_dealloc") (param i32 i32))
+        (func (export "traverse_init") (param i32 i32 i32) (result i32) i32.const 0)
+        (func (export "traverse_submit") (param i32 i32 i32) (result i32) i32.const 0)
+        (func (export "traverse_next_event") (param i32) (result i32) i32.const 0)
+        (func (export "traverse_shutdown") (param $d i32) (result i32)
+          local.get $d i32.const 0 i32.store
+          local.get $d i32.const 4 i32.add i32.const 100000 i32.store
+          i32.const 0))
+    "#;
+
+    /// `traverse_submit` loops forever, exercising FR-014's per-call fuel
+    /// bound: with a small enough fuel budget this must fail closed with
+    /// the `timeout` code rather than hang.
+    const INFINITE_LOOP_FIXTURE_WAT: &str = r#"
+      (module
+        (memory (export "memory") 1)
+        (func (export "traverse_alloc") (param i32) (result i32) i32.const 4096)
+        (func (export "traverse_dealloc") (param i32 i32))
+        (func (export "traverse_init") (param i32 i32 i32) (result i32) i32.const 0)
+        (func (export "traverse_submit") (param i32 i32 i32) (result i32)
+          (loop $forever br $forever)
+          i32.const 0)
+        (func (export "traverse_next_event") (param i32) (result i32) i32.const 0)
+        (func (export "traverse_shutdown") (param i32) (result i32) i32.const 0))
+    "#;
+
     fn broker_with_event(event_type: &str) -> Arc<dyn EventBroker> {
         let catalog = Arc::new(EventCatalog::new());
         catalog
@@ -496,13 +656,45 @@ mod tests {
         let error = err("something went wrong");
         assert_eq!(
             error.to_string(),
-            "runtime.wasm host error: something went wrong"
+            "runtime.wasm host error [internal_error]: something went wrong"
         );
     }
 
     #[test]
+    fn coded_err_carries_the_given_code() {
+        let error = coded_err("timeout", "fuel exhausted");
+        assert_eq!(error.code, "timeout");
+        assert_eq!(error.message, "fuel exhausted");
+    }
+
+    #[test]
+    fn classify_call_error_recognizes_fuel_exhaustion() {
+        let error = classify_call_error(
+            "traverse_submit",
+            &wasmtime::Error::msg("all fuel consumed by WebAssembly"),
+        );
+        assert_eq!(error.code, "timeout");
+    }
+
+    #[test]
+    fn classify_call_error_recognizes_a_forced_growth_trap() {
+        let error = classify_call_error(
+            "traverse_submit",
+            &wasmtime::Error::msg("forcing trap when growing memory"),
+        );
+        assert_eq!(error.code, "resource_exhausted");
+    }
+
+    #[test]
+    fn classify_call_error_defaults_to_internal_error() {
+        let error =
+            classify_call_error("traverse_submit", &wasmtime::Error::msg("some other trap"));
+        assert_eq!(error.code, "internal_error");
+    }
+
+    #[test]
     fn instantiate_rejects_bytes_that_are_not_a_wasm_module() {
-        let result = RuntimeWasmHost::instantiate(b"not a wasm module");
+        let result = RuntimeWasmHost::instantiate(b"not a wasm module", test_limits());
         assert!(result.is_err());
     }
 
@@ -519,7 +711,7 @@ mod tests {
     #[test]
     fn init_surfaces_a_guest_rejection() {
         let artifact = wat::parse_str(REJECTING_FIXTURE_WAT).expect("wat parses");
-        let mut host = RuntimeWasmHost::instantiate(&artifact).expect("instantiate");
+        let mut host = RuntimeWasmHost::instantiate(&artifact, test_limits()).expect("instantiate");
         let result = host.init(
             CapabilityInit {
                 capability_id: "example.rejecting",
@@ -532,24 +724,51 @@ mod tests {
             b"",
         );
         let error = result.expect_err("init must be rejected");
-        assert!(error.0.contains("traverse_init rejected"));
+        assert!(error.message.contains("traverse_init rejected"));
     }
 
     #[test]
     fn submit_surfaces_a_guest_rejection() {
         let artifact = wat::parse_str(REJECTING_FIXTURE_WAT).expect("wat parses");
-        let mut host = RuntimeWasmHost::instantiate(&artifact).expect("instantiate");
+        let mut host = RuntimeWasmHost::instantiate(&artifact, test_limits()).expect("instantiate");
         let result = host.submit(b"{}");
         let error = result.expect_err("submit must be rejected");
-        assert!(error.0.contains("traverse_submit rejected"));
+        assert!(error.message.contains("traverse_submit rejected"));
     }
 
     #[test]
     fn shutdown_handles_a_zero_length_response() {
         let artifact = wat::parse_str(EMPTY_RESPONSE_FIXTURE_WAT).expect("wat parses");
-        let mut host = RuntimeWasmHost::instantiate(&artifact).expect("instantiate");
+        let mut host = RuntimeWasmHost::instantiate(&artifact, test_limits()).expect("instantiate");
         let response = host.shutdown().expect("shutdown succeeds");
         assert_eq!(response, Value::Null);
+    }
+
+    #[test]
+    fn shutdown_fails_closed_when_the_guest_reports_an_out_of_bounds_response() {
+        let artifact = wat::parse_str(OUT_OF_BOUNDS_RESPONSE_FIXTURE_WAT).expect("wat parses");
+        let mut host = RuntimeWasmHost::instantiate(&artifact, test_limits()).expect("instantiate");
+        let error = host
+            .shutdown()
+            .expect_err("out-of-bounds response must be rejected");
+        assert_eq!(error.code, "invalid_response");
+    }
+
+    #[test]
+    fn submit_fails_closed_with_timeout_when_fuel_is_exhausted() {
+        let artifact = wat::parse_str(INFINITE_LOOP_FIXTURE_WAT).expect("wat parses");
+        let mut host = RuntimeWasmHost::instantiate(
+            &artifact,
+            RuntimeWasmHostLimits {
+                fuel_budget: 10_000,
+                memory_bytes: RUNTIME_WASM_HOST_MEMORY_LIMIT_BYTES,
+            },
+        )
+        .expect("instantiate");
+        let error = host
+            .submit(b"{}")
+            .expect_err("infinite loop must exhaust fuel");
+        assert_eq!(error.code, "timeout");
     }
 
     #[test]
@@ -561,7 +780,7 @@ mod tests {
             &broker,
         );
         let error = result.expect_err("missing type must error");
-        assert!(error.0.contains("missing \"type\""));
+        assert!(error.message.contains("missing \"type\""));
     }
 
     #[test]
