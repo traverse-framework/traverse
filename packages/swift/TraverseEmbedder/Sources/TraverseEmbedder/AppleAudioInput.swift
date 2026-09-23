@@ -250,6 +250,7 @@ private final class CaptureSession: @unchecked Sendable {
         }
         #endif
         let engine = AVAudioEngine()
+        engine.prepare()
         let format = engine.inputNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             finish(.failure(AudioCaptureFailure.unavailable))
