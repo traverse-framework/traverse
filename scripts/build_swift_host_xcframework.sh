@@ -3,7 +3,13 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 toolchain="1.94.0-aarch64-apple-darwin"
-rustc_path="/Users/enricopiovesan/.rustup/toolchains/${toolchain}/bin/rustc"
+# `rustup run` only sets env vars (RUSTUP_TOOLCHAIN); it does not put the
+# toolchain's bin dir ahead of PATH. On a machine with a non-rustup cargo/rustc
+# earlier on PATH (e.g. a Homebrew Rust install), that leaves the wrong
+# compiler in effect. Resolve the toolchain's real rustc path explicitly so
+# this works regardless of what else is on PATH, on any machine that has this
+# toolchain installed (locally via rustup, or in CI via dtolnay/rust-toolchain).
+rustc_path="$(rustup which rustc --toolchain "${toolchain}")"
 output_dir="${repo_root}/target/apple"
 header_dir="${repo_root}/crates/traverse-swift-host/include"
 

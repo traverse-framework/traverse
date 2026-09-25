@@ -48,10 +48,10 @@ jobs:
           echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj
 
       - name: Test
-        run: dotnet test --configuration Release
+        run: dotnet test TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj --configuration Release
 
       - name: Pack
         run: dotnet pack TraverseEmbedder/TraverseEmbedder.csproj --configuration Release -p:Version=${TAG_VERSION} --output ./artifacts
