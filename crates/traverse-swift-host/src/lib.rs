@@ -636,8 +636,8 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        ABI_VERSION, BUFFER_TOO_SMALL, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits, digest,
-        execute_wasi_command, traverse_swift_host_abi_version, traverse_swift_host_create,
+        ABI_VERSION, BUFFER_TOO_SMALL, INTERNAL_ERROR, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits,
+        digest, execute_wasi_command, traverse_swift_host_abi_version, traverse_swift_host_create,
         traverse_swift_host_destroy, traverse_swift_host_invoke,
     };
 
@@ -733,6 +733,97 @@ mod tests {
         assert_eq!(traverse_swift_host_destroy(handle), OK);
     }
 
+    /// FR-evidence for #1370: a guest that never returns must fail closed
+    /// under the per-invocation fuel bound rather than hang the host. This
+    /// is the same non-termination scenario the physical-device evidence
+    /// runbook (`docs/swift-host-device-test.md`) exercises on real
+    /// hardware; if this test itself hung, the fuel bound would be broken.
+    #[test]
+    fn invoke_fails_closed_instead_of_hanging_on_an_infinite_loop() {
+        let runtime = wat::parse_str(INFINITE_LOOP_FIXTURE).expect("fixture must compile");
+        let expected_digest = digest(&runtime);
+        let limits = limits();
+        let mut handle = 0_u64;
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let create_status = unsafe {
+            traverse_swift_host_create(
+                runtime.as_ptr(),
+                runtime.len(),
+                expected_digest.as_ptr(),
+                expected_digest.len(),
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(create_status, OK);
+        let operation = b"submit";
+        let input = b"{}";
+        let mut output = [0_u8; 512];
+        let mut required = 0_usize;
+        // SAFETY: `handle` is live from the create call above; all other
+        // pointers are valid for their stated lengths.
+        let invoke_status = unsafe {
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &raw mut required,
+            )
+        };
+        assert_eq!(invoke_status, INTERNAL_ERROR);
+        assert_eq!(traverse_swift_host_destroy(handle), OK);
+    }
+
+    /// FR-evidence for #1370: a guest that tries to grow memory past the
+    /// bound must fail closed rather than let the process balloon. Same
+    /// memory-growth scenario the physical-device evidence runbook
+    /// exercises on real hardware.
+    #[test]
+    fn invoke_fails_closed_instead_of_growing_memory_past_the_bound() {
+        let runtime = wat::parse_str(MEMORY_GROWTH_FIXTURE).expect("fixture must compile");
+        let expected_digest = digest(&runtime);
+        let limits = limits();
+        let mut handle = 0_u64;
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let create_status = unsafe {
+            traverse_swift_host_create(
+                runtime.as_ptr(),
+                runtime.len(),
+                expected_digest.as_ptr(),
+                expected_digest.len(),
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(create_status, OK);
+        let operation = b"submit";
+        let input = b"{}";
+        let mut output = [0_u8; 512];
+        let mut required = 0_usize;
+        // SAFETY: `handle` is live from the create call above; all other
+        // pointers are valid for their stated lengths.
+        let invoke_status = unsafe {
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &raw mut required,
+            )
+        };
+        assert_eq!(invoke_status, INTERNAL_ERROR);
+        assert_eq!(traverse_swift_host_destroy(handle), OK);
+    }
+
     #[test]
     fn executes_the_pinned_cross_host_wasi_fixture() {
         let artifact = include_bytes!(
@@ -776,6 +867,52 @@ mod tests {
             i32.const 0)
           (func (export "traverse_init") (param i32 i32 i32) (result i32) local.get 2 call $result)
           (func (export "traverse_submit") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_next_event") (param i32) (result i32) local.get 0 call $result)
+          (func (export "traverse_cancel") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_shutdown") (param i32) (result i32) local.get 0 call $result))
+    "#;
+
+    const INFINITE_LOOP_FIXTURE: &str = r#"
+        (module
+          (memory (export "memory") 1 2)
+          (data (i32.const 128) "{\22status\22:\22ready\22}")
+          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+          (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+          (func (export "traverse_dealloc") (param i32 i32))
+          (func $result (param $descriptor i32) (result i32)
+            local.get $descriptor i32.const 128 i32.store
+            local.get $descriptor i32.const 4 i32.add i32.const 18 i32.store
+            i32.const 0)
+          (func (export "traverse_init") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_submit") (param i32 i32 i32) (result i32)
+            (loop $forever br $forever)
+            i32.const 0)
+          (func (export "traverse_next_event") (param i32) (result i32) local.get 0 call $result)
+          (func (export "traverse_cancel") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_stop") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_compatible_kill") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_shutdown") (param i32) (result i32) local.get 0 call $result))
+    "#;
+
+    const MEMORY_GROWTH_FIXTURE: &str = r#"
+        (module
+          (memory (export "memory") 1 65536)
+          (data (i32.const 128) "{\22status\22:\22ready\22}")
+          (func (export "traverse_bridge_abi_version") (result i32) i32.const 10100)
+          (func (export "traverse_alloc") (param i32) (result i32) i32.const 64)
+          (func (export "traverse_dealloc") (param i32 i32))
+          (func $result (param $descriptor i32) (result i32)
+            local.get $descriptor i32.const 128 i32.store
+            local.get $descriptor i32.const 4 i32.add i32.const 18 i32.store
+            i32.const 0)
+          (func (export "traverse_init") (param i32 i32 i32) (result i32) local.get 2 call $result)
+          (func (export "traverse_submit") (param i32 i32 i32) (result i32)
+            i32.const 40 memory.grow drop
+            local.get 2 call $result)
           (func (export "traverse_next_event") (param i32) (result i32) local.get 0 call $result)
           (func (export "traverse_cancel") (param i32 i32 i32) (result i32) local.get 2 call $result)
           (func (export "traverse_compatible_start") (param i32 i32 i32) (result i32) local.get 2 call $result)
