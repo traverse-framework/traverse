@@ -1,0 +1,4 @@
+body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+button { font: inherit; padding: .45rem .8rem; }
+pre { overflow: auto; background: #f4f4f4; padding: 1rem; border-radius: .4rem; }

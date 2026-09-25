@@ -25,6 +25,13 @@ let package = Package(
                 "TraverseEmbedder",
             ]
         ),
+        // A thin macOS application shell for the Spec 139/140 audio-analysis bundle (#1503).
+        .executableTarget(
+            name: "TraverseAudioAnalysisExample",
+            dependencies: [
+                "TraverseEmbedder",
+            ]
+        ),
         .testTarget(
             name: "TraverseEmbedderTests",
             dependencies: [

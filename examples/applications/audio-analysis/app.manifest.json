@@ -1,0 +1,76 @@
+{
+  "app_id": "audio-analysis",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "workspace_defaults": { "workspace_id": "local-default", "registry_scope": "private" },
+  "components": [
+    {
+      "component_id": "audio-analysis.analyze-component",
+      "version": "1.0.0",
+      "digest": "sha256:00d5abd218395f58fe876dc513bae1ac387f9aad60be39bfd08eb8952de50607",
+      "manifest_path": "components/analyze/component.manifest.json"
+    }
+  ],
+  "workflows": [],
+  "model_dependencies": [],
+  "config_schema": {
+    "type": "object",
+    "required": ["workspace_id"],
+    "properties": { "workspace_id": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "default_config": { "workspace_id": "local-default" },
+  "placement_policy": { "preferred_targets": ["local"], "allow_fallback": false },
+  "public_surfaces": ["embedder"],
+  "connector_bindings": [
+    {
+      "connector_id": "traverse.audio-input",
+      "version_range": "=1.0.0",
+      "config_ref": "host-managed-audio-input"
+    }
+  ],
+  "state_machine": {
+    "initial_state": "idle",
+    "states": [
+      { "id": "idle", "transitions": [{ "on": "request_permission", "to": "requesting_permission" }] },
+      {
+        "id": "requesting_permission",
+        "invoke": { "host_connector": "audio.permission.request" },
+        "transitions": [
+          { "on": "host_connector_succeeded", "to": "ready" },
+          { "on": "host_connector_failed", "to": "error" },
+          { "on": "host_connector_cancelled", "to": "error" },
+          { "on": "host_connector_timeout", "to": "error" }
+        ]
+      },
+      { "id": "ready", "transitions": [{ "on": "capture_audio", "to": "capturing" }] },
+      {
+        "id": "capturing",
+        "invoke": { "host_connector": "audio.capture" },
+        "transitions": [
+          { "on": "host_connector_succeeded", "to": "recorded" },
+          { "on": "host_connector_failed", "to": "error" },
+          { "on": "host_connector_cancelled", "to": "error" },
+          { "on": "host_connector_timeout", "to": "error" }
+        ]
+      },
+      {
+        "id": "recorded",
+        "transitions": [
+          { "on": "analyze", "to": "analyzing" },
+          { "on": "reset", "to": "idle" }
+        ]
+      },
+      {
+        "id": "analyzing",
+        "invoke": { "capability_id": "doc-approval.analyze", "input_from": "host_connector_result.artifact_ref" },
+        "transitions": [
+          { "on": "capability_succeeded", "to": "analyzed" },
+          { "on": "capability_failed", "to": "error" }
+        ]
+      },
+      { "id": "analyzed", "transitions": [{ "on": "reset", "to": "idle" }] },
+      { "id": "error", "transitions": [{ "on": "reset", "to": "idle" }] }
+    ]
+  }
+}
