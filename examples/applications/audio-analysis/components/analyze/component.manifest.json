@@ -1,0 +1,15 @@
+{
+  "component_id": "audio-analysis.analyze-component",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "capability_id": "doc-approval.analyze",
+  "capability_version": "1.0.0",
+  "contract_path": "../../../../../contracts/examples/doc-approval/capabilities/analyze/contract.json",
+  "wasm_binary_path": "../../../../doc-approval/analyze-agent/artifacts/analyze-agent.wasm",
+  "wasm_digest": "sha256:00d5abd218395f58fe876dc513bae1ac387f9aad60be39bfd08eb8952de50607",
+  "runtime_constraints": { "host_api_access": "none", "network_access": "forbidden", "filesystem_access": "none" },
+  "permitted_targets": ["local", "device"],
+  "dependencies": [],
+  "connector_requirements": [],
+  "validation_evidence": [{ "evidence_type": "checked_in_fixture", "status": "passed", "produced_by": "repository_checks" }]
+}

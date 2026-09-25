@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Traverse audio analysis</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Audio analysis</h1>
+      <p>This shell sends commands and renders runtime events. The application state machine runs only in <code>runtime.wasm</code>.</p>
+      <p id="status">Loading verified bundle…</p>
+      <div class="controls">
+        <button id="permission" disabled>Allow microphone</button>
+        <button id="capture" disabled>Capture</button>
+        <button id="analyze" disabled>Analyze</button>
+        <button id="reset" disabled>Reset</button>
+      </div>
+      <h2>Runtime events</h2>
+      <pre id="events">[]</pre>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
