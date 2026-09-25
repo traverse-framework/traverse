@@ -62,6 +62,11 @@ mavenPublishing {
         }
     }
 
-    publishToMavenCentral()
+    // automaticRelease = true is required: the default (false) uploads the
+    // bundle to Central Portal but leaves it pending, requiring someone to
+    // manually click "Publish" on central.sonatype.com — confirmed on the
+    // real v0.13.0 tag push, whose bundle sat unreleased (404 on
+    // repo1.maven.org) despite the Gradle task reporting success.
+    publishToMavenCentral(automaticRelease = true)
     signAllPublications()
 }
