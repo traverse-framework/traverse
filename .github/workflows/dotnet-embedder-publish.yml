@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Release tag to (re)publish, e.g. v0.13.0. Only for re-running a
+          publish after a workflow fix; dispatch against the ref that has the
+          fix (e.g. main), not the tag itself, since a tag's own copy of this
+          file is frozen at whatever it looked like when the tag was pushed.
+        required: true
 
 permissions:
   contents: read
@@ -24,6 +33,11 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Resolve release tag
+        working-directory: .
+        shell: bash
+        run: echo "RELEASE_TAG=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
+
       - name: Verify release tag matches Cargo workspace version
         working-directory: .
         shell: bash
@@ -40,9 +54,9 @@ jobs:
             }
             END { if (!found) exit 1 }
           ' Cargo.toml)"
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${RELEASE_TAG#v}"
           if [[ "${workspace_version}" != "${tag_version}" ]]; then
-            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${GITHUB_REF_NAME}." >&2
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${RELEASE_TAG}." >&2
             exit 1
           fi
           echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
