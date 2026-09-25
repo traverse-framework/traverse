@@ -73,16 +73,23 @@ jobs:
       # the same v<version> tag as crates.io, Maven, and NuGet). It does not
       # replace or edit any prior swift-host-v* release, which stays
       # immutable at whatever checksum it already shipped.
-      - name: Create the release and attach the xcframework
+      #
+      # This repo has GitHub's immutable-releases policy enabled: once a
+      # release is published, no asset can ever be added or replaced on it
+      # afterward (a separate `gh release upload` fails with "Cannot upload
+      # assets to an immutable release"). The asset must be attached in the
+      # same `gh release create` call that publishes the release.
+      - name: Create the release with the xcframework attached
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view "${RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release create "${RELEASE_TAG}" --repo "${{ github.repository }}" \
-              --title "Traverse ${RELEASE_TAG}" --generate-notes
+          if gh release view "${RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists and this repo's releases are immutable once published: its assets can't be added or replaced now. If it's missing the xcframework, delete and recreate the release (not the git tag) before re-running this workflow." >&2
+            exit 1
           fi
-          gh release upload "${RELEASE_TAG}" target/apple/TraverseSwiftHost.xcframework.zip \
-            --repo "${{ github.repository }}" --clobber
+          gh release create "${RELEASE_TAG}" target/apple/TraverseSwiftHost.xcframework.zip \
+            --repo "${{ github.repository }}" \
+            --title "Traverse ${RELEASE_TAG}" --generate-notes
 
       # Package.swift is a tracked, consumer-facing file: proposed as a PR
       # rather than pushed straight to main, since updating the binary
