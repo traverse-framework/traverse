@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-core%20100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.12.0-blue)](https://github.com/traverse-framework/traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.13.0-blue)](https://github.com/traverse-framework/traverse/releases)
 [![Registry](https://img.shields.io/badge/registry-live%20catalog-6f42c1)](https://registry.traverse-framework.com/)
 
 **Define once. Run anywhere.**
@@ -132,20 +132,24 @@ here:
 
 Public packages are on [crates.io](https://crates.io) and
 [npmjs](https://www.npmjs.com/package/traverse-embedder-web), not GitHub
-Packages. Current release: **v0.12.0**.
+Packages. Current release: **v0.13.0**.
 
 ```bash
 # Rust
-cargo add traverse-runtime@0.12.0
-cargo add traverse-embedder@0.12.0
+cargo add traverse-runtime@0.13.0
+cargo add traverse-embedder@0.13.0
 # also: traverse-contracts, traverse-mcp, traverse-cli-rs,
 #       traverse-expedition-wasm
 
 # Web / TypeScript
-npm install traverse-embedder-web@0.12.0
+npm install traverse-embedder-web@0.13.0
 ```
 
-Swift, Maven, and NuGet packages are not published yet.
+Swift, Maven, and NuGet packages are published as of `v0.13.0` (see the
+platform table below); there is no GitHub Release object named `v0.13.0`
+itself — this repo's immutable-releases policy means binary artifacts (like
+the Swift xcframework) ship under their own dedicated release tags instead.
+See [docs/releases/v0.13.0.md](docs/releases/v0.13.0.md).
 
 ---
 
@@ -159,10 +163,10 @@ same Host ABI — the browser is one target among several, not the default.
 | Platform | Embedder | WASM host | Status |
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
-| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned `runtime.wasm`) | Published (npm `traverse-embedder-web@0.12.0`) |
-| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | In-repo package, CI-conformed; not yet on SwiftPM |
-| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | In-repo package, CI-conformed; not yet on Maven |
-| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | In-repo package, CI-conformed; not yet on NuGet |
+| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned `runtime.wasm`) | Published (npm `traverse-embedder-web@0.13.0`) |
+| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published (SwiftPM, binary xcframework release) |
+| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published (Maven Central, `com.traverse-framework:traverse-embedder`) |
+| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published (nuget.org, `TraverseEmbedder`) |
 | **AI agent** | `traverse-mcp` stdio server | via the host embedder | Published on crates.io |
 
 All five embedders run against one CI-enforced conformance suite (spec
@@ -184,13 +188,13 @@ Guides: [docs/wasm-microservice-authoring-guide.md](docs/wasm-microservice-autho
 
 ## Project state
 
-Traverse is **pre-1.0 (`v0.12.0`)** and spec-driven — every capability below is
+Traverse is **pre-1.0 (`v0.13.0`)** and spec-driven — every capability below is
 real, running, tested code.
 
 | | |
 |---|---|
-| **Runtime crates** | 10 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.12.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates; `traverse-nested-wasm-spike` is historical. |
-| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.12.0`) and Web/TypeScript (npm `traverse-embedder-web@0.12.0`) published and aligned on the same app-owned `runtime.wasm` orchestrator; Swift/iOS+macOS (wasmi), Kotlin/Android (Chicory), and .NET/Windows (Wasmtime) in `packages/` with production runtime bridges, not yet on SwiftPM/Maven/NuGet. |
+| **Runtime crates** | 10 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.13.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates; `traverse-nested-wasm-spike` is historical. |
+| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.13.0`), Web/TypeScript (npm `traverse-embedder-web@0.13.0`), Swift/iOS+macOS (wasmi, SwiftPM), Kotlin/Android (Chicory, Maven Central), and .NET/Windows (Wasmtime, nuget.org) all published and aligned on the same app-owned `runtime.wasm` orchestrator. |
 | **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` on crates.io; live catalog at [registry.traverse-framework.com](https://registry.traverse-framework.com). |
 | **Governance** | Specs keep us honest (approved, immutable, merge-gating) — not the headline. List: `jq -r '.specs[].id' specs/governance/approved-specs.json` |
 | **Quality bar** | Core crates keep a hard coverage gate; every PR runs spec-alignment and a multi-OS CI matrix. Details live in CI, not in the pitch. |
@@ -324,7 +328,8 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 
 ### Releases
 
-- [docs/releases/v0.12.0.md](docs/releases/v0.12.0.md) — current release notes
+- [docs/releases/v0.13.0.md](docs/releases/v0.13.0.md) — current release notes
+- [docs/releases/v0.12.0.md](docs/releases/v0.12.0.md) — prior release notes
 - [docs/releases/v0.11.0.md](docs/releases/v0.11.0.md) — prior release notes
 - [docs/releases/v0.10.2.md](docs/releases/v0.10.2.md) — prior release notes
 - [docs/releases/v0.10.1.md](docs/releases/v0.10.1.md) — prior release notes
