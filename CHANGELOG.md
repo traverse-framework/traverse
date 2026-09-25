@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+## v0.13.0 — 2026-09-25
+
+### Embedder app state machine and host-connector artifact wiring (Spec 139)
+
+- `app_command` envelopes (embedder-api 1.1.0) and the app state machine
+  driver, implemented across Swift, Kotlin, .NET, and web against one shared
+  cross-host golden event log (#1502).
+- Decision 99: `invoke.input_from` resolves `host_connector_result.<field>`
+  at runtime; `app validate` rejects an unreachable reference.
+
+### Target-neutral host authorities and audio-input (Spec 140)
+
+- WIT host-adapter interfaces (Decision 97), landing first for
+  `traverse.audio-input`: contracts, conformance fixtures, runtime
+  dispatch/`permission.request`, and real Apple `AVAudioEngine` (#1499) and
+  browser capture/permission adapters.
+- Generic bounded artifact staging (runtime, web, Swift) and audio analysis
+  embedder examples (#1503).
+
+### Native embedder publish pipelines
+
+- New Maven Central, nuget.org, and Swift `TraverseSwiftHost.xcframework`
+  publish workflows (#1370/#1371/#1372/#1504); Kotlin `TraverseEmbedder` at
+  embedder-api 1.1.0 parity (#1500).
+- Swift xcframework publishes under a dedicated `swift-host-v<version>`
+  release tag — this repo's immutable-releases policy means the shared
+  `v<version>` tag can never host a GitHub Release asset, and a burned tag
+  can never be reused for one even after deletion.
+
+### Security hardening (Decision 100)
+
+- `RuntimeWasmHost` fuel/memory limits; fails closed on an out-of-bounds
+  guest response (#1524).
+- Backup restore bounds decompressed archive-member size (#1523/#1531).
+
+### Web fixes
+
+- Event order under reentrant subscriptions, pinned/zero-major registry
+  version ranges, non-string IndexedDB state keys, browser planner
+  truncation reporting, and matching JSON types in browser plans
+  (#1481–#1485).
+
+See [docs/releases/v0.13.0.md](docs/releases/v0.13.0.md).
+
 ## v0.12.0 — 2026-09-16
 
 ### Exact-ref model execution (Spec 138)

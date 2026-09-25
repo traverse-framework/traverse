@@ -62,6 +62,20 @@ that tag after `main` to trigger the credential-free npm Trusted Publishing
 workflow. See [the web embedder npm publish runbook](web-embedder-npm-publish-runbook.md)
 for setup assumptions and verification.
 
+## Native artifact releases (Maven, NuGet, Swift)
+
+Maven, NuGet, and Swift each publish from a tag-triggered workflow
+(`*-embedder-publish.yml`). Maven and NuGet publish to their own registries
+with no GitHub Release object. Swift attaches the built xcframework to a
+GitHub Release, which this repo's immutable-releases policy makes
+irreversible once published: no asset can be added afterward, and a burned
+tag name can never host a release again, even after deleting it. An
+artifact-only Release must therefore never use `gh release create
+--generate-notes` — it pulls in the full product changelog since the last
+Release on any tag, making a single binary artifact look like the product
+cut. Use short, explicit `--notes` describing only that artifact instead
+(see `swift-embedder-publish.yml`).
+
 ## Post-cut documentation, READMEs, and website
 
 `bump_version.sh` only rewrites Cargo / web package version fields. After

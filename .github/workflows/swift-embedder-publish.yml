@@ -83,17 +83,37 @@ jobs:
       # established for this same reason. The asset is attached in the same
       # `gh release create` call that publishes the release, since that's
       # the only point at which an immutable release can receive one.
+      #
+      # `--generate-notes` pulls in every merged PR since the last Release
+      # object on any tag, i.e. the full v0.12.0->v0.13.0 product changelog,
+      # onto what is actually a single-artifact binary release — making it
+      # look like the Traverse product cut itself (issue #1551). Use short,
+      # explicit notes describing only this artifact instead.
       - name: Create the release with the xcframework attached
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECKSUM: ${{ steps.checksum.outputs.value }}
         run: |
           if gh release view "${SWIFT_RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release ${SWIFT_RELEASE_TAG} already exists and this repo's releases are immutable once published: its assets can't be added or replaced now. If it's missing the xcframework, delete the release and use a new swift-host-v<version> tag." >&2
             exit 1
           fi
+          notes="$(cat <<NOTES
+          Artifact-only release for the native Swift host boundary (\`TraverseSwiftHost.xcframework\`).
+
+          This is **not** the Traverse product cut. The workspace tag is \`v${TAG_VERSION}\` (crates.io / Maven / NuGet / npm). This repo enforces an immutable-releases policy that blocks a GitHub Release under that shared tag, so the xcframework ships under the dedicated \`swift-host-v*\` namespace (same pattern as \`runtime-wasm-v*\`).
+
+          Referenced by \`packages/swift/TraverseEmbedder/Package.swift\` as the \`TraverseSwiftHost\` binary target.
+
+          Built via \`scripts/build_swift_host_xcframework.sh\` for Traverse **v${TAG_VERSION}**.
+
+          Asset digest (sha256): \`${CHECKSUM}\`
+          NOTES
+          )"
           gh release create "${SWIFT_RELEASE_TAG}" target/apple/TraverseSwiftHost.xcframework.zip \
             --repo "${{ github.repository }}" \
-            --title "TraverseSwiftHost ${SWIFT_RELEASE_TAG}" --generate-notes
+            --title "TraverseSwiftHost xcframework (workspace v${TAG_VERSION})" \
+            --notes "${notes}"
 
       # Package.swift is a tracked, consumer-facing file: proposed as a PR
       # rather than pushed straight to main, since updating the binary
