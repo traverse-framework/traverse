@@ -13,7 +13,7 @@ public struct TraverseHostLimits: Sendable, Equatable {
     public init(
         maximumArtifactBytes: UInt64 = 32 * 1024 * 1024,
         maximumMemoryBytes: UInt64 = 64 * 1024 * 1024,
-        fuelPerInvocation: UInt64 = 1_000_000,
+        fuelPerInvocation: UInt64 = 50_000_000,
         maximumInputBytes: UInt64 = 1024 * 1024,
         maximumOutputBytes: UInt64 = 1024 * 1024,
         maximumQueuedEvents: UInt64 = 1024
@@ -114,11 +114,11 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
             if status == -6 {
                 output = Data(repeating: 0, count: required)
                 let retry = call(operation: operation, input: input, output: &output, required: &required)
-                guard retry >= 0 else { throw Self.error(retry) }
+                guard retry >= 0 else { throw Self.error(retry, output: output, length: required) }
                 output.count = required
                 return output
             }
-            guard status >= 0 else { throw Self.error(status) }
+            guard status >= 0 else { throw Self.error(status, output: output, length: required) }
             output.count = required
             return output
         }
@@ -145,7 +145,26 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
         }
     }
 
+    /// `traverse_swift_host_create` has no output buffer to carry a structured payload, so this
+    /// is always the generic status-to-string mapping.
     private static func error(_ status: Int32) -> TraverseBridgeError {
         TraverseBridgeError(status: status, message: String(cString: traverse_swift_host_status_message(status)))
+    }
+
+    /// The generic status-to-string mapping (`traverse_swift_host_status_message`) reflects only
+    /// the numeric status, which the bridge also uses to pass through a guest's own negative
+    /// return code (`bridge_runtime_error`) — a value that can coincidentally collide with a
+    /// reserved host status like `-1` ("invalid_handle") despite meaning something unrelated.
+    /// The host always writes a structured `{"code":...}` payload to the same output buffer for
+    /// an error result; prefer that real code when present instead of the numeric collision.
+    private static func error(_ status: Int32, output: Data, length: Int) -> TraverseBridgeError {
+        let fallbackMessage = String(cString: traverse_swift_host_status_message(status))
+        guard length > 0, length <= output.count,
+            let object = try? JSONSerialization.jsonObject(with: output.prefix(length)) as? [String: Any],
+            let code = object["code"] as? String
+        else {
+            return TraverseBridgeError(status: status, message: fallbackMessage)
+        }
+        return TraverseBridgeError(status: status, message: code, code: code)
     }
 }

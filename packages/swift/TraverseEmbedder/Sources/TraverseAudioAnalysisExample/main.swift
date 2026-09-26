@@ -70,17 +70,38 @@ let adapters = AppleAudioInputAdapters(
 _ = try embedder.registerHostConnectorAdapter(command: "audio.permission.request", adapter: adapters.requestPermission)
 _ = try embedder.registerHostConnectorAdapter(command: "audio.capture", adapter: adapters.captureAudio)
 
-func submit(_ command: String, sessionID: String?) throws -> String {
-    let result = try embedder.submit(TraverseAppCommand(command: command, payloadJSON: Data("{}".utf8), sessionID: sessionID))
-    let events = try embedder.subscribe()
+func printEvents(_ events: [TraverseRuntimeEvent]) throws {
     let rendered = events.map { event -> [String: Any] in
         ["type": event.eventType ?? "legacy", "session_id": event.sessionID as Any, "data": String(decoding: event.output ?? Data("{}".utf8), as: UTF8.self)]
     }
     print(String(decoding: try bytes(rendered), as: UTF8.self))
+}
+
+/// Submits one app command, then waits for its host-connector round trip (if any) to
+/// settle before returning. A registered adapter completes asynchronously, so submitting
+/// the next command immediately would race the still-in-flight transition and be
+/// rejected from the wrong state (#1562).
+func submit(_ command: String, payload: [String: Any] = [:], sessionID: String?) async throws -> String {
+    let result = try embedder.submit(TraverseAppCommand(command: command, payloadJSON: try bytes(payload), sessionID: sessionID))
+    var quietPolls = 0
+    while quietPolls < 5 {
+        let events = try embedder.subscribe()
+        if events.isEmpty {
+            quietPolls += 1
+        } else {
+            try printEvents(events)
+            quietPolls = 0
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
     return result.sessionID
 }
 
 // A real app would wire these commands to buttons. This executable intentionally
 // exposes no parallel UI state machine.
-let session = try submit("request_permission", sessionID: nil)
-_ = try submit("reset", sessionID: session)
+let session = try await submit("request_permission", sessionID: nil)
+_ = try await submit(
+    "capture_audio", payload: ["max_duration_ms": 5000, "max_bytes": 1_048_576], sessionID: session)
+// Valid from the resulting "recorded" state (app.manifest.json's state machine);
+// returns the app to "idle", demonstrating the full round trip.
+_ = try await submit("reset", sessionID: session)

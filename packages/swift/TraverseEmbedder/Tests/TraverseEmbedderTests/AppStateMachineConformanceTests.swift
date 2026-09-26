@@ -369,3 +369,90 @@ private final class QueuedEvents: TraverseBridgeClient, @unchecked Sendable {
     #expect(events[4].eventType == "error" && String(decoding: events[4].output ?? Data(), as: UTF8.self) == "{}")
     #expect(try embedder.subscribe().isEmpty)
 }
+
+/// Regression test for #1562: a real consumer (e.g. Callweave) constructs
+/// `WasmiHostBridgeClient`/`RuntimeTraverseEmbedder` with the plain default
+/// constructor, not the explicit `fuelPerInvocation: 50_000_000` the other
+/// tests in this file already pass. `TraverseHostLimits`'s default was
+/// `1_000_000` — enough fuel to run a toy fixture, but not the real v0.13
+/// app-state `runtime.wasm`'s `init`, which trapped with `OutOfFuel` before
+/// `audio.capture` (or any host connector) was ever invoked. This exercises
+/// the full happy-path host-connector sequence — `request_permission` →
+/// `ready` → `capture_audio` → `capturing` → capture terminal → `recorded`
+/// — entirely through defaults, so a regression of that default fuel budget
+/// fails here instead of only surfacing for downstream consumers.
+@Test func defaultHostLimitsRunTheFullHappyPathWithoutFuelExhaustion() async throws {
+    guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return }
+    let root = URL(fileURLWithPath: rootPath)
+    let runtime = try Data(contentsOf: root.appendingPathComponent("runtime/runtime.wasm"))
+    let bundle = try TraverseBundle(
+        rootURL: root,
+        runtimeWasmDigest: "sha256:" + SHA256.hash(data: runtime).map { String(format: "%02x", $0) }.joined())
+    let fixture = try loadJSON("fixture.json")
+    let headerBytes = try encode(try #require(fixture["init_header"]))
+    var initPayload = Data()
+    var length = UInt32(headerBytes.count).littleEndian
+    withUnsafeBytes(of: &length) { initPayload.append(contentsOf: $0) }
+    initPayload.append(headerBytes)
+    let scenario = try #require(
+        (fixture["scenarios"] as? [[String: Any]])?.first { $0["id"] as? String == "happy_path" })
+    let steps = try #require(scenario["steps"] as? [[String: Any]])
+    let machine = try #require((fixture["init_header"] as? [String: Any])?["state_machine"] as? [String: Any])
+    let hostCommands = Set(((machine["states"] as? [[String: Any]]) ?? []).compactMap {
+        ($0["invoke"] as? [String: Any])?["host_connector"] as? String
+    })
+
+    // No `limits:` argument: this is the same construction path a real embedder app uses.
+    let client = try WasmiHostBridgeClient(bundle: bundle)
+    let embedder = RuntimeTraverseEmbedder(client: client)
+    _ = try embedder.initialize(configJSON: initPayload)
+
+    let pending = Box<[HostConnectorResult]>(try steps.compactMap { step in
+        guard let spec = step["complete"] as? [String: Any] else { return nil }
+        return HostConnectorResult(
+            resultClass: try #require(spec["result_class"] as? String),
+            payloadJSON: try encode(spec["payload"] ?? [String: Any]()))
+    })
+    for command in hostCommands {
+        _ = try embedder.registerHostConnectorAdapter(command: command) { _ in
+            pending.value.isEmpty
+                ? HostConnectorResult(resultClass: "failed")
+                : pending.value.removeFirst()
+        }
+    }
+
+    var sessionID: String?
+    var received: [TraverseRuntimeEvent] = []
+    let submitSteps = steps.filter { $0["submit"] != nil }
+    for (index, step) in submitSteps.enumerated() {
+        let spec = try #require(step["submit"] as? [String: Any])
+        let command = try TraverseAppCommand(
+            command: try #require(spec["command"] as? String),
+            payloadJSON: try encode(spec["payload"] ?? [String: Any]()),
+            sessionID: spec["session"] is String ? sessionID : nil)
+        let result = try embedder.submit(command)
+        #expect(result.status == "accepted", "submit #\(index) (\(command.command)): \(result)")
+        sessionID = sessionID ?? result.sessionID
+        // Each host-connector wait completes asynchronously (the registered adapter
+        // runs on a background Task), and can itself trigger a further transition.
+        // Wait for the whole chain to quiesce (no new events for a few consecutive
+        // polls) before submitting the next command, or it races a transition still
+        // in flight and is rejected from the wrong state — see #1562.
+        var quietPolls = 0
+        while quietPolls < 5 {
+            let new = try embedder.subscribe()
+            if new.isEmpty {
+                quietPolls += 1
+            } else {
+                received += new
+                quietPolls = 0
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+    _ = try embedder.shutdown()
+    #expect(received.contains {
+        $0.eventType == "state_changed"
+            && String(decoding: $0.output ?? Data(), as: UTF8.self).contains("\"recorded\"")
+    }, "expected a state_changed event reaching \"recorded\"; got \(received)")
+}
