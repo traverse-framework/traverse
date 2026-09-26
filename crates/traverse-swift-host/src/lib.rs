@@ -210,7 +210,7 @@ impl HostError {
     }
     fn json(&self) -> Vec<u8> {
         format!(
-            r#"{{\"code\":\"{}\",\"message\":\"{}\",\"details\":{{}}}}"#,
+            r#"{{"code":"{}","message":"{}","details":{{}}}}"#,
             self.code, self.code
         )
         .into_bytes()
@@ -636,10 +636,25 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        ABI_VERSION, BUFFER_TOO_SMALL, INTERNAL_ERROR, OK, RESOURCE_LIMIT, TraverseSwiftHostLimits,
-        digest, execute_wasi_command, traverse_swift_host_abi_version, traverse_swift_host_create,
-        traverse_swift_host_destroy, traverse_swift_host_invoke,
+        ABI_VERSION, BUFFER_TOO_SMALL, HostError, INTERNAL_ERROR, OK, RESOURCE_LIMIT,
+        TraverseSwiftHostLimits, digest, execute_wasi_command, traverse_swift_host_abi_version,
+        traverse_swift_host_create, traverse_swift_host_destroy, traverse_swift_host_invoke,
     };
+
+    /// Regression test for #1562: `HostError::json()` previously embedded literal
+    /// backslashes before each quote (a raw-string escaping mistake), producing a
+    /// byte sequence that looked like doubly-escaped JSON but was not valid JSON at
+    /// all. Nothing on the Rust side ever parsed this output, so the bug was silent
+    /// until a native consumer (the Swift bridge) tried to surface the structured
+    /// error to distinguish a runtime failure from a host-connector adapter failure.
+    #[test]
+    fn host_error_json_is_actually_valid_json() {
+        let error = HostError::new(INTERNAL_ERROR, "bridge_trap");
+        let value: serde_json::Value =
+            serde_json::from_slice(&error.json()).expect("HostError::json() must be valid JSON");
+        assert_eq!(value["code"], "bridge_trap");
+        assert_eq!(value["message"], "bridge_trap");
+    }
 
     #[test]
     fn exposes_a_versioned_production_boundary() {
