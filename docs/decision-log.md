@@ -5383,3 +5383,102 @@ production model-signing key work is filed as `#1567` (`future`).
   the standardization is folded into the first layer, so the shipped
   model's input stays raw `pixel / 16`. Measured held-out accuracy is
   96.10% (1,727 / 1,797).
+
+## Decision 103: Production Model-Signing Key — CI-Custodied Dedicated Key, Opt-In Distribution, Overlap Rotation
+
+- **Date**: 2026-09-29
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendment to
+  0.6.0 lands with the `#1567` implementation), plus a new ADR for the
+  key-management architecture
+- **Related issues**: `#1567`; builds on Decision 101 (host-owned Ed25519
+  trust roots, `key_id`) and Decision 102 (first trained package); prior art
+  Decision 10 (Ed25519 baseline), Decision 15 (offline Sigstore
+  verification), Spec 124 (Registry `signing-key.pub`)
+- **Origin**: `/brainstorm` on `#1567`
+
+### Context
+
+Every Spec 138 package, including the trained `digits-mlp-1.0.0` (Decision
+102), is signed with the committed test-only key, so no Traverse model
+package is publishable. Decision 101 fixed the format (detached Ed25519 over
+exact manifest bytes) and trust ownership (host-configured keys; apps cannot
+add trust) but deferred custody, distribution, rotation, revocation, and the
+CI signing workflow. Both embedders' model package stores are in-memory, so
+packages are re-registered and re-verified on every host start.
+
+### Decision
+
+Project-wide rules for production model-package signing:
+
+1. **Custody: CI environment secret, gated job.** An Ed25519 private key
+   lives only in a protected GitHub Environment (`model-signing`, required
+   reviewer = the maintainer) and is used only by the signing workflow.
+2. **Dedicated key.** A model-only signing key, separate from the Registry
+   capability-artifact key (Spec 124), so a leak or rotation of one never
+   affects the other.
+3. **Distribution: committed public key + opt-in constant.** Public keys are
+   committed under `keys/model-signing/<key_id>.pub`. The Rust and web
+   embedders export them as `TRAVERSE_MODEL_SIGNING_KEYS`, which a host must
+   pass explicitly. There is no default trust, and no network key discovery.
+4. **Rotation: overlap window, re-sign on rotate.** The new key joins
+   `TRAVERSE_MODEL_SIGNING_KEYS` alongside the old one for one minor
+   release, every published package is re-signed with the new key, and the
+   old key is removed in the next minor. Packages keep a single signature
+   (no format change).
+5. **Cadence: on compromise, otherwise yearly**, tracked by a dated issue.
+6. **Revocation: emergency patch release + GitHub security advisory.** The
+   compromised key is removed from `TRAVERSE_MODEL_SIGNING_KEYS` and packages
+   are re-signed with a new key. Upgraded hosts reject old signatures with
+   `key_untrusted` on their next start. No denylist and no online revocation
+   list.
+7. **CI signing workflow: manual dispatch → signing PR.** A
+   `workflow_dispatch` job in the `model-signing` environment re-signs the
+   listed packages' exact manifest bytes and opens a PR with the updated
+   `model.sig.json` files, which merges through normal CI. The secret is
+   never exposed to PR or fork workflows.
+8. **Scope: `digits-mlp-1.0.0` is production-signed; test fixtures stay
+   test-signed.** `echo`, `classifier`, and `responder` remain test-only
+   fixtures. `scripts/fixtures/sign-model-fixtures.mjs` stops signing
+   production packages, and tests verify `digits-mlp` against
+   `TRAVERSE_MODEL_SIGNING_KEYS`.
+9. **Key ceremony: the maintainer generates it; the secret is the only
+   copy.** A documented script generates the key locally. The private key is
+   uploaded to the environment secret and the local copy securely deleted,
+   and the public key is committed. Losing the secret means a routine
+   rotation.
+10. **Governance: Spec 138 amendment (0.6.0) + a new ADR** for the
+    key-management architecture.
+
+### Alternatives Considered
+
+- Custody: maintainer offline key (rejected: a manual bottleneck and single
+  point of failure); Sigstore keyless (rejected: replaces Decision 101's
+  Ed25519 format and verifier).
+- Key scope: reuse the Registry artifact key (rejected: coupled blast radius
+  and rotation).
+- Distribution: built-in default trust (rejected: weakens host-owned trust);
+  a well-known URL pinned on first use (rejected: network-dependent and
+  hijackable on first use).
+- Rotation: multi-signature packages (rejected: a schema change in both
+  hosts); a hard cutover (rejected: breaks hosts on older embedders).
+- Cadence: only on compromise (rejected: the rotation path is never
+  exercised); every major release (rejected: tied to an unpredictable
+  cadence).
+- Revocation: a shipped denylist (rejected: new API, and it only helps hosts
+  that upgrade anyway); an online revocation list (rejected: needs network).
+- CI signing: sign on release tag as release assets (rejected: breaks
+  checked-in offline conformance); sign in PR CI (rejected: exposes the
+  secret).
+- Scope: keep all repo packages test-signed (rejected: nothing proves the
+  production path).
+- Key ceremony: an offline backup (rejected: a second copy to protect);
+  generating inside CI (rejected: needs a privileged admin token).
+- Governance: a new dedicated spec (rejected: splits the trust model);
+  amendment only (rejected: a security-architecture choice warrants an ADR).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
+accepted. `#1567` moves to Ready with this decision as its scope. The key
+generation and environment-secret upload are maintainer-only steps.
