@@ -142,6 +142,9 @@ jobs:
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # A tag push checks out a detached HEAD, so the PR base must be
+          # explicit (v0.14.0's run failed here without it).
+          base: main
           branch: release/swift-host-${{ env.TAG_VERSION }}
           commit-message: "chore(swift): point Package.swift at the ${{ env.SWIFT_RELEASE_TAG }} xcframework"
           title: "chore(swift): point Package.swift at the ${{ env.SWIFT_RELEASE_TAG }} xcframework"
