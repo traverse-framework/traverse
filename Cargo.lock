@@ -2729,9 +2729,9 @@ dependencies = [
 
 [[package]]
 name = "traverse-registry"
-version = "0.24.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc2e9a5155e1ee5b1a1b7624181682e3a05b2483f93f194a4ebe6b9adef8dd5c"
+checksum = "5bd79f51ac78acd3488491694dc9331f64e72a119003420186d4b8864d3e6d48"
 dependencies = [
  "semver",
  "serde",

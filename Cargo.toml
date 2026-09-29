@@ -23,7 +23,7 @@ version = "0.14.0"
 
 [workspace.dependencies]
 traverse-contracts = { path = "crates/traverse-contracts", version = "0.14.0" }
-traverse-registry = { version = "=0.24.0" }
+traverse-registry = { version = "=0.25.0" }
 traverse-runtime = { path = "crates/traverse-runtime", version = "0.14.0" }
 traverse-embedder = { path = "crates/traverse-embedder", version = "0.14.0" }
 traverse-mcp = { path = "crates/traverse-mcp", version = "0.14.0" }
