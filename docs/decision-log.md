@@ -5158,3 +5158,110 @@ Approved by Enrico in `/brainstorm` (2026-09-22): every recommended option
 accepted as given. Unblocks `#1523` and `#1524` once the Spec 526/518 and
 Spec 1402 amendments are drafted and approved — the two tickets can then
 move from `needs-spec` to Ready.
+
+## Decision 101: Signed Exact-Ref Model Packages — Host Trust Roots, Detached Manifest Signatures, Rights Binding
+
+- **Date**: 2026-09-28
+- **Status**: Accepted
+- **Governing specs**: amendment to `138-governed-exact-model-execution`
+- **Related issues**: `#1565` (application-scoped signed model binding for
+  browser exact-ref WASM inference); boundary with `#1460` (browser candidate
+  resolution) and `#1461` (real trained model package)
+- **Origin**: `/brainstorm` before implementing `#1565`
+
+### Context
+
+Spec 138 requires exact model packages to be verified by "Registry signature
+and content digest" before execution, but no signature field, trust-root
+design, or verification code exists in the native runtime, the browser
+embedder, or the fixtures. In today's fixtures `package_digest` equals
+`wasm_digest`, so neither the app pin nor the cache key binds the package
+manifest (license, limits). `#1565` also requires commercial-use and source
+URL rights metadata, a license-policy mismatch failure, and an explicit
+browser candidate-resolution boundary. Prior art: an earlier entry already
+set Ed25519 as the baseline signing path for published artifacts, and
+`traverse-runtime` already depends on `ed25519-dalek`.
+
+### Decision
+
+These are project-wide rules for every exact-ref model package and every
+embedder (native and browser), not Callweave- or target-specific rules.
+
+1. **Trust roots are host-owned.** The embedder is configured with a
+   host-owned set of trusted Ed25519 public keys. An application manifest can
+   never add trust; a pin MAY optionally narrow to one `key_id`.
+2. **Detached signature over exact manifest bytes.** A package is
+   `model.manifest.json` + `model.wasm` + `model.sig.json`
+   (`{alg: "ed25519", key_id, signature}`), where the signature covers the
+   exact `model.manifest.json` bytes and the manifest pins `wasm_digest`. No
+   JSON canonicalization is required.
+3. **Pin digest = SHA-256 of the manifest bytes.** The app pin `digest` and
+   the cache key are the hash of the signed manifest bytes, so one hash binds
+   manifest, rights, limits, and (transitively) WASM. `package_digest` is
+   retired from the manifest (breaking; fixtures regenerate).
+4. **Nested `rights` object, all fields required:** `license_id` (SPDX),
+   `attribution`, `redistribution`, `commercial_use`
+   (`allowed` | `restricted` | `prohibited`), `source_url`. It replaces the
+   flat `license_id` / `attribution` / `redistribution` fields and is exposed
+   read-only to the host/UI unchanged.
+5. **App declares, host checks.** Each pin declares expected
+   `rights.license_id` and `rights.commercial_use`; activation fails closed
+   when the signed package rights differ. No host license-allowlist engine.
+6. **Verify at register/activate; re-check digest at execute.** Full
+   verification (signature, trusted key, manifest digest vs pin, WASM digest,
+   rights, target, limits) runs when a package enters the host cache and on
+   activate; every execute re-hashes cached bytes against the pin.
+7. **Browser uses WebCrypto Ed25519, fail closed when missing.** No runtime
+   dependency and no host-pluggable verifier; an environment without
+   `crypto.subtle` Ed25519 fails activation with a stable reason.
+8. **Existing public codes + stable `reason`.** Failures keep
+   `model_unavailable` / `model_incompatible` and add a stable `reason` enum
+   (for example `signature_invalid`, `key_untrusted`, `digest_mismatch`,
+   `rights_mismatch`, `rights_incomplete`, `target_unsupported`,
+   `crypto_unavailable`, `candidate_unsupported`).
+9. **Browser resolution is single exact-ref only.** The browser accepts a
+   single already-selected `exact-ref.wasm-cpu` pin; mixed or Ollama
+   candidates fail closed with `candidate_unsupported`. `#1460` is the named
+   future extension.
+10. **Fixtures use a committed test-only keypair**, clearly labelled and never
+    trusted by default, so the same signed bytes are checked in native and
+    browser conformance.
+11. **`key_id` = `"ed25519:" +` lowercase hex SHA-256 of the raw 32-byte
+    public key.**
+
+### Alternatives Considered
+
+- Trust roots: app-manifest-pinned keys (rejected: the manifest author then
+  controls trust, adding little over the digest pin); Registry-published key
+  lists (rejected: still needs a bootstrap root, adds network/freshness);
+  mandatory per-pin `key_id` (kept optional instead).
+- Signature format: embedded signature over canonical JSON (rejected:
+  cross-language canonicalization mismatch risk); signing `package_digest`
+  only (rejected: does not cover rights/limits); DSSE/in-toto (rejected:
+  heavier than v1 needs).
+- Pin digest: keep WASM digest (rejected: packages with the same WASM but
+  different rights/limits collide); pair digest (rejected: a new composition
+  rule with no gain over hashing the signed manifest).
+- Rights: flat fields (rejected: no single unit for hosts); free-text
+  `commercial_use` (rejected: not deterministically enforceable); host
+  license allowlist or both (rejected: new policy surface across five host
+  languages); expose-only (rejected: drops the mismatch failure).
+- Verification timing: every execute (rejected: per-call crypto cost);
+  register only (rejected: tampered cache undetected).
+- Browser crypto: vendored pure-TS Ed25519 (rejected: first runtime
+  dependency for a security check); pluggable verifier (rejected: a host can
+  inject an always-pass verifier).
+- Errors: new top-level Spec 137 codes (rejected: breaking across hosts);
+  message-only (rejected: forces string matching).
+- Browser resolution: designing `#1460` now (rejected: separate,
+  future-scoped design).
+- Fixture keys: ephemeral test-time keys (rejected: no checked-in signed
+  artifact); Sigstore keyless (rejected: network-dependent verification).
+- `key_id`: host-assigned labels (rejected: ambiguous across hosts).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-28): every recommended option
+accepted. Implementation proceeds under `#1565` with the Spec 138 amendment
+in the same PR. The `#1565` DoD item requiring a real (non-fixture) licensed
+model stays open until `#1461` lands.
