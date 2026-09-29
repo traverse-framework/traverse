@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.14.0 — 2026-09-29
+
+Minor lockstep release with **breaking** Spec 138 exact-ref model changes. See
+[docs/releases/v0.14.0.md](docs/releases/v0.14.0.md) and
+[docs/upgrade-to-v0.14.0.md](docs/upgrade-to-v0.14.0.md).
+
 ### First trained exact-ref model (Spec 138 0.5.0, Decision 102)
 
 - `digits-mlp-1.0.0` is a 64→32→10 MLP trained on the vendored UCI Optical
