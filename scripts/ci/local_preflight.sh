@@ -94,6 +94,7 @@ bash scripts/ci/repository_checks.sh
 echo "local-preflight: RUN Rust and runtime WASM checks"
 bash scripts/ci/rust_checks.sh
 cargo check -p traverse-runtime --target wasm32-unknown-unknown --no-default-features
+bash scripts/ci/digits_mlp_guest_check.sh
 bash scripts/ci/wasm_agent_example_smoke.sh
 bash scripts/ci/event_driven_workflow_smoke.sh
 bash scripts/ci/embedder_conformance/rust_package.sh

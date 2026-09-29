@@ -145,6 +145,38 @@ test("signed classifier conformance vector matches native output byte-for-byte",
   assert.equal(Buffer.from(output).toString("hex"), VECTOR.expected.output_frame_hex);
 });
 
+test("trained digits MLP (#1461) matches the native vector and clears the accuracy floor", async () => {
+  const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-mlp.json", MODELS), "utf8"));
+  const pkg = fixture(vector.package_dir);
+  const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex] });
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  assert.equal(host.modelRights(digest).license_id, "CC-BY-4.0");
+  const run = async (frame) => {
+    const input_ref = host.io.stageModelInput(frame, 268);
+    const result = await host.execute(
+      executeArgs(vector.pin.model_id, digest, input_ref, vector.request.input_schema_ref, { max_output_bytes: 64 }),
+    );
+    return host.io.readModelOutput(result.output_ref, 64);
+  };
+  for (const testCase of vector.cases) {
+    const output = await run(Buffer.from(testCase.input_frame_hex, "hex"));
+    assert.equal(Buffer.from(output).toString("hex"), testCase.output_frame_hex);
+  }
+  // Full held-out split through the browser host: same count as native.
+  const rows = readFileSync(new URL("../datasets/uci-optdigits/optdigits.tes", MODELS), "utf8").trim().split("\n");
+  let correct = 0;
+  for (const line of rows) {
+    const values = line.split(",").map(Number);
+    const label = values.pop();
+    const output = await run(encodeGuestFrame(2, [64], new Uint8Array(Float32Array.from(values).buffer)));
+    const view = new DataView(output.buffer, output.byteOffset, output.byteLength);
+    correct += view.getFloat32(52, true) === label ? 1 : 0;
+  }
+  assert.equal(rows.length, 1797);
+  assert.ok(correct / rows.length >= 0.95);
+  assert.equal(correct, 1727);
+});
+
 test("classifier fixture computes real inference, not a pass-through", async () => {
   const { host, digest } = await registeredHost("fixture-classifier-1.0.0", "fixture.classifier");
   const features = Float32Array.from([1.0, 2.0, -1.0, 4.0]);

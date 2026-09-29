@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.4.0
+**Version**: 0.5.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -27,6 +27,14 @@ those bytes, a nested required `rights` object (adds `commercial_use` and
 single exact-ref browser resolution boundary (FR-018 through FR-023).
 Manifest `schema_version` becomes `2.0.0` (breaking; `package_digest` and the
 flat license fields are removed).
+**Amendment (2026-09-29, version 0.4.0 -> 0.5.0, approved 2026-09-29)**: Decision 102 /
+ADR-0077 / `#1461`. Adds the first trained exact-ref package and the
+provenance rules any trained package must meet: vendored, digest-pinned,
+licensed training data; a deterministic in-repo trainer; committed pinned
+weights; a guest whose checked-in `model.wasm` rebuilds byte-identically in
+CI; and a held-out accuracy floor enforced through the signed
+register → execute path on both native and browser (FR-024 through FR-027).
+Additive; no ABI or schema change.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -255,6 +263,33 @@ Success/failure on the Spec 137 result path MUST surface:
 MUST NEVER expose credentials, host paths, private URLs, or internal runtime
 details.
 
+## Trained model packages (0.5.0, Decision 102)
+
+A package that claims to be a trained model (not fixture logic) MUST ship
+reproducible provenance alongside its signed files:
+
+- **Data**: training and held-out data vendored in the repo with its
+  licence and attribution, pinned by SHA-256, and never downloaded by
+  training or CI.
+- **Trainer**: a deterministic, seeded, offline trainer in the Cargo
+  workspace. The committed weights are pinned by SHA-256 and consumed by the
+  guest at build time.
+- **Guest**: the checked-in `model.wasm` MUST rebuild byte-identically from
+  the reviewed guest source with the pinned toolchain in CI, and MUST import
+  nothing. A Rust guest's pointer-passing ABI boundary is an audited
+  `unsafe` exception (ADR-0077).
+- **Evidence**: CI enforces a declared held-out accuracy floor by running
+  the signed package through `register_package` → `model.execute`
+  natively, and the browser embedder MUST produce byte-identical output for
+  a checked-in conformance vector.
+- **Rights**: `rights` reflect the data licence (for example CC BY 4.0
+  weights carry the dataset attribution).
+
+The first such package is `fixtures/models/digits-mlp-1.0.0`: a
+64 → 32 (ReLU) → 10 MLP trained on UCI Optical Recognition of Handwritten
+Digits (CC BY 4.0) with a ≥ 95% held-out accuracy floor (96.10% measured).
+It is signed with the test-only key; production signing is `#1567`.
+
 ## Resolver and cache behavior
 
 Traverse MUST:
@@ -320,6 +355,17 @@ Traverse MUST:
 - **FR-023**: The browser embedder MUST use WebCrypto Ed25519 and fail closed
   with `crypto_unavailable` when absent, and MUST accept only single exact-ref
   `wasm-cpu` pins (`candidate_unsupported` otherwise).
+- **FR-024**: A trained model package MUST vendor its licensed training and
+  held-out data pinned by SHA-256, and MUST NOT download data during training
+  or CI.
+- **FR-025**: A trained package's weights MUST come from a deterministic,
+  seeded, in-repo trainer and be committed with a pinned SHA-256.
+- **FR-026**: A trained package's checked-in `model.wasm` MUST rebuild
+  byte-identically from its guest source in CI with the pinned toolchain,
+  and MUST import nothing.
+- **FR-027**: CI MUST enforce the package's declared held-out accuracy floor
+  through the signed register → execute path, and native and browser MUST
+  match a checked-in conformance vector byte-for-byte.
 - **FR-017**: The runtime MUST resolve an `artifact_ref` into a bounded
   capability input only through runtime-mediated staging (`stage_artifact` /
   `read_artifact`); guests MUST NOT read host storage directly and MUST NOT
@@ -349,6 +395,10 @@ Traverse MUST:
    output for the checked-in signed conformance vector.
 8. (0.4.0) Registration and execution with a cached package make zero
    network calls.
+9. (0.5.0) The trained `digits-mlp-1.0.0` package verifies, and scores
+   ≥ 95% on the 1,797-sample held-out split through signed native
+   execution. The browser matches the native conformance vector
+   byte-for-byte.
 
 ### Unhappy paths
 
@@ -377,6 +427,11 @@ Traverse MUST:
     browser candidate → `candidate_unsupported`; no WebCrypto Ed25519 →
     `crypto_unavailable`.
 18. (0.4.0) Tampered cache bytes at execute → `digest_mismatch`.
+19. (0.5.0) A trained guest given a malformed frame (wrong dtype, dims,
+    length, or a pixel value outside `0..=16`) returns `-1` and the host
+    fails closed. A per-call fuel ceiling below the measured need traps as
+    `execution_failed`. A rebuilt guest whose bytes differ from the
+    checked-in `model.wasm` fails CI.
 
 ## Compatibility and non-goals
 

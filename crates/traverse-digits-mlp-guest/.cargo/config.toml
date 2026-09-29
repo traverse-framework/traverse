@@ -1,0 +1,5 @@
+# Reproducible Spec 138 guest build (Decision 102, ADR-0077): a 16 KiB stack
+# keeps the whole module in one 64 KiB page, well inside the manifest's
+# memory ceiling, and away from the host-staged input/output windows.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16384"]

@@ -6,6 +6,9 @@ readonly swift_boundary="crates/traverse-swift-host/src/lib.rs"
 readonly runtime_wasm_boundary="crates/traverse-runtime-wasm/src/lib.rs"
 readonly expedition_boundary="crates/traverse-expedition-wasm/src/wasi_stdio.rs"
 readonly expedition_root="crates/traverse-expedition-wasm/src/main.rs"
+# ADR-0077: the trained digits MLP guest's Spec 138 ABI boundary.
+readonly digits_guest_boundary="crates/traverse-digits-mlp-guest/src/abi.rs"
+readonly digits_guest_root="crates/traverse-digits-mlp-guest/src/lib.rs"
 
 if ! grep -Fqx 'unsafe_code = "deny"' Cargo.toml; then
   echo "Workspace unsafe-code lint must remain set to deny." >&2
@@ -34,8 +37,8 @@ while IFS= read -r path; do
   unsafe_files+=("${path}")
 done < <(grep -RIl --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
 for path in "${unsafe_files[@]}"; do
-  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${expedition_boundary}" ]]; then
-    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, or ${expedition_boundary}." >&2
+  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" ]]; then
+    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${expedition_boundary}, or ${digits_guest_boundary}." >&2
     exit 1
   fi
 done
@@ -65,6 +68,32 @@ if [[ -f "${expedition_boundary}" ]]; then
   fi
   if grep -Eq 'environ_get|path_|fd_(open|close|seek|sync)|random_get|clock_|sock_|proc_raise' "${expedition_boundary}"; then
     echo "The expedition boundary imports a forbidden WASI capability." >&2
+    exit 1
+  fi
+fi
+
+# ADR-0077: the digits guest scopes `unsafe` to one `abi` module exposing one
+# `model_execute` symbol with exactly two audited slice views.
+if [[ -f "${digits_guest_boundary}" ]]; then
+  if ! grep -Fqx '#[allow(unsafe_code)]' "${digits_guest_root}"; then
+    echo "The digits guest must scope its unsafe-code allowance to the abi module." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc 'mod abi;' "${digits_guest_root}")" -ne 1 ]]; then
+    echo "The digits guest must expose exactly one abi module." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${digits_guest_boundary}")" -ne 1 ]] ||
+    [[ "$(grep -Fc 'fn model_execute(' "${digits_guest_boundary}")" -ne 1 ]]; then
+    echo "The digits guest boundary must export exactly one model_execute symbol." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Ec 'unsafe[[:space:]]*\{' "${digits_guest_boundary}")" -ne 2 ]]; then
+    echo "The digits guest boundary must contain exactly two audited unsafe blocks." >&2
+    exit 1
+  fi
+  if grep -Eq 'extern[[:space:]]*"C"[[:space:]]*\{|#\[link' "${digits_guest_boundary}"; then
+    echo "The digits guest boundary must not import host functions." >&2
     exit 1
   fi
 fi

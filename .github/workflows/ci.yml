@@ -205,6 +205,9 @@ jobs:
       - name: Check runtime wasm32 core build
         run: cargo check -p traverse-runtime --target wasm32-unknown-unknown --no-default-features
 
+      - name: Verify trained digits-mlp guest rebuilds reproducibly (Decision 102)
+        run: bash scripts/ci/digits_mlp_guest_check.sh
+
       - name: Run event-driven workflow smoke path
         run: bash scripts/ci/event_driven_workflow_smoke.sh
 

@@ -93,7 +93,52 @@ only. `source_url` is informational: identity is always the digest.
 ## Fixtures
 
 `node scripts/fixtures/sign-model-fixtures.mjs` regenerates the manifests,
-signatures, and conformance vector deterministically with the **test-only**
+signatures, and conformance vectors deterministically with the **test-only**
 key in `fixtures/models/test-signing-key.json`. No host trusts that key by
-default. The fixtures are hand-written deterministic guests. A real,
-licensed trained model package is `#1461`.
+default; production signing is `#1567`. `echo`, `classifier`, and `responder`
+are hand-written deterministic fixtures. `digits-mlp-1.0.0` is a real trained
+model (below).
+
+## Trained model: `digits-mlp-1.0.0` (Spec 138 0.5.0, Decision 102)
+
+A 64 → 32 (ReLU) → 10 MLP (2,410 `f32` weights) trained on the UCI Optical
+Recognition of Handwritten Digits dataset (CC BY 4.0). It scores **96.10%
+(1,727 / 1,797)** on the held-out test split, bit-identically in the host
+trainer, the native wasmtime host, and the browser host.
+
+| Piece | Location |
+| --- | --- |
+| Data (vendored, pinned, CC BY 4.0) | `fixtures/datasets/uci-optdigits/` (`ATTRIBUTION.md`, `SHA256SUMS`) |
+| Trainer (seeded, offline) | `crates/traverse-model-trainer` → `cargo run --release -p traverse-model-trainer` |
+| Weights (pinned) | `crates/traverse-digits-mlp-guest/weights/digits-mlp-1.0.0.bin{,.sha256}` |
+| Guest (`no_std` on wasm32, audited ABI boundary per ADR-0077) | `crates/traverse-digits-mlp-guest` (its own `[workspace]`) |
+| Signed package | `fixtures/models/digits-mlp-1.0.0/` |
+| Conformance vector | `fixtures/models/conformance/signed-digits-mlp.json` |
+
+**Frames.** The input is dtype `2` (`f32`), dims `[64]`: the 8×8 raw pixel
+counts `0..=16`, row-major. The output is dtype `3` (`f32`), dims `[11]`: 10
+logits followed by the predicted class. There's no softmax, so results are
+bit-identical across hosts. Malformed frames or out-of-range pixels return
+`-1`, and the host fails closed.
+
+**Limits** (from measured usage): about 56k fuel per inference (ceiling
+200,000), one 64 KiB memory page (ceiling 128 KiB), a 268-byte input, and a
+56-byte output (ceiling 64).
+
+**Rights.** `license_id` `CC-BY-4.0`, `commercial_use` `allowed`, and an
+`attribution` crediting E. Alpaydin & C. Kaynak (UCI,
+doi:10.24432/C50P49). A UI must show that attribution.
+
+**Retraining.** Retraining changes the weights, so every downstream artifact
+must be regenerated in order:
+
+1. `cargo run --release -p traverse-model-trainer` rewrites the weights and
+   their digest.
+2. `cargo build --release --target wasm32-unknown-unknown` in the guest
+   crate, then copy the `.wasm` to `fixtures/models/digits-mlp-1.0.0/model.wasm`.
+3. `node scripts/fixtures/sign-model-fixtures.mjs` re-signs and regenerates
+   the vector.
+4. Update the pinned accuracy count in the tests.
+
+`scripts/ci/digits_mlp_guest_check.sh` fails CI if the checked-in
+`model.wasm` no longer rebuilds byte-identically.

@@ -1,0 +1,15 @@
+[package]
+name = "traverse-model-trainer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Deterministic, offline trainer for Traverse's Spec 138 exact-ref model packages (Decision 102)."
+publish = false
+
+[dependencies]
+sha2 = "0.11"
+
+[lints]
+workspace = true

@@ -2703,6 +2703,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-model-trainer"
+version = "0.13.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "traverse-native-bridge"
 version = "0.13.0"
 dependencies = [

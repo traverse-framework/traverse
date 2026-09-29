@@ -1,0 +1,2 @@
+# Signed and digest-pinned bytes: never normalize line endings.
+* -text

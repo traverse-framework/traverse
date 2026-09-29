@@ -1908,7 +1908,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1924,7 +1924,12 @@
         "packages/web/TraverseEmbedder/",
         "specs/140-host-authority-wit-adapters/",
         "docs/adr/0076-target-neutral-host-authorities-wit-adapters.md",
-        "scripts/fixtures/"
+        "scripts/fixtures/",
+        "crates/traverse-model-trainer/",
+        "crates/traverse-digits-mlp-guest/",
+        "fixtures/datasets/",
+        "docs/adr/0077-digits-mlp-guest-abi-unsafe-boundary.md",
+        "scripts/ci/digits_mlp_guest_check.sh"
       ]
     },
     {

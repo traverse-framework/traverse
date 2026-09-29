@@ -1,0 +1,38 @@
+[package]
+name = "traverse-digits-mlp-guest"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.94"
+description = "no_std Spec 138 exact-ref guest for the trained digits MLP (Decision 102, ADR-0077)."
+publish = false
+
+# Built only for wasm32-unknown-unknown and kept out of the host workspace by
+# its own empty `[workspace]` table below. `scripts/ci/digits_mlp_guest_check.sh`
+# rebuilds `fixtures/models/digits-mlp-1.0.0/model.wasm` from this source and
+# asserts an identical SHA-256.
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
+
+# Mirrors the host workspace lints, which excluded crates do not inherit.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"

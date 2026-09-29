@@ -5370,3 +5370,16 @@ following the same path:
 Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
 accepted. `#1461` moves to Ready with this decision as its scope; the
 production model-signing key work is filed as `#1567` (`future`).
+
+**Implementation addendum (2026-09-29, approved during `#1461`):**
+- Item 5: the Spec 138 pointer-passing guest ABI requires `unsafe` to view
+  host-staged memory. Approved: keep the Rust guest, with a narrowly audited
+  `unsafe` ABI boundary (ADR-0077). The guest lives in
+  `crates/traverse-digits-mlp-guest` so `scoped_unsafe_boundary_check.sh`
+  covers it, and stays out of the host workspace via its own `[workspace]`
+  table rather than living outside `crates/`. It is `no_std` on wasm32 and
+  keeps `std` for host unit tests.
+- Item 3 (training detail): features are standardized during training and
+  the standardization is folded into the first layer, so the shipped
+  model's input stays raw `pixel / 16`. Measured held-out accuracy is
+  96.10% (1,727 / 1,797).

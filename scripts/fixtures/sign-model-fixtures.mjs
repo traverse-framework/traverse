@@ -56,6 +56,30 @@ const fixtures = [
     attribution: "Traverse Spec 045/138 bridge conformance fixture",
     input: ["schema:bridged-generate-in", "schema:bridged-generate-out"],
   },
+  // First trained model (Decision 102, #1461). model.wasm is built from
+  // crates/traverse-digits-mlp-guest; limits come from measured usage
+  // (~56k fuel per inference, one 64 KiB page, 268-byte input, 56-byte output).
+  {
+    dir: "digits-mlp-1.0.0",
+    model_id: "traverse.digits-mlp",
+    attribution:
+      "Weights trained by Traverse on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0)",
+    input: ["schema:traverse-digits-mlp-in", "schema:traverse-digits-mlp-out"],
+    rights: {
+      license_id: "CC-BY-4.0",
+      redistribution:
+        "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+      commercial_use: "allowed",
+      source_url: "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits",
+    },
+    limits: {
+      max_memory_bytes: 131072,
+      max_fuel: 200000,
+      max_input_bytes: 268,
+      max_output_bytes: 64,
+      max_execution_ms: 1000,
+    },
+  },
 ];
 
 const pins = {};
@@ -75,18 +99,22 @@ for (const fixture of fixtures) {
     output_schema_ref: fixture.input[1],
     output_schema_version: "1.0.0",
     rights: {
-      license_id: "Apache-2.0",
+      license_id: fixture.rights?.license_id ?? "Apache-2.0",
       attribution: fixture.attribution,
-      redistribution: common.redistribution,
-      commercial_use: "allowed",
-      source_url: `https://github.com/traverse-framework/Traverse/tree/main/fixtures/models/${fixture.dir}`,
+      redistribution: fixture.rights?.redistribution ?? common.redistribution,
+      commercial_use: fixture.rights?.commercial_use ?? "allowed",
+      source_url:
+        fixture.rights?.source_url ??
+        `https://github.com/traverse-framework/Traverse/tree/main/fixtures/models/${fixture.dir}`,
     },
     supported_profiles: ["wasm-cpu"],
-    max_memory_bytes: 131072,
-    max_fuel: 1000000,
-    max_input_bytes: 4096,
-    max_output_bytes: 4096,
-    max_execution_ms: 5000,
+    ...(fixture.limits ?? {
+      max_memory_bytes: 131072,
+      max_fuel: 1000000,
+      max_input_bytes: 4096,
+      max_output_bytes: 4096,
+      max_execution_ms: 5000,
+    }),
     offline_allowed: true,
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -102,7 +130,10 @@ for (const fixture of fixtures) {
     digest: sha256(manifestBytes),
     offline_allowed: true,
     target: "wasm-cpu",
-    rights: { license_id: "Apache-2.0", commercial_use: "allowed" },
+    rights: {
+      license_id: fixture.rights?.license_id ?? "Apache-2.0",
+      commercial_use: fixture.rights?.commercial_use ?? "allowed",
+    },
     key_id: keyId,
   };
 }
@@ -129,6 +160,39 @@ writeJson(join(modelsDir, "conformance", "signed-classifier.json"), {
     placement: "wasm-cpu",
     output_frame_hex: Buffer.from(output).toString("hex"),
   },
+});
+
+// Trained digits MLP vector: the first 10 held-out test rows through the
+// signed package; native and browser must match byte-for-byte.
+const digitsWasm = readFileSync(join(modelsDir, "digits-mlp-1.0.0", "model.wasm"));
+const testRows = readFileSync(join(root, "fixtures", "datasets", "uci-optdigits", "optdigits.tes"), "utf8")
+  .trim()
+  .split("\n")
+  .slice(0, 10)
+  .map((line) => line.split(",").map(Number));
+writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
+  governing_spec: "138-governed-exact-model-execution",
+  package_dir: "digits-mlp-1.0.0",
+  trusted_public_key_hex: publicKey.toString("hex"),
+  pin: pins["traverse.digits-mlp"],
+  request: {
+    policy_ref: "policy-1",
+    data_classification: "sensitive",
+    input_schema_ref: "schema:traverse-digits-mlp-in",
+    input_schema_version: "1.0.0",
+    max_output_bytes: 64,
+  },
+  cases: testRows.map((row) => {
+    const label = row.pop();
+    const frame = guestFrame(2, [64], f32Bytes(row));
+    const out = Buffer.from(runGuest(digitsWasm, frame, 64));
+    return {
+      label,
+      predicted: out.readFloatLE(52),
+      input_frame_hex: frame.toString("hex"),
+      output_frame_hex: out.toString("hex"),
+    };
+  }),
 });
 
 function writeJson(path, value) {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### First trained exact-ref model (Spec 138 0.5.0, Decision 102)
+
+- `digits-mlp-1.0.0` is a 64→32→10 MLP trained on the vendored UCI Optical
+  Digits dataset (CC BY 4.0). It scores 96.10% on the held-out split, and
+  the result is bit-identical across the trainer, native, and browser hosts.
+  It closes the last `#1565` item (#1461).
+- New `traverse-model-trainer` crate: a seeded, offline trainer with pinned
+  data and weight digests.
+- New `traverse-digits-mlp-guest` crate: a `no_std` wasm32 guest with an
+  audited ABI `unsafe` boundary (ADR-0077). A CI job
+  (`scripts/ci/digits_mlp_guest_check.sh`) proves the checked-in
+  `model.wasm` rebuilds byte-identically with zero imports.
+
 ### Signed exact-ref model packages (Spec 138 0.4.0, Decision 101)
 
 - **Breaking:** model package manifests move to schema `2.0.0`. Each package
