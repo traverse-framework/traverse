@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/model-package-signature-1.0.0.json",
+  "title": "Spec 138 detached model package signature (model.sig.json)",
+  "description": "Ed25519 signature over the exact model.manifest.json bytes (Decision 101).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "alg",
+    "key_id",
+    "signature"
+  ],
+  "properties": {
+    "alg": {
+      "const": "ed25519"
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^ed25519:[0-9a-f]{64}$",
+      "description": "ed25519: + hex SHA-256 of the raw 32-byte public key"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  }
+}

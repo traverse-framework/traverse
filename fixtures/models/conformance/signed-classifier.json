@@ -1,0 +1,29 @@
+{
+  "governing_spec": "138-governed-exact-model-execution",
+  "package_dir": "fixture-classifier-1.0.0",
+  "trusted_public_key_hex": "97002eba1e28b582a739eb48750a5f0822b2bbcb61e6bcedd2fada36b51af355",
+  "pin": {
+    "model_id": "fixture.classifier",
+    "version": "1.0.0",
+    "digest": "52d7548062b4707e14c5d627b35b8daab74d229a22353643687146a057766abd",
+    "offline_allowed": true,
+    "target": "wasm-cpu",
+    "rights": {
+      "license_id": "Apache-2.0",
+      "commercial_use": "allowed"
+    },
+    "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+  },
+  "request": {
+    "policy_ref": "policy-1",
+    "data_classification": "sensitive",
+    "input_schema_ref": "schema:fixture-classifier-in",
+    "input_schema_version": "1.0.0",
+    "max_output_bytes": 4096,
+    "input_frame_hex": "0100020104000000100000000000803f0000003f0000803ecdcccc3d"
+  },
+  "expected": {
+    "placement": "wasm-cpu",
+    "output_frame_hex": "010003010200000008000000cccc4c3e0000803f"
+  }
+}

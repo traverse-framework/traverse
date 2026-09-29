@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Signed exact-ref model packages (Spec 138 0.4.0, Decision 101)
+
+- **Breaking:** model package manifests move to schema `2.0.0`. Each package
+  now ships a detached Ed25519 `model.sig.json` over the exact manifest bytes.
+  App pins bind the manifest digest and declare `target` and `rights`.
+  `package_digest` and the flat license fields are replaced by a required
+  `rights` object that adds `commercial_use` and `source_url` (#1565).
+- Host-owned trust roots (`TrustedModelKeys` natively, `trustedPublicKeysHex`
+  in the browser). Packages enter only through `register_package` /
+  `registerPackage`. Failures carry a stable `reason`.
+- The browser `ExactModelBrowserHost` verifies with WebCrypto Ed25519 and
+  fails closed without it. It returns typed results with `model_ref`, `target`,
+  and a redacted trace, supports `AbortSignal` cancellation and timeouts, and
+  accepts only single exact-ref `wasm-cpu` pins (#1460 is the extension).
+
 ## v0.13.0 — 2026-09-25
 
 ### Embedder app state machine and host-connector artifact wiring (Spec 139)

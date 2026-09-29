@@ -1,9 +1,8 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "model_id": "fixture.responder",
   "version": "1.0.0",
   "wasm_digest": "bf04760b1937c2f2b813b6e28f2fdc6e334833c2dfadc1f7c872f3f28c341294",
-  "package_digest": "bf04760b1937c2f2b813b6e28f2fdc6e334833c2dfadc1f7c872f3f28c341294",
   "registry_ref": "registry:fixture.responder@1.0.0",
   "executable_format": "traverse-model-wasm",
   "abi_version": 1,
@@ -11,9 +10,13 @@
   "input_schema_version": "1.0.0",
   "output_schema_ref": "schema:bridged-generate-out",
   "output_schema_version": "1.0.0",
-  "license_id": "Apache-2.0",
-  "attribution": "Traverse Spec 045/138 bridge conformance fixture",
-  "redistribution": "test-only; not for production redistribution claims",
+  "rights": {
+    "license_id": "Apache-2.0",
+    "attribution": "Traverse Spec 045/138 bridge conformance fixture",
+    "redistribution": "test-only; not for production redistribution claims",
+    "commercial_use": "allowed",
+    "source_url": "https://github.com/traverse-framework/Traverse/tree/main/fixtures/models/fixture-responder-1.0.0"
+  },
   "supported_profiles": [
     "wasm-cpu"
   ],

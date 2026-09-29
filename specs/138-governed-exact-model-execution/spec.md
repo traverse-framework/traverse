@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.3.0
+**Version**: 0.4.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -17,6 +17,16 @@ Formalizes the previously descriptive "runtime resolves an `artifact_ref`
 through staging" behavior as FR-017. Spec 139 defines the app-state-machine
 `input_from` syntax (`host_connector_result.<field>`) that is its first
 caller. Unblocks `#1502` / `#1503`.
+**Amendment (2026-09-28, version 0.3.0 -> 0.4.0, approved 2026-09-28)**: Decision 101 /
+`#1565`. Defines the signed-package trust model the spec previously only
+named ("verify Registry signature"): host-owned Ed25519 trust roots, a
+detached signature over the exact manifest bytes, pin digest = SHA-256 of
+those bytes, a nested required `rights` object (adds `commercial_use` and
+`source_url`), app-declared rights checked at registration, stable failure
+`reason` values, WebCrypto-only browser verification, and an explicit
+single exact-ref browser resolution boundary (FR-018 through FR-023).
+Manifest `schema_version` becomes `2.0.0` (breaking; `package_digest` and the
+flat license fields are removed).
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -78,9 +88,18 @@ the LLM/candidate track and MUST NOT be treated as satisfying this DoD.
 
 Each `exact_model_dependencies` entry MUST include at least:
 
-- `model_id`, semantic `version`, and package/pair `digest`;
+- `model_id`, semantic `version`, and `digest` = SHA-256 of the exact signed
+  `model.manifest.json` bytes (0.4.0; this one hash binds manifest, rights,
+  limits, and transitively the WASM via `wasm_digest`);
 - Registry reference;
-- whether offline execution is allowed after provisioning.
+- whether offline execution is allowed after provisioning;
+- `target` (execution profile; `wasm-cpu` is the only conformance target);
+- `rights`: `{ license_id, commercial_use }` the signed package MUST carry;
+- optional `key_id` narrowing to one host-trusted signer. A pin can never
+  add trust.
+
+Unknown pin fields fail closed. More than one pin with the same `model_id`
+and `version` is ambiguous and fails closed.
 
 `model.execute.model_ref` MUST equal a declared pin or fail closed
 (`model_unavailable` / `model_incompatible` as appropriate).
@@ -95,7 +114,9 @@ least:
 - Registry reference;
 - executable format and model-ABI version;
 - input and output schema references + schema versions;
-- license identifier, attribution, and redistribution terms;
+- `rights` object (0.4.0), every field required and non-empty:
+  `license_id` (SPDX), `attribution`, `redistribution`,
+  `commercial_use` (`allowed` | `restricted` | `prohibited`), `source_url`;
 - supported target profiles (at least `wasm-cpu` for conformance);
 - maximum linear memory, fuel/instruction, input bytes, output bytes, and
   execution time;
@@ -103,9 +124,53 @@ least:
 - provenance / source revision and build reproducibility evidence;
 - whether offline execution is allowed after provisioning.
 
-Validation MUST reject missing license, digest, ABI, schema refs, or
-resource limits. A model URL alone is never an acceptable identity.
+Validation MUST reject missing rights, digest, ABI, schema refs, or
+resource limits, and any `schema_version` other than `2.0.0`. A model URL
+alone (including `rights.source_url`) is never an acceptable identity.
 Unknown fields fail closed.
+
+## Signed package verification (0.4.0, Decision 101)
+
+A package is `model.manifest.json` + `model.wasm` + `model.sig.json`.
+`model.sig.json` is `{ "alg": "ed25519", "key_id", "signature" }` where
+`signature` is the lowercase hex Ed25519 signature over the **exact**
+manifest bytes (no JSON canonicalization) and `key_id` is `ed25519:` +
+lowercase hex SHA-256 of the raw 32-byte public key.
+
+Trust roots are **host-owned**: the embedder is configured with the set of
+trusted public keys. Application manifests never add trust.
+
+Registration (host cache admission / activation) verifies, failing closed:
+signature document shape and algorithm; signer key is host-trusted and, when
+the pin names `key_id`, equal to it; signature over the manifest bytes;
+manifest digest equals exactly one pin; manifest parses with no unknown
+fields; identity equals the pin; manifest validation (rights, limits,
+schema version, `wasm-cpu`); pin `target` supported; pin `rights` equal the
+signed `rights.license_id` and `rights.commercial_use`; WASM bytes match
+`wasm_digest`. Every `model.execute` re-hashes the cached manifest and WASM
+bytes against the pin. All verification is local; none of it uses the
+network.
+
+Signed `rights` are exposed read-only to the host/application unchanged so a
+UI can show attribution and commercial-use terms without reimplementing
+policy.
+
+### Failure reasons
+
+Failures keep the public codes `model_unavailable` / `model_incompatible`
+and add a stable `reason`: `pin_mismatch`, `pin_ambiguous`,
+`signature_invalid`, `key_untrusted`, `digest_mismatch`, `manifest_invalid`,
+`rights_incomplete`, `rights_mismatch`, `target_unsupported`,
+`crypto_unavailable`, `candidate_unsupported`.
+
+### Browser embedder boundary
+
+The browser embedder verifies with WebCrypto Ed25519 only; an environment
+without it fails activation with `model_unavailable` /
+`crypto_unavailable` (no pure-JS fallback, no host-injected verifier). It
+accepts only single, already-selected `exact-ref` `wasm-cpu` pins; any other
+candidate kind fails closed with `candidate_unsupported`. Mixed-candidate
+(Spec 045) browser resolution is the future extension tracked by `#1460`.
 
 ## Host staging APIs (embedder surface)
 
@@ -240,6 +305,21 @@ Traverse MUST:
 - **FR-015**: A signed example model package fixture MUST be publishable.
 - **FR-016**: The `traverse.model-runtime` connector contract MUST be updated
   in the same governance approval as this spec (breaking schema bump).
+- **FR-018**: Model packages MUST carry a detached Ed25519 signature over the
+  exact manifest bytes; the pin `digest` MUST be SHA-256 of those bytes.
+- **FR-019**: Signature trust roots MUST be host-owned; a pin MAY only narrow
+  to one trusted `key_id` and MUST NOT add trust.
+- **FR-020**: Registration MUST reject a signed package whose `rights`
+  `license_id` or `commercial_use` differ from the pin (`rights_mismatch`)
+  and MUST expose signed `rights` to the host unchanged.
+- **FR-021**: Registration MUST perform the full verification in "Signed
+  package verification"; every execute MUST re-check cached bytes against the
+  pin digest (`digest_mismatch`).
+- **FR-022**: Failures MUST carry the stable `reason` values listed above in
+  addition to the public code.
+- **FR-023**: The browser embedder MUST use WebCrypto Ed25519 and fail closed
+  with `crypto_unavailable` when absent, and MUST accept only single exact-ref
+  `wasm-cpu` pins (`candidate_unsupported` otherwise).
 - **FR-017**: The runtime MUST resolve an `artifact_ref` into a bounded
   capability input only through runtime-mediated staging (`stage_artifact` /
   `read_artifact`); guests MUST NOT read host storage directly and MUST NOT
@@ -264,6 +344,12 @@ Traverse MUST:
    resolved via runtime-mediated staging, never a path, URL, or raw ref
    (FR-017).
 
+7. (0.4.0) A signed package verifies against a host-trusted key and its
+   rights are exposed to the host; native and browser produce byte-identical
+   output for the checked-in signed conformance vector.
+8. (0.4.0) Registration and execution with a cached package make zero
+   network calls.
+
 ### Unhappy paths
 
 1. Missing pin / version or digest mismatch.
@@ -282,11 +368,22 @@ Traverse MUST:
     exceeds the lesser of the artifact's staged ceiling or the capability's
     declared limit → `input_limit_exceeded` before invoke, capability never
     runs (FR-017).
+14. (0.4.0) Unsigned, malformed, wrong-algorithm, or bad signature →
+    `signature_invalid`; untrusted or pin-mismatched signer → `key_untrusted`.
+15. (0.4.0) No or ambiguous pin → `pin_mismatch` / `pin_ambiguous`.
+16. (0.4.0) Rights incomplete or differing from the pin →
+    `rights_incomplete` / `rights_mismatch`.
+17. (0.4.0) Unsupported pin target → `target_unsupported`; non-exact-ref
+    browser candidate → `candidate_unsupported`; no WebCrypto Ed25519 →
+    `crypto_unavailable`.
+18. (0.4.0) Tampered cache bytes at execute → `digest_mismatch`.
 
 ## Compatibility and non-goals
 
 Non-goals: production animal-recognition model selection; third-party weight
-licensing/download; microphone/codecs; UI; Callweave workflow composition;
+licensing/download (a real licensed model package is `#1461`); Registry key
+distribution/rotation service; key revocation after registration (takes
+effect on re-activation); microphone/codecs; UI; Callweave workflow composition;
 cloud LMM transport; training; guest `model_invoke` in v1; Spec 045
 candidate semantics.
 

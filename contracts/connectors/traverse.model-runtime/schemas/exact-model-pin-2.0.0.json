@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/exact-model-pin-2.0.0.json",
+  "title": "Spec 044/138 exact_model_dependencies pin",
+  "description": "Application-scoped exact model binding (Spec 138 0.4.0, Decision 101). A pin can never add signature trust; key_id only narrows the host-owned trust set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model_id",
+    "version",
+    "digest",
+    "offline_allowed",
+    "target",
+    "rights"
+  ],
+  "properties": {
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^(sha256:)?[0-9a-f]{64}$",
+      "description": "SHA-256 of the exact signed model.manifest.json bytes"
+    },
+    "offline_allowed": {
+      "type": "boolean"
+    },
+    "target": {
+      "const": "wasm-cpu"
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "license_id",
+        "commercial_use"
+      ],
+      "properties": {
+        "license_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commercial_use": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "restricted",
+            "prohibited"
+          ]
+        }
+      }
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^ed25519:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -3,7 +3,7 @@
 
 use crate::host_connector_dispatch::{
     HostConnectorError, HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorHostResult,
-    HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
+    HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR, ModelFailureReason,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,23 +20,76 @@ pub const PLACEMENT_WASM_CPU: &str = "wasm-cpu";
 /// Guest export name.
 pub const MODEL_EXECUTE_EXPORT: &str = "model_execute";
 
+/// Model package manifest schema version (Spec 138 0.4.0, Decision 101).
+pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
+/// The only accepted package signature algorithm.
+pub const MODEL_SIGNATURE_ALG_ED25519: &str = "ed25519";
+
+/// Commercial-use terms carried in signed package rights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommercialUse {
+    /// Commercial use permitted.
+    Allowed,
+    /// Commercial use permitted only under the license's conditions.
+    Restricted,
+    /// Commercial use not permitted.
+    Prohibited,
+}
+
+/// Signed model rights, exposed read-only to hosts/UIs unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRights {
+    /// SPDX license identifier.
+    pub license_id: String,
+    /// Attribution text a UI must be able to show.
+    pub attribution: String,
+    /// Redistribution terms summary.
+    pub redistribution: String,
+    /// Commercial-use terms.
+    pub commercial_use: CommercialUse,
+    /// Source URL of the model/weights (identity is the digest, never this URL).
+    pub source_url: String,
+}
+
+/// Rights an application pin expects the signed package to carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinRights {
+    /// Expected SPDX license identifier.
+    pub license_id: String,
+    /// Expected commercial-use terms.
+    pub commercial_use: CommercialUse,
+}
+
 /// Exact app-manifest pin (Spec 044 `exact_model_dependencies`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExactModelPin {
     /// Model identity.
     pub model_id: String,
     /// Semantic version.
     pub version: String,
-    /// Package/pair digest (hex sha256, optionally `sha256:` prefixed).
+    /// SHA-256 of the exact signed `model.manifest.json` bytes (hex,
+    /// optionally `sha256:` prefixed).
     pub digest: String,
     /// Whether offline execute is allowed when the package is cached.
     pub offline_allowed: bool,
+    /// Execution target profile (`wasm-cpu`).
+    pub target: String,
+    /// Rights the signed package must carry.
+    pub rights: PinRights,
+    /// Optional narrowing to one host-trusted signer `key_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
 }
 
-/// Versioned model package manifest (sidecar).
+/// Versioned model package manifest (sidecar `model.manifest.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelPackageManifest {
-    /// Schema version for this manifest document.
+    /// Schema version for this manifest document ([`MODEL_PACKAGE_SCHEMA_VERSION`]).
     pub schema_version: String,
     /// Model identity.
     pub model_id: String,
@@ -44,8 +97,6 @@ pub struct ModelPackageManifest {
     pub version: String,
     /// Digest of the WASM bytes (hex).
     pub wasm_digest: String,
-    /// Package/pair digest (hex).
-    pub package_digest: String,
     /// Registry reference string.
     pub registry_ref: String,
     /// Executable format (`traverse-model-wasm`).
@@ -60,12 +111,8 @@ pub struct ModelPackageManifest {
     pub output_schema_ref: String,
     /// Output schema version.
     pub output_schema_version: String,
-    /// SPDX or equivalent license id.
-    pub license_id: String,
-    /// Attribution text.
-    pub attribution: String,
-    /// Redistribution terms summary.
-    pub redistribution: String,
+    /// Signed rights metadata.
+    pub rights: ModelRights,
     /// Supported placement profiles.
     pub supported_profiles: Vec<String>,
     /// Max linear memory bytes.
@@ -82,65 +129,215 @@ pub struct ModelPackageManifest {
     pub offline_allowed: bool,
 }
 
+fn model_error(
+    code: HostConnectorErrorCode,
+    reason: ModelFailureReason,
+    message: &str,
+) -> HostConnectorError {
+    HostConnectorError {
+        code,
+        reason: Some(reason),
+        message: message.to_string(),
+    }
+}
+
+fn incompatible(reason: ModelFailureReason, message: &str) -> HostConnectorError {
+    model_error(HostConnectorErrorCode::ModelIncompatible, reason, message)
+}
+
 impl ModelPackageManifest {
     /// Fail closed if required governance fields are missing or empty.
     ///
     /// # Errors
     ///
-    /// Returns `model_incompatible` when required fields or limits are invalid.
+    /// Returns `model_incompatible` with `rights_incomplete`,
+    /// `manifest_invalid`, or `target_unsupported`.
     pub fn validate(&self) -> Result<(), HostConnectorError> {
+        let rights = [
+            self.rights.license_id.as_str(),
+            self.rights.attribution.as_str(),
+            self.rights.redistribution.as_str(),
+            self.rights.source_url.as_str(),
+        ];
+        if rights.iter().any(|value| value.trim().is_empty()) {
+            return Err(incompatible(
+                ModelFailureReason::RightsIncomplete,
+                "model manifest rights are incomplete",
+            ));
+        }
         let required = [
-            ("license_id", self.license_id.as_str()),
             ("wasm_digest", self.wasm_digest.as_str()),
-            ("package_digest", self.package_digest.as_str()),
             ("executable_format", self.executable_format.as_str()),
             ("input_schema_ref", self.input_schema_ref.as_str()),
             ("output_schema_ref", self.output_schema_ref.as_str()),
         ];
         for (name, value) in required {
             if value.trim().is_empty() {
-                return Err(HostConnectorError {
-                    code: HostConnectorErrorCode::ModelIncompatible,
-                    message: format!("model manifest missing required field {name}"),
-                });
+                return Err(incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    &format!("model manifest missing required field {name}"),
+                ));
             }
         }
-        if self.abi_version == 0
+        if self.schema_version != MODEL_PACKAGE_SCHEMA_VERSION
+            || self.abi_version == 0
             || self.max_memory_bytes == 0
             || self.max_fuel == 0
             || self.max_input_bytes == 0
             || self.max_output_bytes == 0
             || self.max_execution_ms == 0
         {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::ModelIncompatible,
-                message: "model manifest resource limits or ABI are invalid".to_string(),
-            });
+            return Err(incompatible(
+                ModelFailureReason::ManifestInvalid,
+                "model manifest schema version, resource limits, or ABI are invalid",
+            ));
         }
         if !self
             .supported_profiles
             .iter()
             .any(|profile| profile == PLACEMENT_WASM_CPU)
         {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::ModelIncompatible,
-                message: "model manifest does not support wasm-cpu".to_string(),
-            });
+            return Err(incompatible(
+                ModelFailureReason::TargetUnsupported,
+                "model manifest does not support wasm-cpu",
+            ));
         }
         Ok(())
+    }
+}
+
+/// Detached package signature (`model.sig.json`) over the exact
+/// `model.manifest.json` bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelPackageSignature {
+    /// Must be [`MODEL_SIGNATURE_ALG_ED25519`].
+    pub alg: String,
+    /// Signer key id ([`model_signing_key_id`]).
+    pub key_id: String,
+    /// Lowercase hex of the 64-byte Ed25519 signature.
+    pub signature: String,
+}
+
+/// `key_id` for an Ed25519 public key: `ed25519:` + hex SHA-256 of the raw
+/// 32-byte key (Decision 101).
+#[must_use]
+pub fn model_signing_key_id(public_key: &[u8; 32]) -> String {
+    format!("{MODEL_SIGNATURE_ALG_ED25519}:{}", digest_hex(public_key))
+}
+
+/// Sign exact manifest bytes with a raw 32-byte Ed25519 secret key
+/// (package tooling and conformance fixtures).
+#[must_use]
+pub fn sign_model_manifest(secret_key: &[u8; 32], manifest_bytes: &[u8]) -> ModelPackageSignature {
+    use ed25519_dalek::{Signer, SigningKey};
+    let signing = SigningKey::from_bytes(secret_key);
+    ModelPackageSignature {
+        alg: MODEL_SIGNATURE_ALG_ED25519.to_string(),
+        key_id: model_signing_key_id(&signing.verifying_key().to_bytes()),
+        signature: hex_encode(&signing.sign(manifest_bytes).to_bytes()),
+    }
+}
+
+/// Host-owned set of trusted Ed25519 model-signing keys. Application
+/// manifests can never add trust (Decision 101).
+#[derive(Debug, Clone, Default)]
+pub struct TrustedModelKeys {
+    keys: HashMap<String, ed25519_dalek::VerifyingKey>,
+}
+
+impl TrustedModelKeys {
+    /// Empty set (trusts nothing).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Trust a raw 32-byte Ed25519 public key; returns its `key_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_incompatible` / `key_untrusted` for a non-curve point.
+    pub fn trust(&mut self, public_key: &[u8; 32]) -> Result<String, HostConnectorError> {
+        let key = ed25519_dalek::VerifyingKey::from_bytes(public_key).map_err(|_| {
+            incompatible(
+                ModelFailureReason::KeyUntrusted,
+                "model signing public key is invalid",
+            )
+        })?;
+        let key_id = model_signing_key_id(public_key);
+        self.keys.insert(key_id.clone(), key);
+        Ok(key_id)
+    }
+
+    fn verify(
+        &self,
+        signature: &ModelPackageSignature,
+        manifest_bytes: &[u8],
+    ) -> Result<(), HostConnectorError> {
+        use ed25519_dalek::Verifier;
+        if signature.alg != MODEL_SIGNATURE_ALG_ED25519 {
+            return Err(incompatible(
+                ModelFailureReason::SignatureInvalid,
+                "unsupported model signature algorithm",
+            ));
+        }
+        let key = self.keys.get(&signature.key_id).ok_or_else(|| {
+            incompatible(
+                ModelFailureReason::KeyUntrusted,
+                "model signing key is not host-trusted",
+            )
+        })?;
+        let bytes = hex_decode(&signature.signature)
+            .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
+            .ok_or_else(|| {
+                incompatible(
+                    ModelFailureReason::SignatureInvalid,
+                    "model signature is malformed",
+                )
+            })?;
+        key.verify(
+            manifest_bytes,
+            &ed25519_dalek::Signature::from_bytes(&bytes),
+        )
+        .map_err(|_| {
+            incompatible(
+                ModelFailureReason::SignatureInvalid,
+                "model signature verification failed",
+            )
+        })
     }
 }
 
 /// Provisioned model package in the host-owned verified digest store.
 #[derive(Debug, Clone)]
 pub struct VerifiedModelPackage {
-    /// Manifest.
+    /// Parsed manifest.
     pub manifest: ModelPackageManifest,
+    /// Exact signed manifest bytes (their SHA-256 is the pin digest).
+    pub manifest_bytes: Vec<u8>,
     /// WASM bytes.
     pub wasm: Vec<u8>,
 }
 
-/// Content-addressed model package store (Spec 080-shaped; Spec 526 lifecycle later).
+impl VerifiedModelPackage {
+    /// Re-hash cached bytes against the pinned digest (every execute).
+    fn recheck(&self, pinned_digest: &str) -> Result<(), HostConnectorError> {
+        if digest_hex(&self.manifest_bytes) != normalize_digest(pinned_digest)
+            || digest_hex(&self.wasm) != normalize_digest(&self.manifest.wasm_digest)
+        {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "cached model package bytes no longer match the pinned digest",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Content-addressed model package store keyed by manifest-bytes digest
+/// (Spec 080-shaped; Spec 526 lifecycle later). Packages enter only through
+/// [`ExactModelHostConnector::register_package`].
 #[derive(Debug, Default)]
 pub struct ModelPackageStore {
     by_digest: HashMap<String, VerifiedModelPackage>,
@@ -153,29 +350,29 @@ impl ModelPackageStore {
         Self::default()
     }
 
-    /// Insert a verified package keyed by normalized package digest.
+    /// Validate and insert a package keyed by SHA-256 of its manifest bytes.
     ///
     /// # Errors
     ///
-    /// Returns `model_incompatible` when manifest validation fails or digests mismatch bytes.
-    pub fn insert_verified(
+    /// Returns `model_incompatible` when manifest validation fails or the
+    /// WASM digest does not match its bytes.
+    fn insert_verified(
         &mut self,
         package: VerifiedModelPackage,
     ) -> Result<String, HostConnectorError> {
         package.manifest.validate()?;
-        let wasm_digest = digest_hex(&package.wasm);
-        if normalize_digest(&package.manifest.wasm_digest) != wasm_digest {
-            return Err(HostConnectorError {
-                code: HostConnectorErrorCode::ModelIncompatible,
-                message: "model wasm digest mismatch".to_string(),
-            });
+        if normalize_digest(&package.manifest.wasm_digest) != digest_hex(&package.wasm) {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "model wasm digest mismatch",
+            ));
         }
-        let key = normalize_digest(&package.manifest.package_digest);
+        let key = digest_hex(&package.manifest_bytes);
         self.by_digest.insert(key.clone(), package);
         Ok(key)
     }
 
-    /// Resolve by package digest without network.
+    /// Resolve by pin digest without network.
     ///
     /// # Errors
     ///
@@ -188,8 +385,17 @@ impl ModelPackageStore {
             .get(&normalize_digest(digest))
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::ModelUnavailable,
+                reason: None,
                 message: "model package not present in verified cache".to_string(),
             })
+    }
+
+    /// Signed rights of a cached package, for host/UI display.
+    #[must_use]
+    pub fn rights(&self, digest: &str) -> Option<&ModelRights> {
+        self.by_digest
+            .get(&normalize_digest(digest))
+            .map(|package| &package.manifest.rights)
     }
 }
 
@@ -224,6 +430,7 @@ impl ModelIoStore {
         if bytes.is_empty() || bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
+                reason: None,
                 message: "staged model input empty or exceeds ceiling".to_string(),
             });
         }
@@ -243,6 +450,7 @@ impl ModelIoStore {
             .remove(input_ref)
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::InvalidInput,
+                reason: None,
                 message: "input_ref missing or already consumed".to_string(),
             })
     }
@@ -270,11 +478,13 @@ impl ModelIoStore {
             .get(output_ref)
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
+                reason: None,
                 message: "output_ref missing or expired".to_string(),
             })?;
         if bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
+                reason: None,
                 message: "output exceeds read ceiling".to_string(),
             });
         }
@@ -298,6 +508,7 @@ impl ModelIoStore {
         if bytes.is_empty() || bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
+                reason: None,
                 message: "staged artifact empty or exceeds ceiling".to_string(),
             });
         }
@@ -323,11 +534,13 @@ impl ModelIoStore {
             .get(artifact_ref)
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
+                reason: None,
                 message: "artifact_ref missing or expired".to_string(),
             })?;
         if bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
+                reason: None,
                 message: "artifact exceeds read ceiling".to_string(),
             });
         }
@@ -372,19 +585,94 @@ pub struct ExactModelHostConnector {
     pub policies: HashMap<String, ExecutionPolicy>,
     /// When true, resolve_offline-only (no provision path during execute).
     pub offline_mode: bool,
+    /// Host-owned trusted model-signing keys.
+    pub trusted_keys: TrustedModelKeys,
 }
 
 impl ExactModelHostConnector {
-    /// Construct with pins and empty stores.
+    /// Construct with pins, host-trusted signing keys, and empty stores.
     #[must_use]
-    pub fn new(pins: Vec<ExactModelPin>) -> Self {
+    pub fn new(pins: Vec<ExactModelPin>, trusted_keys: TrustedModelKeys) -> Self {
         Self {
             pins,
             packages: ModelPackageStore::new(),
             io: ModelIoStore::new(),
             policies: HashMap::new(),
             offline_mode: true,
+            trusted_keys,
         }
+    }
+
+    /// Verify and admit a signed package into the host cache (Decision 101):
+    /// signature by a host-trusted key over the exact manifest bytes, manifest
+    /// digest equal to exactly one declared pin, WASM digest, rights, target,
+    /// and limits. Returns the pin digest the package is cached under.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_unavailable` / `model_incompatible` with a stable
+    /// [`ModelFailureReason`].
+    pub fn register_package(
+        &mut self,
+        manifest_bytes: &[u8],
+        wasm: Vec<u8>,
+        signature_bytes: &[u8],
+    ) -> Result<String, HostConnectorError> {
+        let signature: ModelPackageSignature =
+            serde_json::from_slice(signature_bytes).map_err(|_| {
+                incompatible(
+                    ModelFailureReason::SignatureInvalid,
+                    "model signature document is malformed",
+                )
+            })?;
+        self.trusted_keys.verify(&signature, manifest_bytes)?;
+        let digest = digest_hex(manifest_bytes);
+        let pin = self
+            .pins
+            .iter()
+            .find(|pin| normalize_digest(&pin.digest) == digest)
+            .ok_or_else(|| {
+                model_error(
+                    HostConnectorErrorCode::ModelUnavailable,
+                    ModelFailureReason::PinMismatch,
+                    "signed package digest does not match an exact_model_dependencies pin",
+                )
+            })?;
+        self.require_unambiguous(pin)?;
+        let manifest: ModelPackageManifest =
+            serde_json::from_slice(manifest_bytes).map_err(|_| {
+                incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    "model manifest is malformed or has unknown fields",
+                )
+            })?;
+        check_pin_against_manifest(pin, &signature, &manifest)?;
+        self.packages.insert_verified(VerifiedModelPackage {
+            manifest,
+            manifest_bytes: manifest_bytes.to_vec(),
+            wasm,
+        })
+    }
+
+    /// Signed rights of a registered package, for host/UI display.
+    #[must_use]
+    pub fn model_rights(&self, digest: &str) -> Option<&ModelRights> {
+        self.packages.rights(digest)
+    }
+
+    fn require_unambiguous(&self, pin: &ExactModelPin) -> Result<(), HostConnectorError> {
+        let same_identity = self
+            .pins
+            .iter()
+            .filter(|other| other.model_id == pin.model_id && other.version == pin.version)
+            .count();
+        if same_identity > 1 {
+            return Err(incompatible(
+                ModelFailureReason::PinAmbiguous,
+                "more than one exact_model_dependencies pin names this model id and version",
+            ));
+        }
+        Ok(())
     }
 
     fn require_pin(&self, model_ref: &ModelRef) -> Result<&ExactModelPin, HostConnectorError> {
@@ -396,11 +684,58 @@ impl ExactModelHostConnector {
                     && pin.version == model_ref.version
                     && normalize_digest(&pin.digest) == digest
             })
-            .ok_or_else(|| HostConnectorError {
-                code: HostConnectorErrorCode::ModelUnavailable,
-                message: "model_ref does not match an exact_model_dependencies pin".to_string(),
+            .ok_or_else(|| {
+                model_error(
+                    HostConnectorErrorCode::ModelUnavailable,
+                    ModelFailureReason::PinMismatch,
+                    "model_ref does not match an exact_model_dependencies pin",
+                )
             })
     }
+}
+
+fn check_pin_against_manifest(
+    pin: &ExactModelPin,
+    signature: &ModelPackageSignature,
+    manifest: &ModelPackageManifest,
+) -> Result<(), HostConnectorError> {
+    if pin
+        .key_id
+        .as_ref()
+        .is_some_and(|key_id| key_id != &signature.key_id)
+    {
+        return Err(incompatible(
+            ModelFailureReason::KeyUntrusted,
+            "package signer is not the key the pin requires",
+        ));
+    }
+    if manifest.model_id != pin.model_id || manifest.version != pin.version {
+        return Err(incompatible(
+            ModelFailureReason::PinMismatch,
+            "signed package identity does not match its pin",
+        ));
+    }
+    manifest.validate()?;
+    if pin.target != PLACEMENT_WASM_CPU
+        || !manifest
+            .supported_profiles
+            .iter()
+            .any(|profile| profile == &pin.target)
+    {
+        return Err(incompatible(
+            ModelFailureReason::TargetUnsupported,
+            "pin target is not supported by the package or the wasm-cpu executor",
+        ));
+    }
+    if manifest.rights.license_id != pin.rights.license_id
+        || manifest.rights.commercial_use != pin.rights.commercial_use
+    {
+        return Err(incompatible(
+            ModelFailureReason::RightsMismatch,
+            "signed package rights differ from the rights the pin declares",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -440,12 +775,14 @@ impl HostConnectorPort for ExactModelHostConnector {
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Incompatible,
+                reason: None,
                 message: "ExactModelHostConnector only serves model.execute".to_string(),
             });
         }
         if request.cancel_requested {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Cancelled,
+                reason: None,
                 message: "model.execute cancelled before invoke".to_string(),
             });
         }
@@ -453,6 +790,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         let payload: ModelExecutePayload = serde_json::from_value(request.payload.clone())
             .map_err(|_| HostConnectorError {
                 code: HostConnectorErrorCode::InvalidInput,
+                reason: None,
                 message: "model.execute payload failed schema validation".to_string(),
             })?;
 
@@ -460,6 +798,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         if self.offline_mode && !pin.offline_allowed {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelUnavailable,
+                reason: None,
                 message: "pin does not allow offline execution".to_string(),
             });
         }
@@ -469,6 +808,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             .get(&payload.policy_ref)
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
+                reason: None,
                 message: "policy_ref is not activated".to_string(),
             })?;
         if !policy
@@ -478,16 +818,19 @@ impl HostConnectorPort for ExactModelHostConnector {
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
+                reason: None,
                 message: "data_classification denied by policy".to_string(),
             });
         }
 
         let package = self.packages.resolve_offline(&payload.model_ref.digest)?;
+        package.recheck(&payload.model_ref.digest)?;
         if package.manifest.model_id != payload.model_ref.model_id
             || package.manifest.version != payload.model_ref.version
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelIncompatible,
+                reason: None,
                 message: "cached package identity does not match model_ref".to_string(),
             });
         }
@@ -496,6 +839,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelIncompatible,
+                reason: None,
                 message: "input schema does not match model manifest".to_string(),
             });
         }
@@ -507,6 +851,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         if call_max_out == 0 {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ResourceExhausted,
+                reason: None,
                 message: "output ceiling is zero after policy intersection".to_string(),
             });
         }
@@ -515,6 +860,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         if input.len() as u64 > package.manifest.max_input_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ResourceExhausted,
+                reason: None,
                 message: "input exceeds model manifest ceiling".to_string(),
             });
         }
@@ -540,6 +886,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         if started.elapsed() > timeout {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Timeout,
+                reason: None,
                 message: "model.execute exceeded timeout".to_string(),
             });
         }
@@ -578,6 +925,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
     if bytes.len() < 8 {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
+            reason: None,
             message: "guest frame too short".to_string(),
         });
     }
@@ -585,6 +933,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
     if abi != MODEL_GUEST_ABI_VERSION {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::ModelIncompatible,
+            reason: None,
             message: "unsupported guest ABI version".to_string(),
         });
     }
@@ -594,6 +943,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
     if bytes.len() < header {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
+            reason: None,
             message: "guest frame header truncated".to_string(),
         });
     }
@@ -619,6 +969,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
     if bytes.len() < payload_end {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
+            reason: None,
             message: "guest frame payload truncated".to_string(),
         });
     }
@@ -643,6 +994,16 @@ pub fn normalize_digest(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if !value.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(value.get(index..index + 2)?, 16).ok())
+        .collect()
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -657,6 +1018,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 fn model_host_err(code: HostConnectorErrorCode, message: &str) -> HostConnectorError {
     HostConnectorError {
         code,
+        reason: None,
         message: message.to_string(),
     }
 }
@@ -790,6 +1152,7 @@ fn execute_wasm_cpu_model(
 ) -> Result<Vec<u8>, HostConnectorError> {
     Err(HostConnectorError {
         code: HostConnectorErrorCode::Unavailable,
+        reason: None,
         message: "wasm-cpu executor requires wasmtime-executor feature".to_string(),
     })
 }
@@ -882,15 +1245,61 @@ mod tests {
     };
     use serde_json::json;
 
+    const TEST_SIGNING_KEY: &str = include_str!("../../../fixtures/models/test-signing-key.json");
+
+    fn fixture_rights() -> ModelRights {
+        ModelRights {
+            license_id: "Apache-2.0".to_string(),
+            attribution: "Traverse fixture".to_string(),
+            redistribution: "test-only".to_string(),
+            commercial_use: CommercialUse::Allowed,
+            source_url: "https://example.invalid/fixture".to_string(),
+        }
+    }
+
+    /// Re-serialize the (possibly mutated) manifest so bytes and digest agree.
+    fn seal(mut package: VerifiedModelPackage) -> VerifiedModelPackage {
+        package.manifest_bytes = serde_json::to_vec(&package.manifest).expect("manifest json");
+        package
+    }
+
+    fn manifest_digest(manifest: &ModelPackageManifest) -> String {
+        digest_hex(&serde_json::to_vec(manifest).expect("manifest json"))
+    }
+
+    fn test_pin(model_id: &str, digest: &str) -> ExactModelPin {
+        ExactModelPin {
+            model_id: model_id.to_string(),
+            version: "1.0.0".to_string(),
+            digest: digest.to_string(),
+            offline_allowed: true,
+            target: PLACEMENT_WASM_CPU.to_string(),
+            rights: PinRights {
+                license_id: "Apache-2.0".to_string(),
+                commercial_use: CommercialUse::Allowed,
+            },
+            key_id: None,
+        }
+    }
+
+    fn test_key() -> ([u8; 32], [u8; 32]) {
+        let key: Value = serde_json::from_str(TEST_SIGNING_KEY).expect("key json");
+        let decode = |field: &str| -> [u8; 32] {
+            hex_decode(key[field].as_str().expect("hex"))
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .expect("32 bytes")
+        };
+        (decode("secret_key_hex"), decode("public_key_hex"))
+    }
+
     fn fixture_package() -> VerifiedModelPackage {
         let wasm = wat::parse_str(FIXTURE_ECHO_WAT).expect("wat");
         let wasm_digest = digest_hex(&wasm);
         let manifest = ModelPackageManifest {
-            schema_version: "1.0.0".to_string(),
+            schema_version: MODEL_PACKAGE_SCHEMA_VERSION.to_string(),
             model_id: "fixture.echo".to_string(),
             version: "1.0.0".to_string(),
-            wasm_digest: wasm_digest.clone(),
-            package_digest: wasm_digest.clone(),
+            wasm_digest,
             registry_ref: "registry:fixture.echo@1.0.0".to_string(),
             executable_format: "traverse-model-wasm".to_string(),
             abi_version: MODEL_GUEST_ABI_VERSION,
@@ -898,9 +1307,7 @@ mod tests {
             input_schema_version: "1.0.0".to_string(),
             output_schema_ref: "schema:fixture-out".to_string(),
             output_schema_version: "1.0.0".to_string(),
-            license_id: "Apache-2.0".to_string(),
-            attribution: "Traverse fixture".to_string(),
-            redistribution: "test-only".to_string(),
+            rights: fixture_rights(),
             supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
             max_memory_bytes: 2 * 64 * 1024,
             max_fuel: 1_000_000,
@@ -909,22 +1316,21 @@ mod tests {
             max_execution_ms: 5_000,
             offline_allowed: true,
         };
-        VerifiedModelPackage { manifest, wasm }
+        seal(VerifiedModelPackage {
+            manifest,
+            manifest_bytes: Vec::new(),
+            wasm,
+        })
     }
 
     #[test]
     fn stage_execute_read_echo_model_round_trip() {
         let package = fixture_package();
-        let digest = package.manifest.package_digest.clone();
-        let pin = ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest.clone(),
-            offline_allowed: true,
-        };
-        let mut host = ExactModelHostConnector::new(vec![pin]);
+        let digest = manifest_digest(&package.manifest);
+        let pin = test_pin("fixture.echo", &digest);
+        let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.packages
-            .insert_verified(package)
+            .insert_verified(seal(package))
             .expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
@@ -993,12 +1399,10 @@ mod tests {
 
     #[test]
     fn offline_cache_miss_is_model_unavailable() {
-        let mut host = ExactModelHostConnector::new(vec![ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: "deadbeef".to_string(),
-            offline_allowed: true,
-        }]);
+        let mut host = ExactModelHostConnector::new(
+            vec![test_pin("fixture.echo", "deadbeef")],
+            TrustedModelKeys::new(),
+        );
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -1036,16 +1440,11 @@ mod tests {
 
     fn seeded_host() -> (ExactModelHostConnector, String) {
         let package = fixture_package();
-        let digest = package.manifest.package_digest.clone();
-        let pin = ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: format!("sha256:{digest}"),
-            offline_allowed: true,
-        };
-        let mut host = ExactModelHostConnector::new(vec![pin]);
+        let digest = manifest_digest(&package.manifest);
+        let pin = test_pin("fixture.echo", &format!("sha256:{digest}"));
+        let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.packages
-            .insert_verified(package)
+            .insert_verified(seal(package))
             .expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
@@ -1096,14 +1495,43 @@ mod tests {
         good.manifest.validate().expect("valid");
 
         let mut missing_license = fixture_package();
-        missing_license.manifest.license_id.clear();
+        missing_license.manifest.rights.license_id.clear();
         assert_eq!(
             missing_license
                 .manifest
                 .validate()
                 .expect_err("license")
-                .code,
-            HostConnectorErrorCode::ModelIncompatible
+                .reason,
+            Some(ModelFailureReason::RightsIncomplete)
+        );
+
+        let mut missing_source = fixture_package();
+        missing_source.manifest.rights.source_url = " ".to_string();
+        assert_eq!(
+            missing_source
+                .manifest
+                .validate()
+                .expect_err("source")
+                .reason,
+            Some(ModelFailureReason::RightsIncomplete)
+        );
+
+        let mut missing_format = fixture_package();
+        missing_format.manifest.executable_format.clear();
+        assert_eq!(
+            missing_format
+                .manifest
+                .validate()
+                .expect_err("format")
+                .reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+
+        let mut old_schema = fixture_package();
+        old_schema.manifest.schema_version = "1.0.0".to_string();
+        assert_eq!(
+            old_schema.manifest.validate().expect_err("schema").reason,
+            Some(ModelFailureReason::ManifestInvalid)
         );
 
         let mut bad_limits = fixture_package();
@@ -1124,7 +1552,10 @@ mod tests {
         let mut mismatched = fixture_package();
         mismatched.manifest.wasm_digest = "00".repeat(32);
         assert_eq!(
-            store.insert_verified(mismatched).expect_err("digest").code,
+            store
+                .insert_verified(seal(mismatched))
+                .expect_err("digest")
+                .code,
             HostConnectorErrorCode::ModelIncompatible
         );
         assert_eq!(
@@ -1340,15 +1771,29 @@ mod tests {
             HostConnectorErrorCode::PolicyDenied
         );
 
-        let mut identity_mismatch = fixture_package();
-        identity_mismatch.manifest.model_id = "other".to_string();
-        identity_mismatch.manifest.package_digest = format!("{}aa", &digest[..62]);
-        identity_mismatch.manifest.wasm_digest = digest_hex(&identity_mismatch.wasm);
-        // Re-key under the requested digest by forging package_digest after byte digest match.
-        identity_mismatch.manifest.package_digest = digest.clone();
+        // A tampered cache entry (bytes no longer hash to the pin) fails closed
+        // on the per-execute digest re-check.
+        let mut tampered = fixture_package();
+        tampered.manifest.model_id = "other".to_string();
+        let tampered = seal(tampered);
         host.packages
-            .insert_verified(identity_mismatch)
-            .expect("overwrite");
+            .by_digest
+            .insert(normalize_digest(&digest), tampered);
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let err = host
+            .invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new(),
+            ))
+            .expect_err("tampered");
+        assert_eq!(err.code, HostConnectorErrorCode::ModelIncompatible);
+        assert_eq!(err.reason, Some(ModelFailureReason::DigestMismatch));
+        let mut tampered_wasm = fixture_package();
+        tampered_wasm.wasm = b"swapped".to_vec();
+        host.packages
+            .by_digest
+            .insert(normalize_digest(&digest), tampered_wasm);
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1356,14 +1801,16 @@ mod tests {
                 &input_ref,
                 serde_json::Map::new()
             ))
-            .expect_err("identity")
-            .code,
-            HostConnectorErrorCode::ModelIncompatible
+            .expect_err("tampered wasm")
+            .reason,
+            Some(ModelFailureReason::DigestMismatch)
         );
 
         // Restore a matching package for remaining cases.
         let restored = fixture_package();
-        host.packages.insert_verified(restored).expect("restore");
+        host.packages
+            .insert_verified(seal(restored))
+            .expect("restore");
 
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut schema = execute_request(&digest, &input_ref, serde_json::Map::new());
@@ -1429,15 +1876,11 @@ mod tests {
         let mut bad_wasm = fixture_package();
         bad_wasm.wasm = b"not-wasm".to_vec();
         bad_wasm.manifest.wasm_digest = digest_hex(&bad_wasm.wasm);
-        bad_wasm.manifest.package_digest = bad_wasm.manifest.wasm_digest.clone();
-        let bad_digest = bad_wasm.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: bad_digest.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(bad_wasm).expect("insert bad");
+        let bad_digest = manifest_digest(&bad_wasm.manifest);
+        host.pins.push(test_pin("fixture.echo", &bad_digest));
+        host.packages
+            .insert_verified(seal(bad_wasm))
+            .expect("insert bad");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1458,15 +1901,9 @@ mod tests {
         let mut pkg = fixture_package();
         pkg.wasm = missing_export;
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
-        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
-        let digest_missing = pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest_missing.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(pkg).expect("insert");
+        let digest_missing = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &digest_missing));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1487,15 +1924,9 @@ mod tests {
         let mut pkg = fixture_package();
         pkg.wasm = missing_memory;
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
-        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
-        let digest_mem = pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest_mem.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(pkg).expect("insert");
+        let digest_mem = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &digest_mem));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1520,16 +1951,10 @@ mod tests {
         let mut pkg = fixture_package();
         pkg.wasm = looper;
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
-        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
         pkg.manifest.max_fuel = 10;
-        let digest_fuel = pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest_fuel.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(pkg).expect("insert");
+        let digest_fuel = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &digest_fuel));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1553,15 +1978,9 @@ mod tests {
         let mut pkg = fixture_package();
         pkg.wasm = bad_len;
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
-        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
-        let digest_len = pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest_len.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(pkg).expect("insert");
+        let digest_len = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &digest_len));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1611,17 +2030,13 @@ mod tests {
         let mut grow_pkg = fixture_package();
         grow_pkg.wasm = wat::parse_str(grow_wat).expect("wat");
         grow_pkg.manifest.wasm_digest = digest_hex(&grow_pkg.wasm);
-        grow_pkg.manifest.package_digest = grow_pkg.manifest.wasm_digest.clone();
         grow_pkg.manifest.max_memory_bytes = 4 * 64 * 1024;
         grow_pkg.manifest.max_output_bytes = 70_000;
-        let grow_digest = grow_pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: grow_digest.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(grow_pkg).expect("insert");
+        let grow_digest = manifest_digest(&grow_pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &grow_digest));
+        host.packages
+            .insert_verified(seal(grow_pkg))
+            .expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut extras = serde_json::Map::new();
         extras.insert("max_output_bytes".to_string(), json!(70_000));
@@ -1642,17 +2057,13 @@ mod tests {
             (param i32 i32 i32 i32) (result i32) (i32.const 0)))"#;
         blocked.wasm = wat::parse_str(alt).expect("wat");
         blocked.manifest.wasm_digest = digest_hex(&blocked.wasm);
-        blocked.manifest.package_digest = blocked.manifest.wasm_digest.clone();
         blocked.manifest.max_memory_bytes = 64 * 1024;
         blocked.manifest.max_output_bytes = 70_000;
-        let blocked_digest = blocked.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: blocked_digest.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(blocked).expect("insert");
+        let blocked_digest = manifest_digest(&blocked.manifest);
+        host.pins.push(test_pin("fixture.echo", &blocked_digest));
+        host.packages
+            .insert_verified(seal(blocked))
+            .expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut extras = serde_json::Map::new();
         extras.insert("max_output_bytes".to_string(), json!(70_000));
@@ -1674,15 +2085,9 @@ mod tests {
         let mut pkg = fixture_package();
         pkg.wasm = imports;
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
-        pkg.manifest.package_digest = pkg.manifest.wasm_digest.clone();
-        let import_digest = pkg.manifest.package_digest.clone();
-        host.pins.push(ExactModelPin {
-            model_id: "fixture.echo".to_string(),
-            version: "1.0.0".to_string(),
-            digest: import_digest.clone(),
-            offline_allowed: true,
-        });
-        host.packages.insert_verified(pkg).expect("insert");
+        let import_digest = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &import_digest));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -1700,11 +2105,10 @@ mod tests {
         let wasm = wat::parse_str(FIXTURE_CLASSIFIER_WAT).expect("wat");
         let wasm_digest = digest_hex(&wasm);
         let manifest = ModelPackageManifest {
-            schema_version: "1.0.0".to_string(),
+            schema_version: MODEL_PACKAGE_SCHEMA_VERSION.to_string(),
             model_id: "fixture.classifier".to_string(),
             version: "1.0.0".to_string(),
-            wasm_digest: wasm_digest.clone(),
-            package_digest: wasm_digest.clone(),
+            wasm_digest,
             registry_ref: "registry:fixture.classifier@1.0.0".to_string(),
             executable_format: "traverse-model-wasm".to_string(),
             abi_version: MODEL_GUEST_ABI_VERSION,
@@ -1712,9 +2116,7 @@ mod tests {
             input_schema_version: "1.0.0".to_string(),
             output_schema_ref: "schema:fixture-classifier-out".to_string(),
             output_schema_version: "1.0.0".to_string(),
-            license_id: "Apache-2.0".to_string(),
-            attribution: "Traverse fixture".to_string(),
-            redistribution: "test-only".to_string(),
+            rights: fixture_rights(),
             supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
             max_memory_bytes: 2 * 64 * 1024,
             max_fuel: 1_000_000,
@@ -1723,7 +2125,11 @@ mod tests {
             max_execution_ms: 5_000,
             offline_allowed: true,
         };
-        VerifiedModelPackage { manifest, wasm }
+        seal(VerifiedModelPackage {
+            manifest,
+            manifest_bytes: Vec::new(),
+            wasm,
+        })
     }
 
     fn classifier_input_frame(features: [f32; 4]) -> Vec<u8> {
@@ -1760,16 +2166,11 @@ mod tests {
 
     fn seeded_classifier_host() -> (ExactModelHostConnector, String) {
         let package = fixture_classifier_package();
-        let digest = package.manifest.package_digest.clone();
-        let pin = ExactModelPin {
-            model_id: "fixture.classifier".to_string(),
-            version: "1.0.0".to_string(),
-            digest: digest.clone(),
-            offline_allowed: true,
-        };
-        let mut host = ExactModelHostConnector::new(vec![pin]);
+        let digest = manifest_digest(&package.manifest);
+        let pin = test_pin("fixture.classifier", &digest);
+        let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.packages
-            .insert_verified(package)
+            .insert_verified(seal(package))
             .expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
@@ -1849,5 +2250,421 @@ mod tests {
             host.invoke(&request).expect_err("undersized output").code,
             HostConnectorErrorCode::ResourceExhausted
         );
+    }
+
+    const CLASSIFIER_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/models/fixture-classifier-1.0.0"
+    );
+
+    fn read_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{CLASSIFIER_DIR}/{name}")).expect("fixture file")
+    }
+
+    fn classifier_pin(manifest_bytes: &[u8]) -> ExactModelPin {
+        test_pin("fixture.classifier", &digest_hex(manifest_bytes))
+    }
+
+    fn trusted_host(pins: Vec<ExactModelPin>) -> ExactModelHostConnector {
+        let (_, public) = test_key();
+        let mut keys = TrustedModelKeys::new();
+        keys.trust(&public).expect("trust");
+        ExactModelHostConnector::new(pins, keys)
+    }
+
+    fn register_err(
+        host: &mut ExactModelHostConnector,
+        manifest: &[u8],
+        wasm: Vec<u8>,
+        sig: &[u8],
+    ) -> (HostConnectorErrorCode, Option<ModelFailureReason>) {
+        let err = host
+            .register_package(manifest, wasm, sig)
+            .expect_err("register must fail closed");
+        (err.code, err.reason)
+    }
+
+    fn signed(manifest: &[u8]) -> Vec<u8> {
+        let (secret, _) = test_key();
+        serde_json::to_vec(&sign_model_manifest(&secret, manifest)).expect("sig json")
+    }
+
+    #[test]
+    fn checked_in_signed_fixture_registers_and_exposes_rights() {
+        let manifest = read_fixture("model.manifest.json");
+        let pin = classifier_pin(&manifest);
+        let mut host = trusted_host(vec![pin.clone()]);
+        let (_, public) = test_key();
+        let key: Value = serde_json::from_str(TEST_SIGNING_KEY).expect("key json");
+        assert_eq!(key["key_id"], json!(model_signing_key_id(&public)));
+        let digest = host
+            .register_package(
+                &manifest,
+                read_fixture("model.wasm"),
+                &read_fixture("model.sig.json"),
+            )
+            .expect("checked-in signed fixture must verify");
+        assert_eq!(digest, normalize_digest(&pin.digest));
+        let rights = host.model_rights(&digest).expect("rights");
+        assert_eq!(rights.license_id, "Apache-2.0");
+        assert_eq!(rights.commercial_use, CommercialUse::Allowed);
+        assert!(rights.source_url.starts_with("https://"));
+        assert!(host.model_rights("missing").is_none());
+    }
+
+    #[test]
+    fn signed_conformance_vector_matches_native_execution() {
+        let vector: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/models/conformance/signed-classifier.json"
+        ))
+        .expect("vector json");
+        let pin: ExactModelPin = serde_json::from_value(vector["pin"].clone()).expect("pin");
+        let public = hex_decode(vector["trusted_public_key_hex"].as_str().expect("key"))
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .expect("public key");
+        let mut keys = TrustedModelKeys::new();
+        keys.trust(&public).expect("trust");
+        let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+        host.policies.insert(
+            "policy-1".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-1".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+            },
+        );
+        host.register_package(
+            &read_fixture("model.manifest.json"),
+            read_fixture("model.wasm"),
+            &read_fixture("model.sig.json"),
+        )
+        .expect("register");
+        let request = &vector["request"];
+        let input = hex_decode(request["input_frame_hex"].as_str().expect("input")).expect("hex");
+        let input_ref = host.io.stage_model_input(&input, 4096).expect("stage");
+        let result = host
+            .invoke(&classifier_execute_request(&pin.digest, &input_ref))
+            .expect("execute");
+        let output = host
+            .io
+            .read_model_output(result.artifact_ref.as_deref().expect("output_ref"), 4096)
+            .expect("read");
+        assert_eq!(
+            hex_encode(&output),
+            vector["expected"]["output_frame_hex"]
+                .as_str()
+                .expect("expected")
+        );
+    }
+
+    #[test]
+    fn register_rejects_bad_signatures_and_untrusted_keys() {
+        use HostConnectorErrorCode::ModelIncompatible as Inc;
+        use ModelFailureReason as R;
+        let manifest = read_fixture("model.manifest.json");
+        let wasm = read_fixture("model.wasm");
+        let sig = read_fixture("model.sig.json");
+        let pin = classifier_pin(&manifest);
+
+        // No trusted keys at all.
+        let mut untrusting =
+            ExactModelHostConnector::new(vec![pin.clone()], TrustedModelKeys::new());
+        assert_eq!(
+            register_err(&mut untrusting, &manifest, wasm.clone(), &sig),
+            (Inc, Some(R::KeyUntrusted))
+        );
+
+        let mut host = trusted_host(vec![pin.clone()]);
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), b"not json"),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        let mut doc: ModelPackageSignature = serde_json::from_slice(&sig).expect("sig");
+        let original = doc.clone();
+        doc.alg = "rsa".to_string();
+        let bad_alg = serde_json::to_vec(&doc).expect("json");
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), &bad_alg),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        doc = original.clone();
+        doc.signature = "zz".to_string();
+        let malformed = serde_json::to_vec(&doc).expect("json");
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), &malformed),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        doc.signature = "abc".to_string();
+        let odd = serde_json::to_vec(&doc).expect("json");
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), &odd),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        doc = original.clone();
+        doc.signature = "00".repeat(64);
+        let wrong = serde_json::to_vec(&doc).expect("json");
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), &wrong),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        // Signature over different bytes than the manifest presented.
+        let mut tampered = manifest.clone();
+        tampered.push(b'\n');
+        assert_eq!(
+            register_err(&mut host, &tampered, wasm.clone(), &sig),
+            (Inc, Some(R::SignatureInvalid))
+        );
+        // Signed by a key the host does not trust.
+        let other = sign_model_manifest(&[7_u8; 32], &manifest);
+        assert_eq!(
+            register_err(
+                &mut host,
+                &manifest,
+                wasm.clone(),
+                &serde_json::to_vec(&other).expect("json")
+            ),
+            (Inc, Some(R::KeyUntrusted))
+        );
+        // Pin narrows to a different trusted key id.
+        let mut narrowed = pin.clone();
+        narrowed.key_id = Some("ed25519:other".to_string());
+        let mut host = trusted_host(vec![narrowed]);
+        assert_eq!(
+            register_err(&mut host, &manifest, wasm.clone(), &sig),
+            (Inc, Some(R::KeyUntrusted))
+        );
+        let mut exact = pin;
+        exact.key_id = Some(original.key_id);
+        let mut host = trusted_host(vec![exact]);
+        host.register_package(&manifest, wasm, &sig)
+            .expect("matching key_id narrows successfully");
+
+        // Find a 32-byte string that is not a valid curve point encoding.
+        let mut keys = TrustedModelKeys::new();
+        let rejected = (0_u8..=255)
+            .map(|byte| keys.trust(&[byte; 32]))
+            .find_map(Result::err)
+            .expect("some constant byte string is not a curve point");
+        assert_eq!(rejected.reason, Some(R::KeyUntrusted));
+    }
+
+    #[test]
+    fn register_rejects_pin_digest_rights_and_target_mismatches() {
+        use HostConnectorErrorCode::{ModelIncompatible as Inc, ModelUnavailable as Unav};
+        use ModelFailureReason as R;
+        let manifest_bytes = read_fixture("model.manifest.json");
+        let wasm = read_fixture("model.wasm");
+        let sig = read_fixture("model.sig.json");
+        let pin = classifier_pin(&manifest_bytes);
+
+        // Missing pin.
+        let mut host = trusted_host(vec![test_pin("fixture.classifier", "00")]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Unav, Some(R::PinMismatch))
+        );
+        // Ambiguous pins for the same identity.
+        let mut host = trusted_host(vec![pin.clone(), test_pin("fixture.classifier", "11")]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Inc, Some(R::PinAmbiguous))
+        );
+        // Pin identity differs from signed manifest identity.
+        let mut renamed = pin.clone();
+        renamed.model_id = "fixture.other".to_string();
+        let mut host = trusted_host(vec![renamed]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Inc, Some(R::PinMismatch))
+        );
+        // Unsupported pin target.
+        let mut gpu = pin.clone();
+        gpu.target = "gpu".to_string();
+        let mut host = trusted_host(vec![gpu]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Inc, Some(R::TargetUnsupported))
+        );
+        // License and commercial-use mismatches.
+        let mut license = pin.clone();
+        license.rights.license_id = "MIT".to_string();
+        let mut host = trusted_host(vec![license]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Inc, Some(R::RightsMismatch))
+        );
+        let mut commercial = pin.clone();
+        commercial.rights.commercial_use = CommercialUse::Prohibited;
+        let mut host = trusted_host(vec![commercial]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, wasm.clone(), &sig),
+            (Inc, Some(R::RightsMismatch))
+        );
+        // WASM bytes do not match the signed wasm_digest.
+        let mut host = trusted_host(vec![pin]);
+        assert_eq!(
+            register_err(&mut host, &manifest_bytes, b"other".to_vec(), &sig),
+            (Inc, Some(R::DigestMismatch))
+        );
+
+        // Correctly signed but malformed / incomplete manifests.
+        let manifest: Value = serde_json::from_slice(&manifest_bytes).expect("manifest");
+        let resign = |value: &Value| -> (Vec<u8>, Vec<u8>, ExactModelPin) {
+            let bytes = serde_json::to_vec(value).expect("json");
+            let sig = signed(&bytes);
+            let pin = classifier_pin(&bytes);
+            (bytes, sig, pin)
+        };
+        let mut unknown = manifest.clone();
+        unknown["package_digest"] = json!("legacy");
+        let (bytes, sig, pin) = resign(&unknown);
+        let mut host = trusted_host(vec![pin]);
+        assert_eq!(
+            register_err(&mut host, &bytes, wasm.clone(), &sig),
+            (Inc, Some(R::ManifestInvalid))
+        );
+        let mut no_rights = manifest.clone();
+        no_rights["rights"]["attribution"] = json!("");
+        let (bytes, sig, pin) = resign(&no_rights);
+        let mut host = trusted_host(vec![pin]);
+        assert_eq!(
+            register_err(&mut host, &bytes, wasm.clone(), &sig),
+            (Inc, Some(R::RightsIncomplete))
+        );
+        let mut no_cpu = manifest;
+        no_cpu["supported_profiles"] = json!(["gpu"]);
+        let (bytes, sig, pin) = resign(&no_cpu);
+        let mut host = trusted_host(vec![pin]);
+        assert_eq!(
+            register_err(&mut host, &bytes, wasm, &sig),
+            (Inc, Some(R::TargetUnsupported))
+        );
+    }
+
+    #[test]
+    fn identity_mismatch_behind_a_matching_digest_fails_closed() {
+        let mut other = fixture_package();
+        other.manifest.model_id = "other".to_string();
+        let digest = manifest_digest(&other.manifest);
+        let mut host = ExactModelHostConnector::new(
+            vec![test_pin("fixture.echo", &digest)],
+            TrustedModelKeys::new(),
+        );
+        host.packages.insert_verified(seal(other)).expect("insert");
+        host.policies.insert(
+            "policy-1".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-1".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+            },
+        );
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        assert_eq!(
+            host.invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new()
+            ))
+            .expect_err("identity")
+            .code,
+            HostConnectorErrorCode::ModelIncompatible
+        );
+    }
+
+    #[test]
+    fn failure_reasons_have_stable_wire_names() {
+        use ModelFailureReason as R;
+        let all = [
+            (R::PinMismatch, "pin_mismatch"),
+            (R::PinAmbiguous, "pin_ambiguous"),
+            (R::SignatureInvalid, "signature_invalid"),
+            (R::KeyUntrusted, "key_untrusted"),
+            (R::DigestMismatch, "digest_mismatch"),
+            (R::ManifestInvalid, "manifest_invalid"),
+            (R::RightsIncomplete, "rights_incomplete"),
+            (R::RightsMismatch, "rights_mismatch"),
+            (R::TargetUnsupported, "target_unsupported"),
+            (R::CryptoUnavailable, "crypto_unavailable"),
+            (R::CandidateUnsupported, "candidate_unsupported"),
+        ];
+        for (reason, name) in all {
+            assert_eq!(reason.as_str(), name);
+            assert_eq!(serde_json::to_value(reason).expect("json"), json!(name));
+        }
+        let err = HostConnectorError {
+            code: HostConnectorErrorCode::Timeout,
+            reason: None,
+            message: "x".to_string(),
+        };
+        assert!(
+            serde_json::to_value(&err)
+                .expect("json")
+                .get("reason")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn versioned_schemas_match_the_checked_in_signed_fixtures() {
+        fn keys(value: &Value) -> Vec<String> {
+            let mut keys: Vec<String> =
+                value.as_object().expect("object").keys().cloned().collect();
+            keys.sort();
+            keys
+        }
+        fn schema_keys(schema: &str, field: &str) -> Vec<String> {
+            let schema: Value = serde_json::from_str(schema).expect("schema json");
+            let mut keys: Vec<String> = match field {
+                "required" => schema["required"]
+                    .as_array()
+                    .expect("required")
+                    .iter()
+                    .map(|key| key.as_str().expect("key").to_string())
+                    .collect(),
+                _ => schema["properties"]
+                    .as_object()
+                    .expect("properties")
+                    .keys()
+                    .cloned()
+                    .collect(),
+            };
+            keys.sort();
+            keys
+        }
+        let manifest_schema = include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-package-manifest-2.0.0.json"
+        );
+        let signature_schema = include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-package-signature-1.0.0.json"
+        );
+        let pin_schema = include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/exact-model-pin-2.0.0.json"
+        );
+        let manifest: Value =
+            serde_json::from_slice(&read_fixture("model.manifest.json")).expect("manifest");
+        let signature: Value =
+            serde_json::from_slice(&read_fixture("model.sig.json")).expect("signature");
+        let pin = serde_json::to_value(classifier_pin(&read_fixture("model.manifest.json")))
+            .expect("pin");
+        for (schema, document) in [(manifest_schema, &manifest), (signature_schema, &signature)] {
+            assert_eq!(schema_keys(schema, "required"), keys(document));
+            assert_eq!(schema_keys(schema, "properties"), keys(document));
+        }
+        let manifest_schema_value: Value = serde_json::from_str(manifest_schema).expect("schema");
+        assert_eq!(
+            manifest_schema_value["properties"]["schema_version"]["const"],
+            json!(MODEL_PACKAGE_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            keys(&manifest_schema_value["$defs"]["rights"]["properties"]),
+            keys(&manifest["rights"])
+        );
+        // `key_id` is the only optional pin field (skipped when `None`).
+        assert_eq!(schema_keys(pin_schema, "required"), keys(&pin));
+        let mut with_key = schema_keys(pin_schema, "required");
+        with_key.push("key_id".to_string());
+        with_key.sort();
+        assert_eq!(schema_keys(pin_schema, "properties"), with_key);
     }
 }

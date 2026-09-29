@@ -219,6 +219,17 @@ export {
   ModelIoStore,
   MODEL_EXECUTE_EXPORT,
   MODEL_GUEST_ABI_VERSION,
+  MODEL_PACKAGE_SCHEMA_VERSION,
   encodeGuestFrame,
+  modelSigningKeyId,
 } from "./exactModel.js";
-export type { ExactModelPin, ModelPackageManifest } from "./exactModel.js";
+export type {
+  CommercialUse,
+  ExactModelBrowserHostOptions,
+  ExactModelExecution,
+  ExactModelPin,
+  ModelFailureReason,
+  ModelPackageManifest,
+  ModelPackageSignature,
+  ModelRights,
+} from "./exactModel.js";

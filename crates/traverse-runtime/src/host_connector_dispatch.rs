@@ -131,8 +131,62 @@ impl HostConnectorErrorCode {
 pub struct HostConnectorError {
     /// Stable public code.
     pub code: HostConnectorErrorCode,
+    /// Stable machine-readable cause refining `code` (Spec 138 0.4.0,
+    /// Decision 101). Absent when `code` alone is the whole story.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ModelFailureReason>,
     /// Explanation without host-private data.
     pub message: String,
+}
+
+/// Stable `reason` values refining `model_unavailable` / `model_incompatible`
+/// (Spec 138 0.4.0, Decision 101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFailureReason {
+    /// No declared pin matches the package or `model_ref`.
+    PinMismatch,
+    /// More than one declared pin names the same model id and version.
+    PinAmbiguous,
+    /// Signature document malformed, wrong algorithm, or failed verification.
+    SignatureInvalid,
+    /// Signing key is not host-trusted or not the key the pin requires.
+    KeyUntrusted,
+    /// Manifest or WASM bytes do not match the pinned digests.
+    DigestMismatch,
+    /// Manifest is malformed, has unknown fields, or has invalid limits/ABI.
+    ManifestInvalid,
+    /// Required rights metadata is missing or empty.
+    RightsIncomplete,
+    /// Signed package rights differ from the rights the pin declares.
+    RightsMismatch,
+    /// Pin target is not supported by the package or this executor.
+    TargetUnsupported,
+    /// The environment cannot verify Ed25519 signatures.
+    CryptoUnavailable,
+    /// Candidate kind is not resolvable on this embedder (browser: single
+    /// exact-ref `wasm-cpu` only).
+    CandidateUnsupported,
+}
+
+impl ModelFailureReason {
+    /// Stable `snake_case` wire reason.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PinMismatch => "pin_mismatch",
+            Self::PinAmbiguous => "pin_ambiguous",
+            Self::SignatureInvalid => "signature_invalid",
+            Self::KeyUntrusted => "key_untrusted",
+            Self::DigestMismatch => "digest_mismatch",
+            Self::ManifestInvalid => "manifest_invalid",
+            Self::RightsIncomplete => "rights_incomplete",
+            Self::RightsMismatch => "rights_mismatch",
+            Self::TargetUnsupported => "target_unsupported",
+            Self::CryptoUnavailable => "crypto_unavailable",
+            Self::CandidateUnsupported => "candidate_unsupported",
+        }
+    }
 }
 
 impl fmt::Display for HostConnectorError {
@@ -739,6 +793,7 @@ fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), Ho
     if command.kind != COMMAND_KIND || command.schema_version != SCHEMA_VERSION {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
+            reason: None,
             message: "command kind and schema_version must be host_connector_command/1.0.0"
                 .to_string(),
         });
@@ -751,12 +806,14 @@ fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), Ho
     {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
+            reason: None,
             message: "command identity fields must be non-empty".to_string(),
         });
     }
     if payload_bytes(&command.payload) > MAX_PAYLOAD_BYTES {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InputLimitExceeded,
+            reason: None,
             message: "command payload exceeds the published byte ceiling".to_string(),
         });
     }
@@ -804,6 +861,7 @@ fn resolve_route(
             } else {
                 Err(HostConnectorError {
                     code: HostConnectorErrorCode::Incompatible,
+                    reason: None,
                     message: "command route is not a supported host connector operation"
                         .to_string(),
                 })
@@ -811,10 +869,12 @@ fn resolve_route(
         }
         [] => Err(HostConnectorError {
             code: HostConnectorErrorCode::UnknownCommand,
+            reason: None,
             message: "command is not declared by the app state machine".to_string(),
         }),
         _ => Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
+            reason: None,
             message: "command is routed to more than one host connector operation".to_string(),
         }),
     }
@@ -834,18 +894,21 @@ fn resolve_binding(
             if binding.binding_id.trim().is_empty() {
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Unbound,
+                    reason: None,
                     message: "connector binding is missing a binding id".to_string(),
                 });
             }
             if binding.config_ref.trim().is_empty() {
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Unconfigured,
+                    reason: None,
                     message: "connector binding is missing a configuration reference".to_string(),
                 });
             }
             if binding.version.trim().is_empty() {
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Incompatible,
+                    reason: None,
                     message: "connector binding version is incompatible".to_string(),
                 });
             }
@@ -853,10 +916,12 @@ fn resolve_binding(
         }
         [] => Err(HostConnectorError {
             code: HostConnectorErrorCode::Unbound,
+            reason: None,
             message: "application manifest has no binding for the routed connector".to_string(),
         }),
         _ => Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
+            reason: None,
             message: "application manifest declares duplicate bindings for the connector"
                 .to_string(),
         }),
@@ -872,6 +937,7 @@ fn confirm_target(
     if binding.placement_targets.is_empty() {
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::TargetIncompatible,
+            reason: None,
             message: "activated binding does not declare any supported target families".to_string(),
         });
     }
@@ -883,6 +949,7 @@ fn confirm_target(
     } else {
         Err(HostConnectorError {
             code: HostConnectorErrorCode::TargetIncompatible,
+            reason: None,
             message: "activated binding does not claim the requested target family".to_string(),
         })
     }
@@ -953,6 +1020,7 @@ fn confirm_operation_payload(
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Incompatible,
+                reason: None,
                 message: "model.execute payload must not include provider authority fields"
                     .to_string(),
             });
@@ -976,6 +1044,7 @@ fn required_u64(
 fn limit_error(message: &str) -> HostConnectorError {
     HostConnectorError {
         code: HostConnectorErrorCode::InputLimitExceeded,
+        reason: None,
         message: message.to_string(),
     }
 }
@@ -1062,6 +1131,7 @@ fn fail(
 ) -> Box<HostConnectorFailure> {
     let error = HostConnectorError {
         code,
+        reason: None,
         message: message.into(),
     };
     let event_name = if code == HostConnectorErrorCode::Cancelled {

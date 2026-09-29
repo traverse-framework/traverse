@@ -16,8 +16,11 @@ pub use capability_metadata::{
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,
 };
 pub use exact_model::{
-    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelIoStore, ModelPackageManifest,
-    ModelPackageStore, PLACEMENT_WASM_CPU, VerifiedModelPackage, digest_hex, encode_guest_frame,
+    CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy,
+    MODEL_PACKAGE_SCHEMA_VERSION, ModelIoStore, ModelPackageManifest, ModelPackageSignature,
+    ModelPackageStore, ModelRights, PLACEMENT_WASM_CPU, PinRights, TrustedModelKeys,
+    VerifiedModelPackage, digest_hex, encode_guest_frame, model_signing_key_id,
+    sign_model_manifest,
 };
 pub mod data_store;
 /// Durable P3 checkpoint, recovery, wait, retry, and compensation controls.

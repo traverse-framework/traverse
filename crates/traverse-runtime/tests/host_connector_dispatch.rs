@@ -87,18 +87,21 @@ impl HostConnectorPort for FakeHostConnector {
         if self.cancel_on_invoke {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Cancelled,
+                reason: None,
                 message: "host observed cancellation".to_string(),
             });
         }
         if self.deny_policy {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
+                reason: None,
                 message: "host policy denied the connector operation".to_string(),
             });
         }
         if self.unavailable {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
+                reason: None,
                 message: "host connector is unavailable".to_string(),
             });
         }

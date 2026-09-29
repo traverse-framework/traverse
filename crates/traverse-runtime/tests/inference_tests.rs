@@ -19,8 +19,9 @@ use traverse_registry::{
     ModelSelectionPolicy, RegistryProvenance, RegistryScope, SourceKind, SourceReference,
 };
 use traverse_runtime::exact_model::{
-    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, FIXTURE_ECHO_WAT,
-    ModelPackageManifest, PLACEMENT_WASM_CPU, VerifiedModelPackage, digest_hex,
+    CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, FIXTURE_ECHO_WAT,
+    MODEL_PACKAGE_SCHEMA_VERSION, ModelPackageManifest, ModelRights, PLACEMENT_WASM_CPU, PinRights,
+    TrustedModelKeys, digest_hex, sign_model_manifest,
 };
 use traverse_runtime::inference::{
     GovernedModelExecutionError, GovernedModelExecutionErrorCode, GovernedModelExecutionRequest,
@@ -1117,42 +1118,43 @@ fn bridge_fails_closed_when_no_pin_matches_referenced_candidate() {
     );
 }
 
-fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
-    let wasm = wat::parse_str(FIXTURE_ECHO_WAT).expect("wat should parse");
-    let digest = digest_hex(&wasm);
-    let manifest = ModelPackageManifest {
-        schema_version: "1.0.0".to_string(),
-        model_id: "fixture.echo".to_string(),
-        version: "1.0.0".to_string(),
-        wasm_digest: digest.clone(),
-        package_digest: digest.clone(),
-        registry_ref: "registry:fixture.echo@1.0.0".to_string(),
-        executable_format: "traverse-model-wasm".to_string(),
-        abi_version: 1,
-        input_schema_ref: "schema:bridged-generate-in".to_string(),
-        input_schema_version: "1.0.0".to_string(),
-        output_schema_ref: "schema:bridged-generate-out".to_string(),
-        output_schema_version: "1.0.0".to_string(),
-        license_id: "Apache-2.0".to_string(),
-        attribution: "Traverse test fixture".to_string(),
-        redistribution: "test-only".to_string(),
-        supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
-        max_memory_bytes: 2 * 64 * 1024,
-        max_fuel: 1_000_000,
-        max_input_bytes: 4096,
-        max_output_bytes: 4096,
-        max_execution_ms: 5_000,
-        offline_allowed: true,
-    };
+const TEST_SIGNING_KEY: &str = include_str!("../../../fixtures/models/test-signing-key.json");
+
+fn test_key_bytes(field: &str) -> [u8; 32] {
+    let key: serde_json::Value = serde_json::from_str(TEST_SIGNING_KEY).expect("key json");
+    let hex = key[field].as_str().expect("hex field");
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex"))
+        .collect();
+    bytes.try_into().expect("32 bytes")
+}
+
+/// Registers a signed package through the governed `register_package` path
+/// (Decision 101) with the test-only fixture key as the host trust root.
+fn signed_host(
+    model_id: &str,
+    manifest_bytes: &[u8],
+    wasm: Vec<u8>,
+    signature: &[u8],
+) -> (ExactModelHostConnector, ExactModelPin) {
     let pin = ExactModelPin {
-        model_id: manifest.model_id.clone(),
-        version: manifest.version.clone(),
-        digest: digest.clone(),
+        model_id: model_id.to_string(),
+        version: "1.0.0".to_string(),
+        digest: digest_hex(manifest_bytes),
         offline_allowed: true,
+        target: PLACEMENT_WASM_CPU.to_string(),
+        rights: PinRights {
+            license_id: "Apache-2.0".to_string(),
+            commercial_use: CommercialUse::Allowed,
+        },
+        key_id: None,
     };
-    let mut host = ExactModelHostConnector::new(vec![pin.clone()]);
-    host.packages
-        .insert_verified(VerifiedModelPackage { manifest, wasm })
+    let mut keys = TrustedModelKeys::new();
+    keys.trust(&test_key_bytes("public_key_hex"))
+        .expect("trust test key");
+    let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+    host.register_package(manifest_bytes, wasm, signature)
         .expect("package should verify");
     host.policies.insert(
         "policy-1".to_string(),
@@ -1165,61 +1167,62 @@ fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
     (host, pin)
 }
 
-const RESPONDER_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/models/fixture-responder-1.0.0"
-);
-
-/// Spec 045/138 bridge end-to-end proof (#1455): loads the checked-in,
-/// keyword-triggered exact-ref text fixture from disk (not an inline WAT
-/// constant), proving the real published artifact — not just the mechanism
-/// — resolves and executes through `execute_governed_bridged_model_dependency`.
-fn seeded_responder_host() -> (ExactModelHostConnector, ExactModelPin) {
-    let wasm = fs::read(format!("{RESPONDER_FIXTURE_DIR}/model.wasm")).expect("read fixture wasm");
-    let digest = digest_hex(&wasm);
+fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
+    let wasm = wat::parse_str(FIXTURE_ECHO_WAT).expect("wat should parse");
     let manifest = ModelPackageManifest {
-        schema_version: "1.0.0".to_string(),
-        model_id: "fixture.responder".to_string(),
+        schema_version: MODEL_PACKAGE_SCHEMA_VERSION.to_string(),
+        model_id: "fixture.echo".to_string(),
         version: "1.0.0".to_string(),
-        wasm_digest: digest.clone(),
-        package_digest: digest.clone(),
-        registry_ref: "registry:fixture.responder@1.0.0".to_string(),
+        wasm_digest: digest_hex(&wasm),
+        registry_ref: "registry:fixture.echo@1.0.0".to_string(),
         executable_format: "traverse-model-wasm".to_string(),
         abi_version: 1,
         input_schema_ref: "schema:bridged-generate-in".to_string(),
         input_schema_version: "1.0.0".to_string(),
         output_schema_ref: "schema:bridged-generate-out".to_string(),
         output_schema_version: "1.0.0".to_string(),
-        license_id: "Apache-2.0".to_string(),
-        attribution: "Traverse Spec 045/138 bridge conformance fixture".to_string(),
-        redistribution: "test-only; not for production redistribution claims".to_string(),
+        rights: ModelRights {
+            license_id: "Apache-2.0".to_string(),
+            attribution: "Traverse test fixture".to_string(),
+            redistribution: "test-only".to_string(),
+            commercial_use: CommercialUse::Allowed,
+            source_url: "https://example.invalid/fixture".to_string(),
+        },
         supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
-        max_memory_bytes: 131_072,
+        max_memory_bytes: 2 * 64 * 1024,
         max_fuel: 1_000_000,
         max_input_bytes: 4096,
         max_output_bytes: 4096,
         max_execution_ms: 5_000,
         offline_allowed: true,
     };
-    let pin = ExactModelPin {
-        model_id: manifest.model_id.clone(),
-        version: manifest.version.clone(),
-        digest: digest.clone(),
-        offline_allowed: true,
-    };
-    let mut host = ExactModelHostConnector::new(vec![pin.clone()]);
-    host.packages
-        .insert_verified(VerifiedModelPackage { manifest, wasm })
-        .expect("package should verify");
-    host.policies.insert(
-        "policy-1".to_string(),
-        ExecutionPolicy {
-            policy_ref: "policy-1".to_string(),
-            allowed_classifications: vec!["sensitive".to_string()],
-            max_output_bytes: 4096,
-        },
-    );
-    (host, pin)
+    let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest json");
+    let signature = serde_json::to_vec(&sign_model_manifest(
+        &test_key_bytes("secret_key_hex"),
+        &manifest_bytes,
+    ))
+    .expect("signature json");
+    signed_host("fixture.echo", &manifest_bytes, wasm, &signature)
+}
+
+const RESPONDER_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/models/fixture-responder-1.0.0"
+);
+
+/// Spec 045/138 bridge end-to-end proof (#1455): loads the checked-in,
+/// signed, keyword-triggered exact-ref text fixture from disk (not an inline
+/// WAT constant), proving the real published artifact — not just the
+/// mechanism — verifies, resolves, and executes through
+/// `execute_governed_bridged_model_dependency`.
+fn seeded_responder_host() -> (ExactModelHostConnector, ExactModelPin) {
+    let read = |name: &str| fs::read(format!("{RESPONDER_FIXTURE_DIR}/{name}")).expect("fixture");
+    signed_host(
+        "fixture.responder",
+        &read("model.manifest.json"),
+        read("model.wasm"),
+        &read("model.sig.json"),
+    )
 }
 
 #[test]

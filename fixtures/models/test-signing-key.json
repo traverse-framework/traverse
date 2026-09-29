@@ -1,0 +1,7 @@
+{
+  "warning": "TEST-ONLY Spec 138 fixture signing key. Never trust it in a real host.",
+  "alg": "ed25519",
+  "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67",
+  "public_key_hex": "97002eba1e28b582a739eb48750a5f0822b2bbcb61e6bcedd2fada36b51af355",
+  "secret_key_hex": "1e31d18f8d62c5a2005eac82df61fb7d5d0ec5f30f8ce1b9948970059caae36e"
+}
