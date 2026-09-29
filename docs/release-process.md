@@ -38,6 +38,14 @@ Use the release helper from a clean `main` checkout after CI is green:
 - `docs/releases/v<version>.md` must land with the version bump.
   `scripts/ci/release_naming_check.sh` (run by `repository_checks.sh` on
   every PR) enforces all three rules.
+- The live releases are audited by `scripts/ci/release_naming_audit.sh` (the
+  `Release naming audit` workflow) on every release create, edit, or publish
+  and weekly, so a manual UI edit that breaks the convention fails loudly.
+  Don't retitle releases by hand. Fix a failure with `gh release edit`.
+- Tag `v0.13.0` has no product release and can never get one: an earlier
+  attempt created and then deleted a release on it, and immutable releases
+  permanently reserve such a tag. Never create and delete a release on a
+  product tag. Create a draft first if you need to preview.
 
 The version argument is `MAJOR.MINOR.PATCH` without a leading `v`. The helper
 refuses invalid versions, dirty working trees, and pre-existing local release

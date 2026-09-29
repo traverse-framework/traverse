@@ -549,7 +549,9 @@
         "docs/web-embedder-npm-publish-runbook.md",
         "scripts/ci/create_product_release.sh",
         "scripts/ci/release_naming_check.sh",
-        ".github/workflows/swift-embedder-publish.yml"
+        ".github/workflows/swift-embedder-publish.yml",
+        "scripts/ci/release_naming_audit.sh",
+        ".github/workflows/release-naming-audit.yml"
       ]
     },
     {

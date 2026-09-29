@@ -111,6 +111,11 @@ and never depends on a long-lived npm token.
 - **FR-018**: `docs/releases/v<workspace version>.md` MUST exist whenever the
   workspace version changes. A repository check MUST enforce FR-016's CI
   wiring, FR-017, and FR-018 on every PR.
+- **FR-019**: The live GitHub Releases MUST be audited on every release
+  event (`created`, `published`, `edited`, `released`) and weekly: product
+  tags `vX.Y.Z` titled exactly `Traverse vX.Y.Z`, no other tag titled
+  `Traverse v…`, and Latest equal to the highest product release. This
+  catches manual edits in the GitHub UI, which FR-018's static check cannot.
 
 ## Non-Functional Requirements
 
@@ -133,6 +138,7 @@ and never depends on a long-lived npm token.
 - `docs/release-process.md` and `docs/web-embedder-npm-publish-runbook.md` (release documentation)
 - `scripts/ci/create_product_release.sh` and `scripts/ci/release_naming_check.sh` (GitHub Release naming, FR-016–FR-018)
 - `.github/workflows/swift-embedder-publish.yml` (artifact release `--latest=false`, FR-017)
+- `scripts/ci/release_naming_audit.sh` and `.github/workflows/release-naming-audit.yml` (live audit, FR-019)
 
 ## Amendment History
 
@@ -190,6 +196,14 @@ a notes-only release is unaffected.
 
 **Changes**: new FR-016 (CI creates `Traverse vX.Y.Z`, Latest, after
 `publish`, idempotent), FR-017 (artifact releases are never Latest and never
-use the product title), and FR-018 (release notes required for the workspace
-version, with every rule statically enforced on each PR). Additive. The
-tagging interface, crate list, and publish order are unchanged.
+use the product title), FR-018 (release notes required for the workspace
+version, with every rule statically enforced on each PR), and FR-019 (a live
+audit of release titles and Latest on every release event and weekly, added
+after the `swift-host-*` releases were retitled `Traverse v0.13.x` in the UI
+during this fix). Additive. The tagging interface, crate list, and publish
+order are unchanged.
+
+**Known gap**: tag `v0.13.0` can never host the `Traverse v0.13.0` release.
+GitHub rejects it (`tag_name was used by an immutable release`) because an
+earlier attempt created and then deleted a release on that tag. v0.13.0
+stays documented in `docs/releases/v0.13.0.md`.

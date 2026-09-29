@@ -1,0 +1,25 @@
+name: Release naming audit
+
+# Spec 048 FR-019 (#1574): catch GitHub Release titles or Latest flags that
+# break the convention, including manual edits in the GitHub UI.
+on:
+  release:
+    types: [published, created, edited, released]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Audit live GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/release_naming_audit.sh
