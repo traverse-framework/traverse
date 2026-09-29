@@ -5265,3 +5265,108 @@ Approved by Enrico in `/brainstorm` (2026-09-28): every recommended option
 accepted. Implementation proceeds under `#1565` with the Spec 138 amendment
 in the same PR. The `#1565` DoD item requiring a real (non-fixture) licensed
 model stays open until `#1461` lands.
+
+## Decision 102: First Real Trained Exact-Ref Model — Digits MLP, Reproducible Rust Trainer, Verified Guest Build
+
+- **Date**: 2026-09-29
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendment for
+  governed paths, a trained-model acceptance scenario, and the guest
+  rebuild-compare gate lands in the `#1461` implementation PR)
+- **Related issues**: `#1461` (real trained model package), `#1565` (its
+  remaining DoD item closes with `#1461`), `#1460` (explicitly unaffected),
+  `#1567` (production model-signing key follow-up)
+- **Origin**: `/brainstorm` on `#1461`, following Decision 101
+
+### Context
+
+Every exact-ref package so far (`fixture-echo`, `fixture-classifier`,
+`fixture-responder`) is hand-written deterministic logic. Decision 101 made
+the signed pipeline real (host trust roots, detached manifest signatures,
+rights), but `#1565`'s DoD still requires "a real or separately approved
+licensed model package; fixture-only logic is not accepted as end-to-end
+evidence". `#1461` names that gap. The guest must run with zero imports under
+manifest memory/fuel ceilings, bit-identically on native wasmtime and in the
+browser.
+
+### Decision
+
+Project-wide rules for the first trained exact-ref model and any later ones
+following the same path:
+
+1. **Model class: tiny MLP classifier** (64 → 32 ReLU → 10, ~2.4k
+   parameters). Real trained, nonlinear weights at KB scale.
+2. **Dataset: UCI Optical Recognition of Handwritten Digits (8×8)**, CC BY
+   4.0 — train split 3,823 / test split 1,797. Package `rights`:
+   `license_id` `CC-BY-4.0` for the data-derived weights with UCI
+   attribution, `commercial_use` `allowed`, `source_url` the UCI dataset page.
+3. **Training: a seeded, deterministic Rust trainer** inside the Cargo
+   workspace. Weights are committed and pinned by SHA-256. CI re-runs
+   inference on the held-out split and enforces the accuracy floor; CI does
+   not retrain bit-exactly.
+4. **Data is vendored in the repo** (~0.5 MB) with a LICENSE/ATTRIBUTION
+   note and pinned SHA-256; training and CI never touch the network.
+5. **Inference: hand-rolled `#![no_std]` Rust guest** built to
+   `wasm32-unknown-unknown`, weights embedded as a const array, dense → ReLU →
+   dense, output = logits + argmax (no `exp`/softmax) so wasm `f32` results
+   are bit-identical native vs browser.
+6. **Precision: f32, no quantization** (~10 KB of weights).
+7. **Signing: the existing committed test-only key** (Decision 101). A
+   package's realness comes from trained weights, data, and reproducible
+   provenance, not from the signer. Production model-signing key custody,
+   rotation, revocation, and CI signing are `#1567`, which
+   needs its own `/brainstorm`.
+8. **Guest build provenance:** the guest crate lives outside the host Cargo
+   workspace (a `no_std` panic handler breaks host builds). The built
+   `model.wasm` is committed, and a CI job rebuilds it with the pinned 1.94
+   toolchain (path remapping) and asserts an identical SHA-256.
+9. **Closes `#1565`:** the trained package running through signed
+   register → execute natively and in the browser, with a conformance vector
+   and the accuracy gate, satisfies `#1565`'s remaining DoD item.
+10. **Exact-ref only:** `#1460` (browser mixed-candidate resolution) is
+    unaffected; the digits classifier is not a `traverse.inference.generate`
+    candidate.
+11. **Accuracy floor: ≥ 95%** on the 1,797-sample held-out test split.
+12. **Model licence: the trained weights are licensed `CC-BY-4.0`**, the
+    same as the data they derive from, with `attribution` naming UCI and the
+    dataset authors (Alpaydin & Kaynak). Trainer and guest source stay
+    Apache-2.0 as repo code.
+
+### Alternatives Considered
+
+- Model class: logistic regression (rejected: indistinguishable from the
+  fixed-weight fixture); tiny audio keyword-spotter (rejected: feature
+  extraction, larger weights and dataset licensing, leans app-specific);
+  tiny char-level generator (rejected: MB-scale weights, heavy fuel, weak
+  quality).
+- Dataset: Iris (rejected: too trivial to justify an MLP); Palmer Penguins
+  (rejected: missing-value cleaning, still toy-scale); Wine (rejected: linear
+  models already near 100%).
+- Training: Python/numpy script (rejected: adds a Python toolchain);
+  bit-exact retrain in CI (rejected: cross-CPU float nondeterminism makes it
+  flaky); offline weights with no retrain story (rejected: weak provenance).
+- Data: download with pinned digest (rejected: network-dependent CI); vendor
+  test split only (rejected: two data paths).
+- Inference: generated WAT (rejected: hard to review); vendored no_std
+  runtime such as tract (rejected: MB-scale, allocator/imports, over budget).
+- Precision: int8 quantization or both variants (rejected: no benefit at
+  10 KB; doubles the slice).
+- Signing: new CI-held release key or a maintainer offline key (rejected for
+  this slice: key custody is its own security design).
+- Guest build: commit only (rejected: no proof the signed bytes match the
+  source); CI-only build (rejected: breaks checked-in offline conformance).
+- `#1565`: also requiring a production key (rejected: couples it to an
+  undesigned effort).
+- `#1460`: a native bridge demo with Ollama fallback (rejected: a digit
+  classifier does not serve a text-generation interface).
+- Accuracy: ≥ 97% (rejected: flaky near the ceiling); ≥ 90% (rejected: a
+  linear model clears it).
+- Model licence: Apache-2.0 plus data attribution (rejected: the licence
+  status of weights derived from CC BY data is unsettled; claiming Apache
+  alone could overstate the rights).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
+accepted. `#1461` moves to Ready with this decision as its scope; the
+production model-signing key work is filed as `#1567` (`future`).
