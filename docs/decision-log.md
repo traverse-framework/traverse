@@ -5482,3 +5482,108 @@ Project-wide rules for production model-package signing:
 Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
 accepted. `#1567` moves to Ready with this decision as its scope. The key
 generation and environment-secret upload are maintainer-only steps.
+
+## Decision 104: Swift Exact-Ref Model Execution — wasmi in the Rust Swift Host, One Framed C-ABI Call, Host Ceilings, Mid-Run Interruption
+
+- **Date**: 2026-09-29
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendment),
+  `076-production-swift-wasmi-cabi` (C-ABI growth), plus a new ADR amending
+  ADR-0015's five-symbol boundary. All land with the `#1579` implementation.
+- **Related issues**: `#1579` (Swift), `#1580` (Kotlin inherits the generic
+  rules), `#1582` (web + native wasmtime rollout of items 7–8), `#1581`
+  (third-party packaging)
+- **Origin**: `/brainstorm` on `#1579`, prompted by Callweave's iOS/macOS
+  apps being unable to run signed models
+
+### Context
+
+Signed exact-ref execution (Decision 101) exists only in the Rust native host
+(`ExactModelHostConnector`, which executes the guest with **wasmtime**) and the
+web host. The Swift `TraverseEmbedder` only defines the `model.execute`
+constants. On iOS, JIT is forbidden, so WASM must be interpreted. The Rust
+`traverse-swift-host` already runs `wasmi` behind an audited five-symbol C ABI
+(ADR-0015, Spec 076). Swift host connectors are Swift adapters registered on
+`RuntimeTraverseEmbedder` (as `traverse.audio-input` is). `wasmi` 2.0 supports
+resuming a call after it runs out of fuel.
+
+### Decision
+
+1. **Engine: `wasmi` inside the Rust Swift host.** Add a `wasmi` executor to
+   `traverse-runtime`'s `exact_model` alongside wasmtime, and reuse the
+   audited Rust verification (signature, pins, rights, digest re-check,
+   reasons) unchanged. The guest is interpreted once (not nested in
+   `runtime.wasm`), and no Swift-side verification is duplicated.
+2. **C ABI: one additional audited symbol,**
+   `traverse_swift_host_model_call(handle, request, out)`. It multiplexes
+   `register` / `execute` / `stage_input` / `read_output` / `rights` / `drop`
+   through a versioned envelope. This requires a new ADR amending ADR-0015
+   and a Spec 076 amendment, and the symbol is added to
+   `scoped_unsafe_boundary_check.sh`.
+3. **Byte transport: a binary frame.** Requests and responses are
+   `[u32 LE header_len][JSON header][raw payload bytes]`, where the header
+   names the byte segments (offset and length). There is no base64
+   inflation for large (for example 50 MB) model packages.
+4. **Fuel: an engine-relative ceiling plus conformance.** Each engine
+   enforces `max_fuel` in its own units. Packagers size it so the package's
+   conformance vector passes on every supported engine (wasmtime, wasmi,
+   browser). `max_execution_ms` is the portable wall-clock bound. No schema
+   change.
+5. **Swift API mirrors the web API.**
+   `ExactModelHost(pins:, trustedPublicKeys:, limits:)` provides:
+   - `registerPackage(manifest:wasm:signature:) async throws`;
+   - `modelRights(digest:)`;
+   - staging and read;
+   - `execute(...)`, which returns a typed result (`modelRef`, `target`,
+     `trace`).
+
+   `install(on: RuntimeTraverseEmbedder)` registers it as the
+   `traverse.model-runtime` host-connector adapter, so app-state-machine
+   `model.execute` commands route to it.
+6. **Conformance.** The checked-in signed vectors
+   (`signed-classifier.json`, `signed-digits-mlp.json`) must produce
+   byte-identical output on Swift, as on native and web.
+7. **Host ceilings (project-wide rule).** Every host MUST accept
+   host-configured `maxPackageBytes` / `maxMemoryBytes` / `maxFuel` with safe
+   defaults. Registration fails closed with `model_incompatible` and a new
+   additive stable reason `host_limit_exceeded` when the manifest's declared
+   limits exceed them. At execute, the effective limit is
+   manifest ∩ host ∩ per-call. `#1579` implements this in the shared Rust
+   `exact_model` code (Swift and Rust native). Web is `#1582`.
+8. **Mid-run interruption (project-wide rule).** Hosts SHOULD interrupt long
+   inferences mid-run. On `wasmi` the guest runs in fuel slices (resumable
+   out-of-fuel calls). Between slices it checks Swift `Task` cancellation
+   (→ `cancelled`) and the `max_execution_ms` deadline (→ `timeout`); the
+   total stays capped by `max_fuel`. `#1579` implements the `wasmi` path. Web
+   (Worker termination) and native wasmtime (epoch/async fuel) are `#1582`.
+   Kotlin inherits both rules via `#1580`.
+
+### Alternatives Considered
+
+- Engine: handle `model.execute` inside `runtime.wasm` with nested `wasmi`
+  (rejected: double interpretation is far too slow for an audio CNN, and
+  models must fit runtime.wasm's 32 MiB ceiling); Swift-native CryptoKit +
+  WasmKit (rejected: duplicates verification in Swift and adds a third-party
+  engine).
+- C ABI: one typed symbol per operation (rejected: roughly doubles the
+  audited unsafe surface); a separate model-host handle (rejected: the most
+  ABI surface and duplicate limit plumbing).
+- Bytes: base64 in JSON (rejected: +33% memory and encode time on large
+  models on mobile).
+- Fuel: a per-engine fuel map in the manifest (rejected: a breaking schema
+  change right after 2.0.0); time-only on Swift (rejected: an interpreter
+  can't be pre-empted without fuel, so a runaway guest could hang the app).
+- API: app commands only (rejected: no direct inference path; diverges from
+  web).
+- Host limits: manifest limits only (rejected: a signed-but-huge package can
+  exhaust phone memory).
+- Cancellation: before/after checks only (rejected: a multi-second
+  interpreted inference couldn't be stopped).
+- Scope of items 7–8: Swift-only (rejected: a platform-first split; made
+  project-wide with a phased rollout instead).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
+accepted. `#1579` moves to Ready with this decision as its scope; the rollout
+remainder is `#1582`.
