@@ -18,6 +18,7 @@ ed25519-dalek = "3.0.0"
 zeroize = "1.8"
 wasmtime = { version = "44", features = ["cranelift", "component-model"], optional = true }
 wasmtime-wasi = { version = "44", optional = true }
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"], optional = true }
 uuid = { version = "1", features = ["v4", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 rayon = { version = "1.11", optional = true }
@@ -25,12 +26,15 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 aes-gcm = { version = "0.11.0", optional = true, features = ["zeroize"] }
 
 [features]
-default = ["native-executors", "native-inference", "wasmtime-executor", "datastore-encryption"]
+default = ["native-executors", "native-inference", "wasmtime-executor", "wasmi-executor", "datastore-encryption"]
 native-executors = ["dep:rayon"]
 # The Ollama provider uses blocking native TCP sockets. Keep it out of the
 # portable, no-default-features wasm runtime surface.
 native-inference = []
 wasmtime-executor = ["dep:wasmtime", "dep:wasmtime-wasi"]
+# Interpreted Spec 138 model guest execution for JIT-forbidden targets
+# (iOS/macOS Swift host, Decision 104), with fuel-sliced mid-run interruption.
+wasmi-executor = ["dep:wasmi"]
 # Local-file private-record AEAD (Spec 084). Omitted from wasm32
 # `--no-default-features` checks so getrandom backends are not required.
 datastore-encryption = ["dep:aes-gcm"]

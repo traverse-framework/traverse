@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Governing spec id.
@@ -573,6 +575,57 @@ pub struct ExecutionPolicy {
     pub max_output_bytes: u64,
 }
 
+/// Engine that executes the `wasm-cpu` model guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelEngine {
+    /// Cranelift JIT (desktop/server native hosts).
+    Wasmtime,
+    /// `wasmi` interpreter (JIT-forbidden targets such as iOS; Decision 104).
+    /// Runs in fuel slices so cancellation and deadlines interrupt mid-run.
+    Wasmi,
+}
+
+impl Default for ModelEngine {
+    /// Wasmtime when compiled in, otherwise the `wasmi` interpreter.
+    #[cfg(feature = "wasmtime-executor")]
+    fn default() -> Self {
+        Self::Wasmtime
+    }
+
+    /// Wasmtime when compiled in, otherwise the `wasmi` interpreter.
+    #[cfg(not(feature = "wasmtime-executor"))]
+    fn default() -> Self {
+        Self::Wasmi
+    }
+}
+
+/// Host-configured ceilings a package's declared limits must fit within
+/// (Decision 104). Registration fails closed with `host_limit_exceeded`;
+/// execution uses manifest ∩ host ∩ per-call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostModelLimits {
+    /// Max `model.manifest.json` + `model.wasm` bytes.
+    pub max_package_bytes: u64,
+    /// Max guest linear memory bytes.
+    pub max_memory_bytes: u64,
+    /// Max fuel (engine-relative units) per execution.
+    pub max_fuel: u64,
+}
+
+impl Default for HostModelLimits {
+    /// Generous desktop defaults; mobile hosts pass tighter ceilings.
+    fn default() -> Self {
+        Self {
+            max_package_bytes: 256 * 1024 * 1024,
+            max_memory_bytes: 1024 * 1024 * 1024,
+            max_fuel: 50_000_000_000,
+        }
+    }
+}
+
+/// Fuel granted per `wasmi` slice between cancellation/deadline checks.
+pub const WASMI_FUEL_SLICE: u64 = 1_000_000;
+
 /// Production Spec 138 host adapter for `traverse.model-runtime`.
 pub struct ExactModelHostConnector {
     /// Declared exact pins.
@@ -587,6 +640,13 @@ pub struct ExactModelHostConnector {
     pub offline_mode: bool,
     /// Host-owned trusted model-signing keys.
     pub trusted_keys: TrustedModelKeys,
+    /// Guest execution engine.
+    pub engine: ModelEngine,
+    /// Host ceilings (Decision 104).
+    pub host_limits: HostModelLimits,
+    /// Caller-managed cancellation flag, observed between `wasmi` fuel slices.
+    /// The connector never clears it; the owner resets it per execution.
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl ExactModelHostConnector {
@@ -600,6 +660,9 @@ impl ExactModelHostConnector {
             policies: HashMap::new(),
             offline_mode: true,
             trusted_keys,
+            engine: ModelEngine::default(),
+            host_limits: HostModelLimits::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -647,6 +710,12 @@ impl ExactModelHostConnector {
                 )
             })?;
         check_pin_against_manifest(pin, &signature, &manifest)?;
+        check_host_limits(
+            &self.host_limits,
+            &manifest,
+            manifest_bytes.len(),
+            wasm.len(),
+        )?;
         self.packages.insert_verified(VerifiedModelPackage {
             manifest,
             manifest_bytes: manifest_bytes.to_vec(),
@@ -692,6 +761,25 @@ impl ExactModelHostConnector {
                 )
             })
     }
+}
+
+fn check_host_limits(
+    host: &HostModelLimits,
+    manifest: &ModelPackageManifest,
+    manifest_len: usize,
+    wasm_len: usize,
+) -> Result<(), HostConnectorError> {
+    let package_bytes = (manifest_len as u64).saturating_add(wasm_len as u64);
+    if package_bytes > host.max_package_bytes
+        || manifest.max_memory_bytes > host.max_memory_bytes
+        || manifest.max_fuel > host.max_fuel
+    {
+        return Err(incompatible(
+            ModelFailureReason::HostLimitExceeded,
+            "package size or declared limits exceed the host ceilings",
+        ));
+    }
+    Ok(())
 }
 
 fn check_pin_against_manifest(
@@ -868,11 +956,13 @@ impl HostConnectorPort for ExactModelHostConnector {
         let memory = payload
             .max_memory_bytes
             .unwrap_or(package.manifest.max_memory_bytes)
-            .min(package.manifest.max_memory_bytes);
+            .min(package.manifest.max_memory_bytes)
+            .min(self.host_limits.max_memory_bytes);
         let fuel = payload
             .max_fuel
             .unwrap_or(package.manifest.max_fuel)
-            .min(package.manifest.max_fuel);
+            .min(package.manifest.max_fuel)
+            .min(self.host_limits.max_fuel);
         let timeout = Duration::from_millis(
             payload
                 .timeout_ms
@@ -882,7 +972,24 @@ impl HostConnectorPort for ExactModelHostConnector {
 
         let _ = &payload.feature_metadata;
         let started = Instant::now();
-        let output = execute_wasm_cpu_model(&package.wasm, &input, memory, fuel, call_max_out)?;
+        let output = match self.engine {
+            ModelEngine::Wasmtime => {
+                execute_wasm_cpu_model(&package.wasm, &input, memory, fuel, call_max_out)?
+            }
+            ModelEngine::Wasmi => execute_wasmi_model(
+                &package.wasm,
+                &input,
+                &GuestLimits {
+                    memory,
+                    fuel,
+                    max_output: call_max_out,
+                },
+                &SliceControl {
+                    cancel: &self.cancel,
+                    deadline: started + timeout,
+                },
+            )?,
+        };
         if started.elapsed() > timeout {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Timeout,
@@ -1140,6 +1247,178 @@ fn execute_wasm_cpu_model(
     let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
+}
+
+/// Guest ceilings after manifest ∩ host ∩ per-call intersection.
+struct GuestLimits {
+    memory: u64,
+    fuel: u64,
+    max_output: u64,
+}
+
+/// Mid-run interruption checked between `wasmi` fuel slices (Decision 104).
+struct SliceControl<'a> {
+    cancel: &'a AtomicBool,
+    deadline: Instant,
+}
+
+#[cfg(feature = "wasmi-executor")]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn execute_wasmi_model(
+    wasm: &[u8],
+    input: &[u8],
+    limits: &GuestLimits,
+    control: &SliceControl<'_>,
+) -> Result<Vec<u8>, HostConnectorError> {
+    use wasmi::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder};
+
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    let engine = Engine::new(&config);
+    let Ok(module) = Module::new(&engine, wasm) else {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm failed validation",
+        ));
+    };
+    let store_limits = StoreLimitsBuilder::new()
+        .memory_size(usize::try_from(limits.memory).unwrap_or(usize::MAX))
+        .build();
+    let mut store = Store::new(&engine, store_limits);
+    store.limiter(|state| state);
+    // Fuel metering is enabled on this engine, so set_fuel cannot fail; the
+    // first slice is granted here and the rest in `run_fuel_slices`.
+    let _ = store.set_fuel(limits.fuel.min(WASMI_FUEL_SLICE));
+
+    // Empty linker: deny-by-default (no WASI / no host imports).
+    let Ok(instance) = Linker::new(&engine).instantiate_and_start(&mut store, &module) else {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model wasm instantiation failed",
+        ));
+    };
+    let Some(memory) = instance.get_memory(&store, "memory") else {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm missing memory export",
+        ));
+    };
+    let Ok(func) =
+        instance.get_typed_func::<(i32, i32, i32, i32), i32>(&store, MODEL_EXECUTE_EXPORT)
+    else {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ModelIncompatible,
+            "model wasm missing model_execute export",
+        ));
+    };
+
+    let in_ptr = 64_i32;
+    let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
+    let out_cap =
+        i32::try_from(limits.max_output.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
+    let end = usize::try_from(out_ptr).unwrap_or(0) + usize::try_from(out_cap).unwrap_or(0);
+    let current_pages = (memory.data_size(&store) as u64).div_ceil(65_536);
+    let needed_pages = (end as u64).div_ceil(65_536);
+    if needed_pages > current_pages
+        && memory
+            .grow(&mut store, needed_pages - current_pages)
+            .is_err()
+    {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ResourceExhausted,
+            "model memory grow failed",
+        ));
+    }
+    // Region sizing above guarantees the staged window fits.
+    let _ = memory.write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input);
+
+    let args = (
+        in_ptr,
+        i32::try_from(input.len()).unwrap_or(i32::MAX),
+        out_ptr,
+        out_cap,
+    );
+    let out_len = run_fuel_slices(&mut store, func, args, limits, control)?;
+    if out_len < 0 || out_len as u64 > limits.max_output {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ResourceExhausted,
+            "model returned invalid output length",
+        ));
+    }
+    let mut output = vec![0_u8; out_len as usize];
+    let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
+    Ok(output)
+}
+
+/// Drives a resumable `wasmi` call in fuel slices, checking cancellation and
+/// the deadline between slices (Decision 104).
+#[cfg(feature = "wasmi-executor")]
+fn run_fuel_slices(
+    store: &mut wasmi::Store<wasmi::StoreLimits>,
+    func: wasmi::TypedFunc<(i32, i32, i32, i32), i32>,
+    args: (i32, i32, i32, i32),
+    limits: &GuestLimits,
+    control: &SliceControl<'_>,
+) -> Result<i32, HostConnectorError> {
+    use wasmi::TypedResumableCall as Call;
+
+    let mut granted = limits.fuel.min(WASMI_FUEL_SLICE);
+    let trapped = || {
+        model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model_execute trap or fuel exhausted",
+        )
+    };
+    let mut call = func
+        .call_resumable(&mut *store, args)
+        .map_err(|_| trapped())?;
+    loop {
+        let Call::OutOfFuel(paused) = call else {
+            // No host imports exist, so the only other outcome is Finished;
+            // anything else maps to an invalid length and fails closed below.
+            break Ok(if let Call::Finished(n) = call { n } else { -1 });
+        };
+        if control.cancel.load(Ordering::SeqCst) {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::Cancelled,
+                "model.execute cancelled mid-run",
+            ));
+        }
+        if Instant::now() > control.deadline {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::Timeout,
+                "model.execute exceeded timeout mid-run",
+            ));
+        }
+        if granted >= limits.fuel {
+            return Err(trapped());
+        }
+        let next = (limits.fuel - granted).min(WASMI_FUEL_SLICE);
+        granted += next;
+        let _ = store.set_fuel(next);
+        call = paused.resume(&mut *store).map_err(|_| trapped())?;
+    }
+}
+
+#[cfg(not(feature = "wasmi-executor"))]
+fn execute_wasmi_model(
+    _wasm: &[u8],
+    _input: &[u8],
+    _limits: &GuestLimits,
+    _control: &SliceControl<'_>,
+) -> Result<Vec<u8>, HostConnectorError> {
+    Err(model_error_plain(
+        HostConnectorErrorCode::Unavailable,
+        "wasm-cpu interpreter requires the wasmi-executor feature",
+    ))
+}
+
+fn model_error_plain(code: HostConnectorErrorCode, message: &str) -> HostConnectorError {
+    HostConnectorError {
+        code,
+        reason: None,
+        message: message.to_string(),
+    }
 }
 
 #[cfg(not(feature = "wasmtime-executor"))]
@@ -2587,6 +2866,7 @@ mod tests {
             (R::TargetUnsupported, "target_unsupported"),
             (R::CryptoUnavailable, "crypto_unavailable"),
             (R::CandidateUnsupported, "candidate_unsupported"),
+            (R::HostLimitExceeded, "host_limit_exceeded"),
         ];
         for (reason, name) in all {
             assert_eq!(reason.as_str(), name);
@@ -2666,5 +2946,257 @@ mod tests {
         with_key.push("key_id".to_string());
         with_key.sort();
         assert_eq!(schema_keys(pin_schema, "properties"), with_key);
+    }
+    /// Registers a variant of the echo fixture under its own pin and returns
+    /// its digest (bypasses signing: executor behaviour only).
+    fn add_variant(
+        host: &mut ExactModelHostConnector,
+        wasm: Vec<u8>,
+        tweak: impl FnOnce(&mut ModelPackageManifest),
+    ) -> String {
+        let mut pkg = fixture_package();
+        pkg.wasm = wasm;
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        tweak(&mut pkg.manifest);
+        let digest = manifest_digest(&pkg.manifest);
+        host.pins.push(test_pin("fixture.echo", &digest));
+        host.packages.insert_verified(seal(pkg)).expect("insert");
+        digest
+    }
+
+    const LOOPER_WAT: &str = r#"(module
+      (memory (export "memory") 1)
+      (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+        (loop $spin (br $spin))
+        i32.const 0))"#;
+
+    fn run(
+        host: &mut ExactModelHostConnector,
+        digest: &str,
+        extras: serde_json::Map<String, Value>,
+    ) -> Result<Vec<u8>, HostConnectorError> {
+        let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
+        let result = host.invoke(&execute_request(digest, &input_ref, extras))?;
+        Ok(host
+            .io
+            .read_model_output(
+                result.artifact_ref.as_deref().expect("artifact_ref"),
+                70_000,
+            )
+            .expect("read"))
+    }
+
+    #[test]
+    fn wasmi_engine_produces_the_same_outputs_as_wasmtime() {
+        let (mut host, digest) = seeded_classifier_host();
+        let frame = classifier_input_frame([1.0, 2.0, -1.0, 4.0]);
+        let mut outputs = Vec::new();
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            host.engine = engine;
+            let input_ref = host.io.stage_model_input(&frame, 4096).expect("stage");
+            let result = host
+                .invoke(&classifier_execute_request(&digest, &input_ref))
+                .expect("execute");
+            outputs.push(
+                host.io
+                    .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
+                    .expect("read"),
+            );
+        }
+        assert_eq!(outputs[0], outputs[1]);
+
+        let (mut echo, echo_digest) = seeded_host();
+        echo.engine = ModelEngine::Wasmi;
+        assert_eq!(
+            run(&mut echo, &echo_digest, serde_json::Map::new()).expect("echo"),
+            b"abc"
+        );
+    }
+
+    #[test]
+    fn wasmi_engine_fails_closed_like_wasmtime() {
+        let (mut host, _) = seeded_host();
+        host.engine = ModelEngine::Wasmi;
+        let code = |host: &mut ExactModelHostConnector, digest: &str| {
+            run(host, digest, serde_json::Map::new())
+                .expect_err("fails")
+                .code
+        };
+        let bad = add_variant(&mut host, b"not-wasm".to_vec(), |_| {});
+        assert_eq!(
+            code(&mut host, &bad),
+            HostConnectorErrorCode::ModelIncompatible
+        );
+        let no_export = add_variant(
+            &mut host,
+            wat::parse_str(r#"(module (memory (export "memory") 1))"#).expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            code(&mut host, &no_export),
+            HostConnectorErrorCode::ModelIncompatible
+        );
+        let no_memory = add_variant(
+            &mut host,
+            wat::parse_str(
+                r#"(module (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#,
+            )
+            .expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            code(&mut host, &no_memory),
+            HostConnectorErrorCode::ModelIncompatible
+        );
+        let imports = add_variant(
+            &mut host,
+            wat::parse_str(
+                r#"(module (import "env" "f" (func)) (memory (export "memory") 1)
+                   (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#,
+            )
+            .expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            code(&mut host, &imports),
+            HostConnectorErrorCode::ExecutionFailed
+        );
+        let trap = add_variant(
+            &mut host,
+            wat::parse_str(
+                r#"(module (memory (export "memory") 1)
+                   (func (export "model_execute") (param i32 i32 i32 i32) (result i32) unreachable))"#,
+            )
+            .expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            code(&mut host, &trap),
+            HostConnectorErrorCode::ExecutionFailed
+        );
+        let bad_len = add_variant(
+            &mut host,
+            wat::parse_str(
+                r#"(module (memory (export "memory") 1)
+                   (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const -1))"#,
+            )
+            .expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            code(&mut host, &bad_len),
+            HostConnectorErrorCode::ResourceExhausted
+        );
+        // Output window spanning a second page: grow succeeds under the
+        // ceiling and fails when the store limiter caps memory at one page.
+        let grow = wat::parse_str(
+            r#"(module (memory (export "memory") 1)
+               (func (export "model_execute") (param i32 i32 i32 i32) (result i32) (local.get 1)))"#,
+        )
+        .expect("wat");
+        let grows = add_variant(&mut host, grow.clone(), |m| {
+            m.max_memory_bytes = 4 * 64 * 1024;
+            m.max_output_bytes = 70_000;
+        });
+        let capped = add_variant(&mut host, grow, |m| {
+            m.max_memory_bytes = 64 * 1024;
+            m.max_output_bytes = 70_000;
+            m.max_input_bytes = 4095;
+        });
+        host.policies
+            .get_mut("policy-1")
+            .expect("policy")
+            .max_output_bytes = 70_000;
+        let mut big = serde_json::Map::new();
+        big.insert("max_output_bytes".to_string(), json!(70_000));
+        assert_eq!(run(&mut host, &grows, big.clone()).expect("grow").len(), 3);
+        assert_eq!(
+            run(&mut host, &capped, big).expect_err("capped").code,
+            HostConnectorErrorCode::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn wasmi_engine_slices_fuel_and_interrupts_mid_run() {
+        let (mut host, _) = seeded_host();
+        host.engine = ModelEngine::Wasmi;
+        let looper = wat::parse_str(LOOPER_WAT).expect("wat");
+        // Exhausts fuel across several resumed slices.
+        let multi = add_variant(&mut host, looper.clone(), |m| {
+            m.max_fuel = 3 * WASMI_FUEL_SLICE + 7;
+        });
+        assert_eq!(
+            run(&mut host, &multi, serde_json::Map::new())
+                .expect_err("fuel")
+                .code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
+        // Deadline reached mid-run (first slice boundary) -> timeout.
+        let long = add_variant(&mut host, looper, |m| m.max_fuel = 1_000 * WASMI_FUEL_SLICE);
+        let mut zero = serde_json::Map::new();
+        zero.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            run(&mut host, &long, zero).expect_err("timeout").code,
+            HostConnectorErrorCode::Timeout
+        );
+        // Cancellation observed at the next slice boundary.
+        host.cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            run(&mut host, &long, serde_json::Map::new())
+                .expect_err("cancel")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        // The connector never clears the caller-managed flag itself.
+        assert!(host.cancel.load(Ordering::SeqCst));
+        // Host fuel ceiling intersects the manifest's.
+        host.cancel.store(false, Ordering::SeqCst);
+        host.host_limits.max_fuel = WASMI_FUEL_SLICE / 2;
+        assert_eq!(
+            run(&mut host, &long, serde_json::Map::new())
+                .expect_err("host fuel")
+                .code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
+    }
+
+    #[test]
+    fn registration_enforces_host_ceilings() {
+        let manifest = read_fixture("model.manifest.json");
+        let wasm = read_fixture("model.wasm");
+        let sig = read_fixture("model.sig.json");
+        let package_bytes = (manifest.len() + wasm.len()) as u64;
+        let parsed: ModelPackageManifest = serde_json::from_slice(&manifest).expect("manifest");
+        let tight = [
+            HostModelLimits {
+                max_package_bytes: package_bytes - 1,
+                ..HostModelLimits::default()
+            },
+            HostModelLimits {
+                max_memory_bytes: parsed.max_memory_bytes - 1,
+                ..HostModelLimits::default()
+            },
+            HostModelLimits {
+                max_fuel: parsed.max_fuel - 1,
+                ..HostModelLimits::default()
+            },
+        ];
+        for limits in tight {
+            let mut host = trusted_host(vec![classifier_pin(&manifest)]);
+            host.host_limits = limits;
+            let err = host
+                .register_package(&manifest, wasm.clone(), &sig)
+                .expect_err("over host ceiling");
+            assert_eq!(err.code, HostConnectorErrorCode::ModelIncompatible);
+            assert_eq!(err.reason, Some(ModelFailureReason::HostLimitExceeded));
+        }
+        let mut host = trusted_host(vec![classifier_pin(&manifest)]);
+        host.host_limits = HostModelLimits {
+            max_package_bytes: package_bytes,
+            max_memory_bytes: parsed.max_memory_bytes,
+            max_fuel: parsed.max_fuel,
+        };
+        host.register_package(&manifest, wasm, &sig)
+            .expect("exactly at the ceilings registers");
     }
 }

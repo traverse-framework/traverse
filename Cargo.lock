@@ -2755,6 +2755,7 @@ dependencies = [
  "traverse-contracts",
  "traverse-registry",
  "uuid",
+ "wasmi",
  "wasmtime",
  "wasmtime-wasi",
  "wat",

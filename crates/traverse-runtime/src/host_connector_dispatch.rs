@@ -167,6 +167,9 @@ pub enum ModelFailureReason {
     /// Candidate kind is not resolvable on this embedder (browser: single
     /// exact-ref `wasm-cpu` only).
     CandidateUnsupported,
+    /// The package's declared limits exceed the host-configured ceilings
+    /// (Decision 104).
+    HostLimitExceeded,
 }
 
 impl ModelFailureReason {
@@ -185,6 +188,7 @@ impl ModelFailureReason {
             Self::TargetUnsupported => "target_unsupported",
             Self::CryptoUnavailable => "crypto_unavailable",
             Self::CandidateUnsupported => "candidate_unsupported",
+            Self::HostLimitExceeded => "host_limit_exceeded",
         }
     }
 }
