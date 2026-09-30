@@ -13,6 +13,14 @@ on:
           fix (e.g. main), not the tag itself, since a tag's own copy of this
           file is frozen at whatever it looked like when the tag was pushed.
         required: true
+      rebuild:
+        description: >-
+          Optional rebuild number N for an xcframework rebuilt at the same
+          workspace version (e.g. after a Swift-host change). Publishes the
+          artifact release swift-host-v<version>-N instead of
+          swift-host-v<version>, which is immutable once published.
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -56,7 +64,17 @@ jobs:
             exit 1
           fi
           echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
-          echo "SWIFT_RELEASE_TAG=swift-host-v${tag_version}" >> "$GITHUB_ENV"
+          rebuild="${{ github.event.inputs.rebuild }}"
+          if [[ -z "${rebuild}" ]]; then
+            echo "SWIFT_RELEASE_TAG=swift-host-v${tag_version}" >> "$GITHUB_ENV"
+            echo "REBUILD_LABEL=" >> "$GITHUB_ENV"
+          elif [[ "${rebuild}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "SWIFT_RELEASE_TAG=swift-host-v${tag_version}-${rebuild}" >> "$GITHUB_ENV"
+            echo "REBUILD_LABEL=, rebuild ${rebuild}" >> "$GITHUB_ENV"
+          else
+            echo "rebuild must be a positive integer, got '${rebuild}'." >&2
+            exit 1
+          fi
 
       - name: Build TraverseSwiftHost.xcframework
         run: bash scripts/build_swift_host_xcframework.sh
@@ -112,7 +130,7 @@ jobs:
           )"
           gh release create "${SWIFT_RELEASE_TAG}" target/apple/TraverseSwiftHost.xcframework.zip \
             --repo "${{ github.repository }}" \
-            --title "TraverseSwiftHost xcframework (workspace v${TAG_VERSION})" \
+            --title "TraverseSwiftHost xcframework (workspace v${TAG_VERSION}${REBUILD_LABEL})" \
             --notes "${notes}" \
             --latest=false
 
@@ -146,7 +164,7 @@ jobs:
           # A tag push checks out a detached HEAD, so the PR base must be
           # explicit (v0.14.0's run failed here without it).
           base: main
-          branch: release/swift-host-${{ env.TAG_VERSION }}
+          branch: release/${{ env.SWIFT_RELEASE_TAG }}
           commit-message: "chore(swift): point Package.swift at the ${{ env.SWIFT_RELEASE_TAG }} xcframework"
           title: "chore(swift): point Package.swift at the ${{ env.SWIFT_RELEASE_TAG }} xcframework"
           body: |
