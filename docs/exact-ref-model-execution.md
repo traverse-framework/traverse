@@ -63,7 +63,7 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 | Host | Engine | Host ceilings | Mid-run cancel/timeout |
 | --- | --- | --- | --- |
 | Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | `wasmi`: yes; wasmtime: #1582 |
-| Swift host (`traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (supplied at `create`) | yes (fuel slices) |
+| Swift (`ExactModelHost`, over `traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (`ExactModelHostLimits`, phone-sized defaults) | yes (Swift `Task` cancellation; fuel slices) |
 | Web (`ExactModelBrowserHost`) | browser WebAssembly | #1582 | #1582 |
 
 - **Host ceilings:** a host caps package bytes, guest memory, and fuel.
@@ -78,9 +78,15 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 - **Fuel is engine-relative:** each engine counts `max_fuel` in its own
   units. Size it so the package's conformance vector passes on every
   engine; `max_execution_ms` is the portable bound.
-- **Swift API:** `ExactModelHost` on the Swift embedder ships once an
-  xcframework containing the sixth symbol is published (`#1579`,
-  follow-up).
+- **Swift API** (`#1579`, xcframework `swift-host-v0.14.0-1`):
+  `ExactModelHost(pins:trustedPublicKeysHex:limits:)` provides
+  `registerPackage`, `stageModelInput` / `readModelOutput`, `modelRights`,
+  and `execute` (async; Swift `Task` cancellation interrupts the running
+  inference). `install(on:command:)` (or `modelExecuteAdapter`) routes an
+  app-state-machine command's Spec 137 `model.execute` payload, plus
+  `allowed_classifications`, to it. The digits conformance vector is
+  byte-identical on Swift and scores 1,727 / 1,797, as on native and web.
+  Kotlin (`#1580`) and .NET don't execute exact-ref models yet.
 
 ## Cache and offline behavior
 

@@ -14,6 +14,11 @@
   `traverse_swift_host_model_call`, with a framed envelope. It carries
   create, register, stage, execute, read, rights, cancel, drop, and destroy
   (ADR-0078; Spec 076 1.2.0; Spec 138 0.6.0).
+- **Swift `ExactModelHost`** (iOS/macOS) mirrors the web API: signed package
+  registration, staging and read, rights, and `execute` with Swift `Task`
+  cancellation mid-run. It also adds `install(on:command:)` for app-command
+  routing. `Package.swift` now pins the `swift-host-v0.14.0-1` xcframework
+  (#1579).
 
 ## v0.14.0 — 2026-09-29
 
