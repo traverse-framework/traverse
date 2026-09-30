@@ -21,6 +21,12 @@ pub const MODEL_GUEST_ABI_VERSION: u16 = 1;
 pub const PLACEMENT_WASM_CPU: &str = "wasm-cpu";
 /// Guest export name.
 pub const MODEL_EXECUTE_EXPORT: &str = "model_execute";
+/// Guest ABI v2 buffer allocator export (`model_alloc(len) -> ptr`, Decision 105).
+pub const MODEL_ALLOC_EXPORT: &str = "model_alloc";
+/// Highest supported manifest `abi_version`: 1 = host places buffers at fixed
+/// offsets; 2 = the guest allocates them via [`MODEL_ALLOC_EXPORT`]. The
+/// little-endian frame format ([`MODEL_GUEST_ABI_VERSION`]) is unchanged.
+pub const MAX_MODEL_ABI_VERSION: u16 = 2;
 
 /// Model package manifest schema version (Spec 138 0.4.0, Decision 101).
 pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
@@ -183,6 +189,7 @@ impl ModelPackageManifest {
         }
         if self.schema_version != MODEL_PACKAGE_SCHEMA_VERSION
             || self.abi_version == 0
+            || self.abi_version > MAX_MODEL_ABI_VERSION
             || self.max_memory_bytes == 0
             || self.max_fuel == 0
             || self.max_input_bytes == 0
@@ -971,19 +978,19 @@ impl HostConnectorPort for ExactModelHostConnector {
         );
 
         let _ = &payload.feature_metadata;
+        let guest_limits = GuestLimits {
+            memory,
+            fuel,
+            max_output: call_max_out,
+            abi: package.manifest.abi_version,
+        };
         let started = Instant::now();
         let output = match self.engine {
-            ModelEngine::Wasmtime => {
-                execute_wasm_cpu_model(&package.wasm, &input, memory, fuel, call_max_out)?
-            }
+            ModelEngine::Wasmtime => execute_wasm_cpu_model(&package.wasm, &input, &guest_limits)?,
             ModelEngine::Wasmi => execute_wasmi_model(
                 &package.wasm,
                 &input,
-                &GuestLimits {
-                    memory,
-                    fuel,
-                    max_output: call_max_out,
-                },
+                &guest_limits,
                 &SliceControl {
                     cancel: &self.cancel,
                     deadline: started + timeout,
@@ -1148,11 +1155,11 @@ fn require_ok(
 fn execute_wasm_cpu_model(
     wasm: &[u8],
     input: &[u8],
-    max_memory_bytes: u64,
-    max_fuel: u64,
-    max_output_bytes: u64,
+    guest: &GuestLimits,
 ) -> Result<Vec<u8>, HostConnectorError> {
     use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder};
+    let (max_memory_bytes, max_fuel, max_output_bytes) =
+        (guest.memory, guest.fuel, guest.max_output);
 
     let mut config = Config::new();
     config.consume_fuel(true);
@@ -1199,24 +1206,15 @@ fn execute_wasm_cpu_model(
         ));
     };
 
-    let in_ptr = 64_i32;
-    let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
-    let out_cap =
-        i32::try_from(max_output_bytes.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
-    let end = usize::try_from(out_ptr).unwrap_or(0) + usize::try_from(out_cap).unwrap_or(0);
-    let current_pages = u64::try_from(memory.data_size(&store))
-        .unwrap_or(0)
-        .div_ceil(65_536);
-    let needed_pages = u64::try_from(end).unwrap_or(0).div_ceil(65_536);
-    if needed_pages > current_pages {
-        require_ok(
-            memory
-                .grow(&mut store, needed_pages - current_pages)
-                .is_ok(),
-            HostConnectorErrorCode::ResourceExhausted,
-            "model memory grow failed",
-        )?;
-    }
+    let out_cap = output_capacity(max_output_bytes);
+    let (in_ptr, out_ptr) = place_wasmtime_buffers(
+        &mut store,
+        &instance,
+        memory,
+        input.len(),
+        out_cap,
+        guest.abi,
+    )?;
     // Region sizing above ensures the staged write/read windows fit; allocator faults
     // after a successful grow are not distinguishable from guest traps below.
     let _ = memory.write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input);
@@ -1254,6 +1252,71 @@ struct GuestLimits {
     memory: u64,
     fuel: u64,
     max_output: u64,
+    /// Manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`).
+    abi: u16,
+}
+
+/// Output capacity handed to the guest, clamped to `i32`.
+#[allow(clippy::cast_possible_truncation)]
+fn output_capacity(max_output: u64) -> i32 {
+    i32::try_from(max_output.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX)
+}
+
+/// Guest ABI v1: host-chosen fixed offsets; returns `(in_ptr, out_ptr, end)`.
+fn v1_placement(input_len: usize, out_cap: i32) -> (i32, i32, u64) {
+    let in_ptr = 64_i32;
+    let out_ptr = in_ptr + i32::try_from(input_len).unwrap_or(i32::MAX) + 64;
+    let end = u64::try_from(out_ptr).unwrap_or(0) + u64::try_from(out_cap).unwrap_or(0);
+    (in_ptr, out_ptr, end)
+}
+
+/// Guest ABI v2 (Decision 105): regions returned by `model_alloc` must be
+/// positive, inside current linear memory, and disjoint.
+fn check_v2_regions(
+    in_ptr: i32,
+    in_len: usize,
+    out_ptr: i32,
+    out_cap: i32,
+    memory_size: usize,
+) -> Result<(), HostConnectorError> {
+    let invalid = || {
+        model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model_alloc returned an invalid region",
+        )
+    };
+    let (Ok(in_start), Ok(out_start), Ok(out_len)) = (
+        usize::try_from(in_ptr),
+        usize::try_from(out_ptr),
+        usize::try_from(out_cap),
+    ) else {
+        return Err(invalid());
+    };
+    let in_end = in_start.saturating_add(in_len);
+    let out_end = out_start.saturating_add(out_len);
+    if in_start == 0
+        || out_start == 0
+        || in_end > memory_size
+        || out_end > memory_size
+        || (in_start < out_end && out_start < in_end)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn alloc_failed() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ExecutionFailed,
+        "model_alloc trapped or ran out of fuel",
+    )
+}
+
+fn missing_alloc() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ModelIncompatible,
+        "abi_version 2 model wasm missing model_alloc export",
+    )
 }
 
 /// Mid-run interruption checked between `wasmi` fuel slices (Decision 104).
@@ -1312,23 +1375,40 @@ fn execute_wasmi_model(
         ));
     };
 
-    let in_ptr = 64_i32;
-    let out_ptr = in_ptr + i32::try_from(input.len()).unwrap_or(i32::MAX) + 64;
-    let out_cap =
-        i32::try_from(limits.max_output.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX);
-    let end = usize::try_from(out_ptr).unwrap_or(0) + usize::try_from(out_cap).unwrap_or(0);
-    let current_pages = (memory.data_size(&store) as u64).div_ceil(65_536);
-    let needed_pages = (end as u64).div_ceil(65_536);
-    if needed_pages > current_pages
-        && memory
-            .grow(&mut store, needed_pages - current_pages)
-            .is_err()
-    {
-        return Err(model_error_plain(
-            HostConnectorErrorCode::ResourceExhausted,
-            "model memory grow failed",
-        ));
-    }
+    let out_cap = output_capacity(limits.max_output);
+    let (in_ptr, out_ptr) = if limits.abi >= 2 {
+        let alloc = instance
+            .get_typed_func::<i32, i32>(&store, MODEL_ALLOC_EXPORT)
+            .map_err(|_| missing_alloc())?;
+        let in_len = i32::try_from(input.len()).unwrap_or(i32::MAX);
+        let in_ptr = alloc.call(&mut store, in_len).map_err(|_| alloc_failed())?;
+        let out_ptr = alloc
+            .call(&mut store, out_cap)
+            .map_err(|_| alloc_failed())?;
+        check_v2_regions(
+            in_ptr,
+            input.len(),
+            out_ptr,
+            out_cap,
+            memory.data_size(&store),
+        )?;
+        (in_ptr, out_ptr)
+    } else {
+        let (in_ptr, out_ptr, end) = v1_placement(input.len(), out_cap);
+        let current_pages = (memory.data_size(&store) as u64).div_ceil(65_536);
+        let needed_pages = end.div_ceil(65_536);
+        if needed_pages > current_pages
+            && memory
+                .grow(&mut store, needed_pages - current_pages)
+                .is_err()
+        {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::ResourceExhausted,
+                "model memory grow failed",
+            ));
+        }
+        (in_ptr, out_ptr)
+    };
     // Region sizing above guarantees the staged window fits.
     let _ = memory.write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input);
 
@@ -1421,13 +1501,60 @@ fn model_error_plain(code: HostConnectorErrorCode, message: &str) -> HostConnect
     }
 }
 
+/// Stages the input/output windows in guest memory for the wasmtime executor:
+/// fixed offsets (ABI v1) or guest `model_alloc` regions (ABI v2).
+#[cfg(feature = "wasmtime-executor")]
+fn place_wasmtime_buffers(
+    store: &mut wasmtime::Store<wasmtime::StoreLimits>,
+    instance: &wasmtime::Instance,
+    memory: wasmtime::Memory,
+    input_len: usize,
+    out_cap: i32,
+    abi: u16,
+) -> Result<(i32, i32), HostConnectorError> {
+    if abi >= 2 {
+        let alloc = instance
+            .get_typed_func::<i32, i32>(&mut *store, MODEL_ALLOC_EXPORT)
+            .map_err(|_| missing_alloc())?;
+        let in_len = i32::try_from(input_len).unwrap_or(i32::MAX);
+        let in_ptr = alloc
+            .call(&mut *store, in_len)
+            .map_err(|_| alloc_failed())?;
+        let out_ptr = alloc
+            .call(&mut *store, out_cap)
+            .map_err(|_| alloc_failed())?;
+        check_v2_regions(
+            in_ptr,
+            input_len,
+            out_ptr,
+            out_cap,
+            memory.data_size(&*store),
+        )?;
+        Ok((in_ptr, out_ptr))
+    } else {
+        let (in_ptr, out_ptr, end) = v1_placement(input_len, out_cap);
+        let current_pages = u64::try_from(memory.data_size(&*store))
+            .unwrap_or(0)
+            .div_ceil(65_536);
+        let needed_pages = end.div_ceil(65_536);
+        if needed_pages > current_pages {
+            require_ok(
+                memory
+                    .grow(&mut *store, needed_pages - current_pages)
+                    .is_ok(),
+                HostConnectorErrorCode::ResourceExhausted,
+                "model memory grow failed",
+            )?;
+        }
+        Ok((in_ptr, out_ptr))
+    }
+}
+
 #[cfg(not(feature = "wasmtime-executor"))]
 fn execute_wasm_cpu_model(
     _wasm: &[u8],
     _input: &[u8],
-    _max_memory_bytes: u64,
-    _max_fuel: u64,
-    _max_output_bytes: u64,
+    _guest: &GuestLimits,
 ) -> Result<Vec<u8>, HostConnectorError> {
     Err(HostConnectorError {
         code: HostConnectorErrorCode::Unavailable,
@@ -3198,5 +3325,119 @@ mod tests {
         };
         host.register_package(&manifest, wasm, &sig)
             .expect("exactly at the ceilings registers");
+    }
+    const ECHO_V2_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/models/fixture-echo-v2-1.0.0"
+    );
+
+    /// A v2 guest whose `model_alloc` body is `alloc` (param `$len`).
+    fn v2_guest(alloc: &str) -> Vec<u8> {
+        wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1)
+               (func (export "model_alloc") (param $len i32) (result i32) {alloc})
+               (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#
+        ))
+        .expect("wat")
+    }
+
+    #[test]
+    fn abi_v2_guest_matches_the_v1_echo_on_both_engines() {
+        let v2 = std::fs::read(format!("{ECHO_V2_DIR}/model.wasm")).expect("v2 wasm");
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, v1_digest) = seeded_host();
+            host.engine = engine;
+            let v2_digest = add_variant(&mut host, v2.clone(), |m| m.abi_version = 2);
+            let v1 = run(&mut host, &v1_digest, serde_json::Map::new()).expect("v1");
+            let out = run(&mut host, &v2_digest, serde_json::Map::new()).expect("v2");
+            assert_eq!(out, b"abc", "{engine:?}");
+            assert_eq!(out, v1, "{engine:?}");
+            // Input larger than the fixed-offset window still round-trips:
+            // the guest allocator grows memory itself.
+            let big = vec![7_u8; 3000];
+            let input_ref = host.io.stage_model_input(&big, 4096).expect("stage");
+            let result = host
+                .invoke(&execute_request(
+                    &v2_digest,
+                    &input_ref,
+                    serde_json::Map::new(),
+                ))
+                .expect("big v2");
+            let output = host
+                .io
+                .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
+                .expect("read");
+            assert_eq!(output, big, "{engine:?}");
+        }
+    }
+
+    #[test]
+    fn checked_in_signed_v2_fixture_registers_and_runs() {
+        let read = |name: &str| std::fs::read(format!("{ECHO_V2_DIR}/{name}")).expect(name);
+        let manifest = read("model.manifest.json");
+        let parsed: ModelPackageManifest = serde_json::from_slice(&manifest).expect("manifest");
+        assert_eq!(parsed.abi_version, 2);
+        let mut host = trusted_host(vec![test_pin("fixture.echo-v2", &digest_hex(&manifest))]);
+        host.register_package(&manifest, read("model.wasm"), &read("model.sig.json"))
+            .expect("signed v2 fixture registers");
+    }
+
+    #[test]
+    fn abi_v2_fails_closed_on_bad_allocators() {
+        let v1_echo = wat::parse_str(FIXTURE_ECHO_WAT).expect("wat");
+        let cases: [(Vec<u8>, HostConnectorErrorCode); 6] = [
+            (v1_echo, HostConnectorErrorCode::ModelIncompatible),
+            (
+                v2_guest("unreachable"),
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                v2_guest("i32.const 0"),
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                v2_guest("i32.const -8"),
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                v2_guest("i32.const 2147483000"),
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                v2_guest("i32.const 1024"),
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+        ];
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, _) = seeded_host();
+            host.engine = engine;
+            for (index, (wasm, code)) in cases.iter().enumerate() {
+                let digest = add_variant(&mut host, wasm.clone(), |m| m.abi_version = 2);
+                assert_eq!(
+                    run(&mut host, &digest, serde_json::Map::new())
+                        .expect_err("fails closed")
+                        .code,
+                    *code,
+                    "{engine:?} case {index}"
+                );
+            }
+        }
+        assert!(check_v2_regions(64, 8, 128, 8, 256).is_ok());
+        assert!(
+            check_v2_regions(64, 8, 128, 8, 130).is_err(),
+            "output past memory"
+        );
+        assert!(check_v2_regions(64, 300, 128, 8, 4096).is_err(), "overlap");
+        assert!(check_v2_regions(64, 8, -1, 8, 4096).is_err(), "negative");
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_guest_abi_versions() {
+        let mut future = fixture_package();
+        future.manifest.abi_version = MAX_MODEL_ABI_VERSION + 1;
+        assert_eq!(
+            future.manifest.validate().expect_err("abi 3").reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
     }
 }

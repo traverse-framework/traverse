@@ -56,6 +56,15 @@ const fixtures = [
     attribution: "Traverse Spec 045/138 bridge conformance fixture",
     input: ["schema:bridged-generate-in", "schema:bridged-generate-out"],
   },
+  // Guest ABI v2 conformance fixture (Decision 105, #1588): echo semantics,
+  // buffers from the guest's model_alloc.
+  {
+    dir: "fixture-echo-v2-1.0.0",
+    model_id: "fixture.echo-v2",
+    attribution: "Traverse Spec 138 guest ABI v2 conformance fixture",
+    input: ["schema:fixture-in", "schema:fixture-out"],
+    abi_version: 2,
+  },
   // First trained model (Decision 102, #1461). model.wasm is built from
   // crates/traverse-digits-mlp-guest; limits come from measured usage
   // (~56k fuel per inference, one 64 KiB page, 268-byte input, 56-byte output).
@@ -93,7 +102,7 @@ for (const fixture of fixtures) {
     wasm_digest: sha256(wasm),
     registry_ref: `${common.registry}:${fixture.model_id}@1.0.0`,
     executable_format: "traverse-model-wasm",
-    abi_version: 1,
+    abi_version: fixture.abi_version ?? 1,
     input_schema_ref: fixture.input[0],
     input_schema_version: "1.0.0",
     output_schema_ref: fixture.input[1],

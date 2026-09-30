@@ -1,0 +1,29 @@
+{
+  "schema_version": "2.0.0",
+  "model_id": "fixture.echo-v2",
+  "version": "1.0.0",
+  "wasm_digest": "6691c302cc456496d0ed9570b69e25bea8fd2a82129bec193dafb7aefa323d68",
+  "registry_ref": "registry:fixture.echo-v2@1.0.0",
+  "executable_format": "traverse-model-wasm",
+  "abi_version": 2,
+  "input_schema_ref": "schema:fixture-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:fixture-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "Apache-2.0",
+    "attribution": "Traverse Spec 138 guest ABI v2 conformance fixture",
+    "redistribution": "test-only; not for production redistribution claims",
+    "commercial_use": "allowed",
+    "source_url": "https://github.com/traverse-framework/Traverse/tree/main/fixtures/models/fixture-echo-v2-1.0.0"
+  },
+  "supported_profiles": [
+    "wasm-cpu"
+  ],
+  "max_memory_bytes": 131072,
+  "max_fuel": 1000000,
+  "max_input_bytes": 4096,
+  "max_output_bytes": 4096,
+  "max_execution_ms": 5000,
+  "offline_allowed": true
+}
