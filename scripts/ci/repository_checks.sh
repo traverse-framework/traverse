@@ -576,5 +576,6 @@ echo "Running use_case ↔ smoke coverage verification (spec 102 FR-007)..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/use_case_smoke_coverage_check.sh"
 
 bash scripts/ci/release_naming_check.sh
+bash scripts/ci/workflow_shell_syntax_check.sh
 
 echo "Repository checks passed."

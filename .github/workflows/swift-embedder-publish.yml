@@ -119,7 +119,7 @@ jobs:
           notes="$(cat <<NOTES
           Artifact-only release for the native Swift host boundary (\`TraverseSwiftHost.xcframework\`).
 
-          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\` (crates.io / npm / Maven / NuGet). This repo's immutable-releases policy forbids adding assets to a release after it is published, so the xcframework ships attached to its own dedicated \`swift-host-v*\` release (same pattern as \`runtime-wasm-v*\`), never marked Latest.
+          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\` (crates.io / npm / Maven / NuGet). The immutable-releases policy of this repository forbids adding assets to a release after it is published, so the xcframework ships attached to its own dedicated \`swift-host-v*\` release (same pattern as \`runtime-wasm-v*\`), never marked Latest.
 
           Referenced by \`packages/swift/TraverseEmbedder/Package.swift\` as the \`TraverseSwiftHost\` binary target.
 
