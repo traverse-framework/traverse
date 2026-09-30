@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Spec 138 on iOS/macOS: wasmi engine, host ceilings, mid-run interruption (Decision 104, #1579)
+
+- `traverse-runtime` gets `ModelEngine::Wasmi` (new default feature
+  `wasmi-executor`). The interpreter runs the model in fuel slices, so
+  cancellation and deadlines interrupt a running inference.
+- New `HostModelLimits` (package bytes, memory, fuel), enforced at
+  registration with the new additive reason `host_limit_exceeded` and
+  intersected at execute.
+- `traverse-swift-host` gets a sixth audited C-ABI symbol,
+  `traverse_swift_host_model_call`, with a framed envelope. It carries
+  create, register, stage, execute, read, rights, cancel, drop, and destroy
+  (ADR-0078; Spec 076 1.2.0; Spec 138 0.6.0).
+
 ## v0.14.0 — 2026-09-29
 
 Minor lockstep release with **breaking** Spec 138 exact-ref model changes. See

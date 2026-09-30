@@ -104,6 +104,7 @@ exports=(
   traverse_swift_host_invoke
   traverse_swift_host_destroy
   traverse_swift_host_status_message
+  traverse_swift_host_model_call
 )
 for symbol in "${exports[@]}"; do
   if [[ "$(grep -Fc "fn ${symbol}" "${swift_boundary}")" -ne 1 ]]; then
@@ -111,8 +112,9 @@ for symbol in "${exports[@]}"; do
     exit 1
   fi
 done
-if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${swift_boundary}")" -ne 5 ]]; then
-  echo "The audited Swift host must expose exactly five production C-ABI symbols." >&2
+# ADR-0015 five symbols + ADR-0078 / Decision 104 `traverse_swift_host_model_call`.
+if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${swift_boundary}")" -ne 6 ]]; then
+  echo "The audited Swift host must expose exactly six production C-ABI symbols." >&2
   exit 1
 fi
 

@@ -56,7 +56,31 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 `reason`: `pin_mismatch`, `pin_ambiguous`, `signature_invalid`,
 `key_untrusted`, `digest_mismatch`, `manifest_invalid`, `rights_incomplete`,
 `rights_mismatch`, `target_unsupported`, `crypto_unavailable`,
-`candidate_unsupported`.
+`candidate_unsupported`, `host_limit_exceeded`.
+
+## Engines, host ceilings, and interruption (Spec 138 0.6.0, Decision 104)
+
+| Host | Engine | Host ceilings | Mid-run cancel/timeout |
+| --- | --- | --- | --- |
+| Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | `wasmi`: yes; wasmtime: #1582 |
+| Swift host (`traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (supplied at `create`) | yes (fuel slices) |
+| Web (`ExactModelBrowserHost`) | browser WebAssembly | #1582 | #1582 |
+
+- **Host ceilings:** a host caps package bytes, guest memory, and fuel.
+  Registration fails with `host_limit_exceeded` when a package's size or
+  declared limits exceed them, and execution uses manifest ∩ host ∩
+  per-call.
+- **`wasmi` interruption:** `wasmi` runs the guest in fuel slices
+  (`WASMI_FUEL_SLICE`). Between slices it checks a caller-managed cancel
+  flag (→ `cancelled`) and the deadline (→ `timeout`). The Swift host
+  cancels only the named `execution_id`, so a late cancel never affects the
+  next execution.
+- **Fuel is engine-relative:** each engine counts `max_fuel` in its own
+  units. Size it so the package's conformance vector passes on every
+  engine; `max_execution_ms` is the portable bound.
+- **Swift API:** `ExactModelHost` on the Swift embedder ships once an
+  xcframework containing the sixth symbol is published (`#1579`,
+  follow-up).
 
 ## Cache and offline behavior
 

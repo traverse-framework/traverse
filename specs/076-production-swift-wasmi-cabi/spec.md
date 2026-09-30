@@ -3,7 +3,7 @@
 **Feature Branch**: `codex/issue-776-production-cabi`
 **Created**: 2026-07-20
 **Status**: Approved
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Input**: ADR-0015, Traverse #776, and the approved production profile.
 
 **Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**: FR-005's
@@ -13,6 +13,13 @@ non-UTF-8 nested-capability WASM artifact) as spec `071` FR-005's "UTF-8 JSON
 bytes" was — resolved by the same Decision 90 (`docs/decision-log.md`): `init`
 on a `runtime.wasm` orchestrator instance is the one exception to the UTF-8
 requirement. No other requirement changed.
+
+**Amendment (2026-09-29, version 1.1.0 -> 1.2.0, approved 2026-09-29)**: Decision 104 /
+ADR-0078 / `#1579`. FR-001 grows from five to six symbols: the new
+`traverse_swift_host_model_call` carries Spec 138 exact-ref model execution
+through a framed envelope (`[u32 LE header_len][JSON header][payload]`), which
+is a second binary-framing exception to FR-005. Model hosts are a separate,
+registry-held resource; FR-009 is added. No other requirement changed.
 
 ## Purpose
 
@@ -57,7 +64,8 @@ codes and bounded JSON details without a sidecar or ambient authority.
 ### Functional Requirements
 
 - **FR-001**: The boundary MUST expose only the five production symbols in
-  ADR-0015 and one opaque serialized host handle.
+  ADR-0015 plus `traverse_swift_host_model_call` (ADR-0078), and one opaque
+  serialized host handle.
 - **FR-002**: Creation MUST verify runtime bytes, expected SHA-256 digest,
   artifact size, no ambient imports, bridge 1.1 ABI, and required exports
   before instantiation.
@@ -69,8 +77,10 @@ codes and bounded JSON details without a sidecar or ambient authority.
   with one exception: `traverse_init` on a `runtime.wasm` orchestrator
   instance (spec `1402` FR-011) carries a raw, non-UTF-8 nested-capability
   WASM artifact appended after its UTF-8 JSON header, per spec `071` FR-005's
-  matching exception. Insufficient output capacity MUST report the exact
-  retry size.
+  matching exception. `traverse_swift_host_model_call` (ADR-0078) is the
+  second exception: its request and response are
+  `[u32 LE header_len][UTF-8 JSON header][raw payload segments]`.
+  Insufficient output capacity MUST report the exact retry size.
 - **FR-006**: The boundary MUST return stable numeric statuses and bounded
   structured UTF-8 JSON errors for all expected failures.
 - **FR-007**: Unsafe code MUST be restricted to the audited host file and
@@ -78,6 +88,10 @@ codes and bounded JSON details without a sidecar or ambient authority.
   opt-outs.
 - **FR-008**: The initial certified-profile target matrix MUST be arm64 iOS,
   arm64 iOS simulator, and arm64 macOS only.
+- **FR-009**: Model hosts created through `traverse_swift_host_model_call`
+  MUST execute only on `wasmi` under host-supplied positive ceilings, MUST
+  support mid-run cancellation of the named execution only, and MUST never
+  let an inference re-run because of an output-buffer retry.
 
 ## Success Criteria
 

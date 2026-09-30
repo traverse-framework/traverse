@@ -917,7 +917,7 @@
     },
     {
       "id": "076-production-swift-wasmi-cabi",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/076-production-swift-wasmi-cabi/spec.md",
@@ -926,7 +926,8 @@
         "packages/swift/TraverseEmbedder/",
         "scripts/ci/scoped_unsafe_boundary_check.sh",
         "docs/adr/0015-production-swift-wasmi-c-abi.md",
-        "specs/076-production-swift-wasmi-cabi/"
+        "specs/076-production-swift-wasmi-cabi/",
+        "docs/adr/0078-swift-host-model-call-abi.md"
       ]
     },
     {
@@ -1913,7 +1914,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1934,7 +1935,9 @@
         "crates/traverse-digits-mlp-guest/",
         "fixtures/datasets/",
         "docs/adr/0077-digits-mlp-guest-abi-unsafe-boundary.md",
-        "scripts/ci/digits_mlp_guest_check.sh"
+        "scripts/ci/digits_mlp_guest_check.sh",
+        "crates/traverse-swift-host/",
+        "docs/adr/0078-swift-host-model-call-abi.md"
       ]
     },
     {

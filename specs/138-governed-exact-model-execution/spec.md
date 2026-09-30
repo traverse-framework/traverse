@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.5.0
+**Version**: 0.6.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -35,6 +35,13 @@ weights; a guest whose checked-in `model.wasm` rebuilds byte-identically in
 CI; and a held-out accuracy floor enforced through the signed
 register → execute path on both native and browser (FR-024 through FR-027).
 Additive; no ABI or schema change.
+**Amendment (2026-09-29, version 0.5.0 -> 0.6.0, approved 2026-09-29)**: Decision 104 /
+ADR-0078 / `#1579`. Makes three rules project-wide:
+- host ceilings, with a new additive reason `host_limit_exceeded`;
+- mid-run interruption for cancellation and deadlines;
+- engine-relative fuel proven by conformance.
+Adds `wasmi` as a supported `wasm-cpu` engine for JIT-forbidden targets
+(FR-028 through FR-031). Additive; no manifest schema change.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -169,7 +176,7 @@ Failures keep the public codes `model_unavailable` / `model_incompatible`
 and add a stable `reason`: `pin_mismatch`, `pin_ambiguous`,
 `signature_invalid`, `key_untrusted`, `digest_mismatch`, `manifest_invalid`,
 `rights_incomplete`, `rights_mismatch`, `target_unsupported`,
-`crypto_unavailable`, `candidate_unsupported`.
+`crypto_unavailable`, `candidate_unsupported`, `host_limit_exceeded` (0.6.0).
 
 ### Browser embedder boundary
 
@@ -366,6 +373,23 @@ Traverse MUST:
 - **FR-027**: CI MUST enforce the package's declared held-out accuracy floor
   through the signed register → execute path, and native and browser MUST
   match a checked-in conformance vector byte-for-byte.
+- **FR-028**: Every host MUST accept host-configured ceilings (package bytes,
+  guest memory, fuel) with safe defaults. Registration MUST fail closed with
+  `model_incompatible` / `host_limit_exceeded` when a package's size or
+  declared limits exceed them, and execution MUST use
+  manifest ∩ host ∩ per-call.
+- **FR-029**: Hosts SHOULD interrupt a running inference mid-run on
+  cancellation (`cancelled`) or deadline (`timeout`), not only before and
+  after it. On `wasmi` this is done by fuel slices with resumable
+  out-of-fuel calls, checking between slices. A cancellation MUST only
+  affect the execution it names.
+- **FR-030**: `max_fuel` is an engine-relative ceiling: each engine enforces
+  it in its own units. A package's conformance vector MUST pass on every
+  supported engine (wasmtime, `wasmi`, browser). `max_execution_ms` is the
+  portable wall-clock bound.
+- **FR-031**: On JIT-forbidden targets (iOS/macOS Swift host) the `wasm-cpu`
+  guest MUST execute on `wasmi` behind the audited Swift-host ABI
+  (ADR-0078), reusing the same verification as native hosts.
 - **FR-017**: The runtime MUST resolve an `artifact_ref` into a bounded
   capability input only through runtime-mediated staging (`stage_artifact` /
   `read_artifact`); guests MUST NOT read host storage directly and MUST NOT
@@ -432,6 +456,10 @@ Traverse MUST:
     fails closed. A per-call fuel ceiling below the measured need traps as
     `execution_failed`. A rebuilt guest whose bytes differ from the
     checked-in `model.wasm` fails CI.
+20. (0.6.0) A package whose size or declared memory/fuel exceeds the host
+    ceilings → `host_limit_exceeded` at registration; a long inference is
+    interrupted mid-run by cancellation (`cancelled`) or deadline
+    (`timeout`), and a stale cancellation never affects a later execution.
 
 ## Compatibility and non-goals
 

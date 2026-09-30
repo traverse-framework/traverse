@@ -1,10 +1,14 @@
-//! Audited five-symbol C ABI for the bounded Apple `wasmi` bridge.
+//! Audited six-symbol C ABI for the bounded Apple `wasmi` bridge
+//! (ADR-0015; the sixth symbol, `traverse_swift_host_model_call`, is
+//! ADR-0078 / Decision 104).
 //!
 //! All raw-pointer conversion is intentionally confined to this file. The
 //! opaque handle owns a `wasmi` store and cannot grant filesystem, network,
 //! environment, clock, process, or arbitrary-import authority.
 
 #![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0015 and Spec 076.
+
+mod model_host;
 
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -603,6 +607,43 @@ pub unsafe extern "C" fn traverse_swift_host_invoke(
     }
 }
 
+/// Framed Spec 138 exact-ref model call (Decision 104, ADR-0078).
+///
+/// `request` is `[u32 LE header_len][JSON header][payload]`; the response is
+/// written with the same framing. `handle` is `0` only for the `create`
+/// operation, which returns a model handle in its response header. Model
+/// failures are encoded in the response (`"ok": false`); envelope failures
+/// return `INVALID_INPUT` / `INVALID_HANDLE`. A `BUFFER_TOO_SMALL` status
+/// reports the required length; `execute` responses are header-only, so a
+/// retry never re-runs an inference (output bytes come from `read_output`).
+///
+/// # Safety
+///
+/// `request` must be valid for reads of `request_length` bytes;
+/// `output_length_out` must point to one writable `usize`; `output_buffer`
+/// must be valid for writes of `output_capacity` bytes whenever
+/// `output_capacity` is greater than zero. Null pointers are checked.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn traverse_swift_host_model_call(
+    handle: u64,
+    request: *const u8,
+    request_length: usize,
+    output_buffer: *mut u8,
+    output_capacity: usize,
+    output_length_out: *mut usize,
+) -> i32 {
+    if request.is_null() || output_length_out.is_null() {
+        return INVALID_INPUT;
+    }
+    // SAFETY: `request` is non-null and the caller supplies a readable range of the stated length.
+    let frame = unsafe { std::slice::from_raw_parts(request, request_length) };
+    match model_host::model_call(handle, frame) {
+        Ok(response) => output(&response, output_buffer, output_capacity, output_length_out),
+        Err(model_host::EnvelopeError::InvalidHandle) => INVALID_HANDLE,
+        Err(model_host::EnvelopeError::InvalidInput(_)) => INVALID_INPUT,
+    }
+}
+
 /// Destroys a host handle; null is an idempotent success.
 #[unsafe(no_mangle)]
 pub extern "C" fn traverse_swift_host_destroy(handle: u64) -> i32 {
@@ -640,6 +681,80 @@ mod tests {
         TraverseSwiftHostLimits, digest, execute_wasi_command, traverse_swift_host_abi_version,
         traverse_swift_host_create, traverse_swift_host_destroy, traverse_swift_host_invoke,
     };
+
+    /// Decision 104 / ADR-0078: the sixth symbol's pointer handling, status
+    /// mapping, and caller-retry path (`BUFFER_TOO_SMALL` reports the length).
+    #[test]
+    fn model_call_abi_checks_pointers_maps_statuses_and_supports_retry() {
+        use super::{INVALID_HANDLE, INVALID_INPUT, traverse_swift_host_model_call};
+        let frame = |header: &str| {
+            let mut bytes = u32::try_from(header.len())
+                .expect("len")
+                .to_le_bytes()
+                .to_vec();
+            bytes.extend_from_slice(header.as_bytes());
+            bytes
+        };
+        let call = |handle: u64, request: &[u8], capacity: usize| {
+            let mut buffer = vec![0_u8; capacity];
+            let mut length = 0_usize;
+            // SAFETY: test-owned buffers of the stated sizes.
+            let status = unsafe {
+                traverse_swift_host_model_call(
+                    handle,
+                    request.as_ptr(),
+                    request.len(),
+                    buffer.as_mut_ptr(),
+                    capacity,
+                    &raw mut length,
+                )
+            };
+            (status, buffer, length)
+        };
+        let mut length = 0_usize;
+        // SAFETY: null request pointer is rejected before any read.
+        let null_request = unsafe {
+            traverse_swift_host_model_call(
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &raw mut length,
+            )
+        };
+        assert_eq!(null_request, INVALID_INPUT);
+        let request = frame(r#"{"op":"rights","digest":"x"}"#);
+        // SAFETY: null length pointer is rejected before any read.
+        let null_length = unsafe {
+            traverse_swift_host_model_call(
+                0,
+                request.as_ptr(),
+                request.len(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(null_length, INVALID_INPUT);
+        assert_eq!(call(424_242, &request, 64).0, INVALID_HANDLE);
+        assert_eq!(call(0, b"\x01", 64).0, INVALID_INPUT);
+
+        let create = frame(
+            r#"{"op":"create","pins":[],"trusted_public_keys_hex":[],"limits":{"max_package_bytes":1,"max_memory_bytes":1,"max_fuel":1}}"#,
+        );
+        let (status, _, needed) = call(0, &create, 0);
+        assert_eq!(status, BUFFER_TOO_SMALL);
+        let (status, buffer, written) = call(0, &create, needed);
+        assert_eq!(status, OK);
+        let header_len =
+            usize::try_from(u32::from_le_bytes(buffer[..4].try_into().expect("4"))).expect("usize");
+        let header: serde_json::Value =
+            serde_json::from_slice(&buffer[4..4 + header_len]).expect("json");
+        assert_eq!(written, 4 + header_len);
+        assert_eq!(header["ok"], serde_json::json!(true));
+        assert!(header["handle"].as_u64().is_some_and(|handle| handle > 0));
+    }
 
     /// Regression test for #1562: `HostError::json()` previously embedded literal
     /// backslashes before each quote (a raw-string escaping mistake), producing a
