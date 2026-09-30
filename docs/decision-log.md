@@ -5688,3 +5688,49 @@ tiny guests with a reserved small stack.
 
 Approved by Enrico in `/brainstorm` (2026-09-30): every recommended option
 accepted.
+
+## Decision 106: BirdNET ONNX Spike Verdict — GO with simd128 and an Int8 Cross-Engine Tolerance
+
+- **Date**: 2026-09-30
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1590` (spike), `#1591` (runner, still blocked on
+  `#1588`), `#1579` (Swift host `wasmi`)
+- **Origin**: go/no-go review of the `#1590` spike against the Decision 105
+  bar; full data in `docs/spikes/1590-birdnet-onnx-wasm.md`
+
+### Context
+
+tract runs BirdNET v2.4 int8 in an import-free wasm32 guest (criterion 1 ✅)
+with 176–178 MiB peak guest memory (criterion 3 ✅). The plain build takes
+3.23 s per 3 s clip on `wasmi`, which misses the 3 s bar. The `+simd128`
+build takes **1.84 s** (criterion 4 ✅ with simd). Top-5 labels match
+onnxruntime on 20/20 clips, but the worst sigmoid-score difference is
+2.2×10⁻³ against the 1×10⁻³ bar. Only 5 of 130,440 outputs exceed it,
+caused by int8 kernel rounding in a different engine. Every Traverse wasm
+engine and build is bit-identical to every other.
+
+### Decision
+
+**GO for `#1591`**, with conditions:
+
+1. The generic ONNX runner ships as a **`+simd128`** build, and
+   `traverse-swift-host` enables `wasmi`'s `simd` feature (a new
+   xcframework).
+2. The **int8 cross-engine tolerance** against an external reference
+   runtime is top-5 identical and |Δ sigmoid score| ≤ 5×10⁻³. Conformance
+   between Traverse engines remains byte-identical.
+3. `#1591` confirms simd `wasmi` latency on a physical iPhone before claiming
+   device real time.
+
+### Alternatives Considered
+
+- GO but keep 1×10⁻³ and switch to fp32 BirdNET (rejected: about 190 MB of
+  weights, over the 128 MiB default Swift package ceiling, and likely much
+  slower on `wasmi`).
+- NO-GO (rejected: discards a correct, ranking-stable, deterministic result
+  at 1.84 s per clip).
+
+### Approval
+
+Approved by Enrico (2026-09-30): "GO: simd required, int8 tolerance 5e-3".

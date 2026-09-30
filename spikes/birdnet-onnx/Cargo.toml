@@ -1,0 +1,17 @@
+[package]
+name = "birdnet-onnx-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "#1590 feasibility spike: BirdNET v2.4 int8 on tract (host + import-free wasm32). Never embeds or commits BirdNET weights."
+
+# Standalone: not part of the host workspace.
+[workspace]
+
+[dependencies]
+tract-onnx = "0.21"
+wasmi = { version = "2.0", features = ["simd"] }
+wasmtime = "44"
+
+[profile.release]
+opt-level = 3

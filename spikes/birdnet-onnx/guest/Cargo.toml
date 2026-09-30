@@ -1,0 +1,22 @@
+[package]
+name = "birdnet-onnx-spike-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "#1590 spike guest: tract + ONNX weights embedded at build time from $BIRDNET_ONNX (never committed)."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tract-onnx = { version = "0.21", default-features = false }
+# Import-free randomness stub: only tract's Random* ops use it (BirdNET doesn't).
+getrandom = { version = "0.2", features = ["custom"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
