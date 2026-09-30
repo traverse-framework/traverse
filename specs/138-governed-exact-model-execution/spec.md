@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.6.0
+**Version**: 0.7.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -42,6 +42,11 @@ ADR-0078 / `#1579`. Makes three rules project-wide:
 - engine-relative fuel proven by conformance.
 Adds `wasmi` as a supported `wasm-cpu` engine for JIT-forbidden targets
 (FR-028 through FR-031). Additive; no manifest schema change.
+**Amendment (2026-09-30, version 0.6.0 -> 0.7.0, approved 2026-09-30)**: Decision 105 /
+`#1588`. Adds **guest ABI v2**: manifest `abi_version: 2` makes the host
+obtain input and output buffers from the guest's `model_alloc(len) -> ptr`
+instead of fixed offsets, so guests with a real heap (for example an ONNX
+runner) are safe. v1 is unchanged (FR-032 through FR-034).
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -232,6 +237,23 @@ candidate kind fails closed with `candidate_unsupported`. Mixed-candidate
 - Large models MAY declare a target unsupported rather than OOM or silent
   degrade.
 
+### Guest ABI v2 (0.7.0, Decision 105)
+
+- The manifest `abi_version` selects buffer placement. `1` means the host
+  writes input at offset 64 and reserves output after it (the v1 behaviour
+  above). `2` means the guest exports `model_alloc(len: i32) -> i32`, and the
+  host calls it once for the input length and once for the output capacity,
+  writes the input frame there, and passes both regions to `model_execute`.
+- Returned regions MUST be positive, lie inside the guest's current linear
+  memory, and not overlap. Otherwise the host fails closed with
+  `execution_failed`. A missing `model_alloc` is `model_incompatible`; a
+  trapping or fuel-exhausted `model_alloc` is `execution_failed`.
+- The guest grows its own memory. The host still enforces the memory ceiling
+  (engine limiter, or a post-allocation size check where there is none)
+  → `resource_exhausted`.
+- The little-endian frame format (frame `abi_version` field `1`) is
+  unchanged. `abi_version` values above 2 are `manifest_invalid`.
+
 ## `model.execute` request payload (Spec 137 command `payload`)
 
 Required:
@@ -390,6 +412,16 @@ Traverse MUST:
 - **FR-031**: On JIT-forbidden targets (iOS/macOS Swift host) the `wasm-cpu`
   guest MUST execute on `wasmi` behind the audited Swift-host ABI
   (ADR-0078), reusing the same verification as native hosts.
+- **FR-032**: Hosts MUST support guest ABI v1 and v2, selected by the
+  manifest `abi_version`, and MUST reject any other value as
+  `manifest_invalid`.
+- **FR-033**: For ABI v2, hosts MUST obtain both buffers from
+  `model_alloc` and MUST reject non-positive, out-of-bounds, or overlapping
+  regions, a missing `model_alloc`, or a trapping `model_alloc`, before
+  writing any input.
+- **FR-034**: A v2 conformance fixture MUST produce byte-identical output on
+  wasmtime, `wasmi`, the browser, and the Swift host (through the shared
+  Rust `wasmi` executor). v1 fixtures MUST be unaffected.
 - **FR-017**: The runtime MUST resolve an `artifact_ref` into a bounded
   capability input only through runtime-mediated staging (`stage_artifact` /
   `read_artifact`); guests MUST NOT read host storage directly and MUST NOT
@@ -460,6 +492,9 @@ Traverse MUST:
     ceilings → `host_limit_exceeded` at registration; a long inference is
     interrupted mid-run by cancellation (`cancelled`) or deadline
     (`timeout`), and a stale cancellation never affects a later execution.
+21. (0.7.0) A v2 guest whose `model_alloc` is missing, traps, or returns a
+    zero, negative, out-of-bounds, or overlapping region fails closed before
+    any input is written; `abi_version: 3` is `manifest_invalid`.
 
 ## Compatibility and non-goals
 

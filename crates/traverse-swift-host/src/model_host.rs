@@ -848,4 +848,45 @@ mod tests {
         timed["payload"]["timeout_ms"] = json!(0);
         assert_eq!(call(handle, &timed, &[])["error"]["code"], json!("timeout"));
     }
+    #[test]
+    fn guest_abi_v2_package_round_trips_through_the_swift_model_call() {
+        let manifest = read("fixture-echo-v2-1.0.0/model.manifest.json");
+        let pin = json!({
+            "model_id": "fixture.echo-v2", "version": "1.0.0", "digest": digest_hex(&manifest),
+            "offline_allowed": true, "target": "wasm-cpu",
+            "rights": { "license_id": "Apache-2.0", "commercial_use": "allowed" }
+        });
+        let handle = create(json!([pin.clone()]));
+        let registered = call(
+            handle,
+            &json!({ "op": "register" }),
+            &[
+                ("manifest", &manifest),
+                ("wasm", &read("fixture-echo-v2-1.0.0/model.wasm")),
+                ("signature", &read("fixture-echo-v2-1.0.0/model.sig.json")),
+            ],
+        );
+        assert_eq!(registered["ok"], json!(true), "{registered}");
+        let input = vec![5_u8; 3000];
+        let input_ref = stage(handle, &input);
+        let mut header = execute_header(&pin, &input_ref, "exec-v2");
+        header["payload"]["input_schema_ref"] = json!("schema:fixture-in");
+        header["payload"]["max_output_bytes"] = json!(4096);
+        let executed = call(handle, &header, &[]);
+        assert_eq!(executed["ok"], json!(true), "{executed}");
+        let (response, payload) = decode(
+            &model_call(
+                handle,
+                &frame(&json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 4096 }), &[]),
+            )
+            .expect("read"),
+        );
+        let range = response["segments"]["output"]
+            .as_array()
+            .expect("segment")
+            .clone();
+        let start = range[0].as_u64().unwrap() as usize;
+        let len = range[1].as_u64().unwrap() as usize;
+        assert_eq!(&payload[start..start + len], input.as_slice());
+    }
 }

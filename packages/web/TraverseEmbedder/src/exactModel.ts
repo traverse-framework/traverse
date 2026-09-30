@@ -5,6 +5,10 @@
 
 export const MODEL_GUEST_ABI_VERSION = 1 as const;
 export const MODEL_EXECUTE_EXPORT = "model_execute" as const;
+/** Guest ABI v2 buffer allocator export (Decision 105). */
+export const MODEL_ALLOC_EXPORT = "model_alloc" as const;
+/** Highest supported manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`). */
+export const MAX_MODEL_ABI_VERSION = 2 as const;
 export const PLACEMENT_WASM_CPU = "wasm-cpu" as const;
 
 /** Model package manifest schema version (Spec 138 0.4.0, Decision 101). */
@@ -225,6 +229,7 @@ function validateManifest(manifest: ModelPackageManifest): void {
   }
   if (
     manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION ||
+    manifest.abi_version > MAX_MODEL_ABI_VERSION ||
     [
       manifest.abi_version, manifest.max_memory_bytes, manifest.max_fuel, manifest.max_input_bytes,
       manifest.max_output_bytes, manifest.max_execution_ms,
@@ -536,7 +541,7 @@ export class ExactModelBrowserHost {
     const ceiling = Math.min(args.max_output_bytes, pack.manifest.max_output_bytes);
     const timeout = Math.min(args.timeout_ms ?? pack.manifest.max_execution_ms, pack.manifest.max_execution_ms);
     const started = performance.now();
-    const output = await runWasmCpu(pack.wasm, input, ceiling, pack.manifest.max_memory_bytes);
+    const output = await runWasmCpu(pack.wasm, input, ceiling, pack.manifest.max_memory_bytes, pack.manifest.abi_version);
     const durationMs = performance.now() - started;
     if (args.signal?.aborted) {
       throw new ExactModelError("cancelled", "model.execute cancelled during invoke");
@@ -565,6 +570,7 @@ async function runWasmCpu(
   input: Uint8Array,
   maxOutputBytes: number,
   maxMemoryBytes: number,
+  abiVersion: number,
 ): Promise<Uint8Array> {
   const module = await WebAssembly.compile(new Uint8Array(wasm));
   // Deny-by-default: no imports.
@@ -574,15 +580,9 @@ async function runWasmCpu(
   if (!(memory instanceof WebAssembly.Memory) || typeof execute !== "function") {
     throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
   }
-  const inPtr = 64;
-  const outPtr = inPtr + input.length + 64;
-  const needed = outPtr + maxOutputBytes;
-  if (needed > maxMemoryBytes) {
-    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
-  }
-  while (memory.buffer.byteLength < needed) {
-    memory.grow(1);
-  }
+  const [inPtr, outPtr] = abiVersion >= 2
+    ? placeV2(instance, memory, input.length, maxOutputBytes, maxMemoryBytes)
+    : placeV1(memory, input.length, maxOutputBytes, maxMemoryBytes);
   new Uint8Array(memory.buffer, inPtr, input.length).set(input);
   const outLen = Number(
     (execute as (a: number, b: number, c: number, d: number) => number)(
@@ -595,5 +595,57 @@ async function runWasmCpu(
   if (!Number.isFinite(outLen) || outLen < 0 || outLen > maxOutputBytes) {
     throw new ExactModelError("resource_exhausted", "model returned invalid output length");
   }
+  if (memory.buffer.byteLength > maxMemoryBytes) {
+    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
+  }
   return new Uint8Array(memory.buffer.slice(outPtr, outPtr + outLen));
+}
+
+/** Guest ABI v1: host-chosen fixed offsets, grown by the host. */
+function placeV1(memory: WebAssembly.Memory, inLen: number, outCap: number, maxMemoryBytes: number): [number, number] {
+  const inPtr = 64;
+  const outPtr = inPtr + inLen + 64;
+  const needed = outPtr + outCap;
+  if (needed > maxMemoryBytes) {
+    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
+  }
+  while (memory.buffer.byteLength < needed) {
+    memory.grow(1);
+  }
+  return [inPtr, outPtr];
+}
+
+/**
+ * Guest ABI v2 (Decision 105): buffers come from the guest's `model_alloc`.
+ * Regions must be positive, in bounds, and disjoint (same rules as native).
+ */
+function placeV2(
+  instance: WebAssembly.Instance,
+  memory: WebAssembly.Memory,
+  inLen: number,
+  outCap: number,
+  maxMemoryBytes: number,
+): [number, number] {
+  const alloc = instance.exports[MODEL_ALLOC_EXPORT];
+  if (typeof alloc !== "function") {
+    throw new ExactModelError("model_incompatible", "abi_version 2 model wasm missing model_alloc export");
+  }
+  let inPtr: number;
+  let outPtr: number;
+  try {
+    inPtr = Number((alloc as (n: number) => number)(inLen));
+    outPtr = Number((alloc as (n: number) => number)(outCap));
+  } catch {
+    throw new ExactModelError("execution_failed", "model_alloc trapped");
+  }
+  if (memory.buffer.byteLength > maxMemoryBytes) {
+    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
+  }
+  const size = memory.buffer.byteLength;
+  const inEnd = inPtr + inLen;
+  const outEnd = outPtr + outCap;
+  if (!(inPtr > 0 && outPtr > 0 && inEnd <= size && outEnd <= size) || (inPtr < outEnd && outPtr < inEnd)) {
+    throw new ExactModelError("execution_failed", "model_alloc returned an invalid region");
+  }
+  return [inPtr, outPtr];
 }

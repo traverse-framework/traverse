@@ -58,6 +58,18 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 `rights_mismatch`, `target_unsupported`, `crypto_unavailable`,
 `candidate_unsupported`, `host_limit_exceeded`.
 
+## Guest ABI v1 and v2 (Spec 138 0.7.0, Decision 105)
+
+| `abi_version` | Buffers | For |
+| --- | --- | --- |
+| `1` | The host writes input at offset 64 and reserves output after it | Tiny guests with a small reserved stack (the fixtures, digits) |
+| `2` | The host calls the guest's `model_alloc(len) -> ptr` for the input and output regions | Guests with a heap (for example the ONNX runner, #1591) |
+
+For v2, returned regions must be positive, in bounds, and disjoint, and
+`model_alloc` must exist and not trap; otherwise the call fails closed. The
+frame format is the same for both. `fixtures/models/fixture-echo-v2-1.0.0` is
+the signed v2 conformance guest, a bump allocator with echo semantics.
+
 ## Engines, host ceilings, and interruption (Spec 138 0.6.0, Decision 104)
 
 | Host | Engine | Host ceilings | Mid-run cancel/timeout |

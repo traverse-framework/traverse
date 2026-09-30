@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createPrivateKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   ExactModelBrowserHost,
@@ -429,4 +429,60 @@ test("shutdown invalidates every staged ref", () => {
   assert.throws(() => io.readArtifact(artifactRef, 8), (e) => e.code === "unavailable");
   assert.throws(() => io.takeInput(inputRef), (e) => e.code === "invalid_input");
   assert.throws(() => io.readModelOutput(outputRef, 8), (e) => e.code === "unavailable");
+});
+
+test("guest ABI v2 (#1588): model_alloc buffers match the v1 echo; bad allocators fail closed", async () => {
+  const pkg = fixture("fixture-echo-v2-1.0.0");
+  const pin = await pinFor("fixture.echo-v2", pkg.manifest);
+  const host = new ExactModelBrowserHost([pin], TRUST);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  for (const bytes of [new Uint8Array([1, 2, 3]), new Uint8Array(3000).fill(7)]) {
+    const input_ref = host.io.stageModelInput(bytes, 4096);
+    const result = await host.execute(executeArgs("fixture.echo-v2", digest, input_ref, "schema:fixture-in"));
+    assert.deepEqual([...host.io.readModelOutput(result.output_ref, 4096)], [...bytes]);
+  }
+
+  const { default: wabtInit } = await import("wabt");
+  const wabt = await wabtInit();
+  const guest = (alloc) =>
+    new Uint8Array(
+      wabt
+        .parseWat(
+          "g.wat",
+          `(module (memory (export "memory") 1)
+             (func (export "model_alloc") (param $len i32) (result i32) ${alloc})
+             (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))`,
+        )
+        .toBinary({}).buffer,
+    );
+  const v1Echo = fixture("fixture-echo-1.0.0").wasm;
+  const cases = [
+    [v1Echo, "model_incompatible"],
+    [guest("unreachable"), "execution_failed"],
+    [guest("i32.const 0"), "execution_failed"],
+    [guest("i32.const -8"), "execution_failed"],
+    [guest("i32.const 2147483000"), "execution_failed"],
+    [guest("i32.const 1024"), "execution_failed"],
+    [guest("(drop (memory.grow (i32.const 16))) i32.const 1024"), "resource_exhausted"],
+  ];
+  for (const [wasm, code] of cases) {
+    const { bytes, sig } = resigned(pkg.manifest, (m) => {
+      m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
+      m.max_memory_bytes = 131072;
+    });
+    const casePin = await pinFor("fixture.echo-v2", bytes);
+    const caseHost = new ExactModelBrowserHost([casePin], TRUST);
+    const caseDigest = await caseHost.registerPackage(bytes, wasm, sig);
+    const input_ref = caseHost.io.stageModelInput(new Uint8Array([1, 2, 3]), 64);
+    await assert.rejects(
+      () => caseHost.execute(executeArgs("fixture.echo-v2", caseDigest, input_ref, "schema:fixture-in")),
+      (error) => error.code === code,
+      code,
+    );
+  }
+  const { bytes, sig } = resigned(pkg.manifest, (m) => {
+    m.abi_version = 3;
+  });
+  const future = new ExactModelBrowserHost([await pinFor("fixture.echo-v2", bytes)], TRUST);
+  await assert.rejects(() => future.registerPackage(bytes, pkg.wasm, sig), (error) => error.reason === "manifest_invalid");
 });

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Spec 138 guest ABI v2 (Decision 105, #1588)
+
+- Manifest `abi_version: 2`: the host obtains model input and output
+  buffers from the guest's `model_alloc(len)` instead of fixed offsets. It
+  works on wasmtime, `wasmi` (Swift), and the browser, and fails closed on
+  a missing, trapping, out-of-bounds, or overlapping allocator. v1 guests
+  are unchanged. Adds the new signed `fixture-echo-v2-1.0.0` fixture.
+
 ### Spec 138 on iOS/macOS: wasmi engine, host ceilings, mid-run interruption (Decision 104, #1579)
 
 - `traverse-runtime` gets `ModelEngine::Wasmi` (new default feature
