@@ -16,7 +16,8 @@ use std::fmt::Write as _;
 use wasmi::{Caller, Extern};
 use wasmi::{Config, Engine, Instance, Linker, Memory, Store, StoreLimits, StoreLimitsBuilder};
 
-const ABI_VERSION: u32 = 2;
+// 3: adds `traverse_swift_host_model_call` (ADR-0078 / Decision 104).
+const ABI_VERSION: u32 = 3;
 const OK: i32 = 0;
 const INVALID_HANDLE: i32 = -1;
 const INVALID_INPUT: i32 = -2;

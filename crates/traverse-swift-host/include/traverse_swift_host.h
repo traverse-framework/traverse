@@ -37,4 +37,16 @@ int32_t traverse_swift_host_destroy(uint64_t handle);
 /// Returns a stable, static UTF-8 description for a status code.
 const char *traverse_swift_host_status_message(int32_t status);
 
+/// Spec 138 exact-ref model call (ABI version >= 3; ADR-0078, Decision 104).
+/// `request` and the response written to `output` use the framing
+/// `[u32 LE header_len][UTF-8 JSON header][payload segments]`. Pass
+/// `handle == 0` only for the `create` operation, which returns a model
+/// handle in its response header. Model failures are encoded in the response
+/// (`"ok": false`). On `TRAVERSE_SWIFT_HOST_BUFFER_TOO_SMALL`,
+/// `output_length_out` is the exact required length; `execute` responses are
+/// header-only, so a retry never re-runs an inference.
+int32_t traverse_swift_host_model_call(
+  uint64_t handle, const uint8_t *request, size_t request_length,
+  uint8_t *output, size_t output_capacity, size_t *output_length_out);
+
 #endif
