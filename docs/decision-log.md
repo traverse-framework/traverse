@@ -5587,3 +5587,104 @@ resuming a call after it runs out of fuel.
 Approved by Enrico in `/brainstorm` (2026-09-29): every recommended option
 accepted. `#1579` moves to Ready with this decision as its scope; the rollout
 remainder is `#1582`.
+
+## Decision 105: Third-Party Model Packaging — Generic ONNX Runner (Spike-Gated), Guest ABI v2, `traverse-cli model`, Two-Tier Provenance
+
+- **Date**: 2026-09-30
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendments land
+  with `#1588` and `#1589`)
+- **Related issues**: `#1581` (umbrella); `#1588` guest ABI v2, `#1589` CLI +
+  guide + provenance, `#1590` BirdNET spike, `#1591` ONNX runner (blocked on
+  `#1588` and `#1590`)
+- **Origin**: `/brainstorm` on `#1581`, driven by Callweave's need to ship
+  BirdNET v2.4 int8 (47 MB ONNX, `[1,144000]` f32 in, 6,522 outputs,
+  CC BY-NC-SA 4.0) as a Spec 138 package
+
+### Context
+
+The only path to a Spec 138 guest today is hand-written inference code
+(Decision 102's digits MLP), which is unrealistic for a CNN such as BirdNET.
+Packagers have no model CLI (only the capability `artifact sign/verify`),
+and Spec 138 0.5.0 FR-024–027 require in-repo training evidence that a
+converted pretrained model can't provide. Guest ABI v1 also has the host
+write input at a fixed offset (64) in guest memory, which is only safe for
+tiny guests with a reserved small stack.
+
+### Decision
+
+1. **A generic ONNX runner, gated by a spike.** Traverse ships one reusable,
+   audited, import-free wasm32 ONNX runner guest built on a pure-Rust
+   engine (for example tract). A time-boxed BirdNET spike (`#1590`) must pass
+   first.
+2. **Guest ABI v2.** The guest exports `model_alloc(len) -> ptr` (and
+   optionally `model_free`), and the host places input and output in
+   guest-allocated memory. The manifest `abi_version: 2` selects it, and v1
+   guests keep working. It is implemented in every host (`#1588`).
+3. **Weights are baked into `model.wasm`.** `model package-onnx` embeds the
+   ONNX bytes and tensor config into the runner as data segments, producing
+   one `model.wasm` per model. There is no manifest schema change, and the
+   existing digest, signature, and pin cover the weights.
+4. **Tensor interface v1: one input, one output, raw values.** Names,
+   shapes, and dtypes are fixed at package time and validated per call.
+   There is no post-processing in the runner; sigmoid, labels, and
+   thresholds stay in app capabilities.
+5. **A new `traverse-cli model` group,** all with `--json`:
+   - `package-onnx`, `digest`, `sign --key` (a key the user supplies,
+     never generated into the repo), `verify`, `pin`, `conformance`;
+   - `verify` checks schema, rights, signature, trusted key, wasm digest,
+     zero imports, and limits against host ceilings.
+6. **Two-tier provenance.** FR-024–027 apply only to Traverse-published
+   trained packages. A third-party package MUST pass `model verify` and ship
+   a conformance vector that passes on `wasmi` plus at least one other
+   engine. Runner-built packages record the source ONNX SHA-256 in
+   `rights.attribution`.
+7. **The spike's go/no-go bar:**
+   - BirdNET runs in an import-free wasm32 guest;
+   - top-5 labels match an onnxruntime reference on about 20 clips, with
+     scores within 1e-3;
+   - peak guest memory is under 256 MiB;
+   - it takes under 3 s per 3 s clip on `wasmi` on Apple silicon.
+
+   On failure, the spike reports which criterion failed and the options
+   (fp32 variant, a smaller model, or a Core ML acceleration adapter per
+   FR-012).
+8. **Licensing: NC/SA weights are never committed.** BirdNET is read from a
+   local path for the spike and for local evidence. The runner's committed
+   conformance fixture uses a permissively licensed model (for example an
+   ONNX export of the CC-BY-4.0 digits MLP).
+9. **Work split:** umbrella `#1581` with four children. `#1588`, `#1589`,
+   and `#1590` are Ready in parallel; `#1591` is Blocked on `#1588` and
+   `#1590`.
+
+### Alternatives Considered
+
+- ONNX scope: ABI docs and tools only (rejected: leaves Callweave to write
+  a CNN guest); an ONNX-to-code generator (rejected: effectively a compiler,
+  far larger than a runner).
+- Buffers: the runner reserves a fixed low scratch region (rejected: a
+  fragile hidden layout contract that caps input size); deciding after the
+  spike (rejected: the overlap is predictable).
+- Weights: a separate `model.onnx` file with `weights_digest` (rejected: a
+  manifest schema bump and new host load plumbing everywhere).
+- Tensors: multiple named tensors (rejected: extends frames and staging
+  with no current need); built-in post-processing (rejected: model-specific
+  logic inside the audited runner).
+- CLI: extending `artifact sign/verify` (rejected: mixes two signing
+  models); library plus scripts only (rejected: every packager re-scripts
+  the same steps).
+- Provenance: signature only (rejected: nothing checks that a package runs
+  on the host's engine); the same FR-024–027 for everyone (rejected: blocks
+  converted pretrained models).
+- Spike bar: correctness only (rejected: a correct but slow inference is
+  useless for field audio); a latency under 1 s (rejected: likely
+  unreachable on an interpreter).
+- Licensing: vendoring BirdNET as a fixture (rejected: NC/SA weights in an
+  Apache-2.0 repo, plus 47 MB).
+- Split: one big ticket (rejected: no gate between spike and runner); spike
+  only (rejected: ABI v2 and the CLI are needed regardless).
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-09-30): every recommended option
+accepted.
