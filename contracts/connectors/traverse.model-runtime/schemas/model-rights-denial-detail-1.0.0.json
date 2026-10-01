@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/model-rights-denial-detail-1.0.0.json",
+  "title": "Spec 138 rights denial detail",
+  "description": "error.detail on rights_incomplete, rights_mismatch, rights_policy_denied, rights_inconsistent, package_revoked, and usage_undeclared (Spec 138 0.8.0, Decision 107, FR-037). Identity fields are omitted only when no package is known yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "field",
+    "expected",
+    "actual"
+  ],
+  "properties": {
+    "model_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "field": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dotted path that failed, e.g. rights.commercial_use"
+    },
+    "expected": {
+      "type": "string"
+    },
+    "actual": {
+      "type": "string"
+    },
+    "effective_usage": {
+      "type": "string",
+      "enum": [
+        "commercial",
+        "non_commercial"
+      ]
+    }
+  }
+}

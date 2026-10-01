@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use traverse_runtime::exact_model::{
     ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits, ModelEngine,
-    PLACEMENT_WASM_CPU, TrustedModelKeys,
+    ModelUsage, PLACEMENT_WASM_CPU, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -233,7 +233,24 @@ fn create(request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
         max_memory_bytes: limit("max_memory_bytes")?,
         max_fuel: limit("max_fuel")?,
     };
+    // App `model_usage` (Decision 107): absent stays undeclared so
+    // registration fails closed with `usage_undeclared`.
+    let model_usage = match request.header.get("model_usage") {
+        None => None,
+        Some(value) => Some(
+            serde_json::from_value::<ModelUsage>(value.clone())
+                .map_err(|_| EnvelopeError::InvalidInput("model_usage"))?,
+        ),
+    };
+    let host_requires_commercial = match request.header.get("host_requires_commercial") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or(EnvelopeError::InvalidInput("host_requires_commercial"))?,
+    };
     let mut connector = ExactModelHostConnector::new(pins, trusted);
+    connector.model_usage = model_usage;
+    connector.host_requires_commercial = host_requires_commercial;
     connector.engine = ModelEngine::Wasmi;
     connector.host_limits = host_limits;
     let cancel = Arc::clone(&connector.cancel);
@@ -462,7 +479,7 @@ mod tests {
     fn create(pins: Value) -> u64 {
         let response = call(
             0,
-            &json!({ "op": "create", "pins": pins, "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits() }),
+            &json!({ "op": "create", "pins": pins, "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits(), "model_usage": "commercial" }),
             &[],
         );
         assert_eq!(response["ok"], json!(true), "{response}");
@@ -621,6 +638,7 @@ mod tests {
         let tight = call(
             0,
             &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": [key("public_key_hex")],
+                     "model_usage": "commercial",
                      "limits": { "max_package_bytes": 100, "max_memory_bytes": 1_048_576, "max_fuel": 1_000_000 } }),
             &[],
         );

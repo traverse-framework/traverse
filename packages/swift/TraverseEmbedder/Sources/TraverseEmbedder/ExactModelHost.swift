@@ -101,10 +101,14 @@ public final class ExactModelHost: @unchecked Sendable {
     private let handle: UInt64
     private let responseCapacity = 64 * 1024
 
+    /// - Parameter modelUsage: the app manifest `model_usage`
+    ///   (`commercial` | `non_commercial`, Spec 138 0.8.0); registration fails
+    ///   closed with `usage_undeclared` when it is `nil`.
     public init(pins: [ExactModelPin], trustedPublicKeysHex: [String],
+                modelUsage: String?,
                 limits: ExactModelHostLimits = ExactModelHostLimits()) throws {
         let pinsJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pins))
-        let response = try Self.call(handle: 0, header: [
+        var header: [String: Any] = [
             "op": "create",
             "pins": pinsJSON,
             "trusted_public_keys_hex": trustedPublicKeysHex,
@@ -113,7 +117,9 @@ public final class ExactModelHost: @unchecked Sendable {
                 "max_memory_bytes": limits.maxMemoryBytes,
                 "max_fuel": limits.maxFuel,
             ],
-        ], segments: [], capacity: 64 * 1024)
+        ]
+        if let modelUsage { header["model_usage"] = modelUsage }
+        let response = try Self.call(handle: 0, header: header, segments: [], capacity: 64 * 1024)
         guard let handle = (response.header["handle"] as? NSNumber)?.uint64Value else {
             throw ExactModelError(code: "unavailable", reason: nil, message: "model host was not created")
         }

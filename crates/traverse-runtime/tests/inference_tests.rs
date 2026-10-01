@@ -20,8 +20,8 @@ use traverse_registry::{
 };
 use traverse_runtime::exact_model::{
     CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, FIXTURE_ECHO_WAT,
-    MODEL_PACKAGE_SCHEMA_VERSION, ModelPackageManifest, ModelRights, PLACEMENT_WASM_CPU, PinRights,
-    TrustedModelKeys, digest_hex, sign_model_manifest,
+    MODEL_PACKAGE_SCHEMA_VERSION, ModelPackageManifest, ModelRights, ModelUsage,
+    PLACEMENT_WASM_CPU, PinRights, TrustedModelKeys, digest_hex, sign_model_manifest,
 };
 use traverse_runtime::inference::{
     GovernedModelExecutionError, GovernedModelExecutionErrorCode, GovernedModelExecutionRequest,
@@ -1154,6 +1154,7 @@ fn signed_host(
     keys.trust(&test_key_bytes("public_key_hex"))
         .expect("trust test key");
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+    host.model_usage = Some(ModelUsage::Commercial);
     host.register_package(manifest_bytes, wasm, signature)
         .expect("package should verify");
     host.policies.insert(
@@ -1187,6 +1188,7 @@ fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
             redistribution: "test-only".to_string(),
             commercial_use: CommercialUse::Allowed,
             source_url: "https://example.invalid/fixture".to_string(),
+            derivation: None,
         },
         supported_profiles: vec![PLACEMENT_WASM_CPU.to_string()],
         max_memory_bytes: 2 * 64 * 1024,

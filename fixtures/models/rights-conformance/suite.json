@@ -1,0 +1,1016 @@
+{
+  "governing_spec": "138-governed-exact-model-execution",
+  "spec_version": "0.8.0",
+  "description": "Shared rights conformance suite (Decision 107, FR-041). Data only: every model-capable embedder runs each case on a fresh host and MUST match code, reason, detail, rights records, and model_evidence exactly (scenario 10: native/browser parity).",
+  "trusted_public_key_hex": "97002eba1e28b582a739eb48750a5f0822b2bbcb61e6bcedd2fada36b51af355",
+  "wasm_path": "fixtures/models/fixture-echo-1.0.0/model.wasm",
+  "package_dir": "fixtures/models/rights-conformance/packages",
+  "tamper": {
+    "signature": "XOR the first decoded byte of model.sig.json `signature` with 0x01 and re-encode as lowercase hex",
+    "wasm": "append one 0x00 byte to model.wasm"
+  },
+  "execute": {
+    "policy_ref": "policy-1",
+    "allowed_classifications": [
+      "sensitive"
+    ],
+    "data_classification": "sensitive",
+    "input_schema_ref": "schema:fixture-in",
+    "input_schema_version": "1.0.0",
+    "max_output_bytes": 4096,
+    "input_hex": "74726176657273652072696768747320636f6e666f726d616e6365"
+  },
+  "cases": [
+    {
+      "id": "permissive-commercial",
+      "scenarios": [
+        1,
+        9
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef"
+          }
+        },
+        {
+          "op": "rights_record",
+          "package": "permissive",
+          "expect": {
+            "model_id": "fixture.rights.permissive",
+            "version": "1.0.0",
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+            "rights": {
+              "license_id": "Apache-2.0",
+              "attribution": "Traverse Spec 138 rights conformance fixture",
+              "redistribution": "test-only; not for production redistribution claims",
+              "commercial_use": "allowed",
+              "source_url": "https://example.invalid/rights-conformance"
+            },
+            "status": "active",
+            "effective_usage": "commercial"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "rights": {
+                "license_id": "Apache-2.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "allowed",
+                "source_url": "https://example.invalid/rights-conformance"
+              },
+              "status": "active",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-commercial-package-non-commercial-app",
+      "scenarios": [
+        2,
+        9
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.non-commercial",
+          "version": "1.0.0",
+          "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "non_commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "non-commercial",
+          "expect": {
+            "ok": true,
+            "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "non-commercial",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.non-commercial",
+              "version": "1.0.0",
+              "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+              "rights": {
+                "license_id": "CC-BY-NC-4.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "prohibited",
+                "source_url": "https://example.invalid/rights-conformance"
+              },
+              "status": "active",
+              "effective_usage": "non_commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-commercial-package-commercial-app",
+      "scenarios": [
+        2,
+        3
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.non-commercial",
+          "version": "1.0.0",
+          "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "non-commercial",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_policy_denied",
+            "detail": {
+              "model_id": "fixture.rights.non-commercial",
+              "version": "1.0.0",
+              "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+              "field": "rights.commercial_use",
+              "expected": "allowed|restricted",
+              "actual": "prohibited",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "host-requires-commercial-overrides-non-commercial-app",
+      "scenarios": [
+        3
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.non-commercial",
+          "version": "1.0.0",
+          "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "non_commercial",
+      "host_requires_commercial": true,
+      "steps": [
+        {
+          "op": "register",
+          "package": "non-commercial",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_policy_denied",
+            "detail": {
+              "model_id": "fixture.rights.non-commercial",
+              "version": "1.0.0",
+              "digest": "28ab65aeec089b0e1885f6a329f9cd98d81eea1539dd27fab53ceebe28c1d68a",
+              "field": "rights.commercial_use",
+              "expected": "allowed|restricted",
+              "actual": "prohibited",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "restricted-package-acknowledged-by-pin",
+      "scenarios": [
+        3
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.restricted",
+          "version": "1.0.0",
+          "digest": "a2f671a5f80e8ff51ce6dbec8b3d3c12a7f630f3f28c7d884981fdd3ab19b7ca",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "LicenseRef-Restricted-1.0",
+            "commercial_use": "restricted"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "restricted",
+          "expect": {
+            "ok": true,
+            "digest": "a2f671a5f80e8ff51ce6dbec8b3d3c12a7f630f3f28c7d884981fdd3ab19b7ca"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "restricted",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.restricted",
+              "version": "1.0.0",
+              "digest": "a2f671a5f80e8ff51ce6dbec8b3d3c12a7f630f3f28c7d884981fdd3ab19b7ca",
+              "rights": {
+                "license_id": "LicenseRef-Restricted-1.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "restricted",
+                "source_url": "https://example.invalid/rights-conformance"
+              },
+              "status": "active",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "restricted-package-pin-expects-allowed",
+      "scenarios": [
+        3
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.restricted",
+          "version": "1.0.0",
+          "digest": "a2f671a5f80e8ff51ce6dbec8b3d3c12a7f630f3f28c7d884981fdd3ab19b7ca",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "LicenseRef-Restricted-1.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "restricted",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_mismatch",
+            "detail": {
+              "model_id": "fixture.rights.restricted",
+              "version": "1.0.0",
+              "digest": "a2f671a5f80e8ff51ce6dbec8b3d3c12a7f630f3f28c7d884981fdd3ab19b7ca",
+              "field": "rights.commercial_use",
+              "expected": "allowed",
+              "actual": "restricted"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "usage-undeclared",
+      "scenarios": [
+        4
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": null,
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "usage_undeclared",
+            "detail": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "field": "model_usage",
+              "expected": "commercial|non_commercial",
+              "actual": "undeclared"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-attribution",
+      "scenarios": [
+        4
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.missing-attribution",
+          "version": "1.0.0",
+          "digest": "31c8cb24caefca6acc34a680b5c54f26d420ff5abb4d000e35633b639d1b70d4",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "missing-attribution",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_incomplete",
+            "detail": {
+              "model_id": "fixture.rights.missing-attribution",
+              "version": "1.0.0",
+              "digest": "31c8cb24caefca6acc34a680b5c54f26d420ff5abb4d000e35633b639d1b70d4",
+              "field": "rights.attribution",
+              "expected": "non-empty",
+              "actual": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-license",
+      "scenarios": [
+        4
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.missing-license",
+          "version": "1.0.0",
+          "digest": "15694da1cd5318a40aa7f3cbc0135f19397a5ef026e528b9269db132ec743f97",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "missing-license",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_incomplete",
+            "detail": {
+              "model_id": "fixture.rights.missing-license",
+              "version": "1.0.0",
+              "digest": "15694da1cd5318a40aa7f3cbc0135f19397a5ef026e528b9269db132ec743f97",
+              "field": "rights.license_id",
+              "expected": "non-empty",
+              "actual": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "unknown-commercial-use",
+      "scenarios": [
+        5
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.unknown-commercial-use",
+          "version": "1.0.0",
+          "digest": "a85d00a0a64bd7be241448d722f9013d79b48401b5bdcb0be58bf9bf30b29efe",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "unknown-commercial-use",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "manifest_invalid"
+          }
+        }
+      ]
+    },
+    {
+      "id": "signature-tampered",
+      "scenarios": [
+        6
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "tamper": "signature",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "signature_invalid"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wasm-tampered",
+      "scenarios": [
+        6
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "tamper": "wasm",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "digest_mismatch"
+          }
+        }
+      ]
+    },
+    {
+      "id": "revoked-at-registration",
+      "scenarios": [
+        7
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "package_status": {
+        "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef": {
+          "status": "revoked",
+          "reason": "license withdrawn by the rights holder"
+        }
+      },
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": false,
+            "code": "model_unavailable",
+            "reason": "package_revoked",
+            "detail": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "field": "status",
+              "expected": "active|deprecated",
+              "actual": "revoked",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "revoked-mid-session-blocks-next-execute",
+      "scenarios": [
+        7
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "rights": {
+                "license_id": "Apache-2.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "allowed",
+                "source_url": "https://example.invalid/rights-conformance"
+              },
+              "status": "active",
+              "effective_usage": "commercial"
+            }
+          }
+        },
+        {
+          "op": "set_package_status",
+          "entries": {
+            "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef": {
+              "status": "revoked",
+              "reason": "license withdrawn by the rights holder"
+            }
+          }
+        },
+        {
+          "op": "rights_record",
+          "package": "permissive",
+          "expect": {
+            "model_id": "fixture.rights.permissive",
+            "version": "1.0.0",
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+            "rights": {
+              "license_id": "Apache-2.0",
+              "attribution": "Traverse Spec 138 rights conformance fixture",
+              "redistribution": "test-only; not for production redistribution claims",
+              "commercial_use": "allowed",
+              "source_url": "https://example.invalid/rights-conformance"
+            },
+            "status": "revoked",
+            "status_reason": "license withdrawn by the rights holder",
+            "effective_usage": "commercial"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": false,
+            "code": "model_unavailable",
+            "reason": "package_revoked",
+            "detail": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "field": "status",
+              "expected": "active|deprecated",
+              "actual": "revoked",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "deprecated-runs-and-is-flagged",
+      "scenarios": [
+        7,
+        9
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "package_status": {
+        "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef": {
+          "status": "deprecated",
+          "reason": "superseded by a newer package"
+        }
+      },
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef"
+          }
+        },
+        {
+          "op": "rights_record",
+          "package": "permissive",
+          "expect": {
+            "model_id": "fixture.rights.permissive",
+            "version": "1.0.0",
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+            "rights": {
+              "license_id": "Apache-2.0",
+              "attribution": "Traverse Spec 138 rights conformance fixture",
+              "redistribution": "test-only; not for production redistribution claims",
+              "commercial_use": "allowed",
+              "source_url": "https://example.invalid/rights-conformance"
+            },
+            "status": "deprecated",
+            "status_reason": "superseded by a newer package",
+            "effective_usage": "commercial"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.permissive",
+              "version": "1.0.0",
+              "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+              "rights": {
+                "license_id": "Apache-2.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "allowed",
+                "source_url": "https://example.invalid/rights-conformance"
+              },
+              "status": "deprecated",
+              "status_reason": "superseded by a newer package",
+              "effective_usage": "commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-cache-miss",
+      "scenarios": [
+        8
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": false,
+            "code": "model_unavailable",
+            "reason": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-not-allowed-by-pin",
+      "scenarios": [
+        8
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": false,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "permissive",
+          "expect": {
+            "ok": true,
+            "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "permissive",
+          "expect": {
+            "ok": false,
+            "code": "model_unavailable",
+            "reason": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "derivative-consistent",
+      "scenarios": [
+        9
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.derivative",
+          "version": "1.0.0",
+          "digest": "f8113f83e11efa3b6915a0fe80bab0f5be4192614a62459f0f3d5d79f201e408",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-SA-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "non_commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "derivative",
+          "expect": {
+            "ok": true,
+            "digest": "f8113f83e11efa3b6915a0fe80bab0f5be4192614a62459f0f3d5d79f201e408"
+          }
+        },
+        {
+          "op": "execute",
+          "package": "derivative",
+          "expect": {
+            "ok": true,
+            "output_hex": "74726176657273652072696768747320636f6e666f726d616e6365",
+            "model_evidence": {
+              "model_id": "fixture.rights.derivative",
+              "version": "1.0.0",
+              "digest": "f8113f83e11efa3b6915a0fe80bab0f5be4192614a62459f0f3d5d79f201e408",
+              "rights": {
+                "license_id": "CC-BY-NC-SA-4.0",
+                "attribution": "Traverse Spec 138 rights conformance fixture",
+                "redistribution": "test-only; not for production redistribution claims",
+                "commercial_use": "prohibited",
+                "source_url": "https://example.invalid/rights-conformance",
+                "derivation": {
+                  "kind": "converted",
+                  "source_digest": "75524b63a56a349977feb8837bf26b5eb610a8901377a78234d5b602f6277279",
+                  "source_license_id": "CC-BY-NC-SA-4.0",
+                  "source_commercial_use": "prohibited",
+                  "source_url": "https://example.invalid/rights-conformance/source"
+                }
+              },
+              "status": "active",
+              "effective_usage": "non_commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "derivative-more-permissive-than-source",
+      "scenarios": [
+        4
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.derivative-inconsistent",
+          "version": "1.0.0",
+          "digest": "87621cf1e27ab99527ccd3b6ed7f320d2e2bed5926498fc722fd4e9c6923d357",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "derivative-inconsistent",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_inconsistent",
+            "detail": {
+              "model_id": "fixture.rights.derivative-inconsistent",
+              "version": "1.0.0",
+              "digest": "87621cf1e27ab99527ccd3b6ed7f320d2e2bed5926498fc722fd4e9c6923d357",
+              "field": "rights.commercial_use",
+              "expected": "no more permissive than prohibited",
+              "actual": "allowed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "derivative-missing-source-url",
+      "scenarios": [
+        4
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.derivative-missing-source-url",
+          "version": "1.0.0",
+          "digest": "40d336da4ab6baf9160a354f9d2eb99791f929db6e940e1bb597ccd47df9087f",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-SA-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "non_commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "derivative-missing-source-url",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "rights_incomplete",
+            "detail": {
+              "model_id": "fixture.rights.derivative-missing-source-url",
+              "version": "1.0.0",
+              "digest": "40d336da4ab6baf9160a354f9d2eb99791f929db6e940e1bb597ccd47df9087f",
+              "field": "rights.derivation.source_url",
+              "expected": "non-empty",
+              "actual": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "derivation-in-schema-2-0-0",
+      "scenarios": [
+        5
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.derivation-in-2-0-0",
+          "version": "1.0.0",
+          "digest": "43b82edcf29083163f51dcdbc6177850d5043df1ec78aa6c11b4323118e41065",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "CC-BY-NC-SA-4.0",
+            "commercial_use": "prohibited"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "non_commercial",
+      "steps": [
+        {
+          "op": "register",
+          "package": "derivation-in-2-0-0",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "manifest_invalid"
+          }
+        }
+      ]
+    }
+  ]
+}

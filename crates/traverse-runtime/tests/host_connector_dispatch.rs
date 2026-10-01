@@ -1,4 +1,7 @@
 use serde_json::{Value, json};
+use traverse_runtime::exact_model::{
+    CommercialUse, ModelRights, ModelRightsRecord, ModelUsage, PackageStatus,
+};
 use traverse_runtime::host_connector_dispatch::*;
 
 /// In-process fake host for tests. Not the Spec 135 WIT recording fake.
@@ -15,6 +18,8 @@ pub struct FakeHostConnector {
     cancel_on_invoke: bool,
     empty_artifact: bool,
     permission_state: Option<HostConnectorPermissionState>,
+    model_failure: Option<HostConnectorError>,
+    model_evidence: Option<Box<ModelRightsRecord>>,
 }
 
 impl FakeHostConnector {
@@ -64,6 +69,16 @@ impl FakeHostConnector {
         self.permission_state = None;
     }
 
+    /// Fail the next invoke with this adapter error (reason/detail preserved).
+    pub fn fail_model(&mut self, error: HostConnectorError) {
+        self.model_failure = Some(error);
+    }
+
+    /// Attach this rights record to model successes.
+    pub fn set_model_evidence(&mut self, record: ModelRightsRecord) {
+        self.model_evidence = Some(Box::new(record));
+    }
+
     /// Number of adapter invokes (idempotent replay must not increment this).
     #[must_use]
     pub fn invoke_count(&self) -> u64 {
@@ -88,6 +103,7 @@ impl HostConnectorPort for FakeHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Cancelled,
                 reason: None,
+                detail: None,
                 message: "host observed cancellation".to_string(),
             });
         }
@@ -95,13 +111,18 @@ impl HostConnectorPort for FakeHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
                 reason: None,
+                detail: None,
                 message: "host policy denied the connector operation".to_string(),
             });
+        }
+        if let Some(error) = self.model_failure.clone() {
+            return Err(error);
         }
         if self.unavailable {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
                 reason: None,
+                detail: None,
                 message: "host connector is unavailable".to_string(),
             });
         }
@@ -109,18 +130,21 @@ impl HostConnectorPort for FakeHostConnector {
             return Ok(HostConnectorHostResult {
                 artifact_ref: None,
                 permission_state: self.permission_state,
+                model_evidence: None,
             });
         }
         if self.leaky {
             return Ok(HostConnectorHostResult {
                 artifact_ref: Some("microphone:/tmp/capture.wav".to_string()),
                 permission_state: None,
+                model_evidence: None,
             });
         }
         if self.empty_artifact {
             return Ok(HostConnectorHostResult {
                 artifact_ref: Some(String::new()),
                 permission_state: None,
+                model_evidence: None,
             });
         }
         let artifact_ref = if request.operation == AUDIO_CAPTURE_OPERATION {
@@ -135,6 +159,7 @@ impl HostConnectorPort for FakeHostConnector {
         Ok(HostConnectorHostResult {
             artifact_ref: Some(artifact_ref),
             permission_state: None,
+            model_evidence: self.model_evidence.clone(),
         })
     }
 }
@@ -1269,4 +1294,82 @@ fn public_codes_are_stable_and_guest_paths_are_unused() {
     let _fake = FakeHostConnector::new();
     assert_eq!(COMMAND_KIND, "host_connector_command");
     assert_ne!(COMMAND_KIND, "connector_invoke");
+}
+
+fn rights_record() -> ModelRightsRecord {
+    ModelRightsRecord {
+        model_id: "fixture.model".to_string(),
+        version: "1.0.0".to_string(),
+        digest: "fixture".to_string(),
+        rights: ModelRights {
+            license_id: "CC-BY-NC-4.0".to_string(),
+            attribution: "Fixture attribution".to_string(),
+            redistribution: "test-only".to_string(),
+            commercial_use: CommercialUse::Prohibited,
+            source_url: "https://example.invalid/fixture".to_string(),
+            derivation: None,
+        },
+        status: PackageStatus::Deprecated,
+        status_reason: Some("superseded".to_string()),
+        effective_usage: ModelUsage::NonCommercial,
+    }
+}
+
+#[test]
+fn model_execute_dispatch_carries_rights_evidence() -> Result<(), String> {
+    let manifest = combined_manifest();
+    let mut activations = activated_audio();
+    activations.activate("default-local-model");
+    let mut host = FakeHostConnector::new();
+    host.set_model_evidence(rights_record());
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let dispatch = require_ok(
+        &model_command(),
+        &manifest,
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(dispatch.model_evidence.as_deref(), Some(&rights_record()));
+    assert_eq!(
+        json!(dispatch)["model_evidence"]["status"],
+        json!("deprecated")
+    );
+    Ok(())
+}
+
+#[test]
+fn model_execute_failure_preserves_reason_and_rights_detail() -> Result<(), String> {
+    let manifest = combined_manifest();
+    let mut activations = activated_audio();
+    activations.activate("default-local-model");
+    let mut host = FakeHostConnector::new();
+    let error = HostConnectorError {
+        code: HostConnectorErrorCode::ModelUnavailable,
+        reason: Some(ModelFailureReason::PackageRevoked),
+        detail: Some(Box::new(ModelRightsDenialDetail {
+            model_id: Some("fixture.model".to_string()),
+            version: Some("1.0.0".to_string()),
+            digest: Some("fixture".to_string()),
+            field: "status".to_string(),
+            expected: "active|deprecated".to_string(),
+            actual: "revoked".to_string(),
+            effective_usage: Some(ModelUsage::Commercial),
+        })),
+        message: "revoked".to_string(),
+    };
+    host.fail_model(error.clone());
+    let mut idempotency = HostConnectorIdempotencyStore::new();
+    let failed = require_err(
+        &model_command(),
+        &manifest,
+        &activations,
+        &mut host,
+        &mut idempotency,
+    )?;
+    assert_eq!(failed.error, error);
+    assert_eq!(failed.dispatch.error.as_ref(), Some(&error));
+    assert_eq!(failed.dispatch.model_evidence, None);
+    assert_eq!(failed.dispatch.evidence.outcome, "model_unavailable");
+    Ok(())
 }

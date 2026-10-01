@@ -38,7 +38,7 @@ final class ExactModelHostTests: XCTestCase {
     private func digitsHost(limits: ExactModelHostLimits = ExactModelHostLimits()) async throws -> (ExactModelHost, ExactModelPin, [String: Any]) {
         let vector = try json("conformance/signed-digits-mlp.json")
         let pin = try pin(from: vector["pin"])
-        let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [try XCTUnwrap(vector["trusted_public_key_hex"] as? String)], limits: limits)
+        let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [try XCTUnwrap(vector["trusted_public_key_hex"] as? String)], modelUsage: "commercial", limits: limits)
         return (host, pin, vector)
     }
 
@@ -159,7 +159,7 @@ final class ExactModelHostTests: XCTestCase {
         let pin = ExactModelPin(modelId: "test.looper", version: "1.0.0",
                                 digest: SHA256.hash(data: manifestBytes).hexString,
                                 rights: .init(licenseId: "Apache-2.0", commercialUse: "allowed"))
-        let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [publicHex])
+        let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [publicHex], modelUsage: "commercial")
         _ = try await host.registerPackage(manifest: manifestBytes, wasm: wasm, signature: signature)
         return (host, pin)
     }

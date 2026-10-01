@@ -2,7 +2,7 @@
   "kind": "connector_contract",
   "schema_version": "1.0.0",
   "connector_id": "traverse.model-runtime",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "capabilities_provided": [
     "traverse.model-runtime.execute"
   ],
@@ -148,6 +148,9 @@
               "fuel_consumed": { "type": "integer", "minimum": 0 },
               "duration_ms": { "type": "integer", "minimum": 0 }
             }
+          },
+          "model_evidence": {
+            "$ref": "schemas/model-rights-record-1.0.0.json"
           }
         },
         "additionalProperties": false
@@ -179,6 +182,7 @@
   "notes": [
     "Breaking bump from 1.0.0 per Decision 92 / Spec 138: artifact_ref model picker replaced by must-match model_ref + host-staged input_ref/output_ref.",
     "Binary tensors MUST NOT appear as unbounded JSON base64 on this operation; use host stage_model_input / read_model_output.",
-    "policy_ref is an execution-policy handle, not model identity."
+    "policy_ref is an execution-policy handle, not model identity.",
+    "2.1.0 (Spec 138 0.8.0, Decision 107): additive optional success model_evidence (verified rights record); rights failures carry error.detail (schemas/model-rights-denial-detail-1.0.0.json)."
   ]
 }

@@ -14,8 +14,11 @@ Owner-approved Decisions 91–92. Public invoke remains Spec 137
 | `model.execute` | Command port; must-match `model_ref`, `policy_ref`, `data_classification` |
 | `ExactModelHostConnector` | Native wasm-cpu adapter (`traverse_runtime::exact_model`) |
 | `register_package` / `registerPackage` | Signed package admission into the host cache (Decision 101) |
-| Versioned schemas | `contracts/connectors/traverse.model-runtime/schemas/`: `exact-model-pin-2.0.0`, `model-package-manifest-2.0.0`, `model-package-signature-1.0.0` |
+| Versioned schemas | `contracts/connectors/traverse.model-runtime/schemas/`: `exact-model-pin-2.0.0`, `model-package-manifest-2.0.0` / `2.1.0`, `model-package-signature-1.0.0`, `model-rights-record-1.0.0`, `model-rights-denial-detail-1.0.0` |
 | `model_rights` / `modelRights` | Signed rights, read-only, for host/UI display |
+| App `model_usage` | `commercial` or `non_commercial`; required when pins exist (Spec 138 0.8.0) |
+| `model_rights_record` | Verified rights record (rights, status, effective usage) for host/UI display |
+| `set_package_status` | Host-owned `deprecated` / `revoked` package status map |
 | Fixtures | `fixtures/models/fixture-{echo,classifier,responder}-1.0.0/` (signed, test-only key), `fixtures/models/conformance/signed-classifier.json` |
 | `input_from: host_connector_result.<field>` | Spec 139 app-state-machine capability step resolved through the FR-017 runtime-mediated path above (Decision 99) |
 
@@ -91,7 +94,7 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   units. Size it so the package's conformance vector passes on every
   engine; `max_execution_ms` is the portable bound.
 - **Swift API** (`#1579`, xcframework `swift-host-v0.14.0-1`):
-  `ExactModelHost(pins:trustedPublicKeysHex:limits:)` provides
+  `ExactModelHost(pins:trustedPublicKeysHex:modelUsage:limits:)` provides
   `registerPackage`, `stageModelInput` / `readModelOutput`, `modelRights`,
   and `execute` (async; Swift `Task` cancellation interrupts the running
   inference). `install(on:command:)` (or `modelExecuteAdapter`) routes an
@@ -111,11 +114,82 @@ how the three files reach the device; the runtime never fetches them.
 ## Rights propagation
 
 The signed `rights` object (`license_id`, `attribution`, `redistribution`,
-`commercial_use`, `source_url`) is exposed to the host unchanged via
-`model_rights` / `modelRights`, so a UI can show attribution and
-commercial-use terms without reimplementing policy. The model bytes and
-execution never reach the UI; it receives runtime state and typed results
-only. `source_url` is informational: identity is always the digest.
+`commercial_use`, `source_url`, and optional `derivation`) is exposed to the
+host unchanged via `model_rights` / `modelRights`, so a UI can show
+attribution and commercial-use terms without reimplementing policy. The model
+bytes and execution never reach the UI; it receives runtime state and typed
+results only. `source_url` is informational: identity is always the digest.
+
+## Rights enforcement host API (Spec 138 0.8.0, Decision 107)
+
+The runtime enforces one generic rights contract. It contains no app-,
+model-, species-, location- or UI-specific policy.
+
+**Usage policy.** Set the app manifest's `model_usage` on the connector
+(`connector.model_usage = Some(ModelUsage::Commercial)`). If an app has pins
+but no `model_usage`, every registration and execute fails with
+`model_incompatible` / `usage_undeclared`. The host may set
+`host_requires_commercial = true` to tighten the app's usage, but it can
+never relax it. Every host applies the same table, after the exact pin
+match:
+
+| signed `commercial_use` | `commercial` | `non_commercial` |
+|---|---|---|
+| `allowed` | accept | accept |
+| `restricted` | accept (the pin must declare `restricted`) | accept (the pin must declare `restricted`) |
+| `prohibited` | `rights_policy_denied` | accept |
+
+**Package status.** `set_package_status([(digest, PackageStatusEntry {
+status, reason })])` replaces the host-owned map, which the host may replace
+at any time. Traverse does not distribute it, and nothing checks it over the
+network. The status is checked at registration and on every execute:
+- `revoked` fails with `model_unavailable` / `package_revoked`, so a
+  revocation blocks the next call;
+- `deprecated` runs but is flagged.
+
+**Rights record.** `model_rights_record(digest)` returns
+`{model_id, version, digest, rights, status, status_reason?,
+effective_usage}` (`model-rights-record-1.0.0`). Every successful
+`model.execute` carries the same record as `model_evidence`, on both the
+host result and the Spec 137 dispatch document. The status is never
+`revoked` there, because revoked executions fail.
+
+**Denial record.** These failures carry `error.detail`
+(`model-rights-denial-detail-1.0.0`): `rights_incomplete`,
+`rights_mismatch`, `rights_policy_denied`, `rights_inconsistent`,
+`package_revoked` and `usage_undeclared`. The detail is
+`{model_id, version, digest, field, expected, actual, effective_usage?}`.
+For example, a commercial app registering a non-commercial package gets:
+
+```json
+{ "code": "model_incompatible", "reason": "rights_policy_denied",
+  "detail": { "model_id": "...", "version": "1.0.0", "digest": "...",
+              "field": "rights.commercial_use", "expected": "allowed|restricted",
+              "actual": "prohibited", "effective_usage": "commercial" } }
+```
+
+The Spec 137 dispatch failure preserves `reason` and `detail`.
+
+**Derivation.** Manifest schema `2.1.0` adds an optional `rights.derivation`:
+`{kind: converted | quantized | fine_tuned, source_digest, source_license_id,
+source_commercial_use, source_url}`. A package whose `commercial_use` is more
+permissive than its source fails with `rights_inconsistent`. Hosts accept
+schemas `2.0.0` and `2.1.0`; `derivation` in a `2.0.0` manifest fails with
+`manifest_invalid`.
+
+**Conformance.** Every model-capable embedder must pass
+`fixtures/models/rights-conformance/suite.json` with identical codes,
+reasons, details and evidence. Regenerate the suite with
+`node scripts/fixtures/sign-rights-conformance.mjs`. Native passes it
+(`crates/traverse-runtime/tests/rights_conformance.rs`).
+
+| Embedder | Rights contract |
+|---|---|
+| Rust native (`ExactModelHostConnector`) | Enforced; passes the suite |
+| Swift (`ExactModelHost`, shared Rust core) | `modelUsage` is plumbed and the Rust core enforces the contract; the full Swift API and suite run are `#1601` |
+| Web (`ExactModelBrowserHost`) | `#1600` |
+| Kotlin | Can't run models yet (`#1580`) |
+| .NET | Can't run models yet (`#1602`) |
 
 ## Browser/native portability boundary
 

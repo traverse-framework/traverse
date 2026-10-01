@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/model-package-manifest-2.1.0.json",
+  "title": "Spec 138 model package manifest (model.manifest.json)",
+  "description": "Schema 2.1.0 (Spec 138 0.8.0, Decision 107): 2.0.0 plus optional rights.derivation. The pin digest is SHA-256 of the exact bytes of this document; model.sig.json signs those bytes. A package's commercial_use MUST NOT be more permissive than derivation.source_commercial_use (prohibited < restricted < allowed).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "model_id",
+    "version",
+    "wasm_digest",
+    "registry_ref",
+    "executable_format",
+    "abi_version",
+    "input_schema_ref",
+    "input_schema_version",
+    "output_schema_ref",
+    "output_schema_version",
+    "rights",
+    "supported_profiles",
+    "max_memory_bytes",
+    "max_fuel",
+    "max_input_bytes",
+    "max_output_bytes",
+    "max_execution_ms",
+    "offline_allowed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.1.0"
+    },
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wasm_digest": {
+      "type": "string",
+      "pattern": "^(sha256:)?[0-9a-f]{64}$"
+    },
+    "registry_ref": {
+      "type": "string"
+    },
+    "executable_format": {
+      "type": "string",
+      "minLength": 1
+    },
+    "abi_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "input_schema_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input_schema_version": {
+      "type": "string"
+    },
+    "output_schema_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_schema_version": {
+      "type": "string"
+    },
+    "rights": {
+      "$ref": "#/$defs/rights"
+    },
+    "supported_profiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "contains": {
+        "const": "wasm-cpu"
+      }
+    },
+    "max_memory_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_fuel": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_input_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_output_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_execution_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "offline_allowed": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "license_id",
+        "attribution",
+        "redistribution",
+        "commercial_use",
+        "source_url"
+      ],
+      "properties": {
+        "license_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier"
+        },
+        "attribution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redistribution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commercial_use": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "restricted",
+            "prohibited"
+          ]
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Informational; identity is always the digest."
+        },
+        "derivation": {
+          "$ref": "#/$defs/derivation"
+        }
+      }
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source_digest",
+        "source_license_id",
+        "source_commercial_use",
+        "source_url"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "converted",
+            "quantized",
+            "fine_tuned"
+          ]
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-fA-F]{64}$",
+          "description": "SHA-256 of the source artifact"
+        },
+        "source_license_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier of the source"
+        },
+        "source_commercial_use": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "restricted",
+            "prohibited"
+          ]
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

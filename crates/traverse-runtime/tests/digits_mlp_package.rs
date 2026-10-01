@@ -8,8 +8,8 @@
 use serde_json::{Value, json};
 use std::fs;
 use traverse_runtime::exact_model::{
-    CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, TrustedModelKeys,
-    decode_guest_frame, encode_guest_frame,
+    CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelUsage,
+    TrustedModelKeys, decode_guest_frame, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -43,6 +43,7 @@ fn registered_host() -> (ExactModelHostConnector, ExactModelPin) {
     let mut keys = TrustedModelKeys::new();
     keys.trust(&public).expect("trust");
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+    host.model_usage = Some(ModelUsage::Commercial);
     let dir = "fixtures/models/digits-mlp-1.0.0";
     host.register_package(
         &read(&format!("{dir}/model.manifest.json")),

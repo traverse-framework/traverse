@@ -4,6 +4,7 @@
 //! connector. This is not `traverse_host.connector_invoke` and not the Spec 135
 //! Component WIT fake.
 
+use crate::exact_model::{ModelRightsRecord, ModelUsage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -135,8 +136,37 @@ pub struct HostConnectorError {
     /// Decision 101). Absent when `code` alone is the whole story.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ModelFailureReason>,
+    /// Structured rights-denial detail (Spec 138 0.8.0, Decision 107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Box<ModelRightsDenialDetail>>,
     /// Explanation without host-private data.
     pub message: String,
+}
+
+/// Why a rights-related check failed, so a UI can explain the denial without
+/// re-deriving policy (Spec 138 0.8.0, Decision 107).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRightsDenialDetail {
+    /// Model identity, when a package is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Model version, when a package is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Package (manifest-bytes) digest, when a package is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// Dotted path of the field that failed (for example
+    /// `rights.commercial_use`).
+    pub field: String,
+    /// What the check required.
+    pub expected: String,
+    /// What it found.
+    pub actual: String,
+    /// Effective usage, when it was decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_usage: Option<ModelUsage>,
 }
 
 /// Stable `reason` values refining `model_unavailable` / `model_incompatible`
@@ -170,6 +200,16 @@ pub enum ModelFailureReason {
     /// The package's declared limits exceed the host-configured ceilings
     /// (Decision 104).
     HostLimitExceeded,
+    /// The app declares model pins but no `model_usage` (Decision 107).
+    UsageUndeclared,
+    /// The signed `commercial_use` is not permitted for the effective usage
+    /// (Decision 107).
+    RightsPolicyDenied,
+    /// The host package status map marks the package revoked (Decision 107).
+    PackageRevoked,
+    /// The package's rights are more permissive than its declared derivation
+    /// source (Decision 107).
+    RightsInconsistent,
 }
 
 impl ModelFailureReason {
@@ -189,6 +229,10 @@ impl ModelFailureReason {
             Self::CryptoUnavailable => "crypto_unavailable",
             Self::CandidateUnsupported => "candidate_unsupported",
             Self::HostLimitExceeded => "host_limit_exceeded",
+            Self::UsageUndeclared => "usage_undeclared",
+            Self::RightsPolicyDenied => "rights_policy_denied",
+            Self::PackageRevoked => "package_revoked",
+            Self::RightsInconsistent => "rights_inconsistent",
         }
     }
 }
@@ -340,6 +384,10 @@ pub struct HostConnectorHostResult {
     /// Non-secret permission outcome (`audio.permission.request`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_state: Option<HostConnectorPermissionState>,
+    /// Verified rights record of the executed model (`model.execute`,
+    /// Spec 138 0.8.0 FR-040).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_evidence: Option<Box<ModelRightsRecord>>,
 }
 
 /// Host-owned adapter. Production native/browser drivers implement this.
@@ -459,6 +507,10 @@ pub struct HostConnectorDispatch {
     /// Public error on failure/cancellation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<HostConnectorError>,
+    /// Verified rights record of the executed model (`model.execute`,
+    /// Spec 138 0.8.0 FR-040).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_evidence: Option<Box<ModelRightsRecord>>,
     /// Bounded public events.
     pub events: Vec<HostConnectorEvent>,
     /// Redacted evidence.
@@ -650,13 +702,7 @@ fn invoke_authorized(
         Ok(host_result) => {
             complete_host_success(command, ctx, authorized, host_result, events, &resolved)
         }
-        Err(error) => Err(fail(
-            command,
-            error.code,
-            error.message,
-            events,
-            Some(&resolved),
-        )),
+        Err(error) => Err(fail_with(command, error, events, Some(&resolved))),
     }
 }
 
@@ -678,6 +724,7 @@ fn complete_host_success(
             resolved,
         );
     }
+    let model_evidence = host_result.model_evidence;
     let Some(artifact_ref) = host_result
         .artifact_ref
         .filter(|value| !value.trim().is_empty())
@@ -710,7 +757,7 @@ fn complete_host_success(
         None,
         None,
     );
-    let dispatch = success_dispatch(
+    let mut dispatch = success_dispatch(
         command,
         &authorized.binding,
         &authorized.route,
@@ -718,6 +765,7 @@ fn complete_host_success(
         None,
         events,
     );
+    dispatch.model_evidence = model_evidence;
     ctx.idempotency.entries.insert(
         command.idempotency_key.clone(),
         IdempotencyEntry {
@@ -798,6 +846,7 @@ fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), Ho
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
             reason: None,
+            detail: None,
             message: "command kind and schema_version must be host_connector_command/1.0.0"
                 .to_string(),
         });
@@ -811,6 +860,7 @@ fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), Ho
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
             reason: None,
+            detail: None,
             message: "command identity fields must be non-empty".to_string(),
         });
     }
@@ -818,6 +868,7 @@ fn validate_command_envelope(command: &HostConnectorAppCommand) -> Result<(), Ho
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InputLimitExceeded,
             reason: None,
+            detail: None,
             message: "command payload exceeds the published byte ceiling".to_string(),
         });
     }
@@ -866,6 +917,7 @@ fn resolve_route(
                 Err(HostConnectorError {
                     code: HostConnectorErrorCode::Incompatible,
                     reason: None,
+                    detail: None,
                     message: "command route is not a supported host connector operation"
                         .to_string(),
                 })
@@ -874,11 +926,13 @@ fn resolve_route(
         [] => Err(HostConnectorError {
             code: HostConnectorErrorCode::UnknownCommand,
             reason: None,
+            detail: None,
             message: "command is not declared by the app state machine".to_string(),
         }),
         _ => Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
             reason: None,
+            detail: None,
             message: "command is routed to more than one host connector operation".to_string(),
         }),
     }
@@ -899,6 +953,7 @@ fn resolve_binding(
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Unbound,
                     reason: None,
+                    detail: None,
                     message: "connector binding is missing a binding id".to_string(),
                 });
             }
@@ -906,6 +961,7 @@ fn resolve_binding(
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Unconfigured,
                     reason: None,
+                    detail: None,
                     message: "connector binding is missing a configuration reference".to_string(),
                 });
             }
@@ -913,6 +969,7 @@ fn resolve_binding(
                 return Err(HostConnectorError {
                     code: HostConnectorErrorCode::Incompatible,
                     reason: None,
+                    detail: None,
                     message: "connector binding version is incompatible".to_string(),
                 });
             }
@@ -921,11 +978,13 @@ fn resolve_binding(
         [] => Err(HostConnectorError {
             code: HostConnectorErrorCode::Unbound,
             reason: None,
+            detail: None,
             message: "application manifest has no binding for the routed connector".to_string(),
         }),
         _ => Err(HostConnectorError {
             code: HostConnectorErrorCode::Incompatible,
             reason: None,
+            detail: None,
             message: "application manifest declares duplicate bindings for the connector"
                 .to_string(),
         }),
@@ -942,6 +1001,7 @@ fn confirm_target(
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::TargetIncompatible,
             reason: None,
+            detail: None,
             message: "activated binding does not declare any supported target families".to_string(),
         });
     }
@@ -954,6 +1014,7 @@ fn confirm_target(
         Err(HostConnectorError {
             code: HostConnectorErrorCode::TargetIncompatible,
             reason: None,
+            detail: None,
             message: "activated binding does not claim the requested target family".to_string(),
         })
     }
@@ -1025,6 +1086,7 @@ fn confirm_operation_payload(
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Incompatible,
                 reason: None,
+                detail: None,
                 message: "model.execute payload must not include provider authority fields"
                     .to_string(),
             });
@@ -1049,6 +1111,7 @@ fn limit_error(message: &str) -> HostConnectorError {
     HostConnectorError {
         code: HostConnectorErrorCode::InputLimitExceeded,
         reason: None,
+        detail: None,
         message: message.to_string(),
     }
 }
@@ -1130,14 +1193,27 @@ fn fail(
     command: &HostConnectorAppCommand,
     code: HostConnectorErrorCode,
     message: impl Into<String>,
-    mut events: Vec<HostConnectorEvent>,
+    events: Vec<HostConnectorEvent>,
     resolved: Option<&ResolvedRefs>,
 ) -> Box<HostConnectorFailure> {
     let error = HostConnectorError {
         code,
         reason: None,
+        detail: None,
         message: message.into(),
     };
+    fail_with(command, error, events, resolved)
+}
+
+/// Failure document preserving the adapter's `reason` and rights `detail`
+/// (Spec 138 0.8.0 FR-037).
+fn fail_with(
+    command: &HostConnectorAppCommand,
+    error: HostConnectorError,
+    mut events: Vec<HostConnectorEvent>,
+    resolved: Option<&ResolvedRefs>,
+) -> Box<HostConnectorFailure> {
+    let code = error.code;
     let event_name = if code == HostConnectorErrorCode::Cancelled {
         "cancelled"
     } else {
@@ -1185,6 +1261,7 @@ fn fail(
             artifact_ref: None,
             permission_state: None,
             error: Some(error.clone()),
+            model_evidence: None,
             events,
             evidence,
         },
@@ -1213,6 +1290,7 @@ fn success_dispatch(
         artifact_ref,
         permission_state,
         error: None,
+        model_evidence: None,
         events,
         evidence: HostConnectorEvidence {
             governing_spec: GOVERNING_SPEC.to_string(),

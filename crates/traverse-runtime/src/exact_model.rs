@@ -4,6 +4,7 @@
 use crate::host_connector_dispatch::{
     HostConnectorError, HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorHostResult,
     HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR, ModelFailureReason,
+    ModelRightsDenialDetail,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,6 +31,9 @@ pub const MAX_MODEL_ABI_VERSION: u16 = 2;
 
 /// Model package manifest schema version (Spec 138 0.4.0, Decision 101).
 pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
+/// Manifest schema version that adds optional `rights.derivation`
+/// (Spec 138 0.8.0, Decision 107). Hosts accept both versions.
+pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
 /// The only accepted package signature algorithm.
 pub const MODEL_SIGNATURE_ALG_ED25519: &str = "ed25519";
 
@@ -43,6 +47,111 @@ pub enum CommercialUse {
     Restricted,
     /// Commercial use not permitted.
     Prohibited,
+}
+
+impl CommercialUse {
+    /// Stable wire value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Restricted => "restricted",
+            Self::Prohibited => "prohibited",
+        }
+    }
+
+    /// Permissiveness order `prohibited < restricted < allowed` (Decision 107).
+    fn rank(self) -> u8 {
+        match self {
+            Self::Prohibited => 0,
+            Self::Restricted => 1,
+            Self::Allowed => 2,
+        }
+    }
+}
+
+/// How the application uses its models (app manifest `model_usage`,
+/// Spec 138 0.8.0, Decision 107).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelUsage {
+    /// Commercial use: only `allowed` / pin-acknowledged `restricted` packages.
+    Commercial,
+    /// Non-commercial use: `prohibited` packages are also accepted.
+    NonCommercial,
+}
+
+/// How a derivative package was produced from its source (Decision 107).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DerivationKind {
+    /// Format conversion (for example ONNX to a WASM runner package).
+    Converted,
+    /// Quantized from the source weights.
+    Quantized,
+    /// Fine-tuned from the source weights.
+    FineTuned,
+}
+
+/// Signed provenance of a derivative package (`rights.derivation`, manifest
+/// schema `2.1.0`). Every field is required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelDerivation {
+    /// How the package was derived.
+    pub kind: DerivationKind,
+    /// SHA-256 of the source artifact (hex, optionally `sha256:` prefixed).
+    pub source_digest: String,
+    /// SPDX license identifier of the source.
+    pub source_license_id: String,
+    /// Commercial-use terms of the source.
+    pub source_commercial_use: CommercialUse,
+    /// Source URL (identity is `source_digest`, never this URL).
+    pub source_url: String,
+}
+
+/// Host-owned lifecycle status of a package (Decision 107).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageStatus {
+    /// Not listed in the host status map.
+    Active,
+    /// Runs normally but is flagged in the rights record and evidence.
+    Deprecated,
+    /// Fails closed with `package_revoked`.
+    Revoked,
+}
+
+/// One host status-map entry for a package digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageStatusEntry {
+    /// `deprecated` or `revoked` (`active` is the same as no entry).
+    pub status: PackageStatus,
+    /// Host-supplied reason shown to the app.
+    pub reason: String,
+}
+
+/// Verified rights of a package as the host and every execution report it
+/// (Spec 138 0.8.0 FR-040).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRightsRecord {
+    /// Model identity.
+    pub model_id: String,
+    /// Semantic version.
+    pub version: String,
+    /// Package (manifest-bytes) digest.
+    pub digest: String,
+    /// Signed rights, unchanged.
+    pub rights: ModelRights,
+    /// Host package status (`revoked` only on a host query; executions fail).
+    pub status: PackageStatus,
+    /// Host status reason, when not `active`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
+    /// Usage the rights were checked against.
+    pub effective_usage: ModelUsage,
 }
 
 /// Signed model rights, exposed read-only to hosts/UIs unchanged.
@@ -59,6 +168,9 @@ pub struct ModelRights {
     pub commercial_use: CommercialUse,
     /// Source URL of the model/weights (identity is the digest, never this URL).
     pub source_url: String,
+    /// Derivation provenance (manifest schema `2.1.0` only, Decision 107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivation: Option<ModelDerivation>,
 }
 
 /// Rights an application pin expects the signed package to carry.
@@ -145,12 +257,49 @@ fn model_error(
     HostConnectorError {
         code,
         reason: Some(reason),
+        detail: None,
         message: message.to_string(),
     }
 }
 
 fn incompatible(reason: ModelFailureReason, message: &str) -> HostConnectorError {
     model_error(HostConnectorErrorCode::ModelIncompatible, reason, message)
+}
+
+/// Rights denial detail without package identity (filled in by
+/// [`for_package`]).
+fn denial(field: &str, expected: &str, actual: &str) -> ModelRightsDenialDetail {
+    ModelRightsDenialDetail {
+        model_id: None,
+        version: None,
+        digest: None,
+        field: field.to_string(),
+        expected: expected.to_string(),
+        actual: actual.to_string(),
+        effective_usage: None,
+    }
+}
+
+fn with_detail(
+    mut error: HostConnectorError,
+    detail: ModelRightsDenialDetail,
+) -> HostConnectorError {
+    error.detail = Some(Box::new(detail));
+    error
+}
+
+/// Attach package identity to an error's rights detail, if it has one.
+fn for_package(
+    mut error: HostConnectorError,
+    manifest: &ModelPackageManifest,
+    digest: &str,
+) -> HostConnectorError {
+    if let Some(detail) = error.detail.as_mut() {
+        detail.model_id = Some(manifest.model_id.clone());
+        detail.version = Some(manifest.version.clone());
+        detail.digest = Some(digest.to_string());
+    }
+    error
 }
 
 impl ModelPackageManifest {
@@ -161,16 +310,35 @@ impl ModelPackageManifest {
     /// Returns `model_incompatible` with `rights_incomplete`,
     /// `manifest_invalid`, or `target_unsupported`.
     pub fn validate(&self) -> Result<(), HostConnectorError> {
-        let rights = [
-            self.rights.license_id.as_str(),
-            self.rights.attribution.as_str(),
-            self.rights.redistribution.as_str(),
-            self.rights.source_url.as_str(),
+        let mut rights = vec![
+            ("rights.license_id", self.rights.license_id.as_str()),
+            ("rights.attribution", self.rights.attribution.as_str()),
+            ("rights.redistribution", self.rights.redistribution.as_str()),
+            ("rights.source_url", self.rights.source_url.as_str()),
         ];
-        if rights.iter().any(|value| value.trim().is_empty()) {
-            return Err(incompatible(
-                ModelFailureReason::RightsIncomplete,
-                "model manifest rights are incomplete",
+        if let Some(derivation) = &self.rights.derivation {
+            rights.extend([
+                (
+                    "rights.derivation.source_digest",
+                    derivation.source_digest.as_str(),
+                ),
+                (
+                    "rights.derivation.source_license_id",
+                    derivation.source_license_id.as_str(),
+                ),
+                (
+                    "rights.derivation.source_url",
+                    derivation.source_url.as_str(),
+                ),
+            ]);
+        }
+        if let Some((field, value)) = rights.iter().find(|(_, value)| value.trim().is_empty()) {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::RightsIncomplete,
+                    "model manifest rights are incomplete",
+                ),
+                denial(field, "non-empty", value),
             ));
         }
         let required = [
@@ -187,7 +355,17 @@ impl ModelPackageManifest {
                 ));
             }
         }
-        if self.schema_version != MODEL_PACKAGE_SCHEMA_VERSION
+        let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
+        let derivation_allowed = self.rights.derivation.is_none()
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
+        if !schema_supported
+            || !derivation_allowed
+            || self
+                .rights
+                .derivation
+                .as_ref()
+                .is_some_and(|derivation| !is_sha256_hex(&derivation.source_digest))
             || self.abi_version == 0
             || self.abi_version > MAX_MODEL_ABI_VERSION
             || self.max_memory_bytes == 0
@@ -211,8 +389,31 @@ impl ModelPackageManifest {
                 "model manifest does not support wasm-cpu",
             ));
         }
+        if let Some(derivation) = &self.rights.derivation
+            && self.rights.commercial_use.rank() > derivation.source_commercial_use.rank()
+        {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::RightsInconsistent,
+                    "package commercial_use is more permissive than its derivation source",
+                ),
+                denial(
+                    "rights.commercial_use",
+                    &format!(
+                        "no more permissive than {}",
+                        derivation.source_commercial_use.as_str()
+                    ),
+                    self.rights.commercial_use.as_str(),
+                ),
+            ));
+        }
         Ok(())
     }
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    let hex = normalize_digest(value);
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Detached package signature (`model.sig.json`) over the exact
@@ -395,6 +596,7 @@ impl ModelPackageStore {
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::ModelUnavailable,
                 reason: None,
+                detail: None,
                 message: "model package not present in verified cache".to_string(),
             })
     }
@@ -440,6 +642,7 @@ impl ModelIoStore {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
                 reason: None,
+                detail: None,
                 message: "staged model input empty or exceeds ceiling".to_string(),
             });
         }
@@ -460,6 +663,7 @@ impl ModelIoStore {
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::InvalidInput,
                 reason: None,
+                detail: None,
                 message: "input_ref missing or already consumed".to_string(),
             })
     }
@@ -488,12 +692,14 @@ impl ModelIoStore {
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
                 reason: None,
+                detail: None,
                 message: "output_ref missing or expired".to_string(),
             })?;
         if bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
                 reason: None,
+                detail: None,
                 message: "output exceeds read ceiling".to_string(),
             });
         }
@@ -518,6 +724,7 @@ impl ModelIoStore {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
                 reason: None,
+                detail: None,
                 message: "staged artifact empty or exceeds ceiling".to_string(),
             });
         }
@@ -544,12 +751,14 @@ impl ModelIoStore {
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::Unavailable,
                 reason: None,
+                detail: None,
                 message: "artifact_ref missing or expired".to_string(),
             })?;
         if bytes.len() > max_bytes {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::InputLimitExceeded,
                 reason: None,
+                detail: None,
                 message: "artifact exceeds read ceiling".to_string(),
             });
         }
@@ -654,6 +863,14 @@ pub struct ExactModelHostConnector {
     /// Caller-managed cancellation flag, observed between `wasmi` fuel slices.
     /// The connector never clears it; the owner resets it per execution.
     pub cancel: Arc<AtomicBool>,
+    /// App manifest `model_usage`; required whenever pins exist (Decision 107).
+    pub model_usage: Option<ModelUsage>,
+    /// Host tightening: when true the effective usage is always `commercial`.
+    /// A host can never relax an app's usage (Decision 107).
+    pub host_requires_commercial: bool,
+    /// Host-owned package status map keyed by normalized manifest digest; see
+    /// [`ExactModelHostConnector::set_package_status`].
+    package_status: HashMap<String, PackageStatusEntry>,
 }
 
 impl ExactModelHostConnector {
@@ -670,7 +887,111 @@ impl ExactModelHostConnector {
             engine: ModelEngine::default(),
             host_limits: HostModelLimits::default(),
             cancel: Arc::new(AtomicBool::new(false)),
+            model_usage: None,
+            host_requires_commercial: false,
+            package_status: HashMap::new(),
         }
+    }
+
+    /// Replace the host-owned package status map (digest → status). Takes
+    /// effect at the next registration or execute (Decision 107).
+    pub fn set_package_status(
+        &mut self,
+        entries: impl IntoIterator<Item = (String, PackageStatusEntry)>,
+    ) {
+        self.package_status = entries
+            .into_iter()
+            .map(|(digest, entry)| (normalize_digest(&digest), entry))
+            .collect();
+    }
+
+    /// The usage rights are checked against: `commercial` when the host
+    /// requires it, otherwise the app's declared `model_usage`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_incompatible` / `usage_undeclared` when the app
+    /// declares no `model_usage`.
+    pub fn effective_usage(&self) -> Result<ModelUsage, HostConnectorError> {
+        let declared = self.model_usage.ok_or_else(|| {
+            with_detail(
+                incompatible(
+                    ModelFailureReason::UsageUndeclared,
+                    "app declares exact_model_dependencies but no model_usage",
+                ),
+                denial("model_usage", "commercial|non_commercial", "undeclared"),
+            )
+        })?;
+        Ok(if self.host_requires_commercial {
+            ModelUsage::Commercial
+        } else {
+            declared
+        })
+    }
+
+    /// Verified rights record of a registered package for host/UI display,
+    /// including `revoked` status. `None` when the digest is not registered or
+    /// the app declares no `model_usage`.
+    #[must_use]
+    pub fn model_rights_record(&self, digest: &str) -> Option<ModelRightsRecord> {
+        let key = normalize_digest(digest);
+        let package = self.packages.by_digest.get(&key)?;
+        let usage = self.effective_usage().ok()?;
+        let entry = self.package_status.get(&key);
+        Some(rights_record(&package.manifest, &key, usage, entry))
+    }
+
+    /// Usage policy and package status for a verified package (registration
+    /// and every execute). Returns the rights record on success.
+    fn check_rights_and_status(
+        &self,
+        manifest: &ModelPackageManifest,
+        digest: &str,
+    ) -> Result<ModelRightsRecord, HostConnectorError> {
+        let usage = self
+            .effective_usage()
+            .map_err(|error| for_package(error, manifest, digest))?;
+        // `restricted` passes: the exact pin match (FR-020) already required
+        // the pin to declare it.
+        if manifest.rights.commercial_use == CommercialUse::Prohibited
+            && usage == ModelUsage::Commercial
+        {
+            let mut detail = denial(
+                "rights.commercial_use",
+                "allowed|restricted",
+                CommercialUse::Prohibited.as_str(),
+            );
+            detail.effective_usage = Some(usage);
+            return Err(for_package(
+                with_detail(
+                    incompatible(
+                        ModelFailureReason::RightsPolicyDenied,
+                        "package commercial_use is not permitted for the effective model_usage",
+                    ),
+                    detail,
+                ),
+                manifest,
+                digest,
+            ));
+        }
+        let entry = self.package_status.get(digest);
+        if entry.is_some_and(|entry| entry.status == PackageStatus::Revoked) {
+            let mut detail = denial("status", "active|deprecated", "revoked");
+            detail.effective_usage = Some(usage);
+            return Err(for_package(
+                with_detail(
+                    model_error(
+                        HostConnectorErrorCode::ModelUnavailable,
+                        ModelFailureReason::PackageRevoked,
+                        "the host package status map marks this package revoked",
+                    ),
+                    detail,
+                ),
+                manifest,
+                digest,
+            ));
+        }
+        Ok(rights_record(manifest, digest, usage, entry))
     }
 
     /// Verify and admit a signed package into the host cache (Decision 101):
@@ -716,7 +1037,9 @@ impl ExactModelHostConnector {
                     "model manifest is malformed or has unknown fields",
                 )
             })?;
-        check_pin_against_manifest(pin, &signature, &manifest)?;
+        check_pin_against_manifest(pin, &signature, &manifest)
+            .map_err(|error| for_package(error, &manifest, &digest))?;
+        self.check_rights_and_status(&manifest, &digest)?;
         check_host_limits(
             &self.host_limits,
             &manifest,
@@ -822,15 +1145,51 @@ fn check_pin_against_manifest(
             "pin target is not supported by the package or the wasm-cpu executor",
         ));
     }
-    if manifest.rights.license_id != pin.rights.license_id
-        || manifest.rights.commercial_use != pin.rights.commercial_use
-    {
-        return Err(incompatible(
-            ModelFailureReason::RightsMismatch,
-            "signed package rights differ from the rights the pin declares",
+    let mismatch = if manifest.rights.license_id == pin.rights.license_id {
+        None
+    } else {
+        Some(denial(
+            "rights.license_id",
+            &pin.rights.license_id,
+            &manifest.rights.license_id,
+        ))
+    }
+    .or_else(|| {
+        (manifest.rights.commercial_use != pin.rights.commercial_use).then(|| {
+            denial(
+                "rights.commercial_use",
+                pin.rights.commercial_use.as_str(),
+                manifest.rights.commercial_use.as_str(),
+            )
+        })
+    });
+    if let Some(detail) = mismatch {
+        return Err(with_detail(
+            incompatible(
+                ModelFailureReason::RightsMismatch,
+                "signed package rights differ from the rights the pin declares",
+            ),
+            detail,
         ));
     }
     Ok(())
+}
+
+fn rights_record(
+    manifest: &ModelPackageManifest,
+    digest: &str,
+    effective_usage: ModelUsage,
+    entry: Option<&PackageStatusEntry>,
+) -> ModelRightsRecord {
+    ModelRightsRecord {
+        model_id: manifest.model_id.clone(),
+        version: manifest.version.clone(),
+        digest: digest.to_string(),
+        rights: manifest.rights.clone(),
+        status: entry.map_or(PackageStatus::Active, |entry| entry.status),
+        status_reason: entry.map(|entry| entry.reason.clone()),
+        effective_usage,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -871,6 +1230,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Incompatible,
                 reason: None,
+                detail: None,
                 message: "ExactModelHostConnector only serves model.execute".to_string(),
             });
         }
@@ -878,6 +1238,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Cancelled,
                 reason: None,
+                detail: None,
                 message: "model.execute cancelled before invoke".to_string(),
             });
         }
@@ -886,6 +1247,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             .map_err(|_| HostConnectorError {
                 code: HostConnectorErrorCode::InvalidInput,
                 reason: None,
+                detail: None,
                 message: "model.execute payload failed schema validation".to_string(),
             })?;
 
@@ -894,6 +1256,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelUnavailable,
                 reason: None,
+                detail: None,
                 message: "pin does not allow offline execution".to_string(),
             });
         }
@@ -904,6 +1267,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             .ok_or_else(|| HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
                 reason: None,
+                detail: None,
                 message: "policy_ref is not activated".to_string(),
             })?;
         if !policy
@@ -914,18 +1278,24 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::PolicyDenied,
                 reason: None,
+                detail: None,
                 message: "data_classification denied by policy".to_string(),
             });
         }
 
         let package = self.packages.resolve_offline(&payload.model_ref.digest)?;
         package.recheck(&payload.model_ref.digest)?;
+        let evidence = self.check_rights_and_status(
+            &package.manifest,
+            &normalize_digest(&payload.model_ref.digest),
+        )?;
         if package.manifest.model_id != payload.model_ref.model_id
             || package.manifest.version != payload.model_ref.version
         {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelIncompatible,
                 reason: None,
+                detail: None,
                 message: "cached package identity does not match model_ref".to_string(),
             });
         }
@@ -935,6 +1305,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ModelIncompatible,
                 reason: None,
+                detail: None,
                 message: "input schema does not match model manifest".to_string(),
             });
         }
@@ -947,6 +1318,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ResourceExhausted,
                 reason: None,
+                detail: None,
                 message: "output ceiling is zero after policy intersection".to_string(),
             });
         }
@@ -956,6 +1328,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::ResourceExhausted,
                 reason: None,
+                detail: None,
                 message: "input exceeds model manifest ceiling".to_string(),
             });
         }
@@ -1001,6 +1374,7 @@ impl HostConnectorPort for ExactModelHostConnector {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Timeout,
                 reason: None,
+                detail: None,
                 message: "model.execute exceeded timeout".to_string(),
             });
         }
@@ -1009,6 +1383,7 @@ impl HostConnectorPort for ExactModelHostConnector {
         Ok(HostConnectorHostResult {
             artifact_ref: Some(output_ref),
             permission_state: None,
+            model_evidence: Some(Box::new(evidence)),
         })
     }
 }
@@ -1040,6 +1415,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
             reason: None,
+            detail: None,
             message: "guest frame too short".to_string(),
         });
     }
@@ -1048,6 +1424,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::ModelIncompatible,
             reason: None,
+            detail: None,
             message: "unsupported guest ABI version".to_string(),
         });
     }
@@ -1058,6 +1435,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
             reason: None,
+            detail: None,
             message: "guest frame header truncated".to_string(),
         });
     }
@@ -1084,6 +1462,7 @@ pub fn decode_guest_frame(bytes: &[u8]) -> Result<(u8, Vec<u32>, Vec<u8>), HostC
         return Err(HostConnectorError {
             code: HostConnectorErrorCode::InvalidInput,
             reason: None,
+            detail: None,
             message: "guest frame payload truncated".to_string(),
         });
     }
@@ -1133,6 +1512,7 @@ fn model_host_err(code: HostConnectorErrorCode, message: &str) -> HostConnectorE
     HostConnectorError {
         code,
         reason: None,
+        detail: None,
         message: message.to_string(),
     }
 }
@@ -1497,6 +1877,7 @@ fn model_error_plain(code: HostConnectorErrorCode, message: &str) -> HostConnect
     HostConnectorError {
         code,
         reason: None,
+        detail: None,
         message: message.to_string(),
     }
 }
@@ -1660,6 +2041,7 @@ mod tests {
             redistribution: "test-only".to_string(),
             commercial_use: CommercialUse::Allowed,
             source_url: "https://example.invalid/fixture".to_string(),
+            derivation: None,
         }
     }
 
@@ -1667,6 +2049,96 @@ mod tests {
     fn seal(mut package: VerifiedModelPackage) -> VerifiedModelPackage {
         package.manifest_bytes = serde_json::to_vec(&package.manifest).expect("manifest json");
         package
+    }
+
+    fn derivative_manifest(
+        commercial_use: CommercialUse,
+        source_commercial_use: CommercialUse,
+    ) -> ModelPackageManifest {
+        let mut manifest = fixture_package().manifest;
+        manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION.to_string();
+        manifest.rights.commercial_use = commercial_use;
+        manifest.rights.derivation = Some(ModelDerivation {
+            kind: DerivationKind::Quantized,
+            source_digest: format!("sha256:{}", "a".repeat(64)),
+            source_license_id: "Apache-2.0".to_string(),
+            source_commercial_use,
+            source_url: "https://example.invalid/source".to_string(),
+        });
+        manifest
+    }
+
+    #[test]
+    fn derivation_validation_orders_permissiveness_and_checks_the_source_digest() {
+        let reason =
+            |manifest: &ModelPackageManifest| manifest.validate().err().and_then(|e| e.reason);
+        let equal = derivative_manifest(CommercialUse::Restricted, CommercialUse::Restricted);
+        assert_eq!(reason(&equal), None);
+        let stricter = derivative_manifest(CommercialUse::Prohibited, CommercialUse::Allowed);
+        assert_eq!(reason(&stricter), None);
+        let looser = derivative_manifest(CommercialUse::Restricted, CommercialUse::Prohibited);
+        let error = looser.validate().expect_err("inconsistent");
+        assert_eq!(error.reason, Some(ModelFailureReason::RightsInconsistent));
+        let detail = error.detail.expect("detail");
+        assert_eq!(
+            (
+                detail.field.as_str(),
+                detail.expected.as_str(),
+                detail.actual.as_str()
+            ),
+            (
+                "rights.commercial_use",
+                "no more permissive than prohibited",
+                "restricted"
+            )
+        );
+        let mut bad_digest = derivative_manifest(CommercialUse::Allowed, CommercialUse::Allowed);
+        if let Some(derivation) = bad_digest.rights.derivation.as_mut() {
+            derivation.source_digest = "not-a-digest".to_string();
+        }
+        assert_eq!(
+            reason(&bad_digest),
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let mut unknown_schema = fixture_package().manifest;
+        unknown_schema.schema_version = "2.2.0".to_string();
+        assert_eq!(
+            reason(&unknown_schema),
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let kinds: Vec<Value> = [
+            DerivationKind::Converted,
+            DerivationKind::Quantized,
+            DerivationKind::FineTuned,
+        ]
+        .iter()
+        .map(|kind| serde_json::to_value(kind).expect("kind"))
+        .collect();
+        assert_eq!(
+            kinds,
+            [json!("converted"), json!("quantized"), json!("fine_tuned")]
+        );
+    }
+
+    #[test]
+    fn rights_record_is_none_until_registered_and_usage_declared() {
+        let (mut host, digest) = seeded_host();
+        assert_eq!(host.model_rights_record("deadbeef"), None);
+        let record = host
+            .model_rights_record(&format!("sha256:{digest}"))
+            .expect("record");
+        assert_eq!(
+            (record.status, record.effective_usage, record.status_reason),
+            (PackageStatus::Active, ModelUsage::Commercial, None)
+        );
+        host.host_requires_commercial = true;
+        host.model_usage = Some(ModelUsage::NonCommercial);
+        assert_eq!(host.effective_usage().ok(), Some(ModelUsage::Commercial));
+        host.model_usage = None;
+        assert_eq!(host.model_rights_record(&digest), None);
+        let error = host.effective_usage().expect_err("undeclared");
+        assert_eq!(error.reason, Some(ModelFailureReason::UsageUndeclared));
+        assert_eq!(error.detail.expect("detail").model_id, None);
     }
 
     fn manifest_digest(manifest: &ModelPackageManifest) -> String {
@@ -1735,6 +2207,7 @@ mod tests {
         let digest = manifest_digest(&package.manifest);
         let pin = test_pin("fixture.echo", &digest);
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
+        host.model_usage = Some(ModelUsage::Commercial);
         host.packages
             .insert_verified(seal(package))
             .expect("insert package");
@@ -1809,6 +2282,7 @@ mod tests {
             vec![test_pin("fixture.echo", "deadbeef")],
             TrustedModelKeys::new(),
         );
+        host.model_usage = Some(ModelUsage::Commercial);
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -1849,6 +2323,7 @@ mod tests {
         let digest = manifest_digest(&package.manifest);
         let pin = test_pin("fixture.echo", &format!("sha256:{digest}"));
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
+        host.model_usage = Some(ModelUsage::Commercial);
         host.packages
             .insert_verified(seal(package))
             .expect("insert package");
@@ -2575,6 +3050,7 @@ mod tests {
         let digest = manifest_digest(&package.manifest);
         let pin = test_pin("fixture.classifier", &digest);
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
+        host.model_usage = Some(ModelUsage::Commercial);
         host.packages
             .insert_verified(seal(package))
             .expect("insert package");
@@ -2675,7 +3151,10 @@ mod tests {
         let (_, public) = test_key();
         let mut keys = TrustedModelKeys::new();
         keys.trust(&public).expect("trust");
-        ExactModelHostConnector::new(pins, keys)
+        let mut host = ExactModelHostConnector::new(pins, keys);
+        host.model_usage = Some(ModelUsage::Commercial);
+        host.model_usage = Some(ModelUsage::Commercial);
+        host
     }
 
     fn register_err(
@@ -2731,6 +3210,7 @@ mod tests {
         let mut keys = TrustedModelKeys::new();
         keys.trust(&public).expect("trust");
         let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+        host.model_usage = Some(ModelUsage::Commercial);
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -2775,6 +3255,7 @@ mod tests {
         // No trusted keys at all.
         let mut untrusting =
             ExactModelHostConnector::new(vec![pin.clone()], TrustedModelKeys::new());
+        untrusting.model_usage = Some(ModelUsage::Commercial);
         assert_eq!(
             register_err(&mut untrusting, &manifest, wasm.clone(), &sig),
             (Inc, Some(R::KeyUntrusted))
@@ -2956,6 +3437,7 @@ mod tests {
             vec![test_pin("fixture.echo", &digest)],
             TrustedModelKeys::new(),
         );
+        host.model_usage = Some(ModelUsage::Commercial);
         host.packages.insert_verified(seal(other)).expect("insert");
         host.policies.insert(
             "policy-1".to_string(),
@@ -3002,6 +3484,7 @@ mod tests {
         let err = HostConnectorError {
             code: HostConnectorErrorCode::Timeout,
             reason: None,
+            detail: None,
             message: "x".to_string(),
         };
         assert!(
@@ -3009,6 +3492,78 @@ mod tests {
                 .expect("json")
                 .get("reason")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn rights_schemas_match_the_rust_types() {
+        fn sorted(value: &Value) -> Vec<String> {
+            let mut keys: Vec<String> =
+                value.as_object().expect("object").keys().cloned().collect();
+            keys.sort();
+            keys
+        }
+        let parse = |text: &str| -> Value { serde_json::from_str(text).expect("schema") };
+        let manifest_schema = parse(include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-package-manifest-2.1.0.json"
+        ));
+        let record_schema = parse(include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-rights-record-1.0.0.json"
+        ));
+        let detail_schema = parse(include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-rights-denial-detail-1.0.0.json"
+        ));
+        assert_eq!(
+            manifest_schema["properties"]["schema_version"]["const"],
+            json!(MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION)
+        );
+        let manifest = derivative_manifest(CommercialUse::Allowed, CommercialUse::Allowed);
+        let manifest_json = serde_json::to_value(&manifest).expect("manifest");
+        assert_eq!(
+            sorted(&manifest_schema["properties"]),
+            sorted(&manifest_json)
+        );
+        assert_eq!(
+            sorted(&manifest_schema["$defs"]["rights"]["properties"]),
+            sorted(&manifest_json["rights"])
+        );
+        assert_eq!(
+            sorted(&manifest_schema["$defs"]["derivation"]["properties"]),
+            sorted(&manifest_json["rights"]["derivation"])
+        );
+        let mut record = rights_record(
+            &manifest,
+            "a",
+            ModelUsage::NonCommercial,
+            Some(&PackageStatusEntry {
+                status: PackageStatus::Deprecated,
+                reason: "r".to_string(),
+            }),
+        );
+        assert_eq!(
+            sorted(&record_schema["properties"]),
+            sorted(&serde_json::to_value(&record).expect("record"))
+        );
+        record.status = PackageStatus::Revoked;
+        assert_eq!(
+            serde_json::to_value(&record).expect("record")["status"],
+            json!("revoked")
+        );
+        let mut detail = denial("rights.commercial_use", "allowed", "prohibited");
+        detail.effective_usage = Some(ModelUsage::Commercial);
+        let detail = for_package(
+            with_detail(
+                incompatible(ModelFailureReason::RightsPolicyDenied, "x"),
+                detail,
+            ),
+            &manifest,
+            "a",
+        )
+        .detail
+        .expect("detail");
+        assert_eq!(
+            sorted(&detail_schema["properties"]),
+            sorted(&serde_json::to_value(&detail).expect("detail"))
         );
     }
 

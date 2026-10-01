@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/model-rights-record-1.0.0.json",
+  "title": "Spec 138 verified model rights record",
+  "description": "Rights record a host exposes per registered package and every successful model.execute carries as model_evidence (Spec 138 0.8.0, Decision 107, FR-040). status is revoked only on a host query; executions of a revoked package fail with package_revoked.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model_id",
+    "version",
+    "digest",
+    "rights",
+    "status",
+    "effective_usage"
+  ],
+  "properties": {
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the exact signed model.manifest.json bytes"
+    },
+    "rights": {
+      "$ref": "model-package-manifest-2.1.0.json#/$defs/rights"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "deprecated",
+        "revoked"
+      ]
+    },
+    "status_reason": {
+      "type": "string"
+    },
+    "effective_usage": {
+      "type": "string",
+      "enum": [
+        "commercial",
+        "non_commercial"
+      ]
+    }
+  }
+}
