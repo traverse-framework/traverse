@@ -133,6 +133,38 @@ traverse-cli model pin out/digits --json
 The app then declares the pin and its `model_usage`, and the host registers
 the three files, for example with `register_package` / `registerPackage`.
 
+## ONNX models: `model package-onnx`
+
+For an ONNX model with exactly one input tensor and one output tensor, you
+don't write a guest at all. `traverse-cli model package-onnx` patches a copy
+of the audited, prebuilt runner guest (`fixtures/onnx/runner.wasm`, built
+from `crates/traverse-onnx-runner-guest` on tract with `+simd128`):
+- it appends the model as one data segment;
+- every other section, including the runner's code, is copied byte for byte.
+
+```bash
+traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model.package.json out/my-model
+```
+
+`my-model.package.json` holds:
+- the manifest fields you own: identity, schemas, `rights`, limits;
+- the `tensor` config: input and output names, shapes, and dtypes, fixed at
+  package time and validated on every call. A mismatched frame returns `-1`
+  and the host fails closed;
+- a required `source`: `{license_id, commercial_use, url}` of the ONNX
+  model.
+
+The packager writes `model.wasm` and an unsigned schema `2.1.0` manifest
+whose `rights.derivation` records `kind: converted`, the ONNX file's
+SHA-256, and the `source` rights. The runner returns raw output values;
+post-processing such as sigmoid, labels, and thresholds belongs in app
+capabilities. Then continue with `model sign`, `verify`, `conformance`, and
+`pin` as above.
+
+For int8 models, cross-engine results inside Traverse stay byte-identical.
+Against an external reference runtime, Decision 106 allows top-5 identical
+and |Δ sigmoid| ≤ 5×10⁻³.
+
 ## Provenance: two tiers (Spec 138 0.9.0)
 
 - **Traverse-published trained packages** (for example
