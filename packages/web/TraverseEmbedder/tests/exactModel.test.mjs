@@ -182,6 +182,30 @@ test("trained digits MLP (#1461) matches the native vector and clears the accura
   assert.equal(correct, 1727);
 });
 
+test("ONNX runner package (#1591) matches the native vector byte-for-byte and fails closed", async () => {
+  const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-onnx.json", MODELS), "utf8"));
+  const pkg = fixture(vector.package_dir);
+  const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex] });
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  assert.match(host.modelRights(digest).attribution, /source ONNX sha256:[0-9a-f]{64}/);
+  const run = async (frame) => {
+    const input_ref = host.io.stageModelInput(frame, 4096);
+    const result = await host.execute(
+      executeArgs(vector.pin.model_id, digest, input_ref, vector.request.input_schema_ref, { max_output_bytes: 56 }),
+    );
+    return host.io.readModelOutput(result.output_ref, 56);
+  };
+  for (const testCase of vector.cases) {
+    const output = await run(Buffer.from(testCase.input_frame_hex, "hex"));
+    assert.equal(Buffer.from(output).toString("hex"), testCase.output_frame_hex);
+  }
+  // Shape and dtype are fixed at package time: the runner returns -1.
+  const pixels = new Uint8Array(new Float32Array(64).fill(1).buffer);
+  for (const frame of [encodeGuestFrame(2, [64], pixels), encodeGuestFrame(3, [1, 64], pixels)]) {
+    await assert.rejects(run(frame), ExactModelError);
+  }
+});
+
 test("classifier fixture computes real inference, not a pass-through", async () => {
   const { host, digest } = await registeredHost("fixture-classifier-1.0.0", "fixture.classifier");
   const features = Float32Array.from([1.0, 2.0, -1.0, 4.0]);

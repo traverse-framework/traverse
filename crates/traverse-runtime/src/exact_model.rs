@@ -871,6 +871,8 @@ pub struct ExactModelHostConnector {
     /// Host-owned package status map keyed by normalized manifest digest; see
     /// [`ExactModelHostConnector::set_package_status`].
     package_status: HashMap<String, PackageStatusEntry>,
+    /// Engines and compiled guests reused across executions.
+    compiled: CompiledGuests,
 }
 
 impl ExactModelHostConnector {
@@ -890,6 +892,7 @@ impl ExactModelHostConnector {
             model_usage: None,
             host_requires_commercial: false,
             package_status: HashMap::new(),
+            compiled: CompiledGuests::default(),
         }
     }
 
@@ -1046,6 +1049,11 @@ impl ExactModelHostConnector {
             manifest_bytes.len(),
             wasm.len(),
         )?;
+        // Compile once at registration so execute deadlines cover guest
+        // execution only. Keyed by the bytes' own hash, so the cache can never
+        // serve a module for other bytes; a module that fails to compile is
+        // not cached and still fails closed at execute.
+        self.compiled.warm(self.engine, &digest_hex(&wasm), &wasm);
         self.packages.insert_verified(VerifiedModelPackage {
             manifest,
             manifest_bytes: manifest_bytes.to_vec(),
@@ -1358,9 +1366,19 @@ impl HostConnectorPort for ExactModelHostConnector {
             abi: package.manifest.abi_version,
         };
         let started = Instant::now();
+        // `recheck` above proved the bytes still hash to `wasm_digest`.
+        let key = normalize_digest(&package.manifest.wasm_digest);
         let output = match self.engine {
-            ModelEngine::Wasmtime => execute_wasm_cpu_model(&package.wasm, &input, &guest_limits)?,
+            ModelEngine::Wasmtime => execute_wasm_cpu_model(
+                &mut self.compiled,
+                &key,
+                &package.wasm,
+                &input,
+                &guest_limits,
+            )?,
             ModelEngine::Wasmi => execute_wasmi_model(
+                &mut self.compiled,
+                &key,
                 &package.wasm,
                 &input,
                 &guest_limits,
@@ -1533,25 +1551,17 @@ fn require_ok(
 #[cfg(feature = "wasmtime-executor")]
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn execute_wasm_cpu_model(
+    compiled: &mut CompiledGuests,
+    key: &str,
     wasm: &[u8],
     input: &[u8],
     guest: &GuestLimits,
 ) -> Result<Vec<u8>, HostConnectorError> {
-    use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder};
+    use wasmtime::{Linker, Store, StoreLimitsBuilder};
     let (max_memory_bytes, max_fuel, max_output_bytes) =
         (guest.memory, guest.fuel, guest.max_output);
 
-    let mut config = Config::new();
-    config.consume_fuel(true);
-    // Engine::new only fails on illegal config; consume_fuel config is always legal.
-    #[allow(clippy::unwrap_used)]
-    let engine = Engine::new(&config).unwrap();
-    let Some(module) = Module::new(&engine, wasm).ok() else {
-        return Err(model_host_err(
-            HostConnectorErrorCode::ModelIncompatible,
-            "model wasm failed validation",
-        ));
-    };
+    let (engine, module) = compiled.wasmtime(key, wasm)?;
 
     let limits = StoreLimitsBuilder::new()
         .memory_size(usize::try_from(max_memory_bytes).unwrap_or(usize::MAX))
@@ -1625,6 +1635,97 @@ fn execute_wasm_cpu_model(
     let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
+}
+
+/// Engines and compiled guests reused across executions, keyed by the
+/// verified `wasm_digest` (#1591): compiling a multi-megabyte guest such as
+/// the ONNX runner on every call dominated latency. Every execution still
+/// gets a fresh `Store` and instance, so no guest state crosses calls.
+#[derive(Default)]
+struct CompiledGuests {
+    #[cfg(feature = "wasmtime-executor")]
+    wasmtime: Option<(wasmtime::Engine, HashMap<String, wasmtime::Module>)>,
+    #[cfg(feature = "wasmi-executor")]
+    wasmi: Option<(wasmi::Engine, HashMap<String, wasmi::Module>)>,
+}
+
+impl CompiledGuests {
+    fn warm(&mut self, engine: ModelEngine, key: &str, wasm: &[u8]) {
+        let _ = match engine {
+            ModelEngine::Wasmtime => self.wasmtime(key, wasm).is_ok(),
+            ModelEngine::Wasmi => self.wasmi(key, wasm).is_ok(),
+        };
+    }
+
+    #[cfg(not(feature = "wasmtime-executor"))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn wasmtime(&mut self, _key: &str, _wasm: &[u8]) -> Result<(), HostConnectorError> {
+        Ok(())
+    }
+
+    #[cfg(not(feature = "wasmi-executor"))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn wasmi(&mut self, _key: &str, _wasm: &[u8]) -> Result<(), HostConnectorError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "wasmtime-executor")]
+    fn wasmtime(
+        &mut self,
+        key: &str,
+        wasm: &[u8],
+    ) -> Result<(wasmtime::Engine, wasmtime::Module), HostConnectorError> {
+        let (engine, modules) = self.wasmtime.get_or_insert_with(|| {
+            let mut config = wasmtime::Config::new();
+            config.consume_fuel(true);
+            // Engine::new only fails on illegal config; consume_fuel config is always legal.
+            #[allow(clippy::unwrap_used)]
+            let engine = wasmtime::Engine::new(&config).unwrap();
+            (engine, HashMap::new())
+        });
+        if let Some(module) = modules.get(key) {
+            return Ok((engine.clone(), module.clone()));
+        }
+        let Ok(module) = wasmtime::Module::new(engine, wasm) else {
+            return Err(model_host_err(
+                HostConnectorErrorCode::ModelIncompatible,
+                "model wasm failed validation",
+            ));
+        };
+        modules.insert(key.to_string(), module.clone());
+        Ok((engine.clone(), module))
+    }
+
+    #[cfg(feature = "wasmi-executor")]
+    fn wasmi(
+        &mut self,
+        key: &str,
+        wasm: &[u8],
+    ) -> Result<(wasmi::Engine, wasmi::Module), HostConnectorError> {
+        let (engine, modules) = self.wasmi.get_or_insert_with(|| {
+            let mut config = wasmi::Config::default();
+            config.consume_fuel(true);
+            // Fixed-width SIMD: the ONNX runner guest ships as a simd128
+            // build (Decision 106); wasmtime enables it by default.
+            config.wasm_simd(true);
+            // Eager translation: lazy mode charges per-function compile fuel
+            // mid-call and reports running out of it as a non-resumable
+            // error, which breaks fuel slicing for large guests (#1591).
+            config.compilation_mode(wasmi::CompilationMode::Eager);
+            (wasmi::Engine::new(&config), HashMap::new())
+        });
+        if let Some(module) = modules.get(key) {
+            return Ok((engine.clone(), module.clone()));
+        }
+        let Ok(module) = wasmi::Module::new(engine, wasm) else {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::ModelIncompatible,
+                "model wasm failed validation",
+            ));
+        };
+        modules.insert(key.to_string(), module.clone());
+        Ok((engine.clone(), module))
+    }
 }
 
 /// Guest ceilings after manifest ∩ host ∩ per-call intersection.
@@ -1708,22 +1809,16 @@ struct SliceControl<'a> {
 #[cfg(feature = "wasmi-executor")]
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn execute_wasmi_model(
+    compiled: &mut CompiledGuests,
+    key: &str,
     wasm: &[u8],
     input: &[u8],
     limits: &GuestLimits,
     control: &SliceControl<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
-    use wasmi::{Config, Engine, Linker, Module, Store, StoreLimitsBuilder};
+    use wasmi::{Linker, Store, StoreLimitsBuilder};
 
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    let engine = Engine::new(&config);
-    let Ok(module) = Module::new(&engine, wasm) else {
-        return Err(model_error_plain(
-            HostConnectorErrorCode::ModelIncompatible,
-            "model wasm failed validation",
-        ));
-    };
+    let (engine, module) = compiled.wasmi(key, wasm)?;
     let store_limits = StoreLimitsBuilder::new()
         .memory_size(usize::try_from(limits.memory).unwrap_or(usize::MAX))
         .build();
@@ -1862,6 +1957,8 @@ fn run_fuel_slices(
 
 #[cfg(not(feature = "wasmi-executor"))]
 fn execute_wasmi_model(
+    _compiled: &mut CompiledGuests,
+    _key: &str,
     _wasm: &[u8],
     _input: &[u8],
     _limits: &GuestLimits,
@@ -1933,6 +2030,8 @@ fn place_wasmtime_buffers(
 
 #[cfg(not(feature = "wasmtime-executor"))]
 fn execute_wasm_cpu_model(
+    _compiled: &mut CompiledGuests,
+    _key: &str,
     _wasm: &[u8],
     _input: &[u8],
     _guest: &GuestLimits,

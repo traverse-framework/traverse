@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Generic ONNX runner guest and `model package-onnx` (Decision 105/106, #1591)
+
+- New audited, import-free `traverse-onnx-runner-guest` (tract, `+simd128`,
+  guest ABI v2) with the prebuilt `fixtures/onnx/runner.wasm`. CI rebuilds it
+  byte-for-byte (`scripts/ci/onnx_runner_guest_check.sh`). One input tensor
+  and one output tensor with raw values. Tensor names, shapes, and dtypes
+  are fixed at package time; a mismatch fails closed.
+- `traverse-cli model package-onnx <runner.wasm> <model.onnx> <package.json>
+  <out-dir>` appends the model to a copy of the runner as one data segment
+  and copies the runner's code byte for byte. It writes `model.wasm` and an
+  unsigned `model.manifest.json` that records the source ONNX SHA-256 in
+  `rights.attribution`.
+- New signed `digits-onnx-1.0.0` fixture: an ONNX export of the CC-BY-4.0
+  digits MLP (`traverse-model-trainer export-onnx`). It scores the same
+  1727/1797, and its conformance vector is byte-identical on wasmtime,
+  `wasmi`, and the browser.
+- `wasmi` model execution enables SIMD and eager translation. Lazy
+  translation charged compile fuel mid-call and failed fuel-sliced runs of
+  large guests. Each host connector now compiles a package's module once, at
+  registration, keyed by its verified wasm digest, and still instantiates a
+  fresh store per execution.
+
 ### Spec 138 guest ABI v2 (Decision 105, #1588)
 
 - Manifest `abi_version: 2`: the host obtains model input and output

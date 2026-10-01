@@ -18,7 +18,7 @@ ed25519-dalek = "3.0.0"
 zeroize = "1.8"
 wasmtime = { version = "44", features = ["cranelift", "component-model"], optional = true }
 wasmtime-wasi = { version = "44", optional = true }
-wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"], optional = true }
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "auto-dispatch", "simd"], optional = true }
 uuid = { version = "1", features = ["v4", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 rayon = { version = "1.11", optional = true }

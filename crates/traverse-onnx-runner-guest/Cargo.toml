@@ -1,0 +1,44 @@
+[package]
+name = "traverse-onnx-runner-guest"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.94"
+description = "Generic Spec 138 ONNX runner guest (guest ABI v2, simd128, tract) — Decision 105/106, #1591."
+publish = false
+
+# Built only for wasm32-unknown-unknown with simd128 (.cargo/config.toml) and
+# kept out of the host workspace. The model is NOT compiled in: `traverse-cli
+# model package-onnx` patches a model blob into a copy of the checked-in
+# runner.wasm. scripts/ci/onnx_runner_guest_check.sh proves the checked-in
+# runner rebuilds byte-identically.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tract-onnx = { version = "0.21", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Import-free randomness stub: only tract's Random* ops use it.
+getrandom = { version = "0.2", features = ["custom"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"

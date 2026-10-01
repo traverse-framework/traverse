@@ -14,6 +14,8 @@
 //! `fixtures/datasets/uci-optdigits/` and verified against pinned SHA-256
 //! digests before use.
 
+pub mod onnx;
+
 use sha2::{Digest, Sha256};
 use std::fmt;
 

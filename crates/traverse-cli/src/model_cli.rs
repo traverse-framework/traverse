@@ -246,6 +246,8 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
     verify <package-dir> --trusted-key <hex>...     Verify a package as a host registers it.
     pin <package-dir>                               Print the exact_model_dependencies entry.
     conformance generate|check <package-dir> ...    Cross-engine (wasmtime + wasmi) conformance vectors.
+    package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir>
+                                                    Package an ONNX model on the audited runner guest.
 
   All subcommands accept --json. Run `traverse-cli model <subcommand> --help` for details."
             .to_string(),

@@ -208,6 +208,9 @@ jobs:
       - name: Verify trained digits-mlp guest rebuilds reproducibly (Decision 102)
         run: bash scripts/ci/digits_mlp_guest_check.sh
 
+      - name: Verify ONNX runner guest rebuilds reproducibly (Decision 105/106)
+        run: bash scripts/ci/onnx_runner_guest_check.sh
+
       - name: Run event-driven workflow smoke path
         run: bash scripts/ci/event_driven_workflow_smoke.sh
 

@@ -17,6 +17,24 @@ fn repo_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
+fn export_onnx() -> Result<(), String> {
+    let weights = "crates/traverse-digits-mlp-guest/weights/digits-mlp-1.0.0.bin";
+    let bytes =
+        std::fs::read(repo_path(weights)).map_err(|error| format!("read {weights}: {error}"))?;
+    let model =
+        traverse_model_trainer::Mlp::from_le_bytes(&bytes).map_err(|error| error.to_string())?;
+    let onnx = traverse_model_trainer::onnx::mlp_to_onnx(&model);
+    let path = "fixtures/onnx/digits-mlp-1.0.0.onnx";
+    std::fs::create_dir_all(repo_path("fixtures/onnx")).map_err(|error| error.to_string())?;
+    std::fs::write(repo_path(path), &onnx).map_err(|error| format!("write {path}: {error}"))?;
+    println!(
+        "wrote {path} ({} bytes) sha256 {}",
+        onnx.len(),
+        sha256_hex(&onnx)
+    );
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let read = |relative: &str| {
         std::fs::read(repo_path(relative)).map_err(|error| format!("read {relative}: {error}"))
@@ -52,7 +70,12 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let result = if std::env::args().nth(1).as_deref() == Some("export-onnx") {
+        export_onnx()
+    } else {
+        run()
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("{message}");

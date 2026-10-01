@@ -89,12 +89,29 @@ const fixtures = [
       max_execution_ms: 1000,
     },
   },
+  // Runner-built package (Decision 105, #1591): model.wasm and the unsigned
+  // model.manifest.json come from `traverse-cli model package-onnx` (see
+  // scripts/ci/onnx_runner_guest_check.sh); this script only signs the
+  // manifest bytes as they are.
+  {
+    dir: "digits-onnx-1.0.0",
+    prebuilt_manifest: true,
+  },
 ];
 
 const pins = {};
 for (const fixture of fixtures) {
   const dir = join(modelsDir, fixture.dir);
   const wasm = readFileSync(join(dir, "model.wasm"));
+  if (fixture.prebuilt_manifest) {
+    const manifestBytes = readFileSync(join(dir, "model.manifest.json"));
+    const manifest = JSON.parse(manifestBytes);
+    if (manifest.wasm_digest !== sha256(wasm)) {
+      throw new Error(`${fixture.dir}: manifest wasm_digest does not match model.wasm; re-run model package-onnx`);
+    }
+    signPackage(dir, manifest, manifestBytes);
+    continue;
+  }
   const manifest = {
     schema_version: "2.0.0",
     model_id: fixture.model_id,
@@ -128,20 +145,24 @@ for (const fixture of fixtures) {
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(dir, "model.manifest.json"), manifestBytes);
+  signPackage(dir, manifest, manifestBytes);
+}
+
+function signPackage(dir, manifest, manifestBytes) {
   writeJson(join(dir, "model.sig.json"), {
     alg: "ed25519",
     key_id: keyId,
     signature: sign(null, manifestBytes, privateKey).toString("hex"),
   });
-  pins[fixture.model_id] = {
-    model_id: fixture.model_id,
-    version: "1.0.0",
+  pins[manifest.model_id] = {
+    model_id: manifest.model_id,
+    version: manifest.version,
     digest: sha256(manifestBytes),
-    offline_allowed: true,
+    offline_allowed: manifest.offline_allowed,
     target: "wasm-cpu",
     rights: {
-      license_id: fixture.rights?.license_id ?? "Apache-2.0",
-      commercial_use: fixture.rights?.commercial_use ?? "allowed",
+      license_id: manifest.rights.license_id,
+      commercial_use: manifest.rights.commercial_use,
     },
     key_id: keyId,
   };
@@ -204,6 +225,42 @@ writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
   }),
 });
 
+// ONNX runner digits vector: the same 10 held-out rows through the signed
+// runner-built package (guest ABI v2). Every engine must match byte-for-byte.
+const onnxWasm = readFileSync(join(modelsDir, "digits-onnx-1.0.0", "model.wasm"));
+const onnxRunner = new WebAssembly.Instance(new WebAssembly.Module(onnxWasm), {});
+writeJson(join(modelsDir, "conformance", "signed-digits-onnx.json"), {
+  governing_spec: "138-governed-exact-model-execution",
+  package_dir: "digits-onnx-1.0.0",
+  trusted_public_key_hex: publicKey.toString("hex"),
+  pin: pins["traverse.digits-onnx"],
+  request: {
+    policy_ref: "policy-1",
+    data_classification: "sensitive",
+    input_schema_ref: "schema:traverse-digits-onnx-in",
+    input_schema_version: "1.0.0",
+    max_output_bytes: 56,
+  },
+  // testRows lost their labels to the digits-mlp vector above; re-read them.
+  cases: readFileSync(join(root, "fixtures", "datasets", "uci-optdigits", "optdigits.tes"), "utf8")
+    .trim()
+    .split("\n")
+    .slice(0, 10)
+    .map((line) => line.split(",").map(Number))
+    .map((row) => {
+    const label = row[64];
+    const frame = guestFrame(2, [1, 64], f32Bytes(row.slice(0, 64)));
+    const out = Buffer.from(runGuestV2(onnxRunner, frame, 56));
+    const logits = Array.from({ length: 10 }, (_, index) => out.readFloatLE(16 + index * 4));
+    return {
+      label,
+      predicted: logits.indexOf(Math.max(...logits)),
+      input_frame_hex: frame.toString("hex"),
+      output_frame_hex: out.toString("hex"),
+    };
+    }),
+});
+
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -232,4 +289,13 @@ function runGuest(wasm, inputFrame, cap) {
   new Uint8Array(memory.buffer, inPtr, inputFrame.length).set(inputFrame);
   const len = instance.exports.model_execute(inPtr, inputFrame.length, outPtr, cap);
   return new Uint8Array(memory.buffer.slice(outPtr, outPtr + len));
+}
+
+function runGuestV2(instance, inputFrame, cap) {
+  const inPtr = instance.exports.model_alloc(inputFrame.length);
+  const outPtr = instance.exports.model_alloc(cap);
+  new Uint8Array(instance.exports.memory.buffer, inPtr, inputFrame.length).set(inputFrame);
+  const len = instance.exports.model_execute(inPtr, inputFrame.length, outPtr, cap);
+  if (len < 0) throw new Error("runner rejected the frame");
+  return new Uint8Array(instance.exports.memory.buffer.slice(outPtr, outPtr + len));
 }

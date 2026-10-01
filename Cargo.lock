@@ -2652,6 +2652,9 @@ dependencies = [
  "traverse-runtime",
  "tungstenite",
  "uuid",
+ "wasm-encoder 0.246.2",
+ "wasmparser 0.246.2",
+ "wat",
  "zeroize",
 ]
 

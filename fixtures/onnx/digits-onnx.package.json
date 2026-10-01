@@ -1,0 +1,31 @@
+{
+  "model_id": "traverse.digits-onnx",
+  "version": "1.0.0",
+  "registry_ref": "registry:traverse.digits-onnx@1.0.0",
+  "input_schema_ref": "schema:traverse-digits-onnx-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:traverse-digits-onnx-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "CC-BY-4.0",
+    "attribution": "ONNX export of Traverse's digits MLP, trained on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0); packaged on the Traverse ONNX runner guest",
+    "redistribution": "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+    "commercial_use": "allowed",
+    "source_url": "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits"
+  },
+  "supported_profiles": ["wasm-cpu"],
+  "max_memory_bytes": 4194304,
+  "max_fuel": 2000000000,
+  "max_input_bytes": 272,
+  "max_output_bytes": 56,
+  "max_execution_ms": 10000,
+  "offline_allowed": true,
+  "tensor": {
+    "input_name": "x",
+    "output_name": "y",
+    "input_shape": [1, 64],
+    "output_shape": [1, 10],
+    "input_dtype": 2,
+    "output_dtype": 3
+  }
+}

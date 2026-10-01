@@ -9,6 +9,9 @@ readonly expedition_root="crates/traverse-expedition-wasm/src/main.rs"
 # ADR-0077: the trained digits MLP guest's Spec 138 ABI boundary.
 readonly digits_guest_boundary="crates/traverse-digits-mlp-guest/src/abi.rs"
 readonly digits_guest_root="crates/traverse-digits-mlp-guest/src/lib.rs"
+# ADR-0077 pattern, Decision 105: the generic ONNX runner guest's ABI v2 boundary.
+readonly onnx_runner_boundary="crates/traverse-onnx-runner-guest/src/abi.rs"
+readonly onnx_runner_root="crates/traverse-onnx-runner-guest/src/lib.rs"
 
 if ! grep -Fqx 'unsafe_code = "deny"' Cargo.toml; then
   echo "Workspace unsafe-code lint must remain set to deny." >&2
@@ -37,8 +40,8 @@ while IFS= read -r path; do
   unsafe_files+=("${path}")
 done < <(grep -RIl --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
 for path in "${unsafe_files[@]}"; do
-  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" ]]; then
-    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${expedition_boundary}, or ${digits_guest_boundary}." >&2
+  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" && "${path}" != "${onnx_runner_boundary}" ]]; then
+    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${expedition_boundary}, ${digits_guest_boundary}, or ${onnx_runner_boundary}." >&2
     exit 1
   fi
 done
@@ -94,6 +97,35 @@ if [[ -f "${digits_guest_boundary}" ]]; then
   fi
   if grep -Eq 'extern[[:space:]]*"C"[[:space:]]*\{|#\[link' "${digits_guest_boundary}"; then
     echo "The digits guest boundary must not import host functions." >&2
+    exit 1
+  fi
+fi
+
+# Decision 105: the ONNX runner scopes `unsafe` to one `abi` module with the
+# blob static, the three guest ABI v2 functions, and four audited unsafe
+# blocks (blob pointer read, blob view, input view, output view).
+if [[ -f "${onnx_runner_boundary}" ]]; then
+  if ! grep -Fqx '#[allow(unsafe_code)]' "${onnx_runner_root}" ||
+    [[ "$(grep -Fc 'mod abi;' "${onnx_runner_root}")" -ne 1 ]]; then
+    echo "The ONNX runner must scope its unsafe-code allowance to exactly one abi module." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${onnx_runner_boundary}")" -ne 4 ]]; then
+    echo "The ONNX runner boundary must export exactly four audited symbols." >&2
+    exit 1
+  fi
+  for symbol in 'static TRAVERSE_MODEL_BLOB:' 'fn model_alloc(' 'fn model_prepare(' 'fn model_execute('; do
+    if [[ "$(grep -Fc "${symbol}" "${onnx_runner_boundary}")" -ne 1 ]]; then
+      echo "Missing or duplicate audited ONNX runner symbol: ${symbol}" >&2
+      exit 1
+    fi
+  done
+  if [[ "$(grep -Ec 'unsafe[[:space:]]*\{' "${onnx_runner_boundary}")" -ne 4 ]]; then
+    echo "The ONNX runner boundary must contain exactly four audited unsafe blocks." >&2
+    exit 1
+  fi
+  if grep -Eq 'extern[[:space:]]*"C"[[:space:]]*\{|#\[link' "${onnx_runner_boundary}"; then
+    echo "The ONNX runner boundary must not import host functions." >&2
     exit 1
   fi
 fi
