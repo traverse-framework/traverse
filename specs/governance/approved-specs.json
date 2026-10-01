@@ -1939,7 +1939,11 @@
         "crates/traverse-swift-host/",
         "docs/adr/0078-swift-host-model-call-abi.md",
         "docs/model-packaging-guide.md",
-        "crates/traverse-cli/src/model_cli.rs"
+        "crates/traverse-cli/src/model_cli.rs",
+        "crates/traverse-cli/src/model_packaging.rs",
+        "crates/traverse-onnx-runner-guest/",
+        "fixtures/onnx/",
+        "scripts/ci/onnx_runner_guest_check.sh"
       ]
     },
     {
