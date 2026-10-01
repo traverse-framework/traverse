@@ -18,7 +18,7 @@ const MODELS = new URL("../../../../fixtures/models/", import.meta.url);
 const readModelFile = (path) => new Uint8Array(readFileSync(new URL(path, MODELS)));
 const TEST_KEY = JSON.parse(readFileSync(new URL("test-signing-key.json", MODELS), "utf8"));
 const VECTOR = JSON.parse(readFileSync(new URL("conformance/signed-classifier.json", MODELS), "utf8"));
-const TRUST = { trustedPublicKeysHex: [TEST_KEY.public_key_hex] };
+const TRUST = { trustedPublicKeysHex: [TEST_KEY.public_key_hex], modelUsage: "commercial" };
 
 function fixture(dir) {
   return {
@@ -93,7 +93,9 @@ const reason = (expected, code = "model_incompatible") => (error) =>
 test("signed echo fixture verifies, executes, and returns typed output + trace", async () => {
   const { host, digest } = await registeredHost("fixture-echo-1.0.0", "fixture.echo");
   assert.equal(await modelSigningKeyId(Buffer.from(TEST_KEY.public_key_hex, "hex")), TEST_KEY.key_id);
-  const frame = encodeGuestFrame(1, [4], new TextEncoder().encode("test"));
+  // Distinctive payload: the trace carries public signed rights text, so the
+  // redaction check must look for tensor bytes no rights field contains.
+  const frame = encodeGuestFrame(1, [4], new TextEncoder().encode("q7zx"));
   const input_ref = host.io.stageModelInput(frame, 4096);
   const result = await host.execute(executeArgs("fixture.echo", digest, input_ref, "schema:fixture-in"));
   assert.equal(result.placement, PLACEMENT_WASM_CPU);
@@ -103,7 +105,10 @@ test("signed echo fixture verifies, executes, and returns typed output + trace",
   assert.equal(result.trace.data_classification, "sensitive");
   assert.equal(result.trace.usage.input_bytes, frame.length);
   assert.equal(result.trace.usage.output_bytes, frame.length);
-  assert.ok(!JSON.stringify(result.trace).includes("test"), "trace must redact tensor bytes");
+  assert.ok(!JSON.stringify(result.trace).includes("q7zx"), "trace must redact tensor bytes");
+  assert.deepEqual(result.trace.model_evidence, result.model_evidence);
+  assert.equal(result.model_evidence.status, "active");
+  assert.equal(result.model_evidence.effective_usage, "commercial");
   const output = host.io.readModelOutput(result.output_ref, 4096);
   assert.deepEqual([...output], [...frame]);
 
@@ -133,7 +138,7 @@ test("signed echo fixture verifies, executes, and returns typed output + trace",
 
 test("signed classifier conformance vector matches native output byte-for-byte", async () => {
   const pkg = fixture(VECTOR.package_dir);
-  const host = new ExactModelBrowserHost([VECTOR.pin], { trustedPublicKeysHex: [VECTOR.trusted_public_key_hex] });
+  const host = new ExactModelBrowserHost([VECTOR.pin], { trustedPublicKeysHex: [VECTOR.trusted_public_key_hex], modelUsage: "commercial" });
   const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
   assert.equal(digest, VECTOR.pin.digest);
   const input_ref = host.io.stageModelInput(Buffer.from(VECTOR.request.input_frame_hex, "hex"), 4096);
@@ -148,7 +153,7 @@ test("signed classifier conformance vector matches native output byte-for-byte",
 test("trained digits MLP (#1461) matches the native vector and clears the accuracy floor", async () => {
   const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-mlp.json", MODELS), "utf8"));
   const pkg = fixture(vector.package_dir);
-  const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex] });
+  const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex], modelUsage: "commercial" });
   const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
   assert.equal(host.modelRights(digest).license_id, "CC-BY-4.0");
   const run = async (frame) => {
@@ -280,9 +285,9 @@ test("registration rejects unsigned, bad-signature, and untrusted-key packages",
     () => bad(enc({ alg: "ed25519", key_id: otherKeyId, signature: signWith(otherSeed, pkg.manifest) })),
     reason("key_untrusted"),
   );
-  const noTrust = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: [] });
+  const noTrust = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: [], modelUsage: "commercial" });
   await assert.rejects(() => noTrust.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), reason("key_untrusted"));
-  const badKey = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: ["abcd"] });
+  const badKey = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: ["abcd"], modelUsage: "commercial" });
   await assert.rejects(() => badKey.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), reason("key_untrusted"));
 
   const narrowedWrong = new ExactModelBrowserHost([{ ...pin, key_id: "ed25519:other" }], TRUST);

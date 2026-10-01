@@ -222,6 +222,7 @@ export {
   MODEL_EXECUTE_EXPORT,
   MODEL_GUEST_ABI_VERSION,
   MODEL_PACKAGE_SCHEMA_VERSION,
+  MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION,
   encodeGuestFrame,
   modelSigningKeyId,
 } from "./exactModel.js";
@@ -230,8 +231,14 @@ export type {
   ExactModelBrowserHostOptions,
   ExactModelExecution,
   ExactModelPin,
+  ModelDerivation,
   ModelFailureReason,
   ModelPackageManifest,
   ModelPackageSignature,
   ModelRights,
+  ModelRightsDenialDetail,
+  ModelRightsRecord,
+  ModelUsage,
+  PackageStatus,
+  PackageStatusEntry,
 } from "./exactModel.js";

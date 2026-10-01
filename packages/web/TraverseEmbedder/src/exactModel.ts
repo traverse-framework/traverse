@@ -13,9 +13,23 @@ export const PLACEMENT_WASM_CPU = "wasm-cpu" as const;
 
 /** Model package manifest schema version (Spec 138 0.4.0, Decision 101). */
 export const MODEL_PACKAGE_SCHEMA_VERSION = "2.0.0" as const;
+/** Manifest schema adding optional `rights.derivation` (Spec 138 0.8.0, Decision 107). Both are accepted. */
+export const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION = "2.1.0" as const;
 export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
 
 export type CommercialUse = "allowed" | "restricted" | "prohibited";
+
+/** App manifest `model_usage` (Spec 138 0.8.0, Decision 107). */
+export type ModelUsage = "commercial" | "non_commercial";
+
+/** Signed provenance of a derivative package (`rights.derivation`, schema 2.1.0). */
+export type ModelDerivation = {
+  readonly kind: "converted" | "quantized" | "fine_tuned";
+  readonly source_digest: string;
+  readonly source_license_id: string;
+  readonly source_commercial_use: CommercialUse;
+  readonly source_url: string;
+};
 
 /** Signed model rights, exposed read-only to hosts/UIs unchanged. */
 export type ModelRights = {
@@ -24,6 +38,39 @@ export type ModelRights = {
   readonly redistribution: string;
   readonly commercial_use: CommercialUse;
   readonly source_url: string;
+  readonly derivation?: ModelDerivation;
+};
+
+/** Host-owned package status (Decision 107). `active` is the same as no entry. */
+export type PackageStatus = "active" | "deprecated" | "revoked";
+
+/** One host status-map entry for a package digest. */
+export type PackageStatusEntry = {
+  readonly status: PackageStatus;
+  readonly reason: string;
+};
+
+/** Verified rights record for host/UI display and every execution (FR-040). */
+export type ModelRightsRecord = {
+  readonly model_id: string;
+  readonly version: string;
+  readonly digest: string;
+  readonly rights: ModelRights;
+  /** `revoked` only on a host query; revoked executions fail. */
+  readonly status: PackageStatus;
+  readonly status_reason?: string;
+  readonly effective_usage: ModelUsage;
+};
+
+/** Why a rights check failed (FR-037); identity is omitted only before a package is known. */
+export type ModelRightsDenialDetail = {
+  readonly model_id?: string;
+  readonly version?: string;
+  readonly digest?: string;
+  readonly field: string;
+  readonly expected: string;
+  readonly actual: string;
+  readonly effective_usage?: ModelUsage;
 };
 
 /** Exact app-manifest pin (Spec 044 `exact_model_dependencies`). */
@@ -81,7 +128,11 @@ export type ModelFailureReason =
   | "rights_mismatch"
   | "target_unsupported"
   | "crypto_unavailable"
-  | "candidate_unsupported";
+  | "candidate_unsupported"
+  | "usage_undeclared"
+  | "rights_policy_denied"
+  | "package_revoked"
+  | "rights_inconsistent";
 
 /** Typed `model.execute` result with identity, placement, and redacted trace. */
 export type ExactModelExecution = {
@@ -96,23 +147,57 @@ export type ExactModelExecution = {
     readonly placement: typeof PLACEMENT_WASM_CPU;
     readonly data_classification: string;
     readonly usage: { readonly input_bytes: number; readonly output_bytes: number; readonly duration_ms: number };
+    readonly model_evidence: ModelRightsRecord;
   };
+  /** Verified rights record of the executed model (Spec 138 0.8.0 FR-040). */
+  readonly model_evidence: ModelRightsRecord;
 };
 
 export class ExactModelError extends Error {
   readonly code: string;
   readonly reason: ModelFailureReason | undefined;
-  constructor(code: string, message: string, reason?: ModelFailureReason) {
+  /** Structured rights-denial detail (Spec 138 0.8.0 FR-037). */
+  detail: ModelRightsDenialDetail | undefined;
+  constructor(code: string, message: string, reason?: ModelFailureReason, detail?: ModelRightsDenialDetail) {
     super(message);
     this.name = "ExactModelError";
     this.code = code;
     this.reason = reason;
+    this.detail = detail;
   }
 }
 
-function incompatible(reason: ModelFailureReason, message: string): ExactModelError {
-  return new ExactModelError("model_incompatible", message, reason);
+function incompatible(
+  reason: ModelFailureReason,
+  message: string,
+  detail?: ModelRightsDenialDetail,
+): ExactModelError {
+  return new ExactModelError("model_incompatible", message, reason, detail);
 }
+
+function denial(field: string, expected: string, actual: string, effectiveUsage?: ModelUsage): ModelRightsDenialDetail {
+  return { field, expected, actual, ...(effectiveUsage ? { effective_usage: effectiveUsage } : {}) };
+}
+
+/** Attach package identity to an error's rights detail, if it has one (native `for_package`). */
+function forPackage(error: unknown, manifest: ModelPackageManifest, digest: string): unknown {
+  if (error instanceof ExactModelError && error.detail) {
+    const { field, expected, actual, effective_usage } = error.detail;
+    error.detail = {
+      model_id: manifest.model_id,
+      version: manifest.version,
+      digest,
+      field,
+      expected,
+      actual,
+      ...(effective_usage ? { effective_usage } : {}),
+    };
+  }
+  return error;
+}
+
+/** Permissiveness order `prohibited < restricted < allowed` (Decision 107). */
+const COMMERCIAL_RANK: Readonly<Record<CommercialUse, number>> = { prohibited: 0, restricted: 1, allowed: 2 };
 
 function normalizeDigest(value: string): string {
   const trimmed = value.trim();
@@ -152,6 +237,8 @@ const MANIFEST_KEYS = [
   "max_input_bytes", "max_output_bytes", "max_execution_ms", "offline_allowed",
 ] as const;
 const RIGHTS_KEYS = ["license_id", "attribution", "redistribution", "commercial_use", "source_url"] as const;
+const DERIVATION_KEYS = ["kind", "source_digest", "source_license_id", "source_commercial_use", "source_url"] as const;
+const DERIVATION_KINDS: readonly string[] = ["converted", "quantized", "fine_tuned"];
 const SIGNATURE_KEYS = ["alg", "key_id", "signature"] as const;
 const COMMERCIAL_USE: readonly string[] = ["allowed", "restricted", "prohibited"];
 
@@ -200,9 +287,7 @@ function parseManifest(bytes: Uint8Array): ModelPackageManifest {
   );
   if (
     !hasExactKeys(value, MANIFEST_KEYS) ||
-    !hasExactKeys(value.rights, RIGHTS_KEYS) ||
-    !Object.values(value.rights).every((field) => typeof field === "string") ||
-    !COMMERCIAL_USE.includes(value.rights.commercial_use as string) ||
+    !isValidRights(value.rights) ||
     !text.every((key) => typeof value[key] === "string") ||
     !numeric.every((key) => Number.isInteger(value[key]) && (value[key] as number) >= 0) ||
     !Array.isArray(value.supported_profiles) ||
@@ -214,11 +299,52 @@ function parseManifest(bytes: Uint8Array): ModelPackageManifest {
   return value as unknown as ModelPackageManifest;
 }
 
+/** `rights` shape with optional `derivation` (mirrors serde deny_unknown_fields). */
+function isValidRights(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { derivation, ...rest } = value;
+  if (!hasExactKeys(rest, RIGHTS_KEYS) || !Object.values(rest).every((field) => typeof field === "string")) {
+    return false;
+  }
+  if (!COMMERCIAL_USE.includes(rest.commercial_use as string)) {
+    return false;
+  }
+  if (!Object.hasOwn(value, "derivation")) {
+    return true;
+  }
+  return (
+    hasExactKeys(derivation, DERIVATION_KEYS) &&
+    Object.values(derivation).every((field) => typeof field === "string") &&
+    DERIVATION_KINDS.includes(derivation.kind as string) &&
+    COMMERCIAL_USE.includes(derivation.source_commercial_use as string)
+  );
+}
+
+function isSha256Hex(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(normalizeDigest(value));
+}
+
 /** Same rules and order as native `ModelPackageManifest::validate`. */
 function validateManifest(manifest: ModelPackageManifest): void {
   const rights = manifest.rights;
-  if ([rights.license_id, rights.attribution, rights.redistribution, rights.source_url].some((v) => !v.trim())) {
-    throw incompatible("rights_incomplete", "model manifest rights are incomplete");
+  const fields: [string, string][] = [
+    ["rights.license_id", rights.license_id],
+    ["rights.attribution", rights.attribution],
+    ["rights.redistribution", rights.redistribution],
+    ["rights.source_url", rights.source_url],
+  ];
+  if (rights.derivation) {
+    fields.push(
+      ["rights.derivation.source_digest", rights.derivation.source_digest],
+      ["rights.derivation.source_license_id", rights.derivation.source_license_id],
+      ["rights.derivation.source_url", rights.derivation.source_url],
+    );
+  }
+  const empty = fields.find(([, value]) => !value.trim());
+  if (empty) {
+    throw incompatible("rights_incomplete", "model manifest rights are incomplete", denial(empty[0], "non-empty", empty[1]));
   }
   if (
     [manifest.wasm_digest, manifest.executable_format, manifest.input_schema_ref, manifest.output_schema_ref].some(
@@ -227,8 +353,13 @@ function validateManifest(manifest: ModelPackageManifest): void {
   ) {
     throw incompatible("manifest_invalid", "model manifest missing required field");
   }
+  const schemaSupported =
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION ||
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
   if (
-    manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION ||
+    !schemaSupported ||
+    (rights.derivation !== undefined && manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION) ||
+    (rights.derivation !== undefined && !isSha256Hex(rights.derivation.source_digest)) ||
     manifest.abi_version > MAX_MODEL_ABI_VERSION ||
     [
       manifest.abi_version, manifest.max_memory_bytes, manifest.max_fuel, manifest.max_input_bytes,
@@ -240,6 +371,34 @@ function validateManifest(manifest: ModelPackageManifest): void {
   if (!manifest.supported_profiles.includes(PLACEMENT_WASM_CPU)) {
     throw incompatible("target_unsupported", "model manifest does not support wasm-cpu");
   }
+  if (rights.derivation && COMMERCIAL_RANK[rights.commercial_use] > COMMERCIAL_RANK[rights.derivation.source_commercial_use]) {
+    throw incompatible(
+      "rights_inconsistent",
+      "package commercial_use is more permissive than its derivation source",
+      denial(
+        "rights.commercial_use",
+        `no more permissive than ${rights.derivation.source_commercial_use}`,
+        rights.commercial_use,
+      ),
+    );
+  }
+}
+
+function rightsRecord(
+  manifest: ModelPackageManifest,
+  digest: string,
+  effectiveUsage: ModelUsage,
+  entry: PackageStatusEntry | undefined,
+): ModelRightsRecord {
+  return {
+    model_id: manifest.model_id,
+    version: manifest.version,
+    digest,
+    rights: manifest.rights,
+    status: entry?.status ?? "active",
+    ...(entry ? { status_reason: entry.reason } : {}),
+    effective_usage: effectiveUsage,
+  };
 }
 
 type StoredPackage = {
@@ -357,6 +516,14 @@ export class ModelIoStore {
 export type ExactModelBrowserHostOptions = {
   /** Host-owned trusted Ed25519 public keys (hex, raw 32 bytes). Apps can never add trust. */
   readonly trustedPublicKeysHex: readonly string[];
+  /**
+   * App manifest `model_usage` (Spec 138 0.8.0). Required whenever pins
+   * exist: without it registration and execution fail closed with
+   * `usage_undeclared`.
+   */
+  readonly modelUsage?: ModelUsage;
+  /** Host tightening: the effective usage is always `commercial`. A host can never relax it. */
+  readonly hostRequiresCommercial?: boolean;
 };
 
 /**
@@ -371,6 +538,9 @@ export class ExactModelBrowserHost {
   private readonly pins: readonly ExactModelPin[];
   private readonly trustedPublicKeysHex: readonly string[];
   private trustedKeys: Promise<Map<string, CryptoKey>> | undefined;
+  private readonly modelUsage: ModelUsage | undefined;
+  private readonly hostRequiresCommercial: boolean;
+  private packageStatus = new Map<string, PackageStatusEntry>();
 
   constructor(pins: readonly ExactModelPin[], options: ExactModelBrowserHostOptions) {
     for (const pin of pins) {
@@ -384,6 +554,73 @@ export class ExactModelBrowserHost {
     }
     this.pins = pins;
     this.trustedPublicKeysHex = options.trustedPublicKeysHex;
+    this.modelUsage = options.modelUsage;
+    this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
+  }
+
+  /** Replace the host-owned package status map (digest → status); takes effect at the next register or execute. */
+  setPackageStatus(entries: Readonly<Record<string, PackageStatusEntry>>): void {
+    this.packageStatus = new Map(
+      Object.entries(entries).map(([digest, entry]) => [normalizeDigest(digest), entry]),
+    );
+  }
+
+  /** `commercial` when the host requires it, otherwise the app's `model_usage`. */
+  effectiveUsage(): ModelUsage {
+    if (this.modelUsage === undefined) {
+      throw incompatible(
+        "usage_undeclared",
+        "app declares exact_model_dependencies but no model_usage",
+        denial("model_usage", "commercial|non_commercial", "undeclared"),
+      );
+    }
+    return this.hostRequiresCommercial ? "commercial" : this.modelUsage;
+  }
+
+  /** Verified rights record (including `revoked` status) for host/UI display. */
+  modelRightsRecord(digest: string): ModelRightsRecord | undefined {
+    const key = normalizeDigest(digest);
+    const pack = this.packages.get(key);
+    if (!pack || this.modelUsage === undefined) {
+      return undefined;
+    }
+    return rightsRecord(pack.manifest, key, this.effectiveUsage(), this.packageStatus.get(key));
+  }
+
+  /** Usage policy and package status (registration and every execute). */
+  private checkRightsAndStatus(manifest: ModelPackageManifest, digest: string): ModelRightsRecord {
+    let usage: ModelUsage;
+    try {
+      usage = this.effectiveUsage();
+    } catch (error) {
+      throw forPackage(error, manifest, digest);
+    }
+    // `restricted` passes: the exact pin match already required the pin to declare it.
+    if (manifest.rights.commercial_use === "prohibited" && usage === "commercial") {
+      throw forPackage(
+        incompatible(
+          "rights_policy_denied",
+          "package commercial_use is not permitted for the effective model_usage",
+          denial("rights.commercial_use", "allowed|restricted", "prohibited", usage),
+        ),
+        manifest,
+        digest,
+      );
+    }
+    const entry = this.packageStatus.get(digest);
+    if (entry?.status === "revoked") {
+      throw forPackage(
+        new ExactModelError(
+          "model_unavailable",
+          "the host package status map marks this package revoked",
+          "package_revoked",
+          denial("status", "active|deprecated", "revoked", usage),
+        ),
+        manifest,
+        digest,
+      );
+    }
+    return rightsRecord(manifest, digest, usage, entry);
   }
 
   private loadTrustedKeys(): Promise<Map<string, CryptoKey>> {
@@ -457,16 +694,28 @@ export class ExactModelBrowserHost {
     if (manifest.model_id !== pin.model_id || manifest.version !== pin.version) {
       throw incompatible("pin_mismatch", "signed package identity does not match its pin");
     }
-    validateManifest(manifest);
+    try {
+      validateManifest(manifest);
+    } catch (error) {
+      throw forPackage(error, manifest, digest);
+    }
     if (!manifest.supported_profiles.includes(pin.target)) {
       throw incompatible("target_unsupported", "pin target is not supported by the package");
     }
-    if (
-      manifest.rights.license_id !== pin.rights.license_id ||
-      manifest.rights.commercial_use !== pin.rights.commercial_use
-    ) {
-      throw incompatible("rights_mismatch", "signed package rights differ from the rights the pin declares");
+    const mismatch =
+      manifest.rights.license_id !== pin.rights.license_id
+        ? denial("rights.license_id", pin.rights.license_id, manifest.rights.license_id)
+        : manifest.rights.commercial_use !== pin.rights.commercial_use
+          ? denial("rights.commercial_use", pin.rights.commercial_use, manifest.rights.commercial_use)
+          : undefined;
+    if (mismatch) {
+      throw forPackage(
+        incompatible("rights_mismatch", "signed package rights differ from the rights the pin declares", mismatch),
+        manifest,
+        digest,
+      );
     }
+    this.checkRightsAndStatus(manifest, digest);
     if (normalizeDigest(manifest.wasm_digest) !== (await digestHex(wasm))) {
       throw incompatible("digest_mismatch", "model wasm digest mismatch");
     }
@@ -518,6 +767,11 @@ export class ExactModelBrowserHost {
         "pin_mismatch",
       );
     }
+    // Browser execution is always cache-only (native offline mode), so a pin
+    // that forbids offline execution cannot run here.
+    if (!pin.offline_allowed) {
+      throw new ExactModelError("model_unavailable", "pin does not allow offline execution");
+    }
     const pack = this.packages.get(digest);
     if (!pack) {
       throw new ExactModelError("model_unavailable", "model package not present in verified cache");
@@ -528,6 +782,7 @@ export class ExactModelBrowserHost {
     ) {
       throw incompatible("digest_mismatch", "cached model package bytes no longer match the pinned digest");
     }
+    const evidence = this.checkRightsAndStatus(pack.manifest, digest);
     if (
       pack.manifest.input_schema_ref !== args.input_schema_ref ||
       pack.manifest.input_schema_version !== args.input_schema_version
@@ -560,7 +815,9 @@ export class ExactModelBrowserHost {
         placement: PLACEMENT_WASM_CPU,
         data_classification: args.data_classification,
         usage: { input_bytes: input.length, output_bytes: output.length, duration_ms: durationMs },
+        model_evidence: evidence,
       },
+      model_evidence: evidence,
     };
   }
 }

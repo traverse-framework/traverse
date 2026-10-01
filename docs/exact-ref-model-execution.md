@@ -180,14 +180,26 @@ schemas `2.0.0` and `2.1.0`; `derivation` in a `2.0.0` manifest fails with
 **Conformance.** Every model-capable embedder must pass
 `fixtures/models/rights-conformance/suite.json` with identical codes,
 reasons, details and evidence. Regenerate the suite with
-`node scripts/fixtures/sign-rights-conformance.mjs`. Native passes it
-(`crates/traverse-runtime/tests/rights_conformance.rs`).
+`node scripts/fixtures/sign-rights-conformance.mjs`. Native
+(`crates/traverse-runtime/tests/rights_conformance.rs`) and web
+(`packages/web/TraverseEmbedder/tests/rightsConformance.test.mjs`) both pass
+it with identical results.
+
+**Web API** (`ExactModelBrowserHost`):
+- `new ExactModelBrowserHost(pins, { trustedPublicKeysHex, modelUsage, hostRequiresCommercial })`;
+- `setPackageStatus({ [digest]: { status, reason } })`;
+- `modelRightsRecord(digest)` and `effectiveUsage()`;
+- `ExactModelError.detail` on rights failures;
+- `model_evidence` on every `execute` result and its `trace`.
+
+Like native offline mode, browser execution is cache-only, so a pin with
+`offline_allowed: false` fails with `model_unavailable`.
 
 | Embedder | Rights contract |
 |---|---|
 | Rust native (`ExactModelHostConnector`) | Enforced; passes the suite |
 | Swift (`ExactModelHost`, shared Rust core) | `modelUsage` is plumbed and the Rust core enforces the contract; the full Swift API and suite run are `#1601` |
-| Web (`ExactModelBrowserHost`) | `#1600` |
+| Web (`ExactModelBrowserHost`) | Enforced; passes the suite (`#1600`) |
 | Kotlin | Can't run models yet (`#1580`) |
 | .NET | Can't run models yet (`#1602`) |
 

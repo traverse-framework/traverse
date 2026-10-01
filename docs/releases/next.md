@@ -30,3 +30,14 @@ Unreleased changes since `v0.14.0` will be recorded here.
 - **Shared rights conformance suite:**
   `fixtures/models/rights-conformance/suite.json`. Web (`#1600`) and Swift
   (`#1601`) parity follow.
+
+### Web embedder parity (`#1600`)
+
+- `ExactModelBrowserHost` enforces the same rights contract and passes the
+  shared suite. **Breaking:** pass `modelUsage` in the host options when an
+  app has model pins; otherwise registration fails with `usage_undeclared`.
+- New: `hostRequiresCommercial`, `setPackageStatus`, `modelRightsRecord`,
+  `effectiveUsage`, `ExactModelError.detail`, `model_evidence` on execute
+  results and traces, and manifest schema `2.1.0` (`rights.derivation`).
+- A pin with `offline_allowed: false` now fails with `model_unavailable` in
+  the browser, which is always cache-only, matching native offline mode.
