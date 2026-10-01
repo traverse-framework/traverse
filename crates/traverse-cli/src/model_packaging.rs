@@ -17,7 +17,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use traverse_runtime::exact_model::{
-    MODEL_PACKAGE_SCHEMA_VERSION, ModelPackageManifest, ModelRights,
+    CommercialUse, DerivationKind, MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION, ModelDerivation,
+    ModelPackageManifest, ModelRights,
 };
 use wasm_encoder::{
     ConstExpr, DataCountSection, DataSection, MemorySection, MemoryType, Module, RawSection,
@@ -71,6 +72,18 @@ pub struct OnnxPackageSpec {
     pub max_execution_ms: u64,
     pub offline_allowed: bool,
     pub tensor: TensorConfig,
+    /// Rights of the source ONNX model; recorded with its SHA-256 as
+    /// `rights.derivation` (manifest schema 2.1.0, Decision 107).
+    pub source: OnnxSource,
+}
+
+/// Rights of the ONNX model a runner package is converted from.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnnxSource {
+    pub license_id: String,
+    pub commercial_use: CommercialUse,
+    pub url: String,
 }
 
 /// JSON report printed by `model package-onnx`.
@@ -448,12 +461,15 @@ fn manifest_bytes(
     onnx_sha256: &str,
 ) -> Result<Vec<u8>, String> {
     let mut rights = spec.rights.clone();
-    rights.attribution = format!(
-        "{} (source ONNX sha256:{onnx_sha256})",
-        rights.attribution.trim()
-    );
+    rights.derivation = Some(ModelDerivation {
+        kind: DerivationKind::Converted,
+        source_digest: onnx_sha256.to_string(),
+        source_license_id: spec.source.license_id.clone(),
+        source_commercial_use: spec.source.commercial_use,
+        source_url: spec.source.url.clone(),
+    });
     let manifest = ModelPackageManifest {
-        schema_version: MODEL_PACKAGE_SCHEMA_VERSION.to_string(),
+        schema_version: MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION.to_string(),
         model_id: spec.model_id.clone(),
         version: spec.version.clone(),
         wasm_digest: wasm_digest.to_string(),
@@ -607,11 +623,21 @@ mod tests {
         assert_eq!(manifest.wasm_digest, sha256_hex(&package.wasm));
         assert_eq!(manifest.abi_version, RUNNER_ABI_VERSION);
         assert_eq!(manifest.executable_format, EXECUTABLE_FORMAT);
-        assert_eq!(manifest.schema_version, MODEL_PACKAGE_SCHEMA_VERSION);
-        assert!(manifest.rights.attribution.ends_with(&format!(
-            "(source ONNX sha256:{})",
-            sha256_hex(b"onnx-bytes")
-        )));
+        assert_eq!(manifest.schema_version, MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION);
+        let derivation = manifest.rights.derivation.expect("derivation");
+        assert_eq!(derivation.kind, DerivationKind::Converted);
+        assert_eq!(derivation.source_digest, sha256_hex(b"onnx-bytes"));
+        assert_eq!(derivation.source_license_id, "CC-BY-4.0");
+        assert_eq!(derivation.source_commercial_use, CommercialUse::Allowed);
+        assert!(!manifest.rights.attribution.contains("sha256:"));
+    }
+
+    #[test]
+    fn a_package_more_permissive_than_its_onnx_source_is_rejected() {
+        let mut spec = spec();
+        spec.source.commercial_use = CommercialUse::Prohibited;
+        let error = build_package(&pristine(), b"onnx-bytes", &spec).expect_err("inconsistent");
+        assert!(error.contains("more permissive"), "{error}");
     }
 
     #[test]

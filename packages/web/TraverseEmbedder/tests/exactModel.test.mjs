@@ -185,9 +185,14 @@ test("trained digits MLP (#1461) matches the native vector and clears the accura
 test("ONNX runner package (#1591) matches the native vector byte-for-byte and fails closed", async () => {
   const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-onnx.json", MODELS), "utf8"));
   const pkg = fixture(vector.package_dir);
-  const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex] });
+  const host = new ExactModelBrowserHost([vector.pin], {
+    trustedPublicKeysHex: [vector.trusted_public_key_hex],
+    modelUsage: "commercial",
+  });
   const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
-  assert.match(host.modelRights(digest).attribution, /source ONNX sha256:[0-9a-f]{64}/);
+  const derivation = host.modelRights(digest).derivation;
+  assert.equal(derivation.kind, "converted");
+  assert.match(derivation.source_digest, /^[0-9a-f]{64}$/);
   const run = async (frame) => {
     const input_ref = host.io.stageModelInput(frame, 4096);
     const result = await host.execute(

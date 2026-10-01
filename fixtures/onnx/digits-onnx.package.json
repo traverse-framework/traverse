@@ -20,6 +20,11 @@
   "max_output_bytes": 56,
   "max_execution_ms": 10000,
   "offline_allowed": true,
+  "source": {
+    "license_id": "CC-BY-4.0",
+    "commercial_use": "allowed",
+    "url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/digits-mlp-1.0.0.onnx"
+  },
   "tensor": {
     "input_name": "x",
     "output_name": "y",

@@ -1770,9 +1770,10 @@ fn help_model_package_onnx() -> String {
     Package one ONNX model as a Spec 138 guest ABI v2 model by patching a
     copy of the audited ONNX runner guest: the model blob is appended as one
     data segment and the runner's code is copied byte for byte. Writes
-    <out-dir>/model.wasm and an unsigned <out-dir>/model.manifest.json (the
-    source ONNX SHA-256 is recorded in rights.attribution), then prints a
-    JSON report. Sign the manifest separately.
+    <out-dir>/model.wasm and an unsigned <out-dir>/model.manifest.json
+    (schema 2.1.0; the source ONNX SHA-256 and the package.json `source`
+    rights are recorded in rights.derivation), then prints a JSON report.
+    Sign the manifest separately (traverse-cli model sign).
 
   Required arguments:
     <runner.wasm>    The pristine runner (fixtures/onnx/runner.wasm).

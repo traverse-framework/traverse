@@ -18,8 +18,8 @@
 use serde_json::{Value, json};
 use std::fs;
 use traverse_runtime::exact_model::{
-    CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelEngine,
-    TrustedModelKeys, decode_guest_frame, encode_guest_frame,
+    CommercialUse, DerivationKind, ExactModelHostConnector, ExactModelPin, ExecutionPolicy,
+    ModelEngine, ModelUsage, TrustedModelKeys, decode_guest_frame, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -56,6 +56,7 @@ fn registered_host(engine: ModelEngine) -> (ExactModelHostConnector, ExactModelP
     let mut keys = TrustedModelKeys::new();
     keys.trust(&public).expect("trust");
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
+    host.model_usage = Some(ModelUsage::Commercial);
     host.engine = engine;
     host.register_package(
         &read(&format!("{DIR}/model.manifest.json")),
@@ -155,9 +156,13 @@ fn check_engine(engine: ModelEngine) {
     assert_eq!(rights.license_id, "CC-BY-4.0");
     assert_eq!(rights.commercial_use, CommercialUse::Allowed);
     assert!(rights.attribution.contains("10.24432/C50P49"));
-    assert!(rights.attribution.contains(
-        "source ONNX sha256:c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc"
-    ));
+    let derivation = rights.derivation.as_ref().expect("rights.derivation");
+    assert_eq!(derivation.kind, DerivationKind::Converted);
+    assert_eq!(
+        derivation.source_digest,
+        "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc"
+    );
+    assert_eq!(derivation.source_commercial_use, CommercialUse::Allowed);
 
     let good = pixel_frame(2, &[1, 64], &[1.0; 64]);
     let mut oversize = good.clone();
