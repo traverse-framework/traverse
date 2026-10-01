@@ -1790,7 +1790,6 @@ fn help_model_package_onnx() -> String {
         .to_string()
 }
 
-
 fn help_wasm_abi() -> String {
     "traverse-cli wasm abi verify <wasm-path>...
 

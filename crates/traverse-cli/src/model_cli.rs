@@ -983,6 +983,88 @@ mod tests {
         );
     }
 
+    /// #1591 DoD: `model package-onnx` → `model sign` → `model verify` →
+    /// `model conformance` yields a registrable package. The result is
+    /// byte-identical to the checked-in `digits-onnx-1.0.0` fixture that the
+    /// native and web suites register, and its outputs match that vector.
+    #[test]
+    fn onnx_runner_package_signs_verifies_and_conforms_end_to_end() {
+        let dir = temp_dir();
+        crate::model_packaging::package_onnx(
+            &repo("fixtures/onnx/runner.wasm"),
+            &repo("fixtures/onnx/digits-mlp-1.0.0.onnx"),
+            &repo("fixtures/onnx/digits-onnx.package.json"),
+            &dir,
+        )
+        .expect("package-onnx");
+        let key = dir.join("key.hex");
+        fs::write(&key, test_key("secret_key_hex")).expect("key");
+        cli(&["sign", path(&dir.join(MANIFEST_FILE)), "--key", path(&key)]).expect("sign");
+        let fixture = repo("fixtures/models/digits-onnx-1.0.0");
+        for file in [MANIFEST_FILE, WASM_FILE, SIGNATURE_FILE] {
+            assert_eq!(
+                fs::read(dir.join(file)).expect("built"),
+                fs::read(fixture.join(file)).expect("fixture"),
+                "{file} is byte-identical to the checked-in fixture"
+            );
+        }
+
+        let public = test_key("public_key_hex");
+        let verified = json_out(cli(&[
+            "verify",
+            path(&dir),
+            "--trusted-key",
+            &public,
+            "--json",
+        ]));
+        assert_eq!(verified["ok"], json!(true), "{verified}");
+        assert_eq!(
+            verified["rights_record"]["rights"]["derivation"]["kind"],
+            json!("converted")
+        );
+
+        let vector: Value = serde_json::from_slice(
+            &fs::read(repo("fixtures/models/conformance/signed-digits-onnx.json")).expect("vector"),
+        )
+        .expect("vector json");
+        let case = &vector["cases"][0];
+        let input = dir.join("in.bin");
+        fs::write(
+            &input,
+            hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex"),
+        )
+        .expect("input");
+        let out = dir.join("conformance.json");
+        cli(&[
+            "conformance",
+            "generate",
+            path(&dir),
+            "--trusted-key",
+            &public,
+            "--input",
+            path(&input),
+            "--out",
+            path(&out),
+        ])
+        .expect("generate");
+        let written: Value =
+            serde_json::from_slice(&fs::read(&out).expect("vector")).expect("json");
+        assert_eq!(
+            written["cases"][0]["output_frame_hex"],
+            case["output_frame_hex"]
+        );
+        assert_eq!(written["pin"], vector["pin"]);
+        cli(&[
+            "conformance",
+            "check",
+            path(&dir),
+            path(&out),
+            "--trusted-key",
+            &public,
+        ])
+        .expect("check");
+    }
+
     fn verify_error(dir: &Path, extra: &[&str]) -> Value {
         let public = test_key("public_key_hex");
         let mut args = vec!["verify", path(dir), "--trusted-key", &public, "--json"];

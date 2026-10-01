@@ -711,6 +711,60 @@ mod tests {
         }
     }
 
+    /// #1591: the simd128 ONNX runner package runs on the Swift host's
+    /// `wasmi` (simd enabled) byte-identically to the checked-in vector that
+    /// wasmtime, native wasmi, and the browser also match.
+    #[test]
+    fn onnx_runner_package_matches_the_vector_through_the_framed_model_call() {
+        let vector: Value =
+            serde_json::from_slice(&read("conformance/signed-digits-onnx.json")).expect("vector");
+        let pin = vector["pin"].clone();
+        // The Swift package's default (phone) ceilings: the runner package
+        // declares 4 MiB memory and 2e9 fuel.
+        let handle = call(
+            0,
+            &json!({
+                "op": "create", "pins": [pin.clone()],
+                "trusted_public_keys_hex": [key("public_key_hex")], "model_usage": "commercial",
+                "limits": { "max_package_bytes": 128 * 1024 * 1024, "max_memory_bytes": 256 * 1024 * 1024, "max_fuel": 20_000_000_000_u64 },
+            }),
+            &[],
+        )["handle"]
+            .as_u64()
+            .expect("handle");
+        let registered = call(
+            handle,
+            &json!({ "op": "register" }),
+            &[
+                ("manifest", &read("digits-onnx-1.0.0/model.manifest.json")),
+                ("wasm", &read("digits-onnx-1.0.0/model.wasm")),
+                ("signature", &read("digits-onnx-1.0.0/model.sig.json")),
+            ],
+        );
+        assert_eq!(registered["digest"], pin["digest"], "{registered}");
+        for case in vector["cases"].as_array().expect("cases") {
+            let input = hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
+            let input_ref = stage(handle, &input);
+            let mut header = execute_header(&pin, &input_ref, "onnx");
+            header["payload"]["input_schema_ref"] = vector["request"]["input_schema_ref"].clone();
+            header["payload"]["max_output_bytes"] = json!(56);
+            let executed = call(handle, &header, &[]);
+            assert_eq!(executed["ok"], json!(true), "{executed}");
+            let (_, output) = decode(
+                &model_call(
+                    handle,
+                    &frame(&json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 56 }), &[]),
+                )
+                .expect("read"),
+            );
+            assert_eq!(
+                hex_encode(&output),
+                case["output_frame_hex"].as_str().expect("out")
+            );
+        }
+        call(handle, &json!({ "op": "destroy" }), &[]);
+    }
+
     #[test]
     fn set_package_status_rejects_malformed_entries() {
         let handle = create(json!([digits_pin()]));

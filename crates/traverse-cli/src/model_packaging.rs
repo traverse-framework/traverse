@@ -623,7 +623,10 @@ mod tests {
         assert_eq!(manifest.wasm_digest, sha256_hex(&package.wasm));
         assert_eq!(manifest.abi_version, RUNNER_ABI_VERSION);
         assert_eq!(manifest.executable_format, EXECUTABLE_FORMAT);
-        assert_eq!(manifest.schema_version, MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION);
+        assert_eq!(
+            manifest.schema_version,
+            MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+        );
         let derivation = manifest.rights.derivation.expect("derivation");
         assert_eq!(derivation.kind, DerivationKind::Converted);
         assert_eq!(derivation.source_digest, sha256_hex(b"onnx-bytes"));

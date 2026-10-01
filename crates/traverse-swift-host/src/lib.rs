@@ -746,7 +746,9 @@ mod tests {
         );
         let (status, _, needed) = call(0, &create, 0);
         assert_eq!(status, BUFFER_TOO_SMALL);
-        let (status, buffer, written) = call(0, &create, needed);
+        // Parallel tests share the handle counter, so the next handle may
+        // need more digits than the probed one: leave headroom.
+        let (status, buffer, written) = call(0, &create, needed + 20);
         assert_eq!(status, OK);
         let header_len =
             usize::try_from(u32::from_le_bytes(buffer[..4].try_into().expect("4"))).expect("usize");
