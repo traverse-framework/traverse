@@ -1940,6 +1940,7 @@ fn execute_wasm_cpu_model(
     Err(HostConnectorError {
         code: HostConnectorErrorCode::Unavailable,
         reason: None,
+        detail: None,
         message: "wasm-cpu executor requires wasmtime-executor feature".to_string(),
     })
 }
