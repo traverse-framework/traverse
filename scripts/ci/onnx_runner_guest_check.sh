@@ -6,7 +6,12 @@
 #    export, fail-closed tensor checks) and clippy on host and wasm32.
 # 2. Rebuilding it with the pinned toolchain, simd128, and registry paths
 #    remapped yields byte-identical `fixtures/onnx/runner.wasm` with zero
-#    imports. Packages built from it (`traverse-cli model package-onnx`) are
+#    imports, on the canonical builder host (CI's x86_64-unknown-linux-gnu).
+#    Cargo hashes `rustc -vV` (which names the host) into every dependency's
+#    `-C metadata`, so symbol hashes, and after LTO the code layout, differ
+#    per build host: the runner is reproducible per host triple, not across
+#    hosts. Other hosts still build it and check imports and exports, but
+#    skip the byte comparison. Packages built from it (`traverse-cli model package-onnx`) are
 #    checked by the CLI's committed-package reproducibility test.
 #
 #   bash scripts/ci/onnx_runner_guest_check.sh            # check
@@ -14,6 +19,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+canonical_host="x86_64-unknown-linux-gnu"
 guest_dir="${repo_root}/crates/traverse-onnx-runner-guest"
 runner_wasm="${repo_root}/fixtures/onnx/runner.wasm"
 target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}/onnx-runner-guest"
@@ -61,6 +67,15 @@ if grep -q "${cargo_home}" "${built}"; then
 fi
 
 actual="$(sha256 "${built}")"
+host="$(rustc -vV | awk '/^host:/ {print $2}')"
+if [[ "${host}" != "${canonical_host}" ]]; then
+  if [[ "${1:-}" == "--update" ]]; then
+    echo "Refusing --update on ${host}: runner.wasm is built on ${canonical_host} (CI); take the rebuilt artifact from the failing CI job." >&2
+    exit 1
+  fi
+  echo "ONNX runner guest check passed on ${host}: zero imports and required exports (byte comparison runs only on ${canonical_host})."
+  exit 0
+fi
 if [[ "${1:-}" == "--update" ]]; then
   cp "${built}" "${runner_wasm}"
   echo "Updated ${runner_wasm} (${actual}). Re-run traverse-cli model package-onnx for each runner package, then scripts/fixtures/sign-model-fixtures.mjs."
