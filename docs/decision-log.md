@@ -5734,3 +5734,180 @@ engine and build is bit-identical to every other.
 ### Approval
 
 Approved by Enrico (2026-09-30): "GO: simd required, int8 tolerance 5e-3".
+
+## Decision 107: Model-Rights Enforcement — App Usage Policy, Host-Owned Package Status, Structured Derivation, Rights in Evidence
+
+- **Date**: 2026-10-01
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendment to the
+  next minor version lands with the runtime ticket)
+- **Related issues**: `#1603` (umbrella); `#1599` runtime + suite, `#1600`
+  web, `#1601` Swift, `#1602` .NET; DoD added to `#1580` (Kotlin), `#1589` /
+  `#1591` (CLI and ONNX runner); boundary with `#1567` (key lifecycle)
+- **Origin**: `/brainstorm` on an app developer's request for consumer-side
+  model-rights enforcement over signed Spec 138 packages
+
+### Context
+
+Decision 101 already covers most of the request:
+- signature and host-trusted key;
+- manifest and WASM digest;
+- target compatibility;
+- required, complete `rights`;
+- an exact pin match on `license_id` / `commercial_use`;
+- the verified offline cache;
+- no substitution;
+- read-only rights exposure.
+
+The request also needs things Spec 138 lacks:
+- an app-level usage policy, rather than a per-pin exact match;
+- revocation or deprecation of an individual package (signed manifests are
+  immutable, and `#1567` handles only key revocation, through a release);
+- structured conversion/derivative provenance (today a free-text hash in
+  `rights.attribution`);
+- rights in execution evidence (FR-011 traces carry only id, version and
+  digest);
+- a structured denial record;
+- one conformance contract proven across embedders (Kotlin and .NET have no
+  model support).
+
+### Decision
+
+These are project-wide rules for every exact-ref model package and every
+model-capable embedder. They make no app-, model- or target-specific
+assumptions.
+
+1. **App-declared usage, checked against a fixed table.**
+   - An app with `exact_model_dependencies` MUST declare
+     `model_usage: commercial | non_commercial`.
+   - Every host applies the same fixed table:
+     - `commercial` accepts a package with `commercial_use: allowed` only;
+     - `non_commercial` accepts `allowed` or `prohibited`;
+     - `restricted` is accepted only when the pin declares
+       `commercial_use: restricted`.
+   - Pins keep the exact `license_id` / `commercial_use` match (Decision 101).
+2. **The app declares usage; the host may only tighten it.** A host MAY force
+   the effective usage to `commercial`. It can never relax it to
+   `non_commercial`. This is the same narrowing rule as trust roots.
+3. **A missing usage fails closed.** An app with model pins and no
+   `model_usage` fails at manifest validation with the new reason
+   `usage_undeclared`. This is breaking: model-using app manifests add one
+   field.
+4. **Policy denials carry a new reason and a structured detail.**
+   - The new reason is `rights_policy_denied`.
+   - Every rights-related failure carries an optional `detail` with
+     `{model_id, version, digest, field, expected, actual, effective_usage}`.
+   - The shape is identical in every host and is checked by conformance, so
+     a UI can explain a denial without re-deriving policy.
+5. **Package status is a host-owned input.**
+   - The host configures a status map
+     `{digest → {status: deprecated | revoked, reason}}` next to the trust
+     roots.
+   - Traverse does not distribute the list, and there is no network check.
+   - A `revoked` package fails closed with the new reason `package_revoked`.
+6. **Status is re-checked at register, activate and every execute.** The host
+   can replace the map at runtime. Each execute does a map lookup (no crypto),
+   so a revocation blocks the very next call.
+7. **`deprecated` runs normally but is flagged.** `status: deprecated` and its
+   reason appear in the rights record, in execution evidence and as a trace
+   warning. Forcing an upgrade is what `revoked` is for.
+8. **Optional structured `rights.derivation`.**
+   - Shape: `{kind: converted | quantized | fine_tuned, source_digest,
+     source_license_id, source_commercial_use, source_url}`. When present,
+     every field is required and non-empty.
+   - It is required for packages built by `traverse-cli model package-onnx`.
+   - Manifest `schema_version` `2.1.0` adds it, and hosts accept `2.0.0` and
+     `2.1.0`. A host that predates this change rejects `2.1.0`.
+9. **One fixed derivation rule.**
+   - A package's `commercial_use` may not be more permissive than
+     `derivation.source_commercial_use`, using the order
+     `prohibited < restricted < allowed`.
+   - A violation fails with the new reason `rights_inconsistent`.
+   - License-ID compatibility is not evaluated.
+10. **Full rights in execution evidence.** Every `model.execute` result and
+    public trace event carries:
+    - `model_id`, `version` and `digest`;
+    - the full signed `rights`, including `derivation`;
+    - `status`;
+    - `effective_usage`.
+
+    Tensor bytes and secrets stay redacted (FR-011).
+11. **One shared conformance suite.**
+    - It is a fixture-driven suite of signed packages plus JSON cases giving
+      the expected code, reason, detail and evidence.
+    - It covers the requester's ten scenarios:
+      - a permissive package;
+      - a non-commercial package;
+      - a restricted package accepted only by a matching policy;
+      - missing license or attribution;
+      - an unknown `commercial_use`;
+      - a digest or signature mismatch;
+      - a revoked or deprecated package;
+      - offline cache-only activation;
+      - rights propagation into evidence;
+      - native/browser parity.
+    - Rust, web and Swift MUST pass it now. Passing it is DoD for Kotlin
+      (`#1580`) and for a new .NET parity ticket.
+    - The docs list which embedders can run models.
+12. **Work split.** One umbrella ticket and three new children:
+    - (a) the Spec 138 amendment, the Rust runtime and the shared suite
+      (Ready);
+    - (b) web parity (Blocked on a);
+    - (c) Swift host/FFI parity (Blocked on a).
+
+    The CLI part (`model verify` / `package-onnx` emit and check
+    `rights.derivation`) is added to the DoD of `#1589` / `#1591`, not filed
+    as a new ticket. A new future .NET model-execution parity ticket is
+    filed, and `#1580` gains the suite as DoD.
+
+### Alternatives Considered
+
+- Policy shape:
+  - Keep exact-match pins only. Rejected: there is no app-level statement of
+    usage, so the request goes unanswered.
+  - Pins list the accepted `commercial_use` values. Rejected: easy to
+    misconfigure per pin, and it is effectively the allowlist engine Decision
+    101 rejected.
+- Usage owner:
+  - The app manifest only. Rejected: a host shipping commercially couldn't
+    enforce that.
+  - Host config only. Rejected: the same bundle would behave differently per
+    host, which contradicts "app declares, host checks".
+- Denial reporting:
+  - A new reason with no detail. Rejected: the UI would have to re-derive the
+    policy.
+  - Reusing `rights_mismatch`. Rejected: it conflates "package differs from
+    pin" with "forbidden by usage".
+- Revocation:
+  - A Traverse-published signed status list. Rejected for now: it needs
+    freshness, anti-replay and publishing work, and overlaps `#1567`.
+  - Keeping revocation a non-goal. Rejected: a single package couldn't be
+    revoked without revoking its signer.
+- Revalidation at register and activate only. Rejected: a revoked model
+  would keep running until re-activation.
+- `deprecated`:
+  - Block only new registrations. Rejected: devices would diverge depending
+    on when they installed.
+  - A per-app opt-in. Rejected: another policy knob in every host.
+- Derivation:
+  - Keep free text in `attribution`. Rejected: not enforceable.
+  - A separate signed provenance file. Rejected: new load plumbing in every
+    host, as with the extra file Decision 105 rejected.
+- Derivation check:
+  - Check the structure only. Rejected: NC weights could be relabelled as
+    commercial without detection.
+  - Also check SPDX compatibility. Rejected: a license-law engine in five
+    languages.
+- Evidence: compact fields plus a lookup. Rejected: archived evidence could
+  not be interpreted without the host that produced it.
+- Parity: block until Kotlin and .NET land. Rejected: holds Rust, web and
+  Swift behind two unrelated designs.
+- Missing usage defaults to `commercial`. Rejected: an implicit default, and
+  NC apps would get a confusing denial.
+- Work split: one cross-host ticket. Rejected: the spec and suite would not
+  be gated before host work.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-10-01): every recommended option
+accepted.
