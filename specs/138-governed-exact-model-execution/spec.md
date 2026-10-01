@@ -265,7 +265,8 @@ successful `model.execute` result carries the same record as
 `model_evidence`. The record contains:
 - `model_id`, `version` and `digest`;
 - the full signed `rights` (including `derivation`);
-- `status` (`active` | `deprecated`);
+- `status` (`active` | `deprecated`, plus `revoked` on a host query; a
+  revoked package never executes, so evidence is never `revoked`);
 - `status_reason` (when deprecated);
 - `effective_usage`.
 
