@@ -4,6 +4,10 @@ Owner-approved Decisions 91–92. Public invoke remains Spec 137
 `dispatch_host_connector_command` → `traverse.model-runtime` /
 `model.execute`.
 
+To package your own model (signing, verification, pins, and cross-engine
+conformance with `traverse-cli model`), see the
+[model packaging guide](model-packaging-guide.md).
+
 ## Surfaces
 
 | Surface | Role |

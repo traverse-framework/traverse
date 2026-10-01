@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.8.0
+**Version**: 0.9.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -61,6 +61,15 @@ runner) are safe. v1 is unchanged (FR-032 through FR-034).
 New reasons: `usage_undeclared`, `rights_policy_denied`, `package_revoked`
 and `rights_inconsistent` (FR-035 through FR-042). Breaking for apps:
 `model_usage` is required when model pins exist.
+**Amendment (2026-10-01, version 0.8.0 -> 0.9.0, approved 2026-10-01)**: Decision 105 /
+`#1589`. Adds **two-tier provenance**: FR-024 through FR-027 apply only to
+Traverse-published trained packages. Third-party packages MUST instead pass
+`traverse-cli model verify` and ship a conformance vector that passes
+`model conformance check` on `wasmi` and at least one other engine. The
+`traverse-cli model` packaging commands are now governed. Packages built
+from a source artifact record it in `rights.derivation` (Decision 107
+supersedes Decision 105's free-text `rights.attribution` note). FR-043
+through FR-045. Additive; no ABI or schema change.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -409,6 +418,23 @@ The first such package is `fixtures/models/digits-mlp-1.0.0`: a
 Digits (CC BY 4.0) with a ≥ 95% held-out accuracy floor (96.10% measured).
 It is signed with the test-only key; production signing is `#1567`.
 
+### Third-party packages (0.9.0, Decision 105)
+
+A package that is not a Traverse-published trained model (for example a
+converted pretrained model, or any team's own guest) does not need
+in-repo training provenance. It MUST instead:
+
+- pass `traverse-cli model verify`. That command runs the same registration
+  checks every host runs (signature by a trusted key, manifest and rights
+  including `rights.derivation`, WASM digest, target, host ceilings) and
+  additionally requires zero WASM imports;
+- ship a conformance vector (`traverse-cli model conformance generate`)
+  whose cases produce byte-identical output on `wasmi` and at least one
+  other engine (`wasmtime`), checked by `model conformance check`;
+- record any source artifact it was built from in `rights.derivation`.
+
+The packaging workflow is documented in `docs/model-packaging-guide.md`.
+
 ## Resolver and cache behavior
 
 Traverse MUST:
@@ -474,7 +500,7 @@ Traverse MUST:
 - **FR-023**: The browser embedder MUST use WebCrypto Ed25519 and fail closed
   with `crypto_unavailable` when absent, and MUST accept only single exact-ref
   `wasm-cpu` pins (`candidate_unsupported` otherwise).
-- **FR-024**: A trained model package MUST vendor its licensed training and
+- **FR-024**: A Traverse-published trained model package MUST vendor its licensed training and
   held-out data pinned by SHA-256, and MUST NOT download data during training
   or CI.
 - **FR-025**: A trained package's weights MUST come from a deterministic,
@@ -549,6 +575,18 @@ Traverse MUST:
   details and evidence.
 - **FR-042**: Rights enforcement MUST NOT encode application-, model-,
   species-, location- or UI-specific policy.
+- **FR-043**: FR-024 through FR-027 apply only to Traverse-published trained
+  packages. A third-party package MUST pass `traverse-cli model verify` and
+  ship a conformance vector that passes on `wasmi` and at least one other
+  engine.
+- **FR-044**: `traverse-cli model verify` MUST apply the runtime's own
+  registration rules (it MUST NOT re-implement them) plus a zero-import
+  check, and MUST exit non-zero with the stable `code` / `reason` /
+  `detail` on failure. `traverse-cli model sign` MUST NOT generate or write
+  signing keys.
+- **FR-045**: `traverse-cli model conformance` MUST run every case through
+  the signed register → execute path on `wasmtime` and `wasmi`, and MUST
+  fail when the engines' outputs differ or differ from the vector.
 
 ## Acceptance scenarios
 
@@ -626,6 +664,11 @@ Traverse MUST:
     than its source → `rights_inconsistent`; `derivation` in `2.0.0` →
     `manifest_invalid`; a valid derivative's `derivation` appears unchanged in
     the rights record and evidence.
+25. (0.9.0) A package built with only `traverse-cli model` (sign, pin,
+    verify, conformance) from an unsigned manifest and WASM registers on
+    native and web hosts. A tampered, untrusted, rights-inconsistent,
+    over-ceiling, or importing package fails `model verify` with the same
+    reason a host reports.
 
 ## Compatibility and non-goals
 

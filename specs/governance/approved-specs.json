@@ -1914,7 +1914,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1937,7 +1937,9 @@
         "docs/adr/0077-digits-mlp-guest-abi-unsafe-boundary.md",
         "scripts/ci/digits_mlp_guest_check.sh",
         "crates/traverse-swift-host/",
-        "docs/adr/0078-swift-host-model-call-abi.md"
+        "docs/adr/0078-swift-host-model-call-abi.md",
+        "docs/model-packaging-guide.md",
+        "crates/traverse-cli/src/model_cli.rs"
       ]
     },
     {

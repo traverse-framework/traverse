@@ -9,6 +9,7 @@ mod capability_packages;
 mod federation_operator;
 mod grpc_event_transport;
 mod http_api;
+mod model_cli;
 #[cfg(test)]
 mod registry_resolution_diagnostics;
 mod supply_chain;
@@ -166,6 +167,7 @@ enum Command {
     ArtifactVerify {
         artifact_path: PathBuf,
     },
+    Model(model_cli::ModelCommand),
     ArtifactSign {
         artifact_path: PathBuf,
     },
@@ -444,6 +446,7 @@ fn run_command(command: Command) -> Result<String, CliError> {
         } => execute_capability_package(&manifest_path, &request_path),
         Command::WasmAbiVerify { wasm_paths } => verify_wasm_abi_imports(&wasm_paths),
         Command::ArtifactVerify { artifact_path } => verify_supply_chain_artifact(&artifact_path),
+        Command::Model(command) => model_cli::run(&command),
         Command::ArtifactSign { artifact_path } => sign_supply_chain_artifact(&artifact_path),
         Command::FederationPeers { manifest_path } => {
             render_federation_peers(&manifest_path).map_err(CliError::IoError)
@@ -1191,6 +1194,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         }
         (Some("artifact"), Some("verify")) => parse_artifact_verify_command(args),
         (Some("artifact"), Some("sign")) => parse_artifact_sign_command(args),
+        (Some("model"), _) => model_cli::parse(args).map(Command::Model),
         (Some("wasm"), Some("abi")) => parse_wasm_abi_command(args),
         (Some("expedition"), Some("execute")) => parse_expedition_execute_command(args),
         (Some("capability"), Some("discover")) => parse_capability_discover_command(args),
@@ -1205,6 +1209,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
 
 fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
     match (family, subcommand) {
+        (Some("model"), subcommand) => model_cli::help(subcommand),
         (Some("bundle"), Some("inspect")) => help_bundle_inspect(),
         (Some("bundle"), Some("register")) => help_bundle_register(),
         (Some("bundle"), _) => help_bundle(),
@@ -13917,6 +13922,12 @@ mod tests {
             ("capability-package", None),
             ("artifact", Some("verify")),
             ("artifact", None),
+            ("model", Some("digest")),
+            ("model", Some("sign")),
+            ("model", Some("verify")),
+            ("model", Some("pin")),
+            ("model", Some("conformance")),
+            ("model", None),
             ("wasm", Some("abi")),
             ("wasm", None),
             ("workflow", Some("register")),
