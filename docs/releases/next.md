@@ -41,3 +41,19 @@ Unreleased changes since `v0.14.0` will be recorded here.
   results and traces, and manifest schema `2.1.0` (`rights.derivation`).
 - A pin with `offline_allowed: false` now fails with `model_unavailable` in
   the browser, which is always cache-only, matching native offline mode.
+
+### Swift parity (`#1601`)
+
+- `ExactModelHost` exposes the rights contract:
+  - `hostRequiresCommercial:`;
+  - `setPackageStatus` and `modelRightsRecord(digest:)`;
+  - `ExactModelError.detail` and `ModelRights.derivation`;
+  - `ExactModelExecution.modelEvidence`.
+
+  The `modelExecuteAdapter` payloads also carry `model_evidence` and
+  `detail`. The new framed ops are `rights_record` and `set_package_status`;
+  the C symbol is unchanged.
+- This needs a rebuilt `TraverseSwiftHost.xcframework`: a
+  `swift-host-v0.14.0-2` release, after which `Package.swift` is repointed.
+  Until then, the shared-suite Swift test fails against
+  `swift-host-v0.14.0-1`.

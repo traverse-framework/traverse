@@ -7,10 +7,13 @@
 //! payload, so large model packages cross without base64 inflation.
 //!
 //! Operations (`header.op`): `create` (handle 0; returns a model handle),
-//! `register`, `stage_input`, `execute`, `read_output`, `rights`, `cancel`,
-//! `drop_ref`, `destroy`. Model-level failures are data
-//! (`{"ok":false,"error":{code,reason,message}}`); envelope failures return a
-//! non-OK status from the ABI.
+//! `register`, `stage_input`, `execute`, `read_output`, `rights`,
+//! `rights_record`, `set_package_status`, `cancel`, `drop_ref`, `destroy`.
+//! Model-level failures are data
+//! (`{"ok":false,"error":{code,reason,detail?,message}}`); envelope failures
+//! return a non-OK status from the ABI. Rights enforcement (usage policy,
+//! package status, derivation, evidence) is the shared Rust core's
+//! (Spec 138 0.8.0, Decision 107).
 //!
 //! Model hosts live in a registry of `Arc` states: `execute` holds the
 //! connector lock for the whole inference while `cancel` only flips the
@@ -25,7 +28,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use traverse_runtime::exact_model::{
     ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits, ModelEngine,
-    ModelUsage, PLACEMENT_WASM_CPU, TrustedModelKeys,
+    ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -139,17 +142,15 @@ impl<'a> Request<'a> {
 }
 
 fn error_response(error: &HostConnectorError) -> Vec<u8> {
-    encode_frame(
-        &json!({
-            "ok": false,
-            "error": {
-                "code": error.code.as_str(),
-                "reason": error.reason.map(ModelFailureReason::as_str),
-                "message": error.message,
-            }
-        }),
-        &[],
-    )
+    let mut body = json!({
+        "code": error.code.as_str(),
+        "reason": error.reason.map(ModelFailureReason::as_str),
+        "message": error.message,
+    });
+    if let Some(detail) = &error.detail {
+        body["detail"] = json!(detail);
+    }
+    encode_frame(&json!({ "ok": false, "error": body }), &[])
 }
 
 fn ok(header: Value) -> Vec<u8> {
@@ -184,6 +185,8 @@ pub fn model_call(handle: u64, frame: &[u8]) -> Result<Vec<u8>, EnvelopeError> {
         "execute" => execute(&host, &request),
         "read_output" => read_output(&host, &request),
         "rights" => rights(&host, &request),
+        "rights_record" => rights_record(&host, &request),
+        "set_package_status" => set_package_status(&host, &request),
         "cancel" => Ok(cancel(&host, &request)),
         "drop_ref" => drop_ref(&host, &request),
         "destroy" => {
@@ -358,7 +361,9 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
         .map(|bytes| bytes.len())
         .unwrap_or(0);
     let model_ref = payload.get("model_ref").cloned().unwrap_or(Value::Null);
+    let evidence = json!(result.model_evidence);
     Ok(ok(json!({
+        "model_evidence": evidence,
         "output_ref": output_ref,
         "placement": PLACEMENT_WASM_CPU,
         "target": PLACEMENT_WASM_CPU,
@@ -367,6 +372,7 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
             "model_ref": model_ref,
             "placement": PLACEMENT_WASM_CPU,
             "data_classification": payload.get("data_classification").cloned().unwrap_or(Value::Null),
+            "model_evidence": evidence,
             "usage": {
                 "input_bytes": input_bytes,
                 "output_bytes": output_bytes,
@@ -396,6 +402,25 @@ fn rights(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeEr
             serde_json::to_value(rights).unwrap_or(Value::Null)
         });
     Ok(ok(json!({ "rights": rights })))
+}
+
+/// Verified rights record (including `revoked` status) for host/UI display.
+fn rights_record(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
+    let digest = request.str("digest")?;
+    let record = lock(&host.connector).model_rights_record(digest);
+    Ok(ok(json!({ "record": record })))
+}
+
+/// Replace the host-owned package status map (`entries`: digest → entry).
+fn set_package_status(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
+    let entries: HashMap<String, PackageStatusEntry> = request
+        .header
+        .get("entries")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or(EnvelopeError::InvalidInput("entries"))?;
+    lock(&host.connector).set_package_status(entries);
+    Ok(ok(json!({})))
 }
 
 /// Flip the shared cancel flag only when the named execution is running, so
@@ -450,6 +475,14 @@ mod tests {
     fn key(field: &str) -> String {
         let key: Value = serde_json::from_slice(&read("test-signing-key.json")).expect("key");
         key[field].as_str().expect("hex").to_string()
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        use std::fmt::Write;
+        bytes.iter().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
     }
 
     fn frame(header: &Value, segments: &[(&str, &[u8])]) -> Vec<u8> {
@@ -525,6 +558,176 @@ mod tests {
             .as_str()
             .expect("input_ref")
             .to_string()
+    }
+
+    /// Shared rights conformance suite (Spec 138 0.8.0, FR-041) through the
+    /// framed C-ABI call the Swift package uses: same codes, reasons,
+    /// details, records, and evidence as the native runner.
+    #[test]
+    fn rights_conformance_suite_passes_through_the_framed_model_call() {
+        let suite: Value =
+            serde_json::from_slice(&read("rights-conformance/suite.json")).expect("suite");
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let file = |path: String| std::fs::read(format!("{root}/{path}")).expect("suite file");
+        let run = &suite["execute"];
+        for case in suite["cases"].as_array().expect("cases") {
+            let id = case["id"].as_str().expect("id");
+            let mut create = json!({
+                "op": "create",
+                "pins": case["pins"],
+                "trusted_public_keys_hex": [suite["trusted_public_key_hex"]],
+                "limits": limits(),
+                "host_requires_commercial": case["host_requires_commercial"].as_bool().unwrap_or(false),
+            });
+            if !case["model_usage"].is_null() {
+                create["model_usage"] = case["model_usage"].clone();
+            }
+            let handle = call(0, &create, &[])["handle"].as_u64().expect("handle");
+            let set_status = |entries: &Value| {
+                let response = call(
+                    handle,
+                    &json!({ "op": "set_package_status", "entries": entries }),
+                    &[],
+                );
+                assert_eq!(response["ok"], json!(true));
+            };
+            set_status(&case.get("package_status").cloned().unwrap_or(json!({})));
+            let pin_for = |package: &str| {
+                case["pins"]
+                    .as_array()
+                    .expect("pins")
+                    .iter()
+                    .find(|pin| pin["model_id"] == json!(format!("fixture.rights.{package}")))
+                    .expect("pin")
+                    .clone()
+            };
+            let as_error = |response: &Value| {
+                let error = &response["error"];
+                let mut out =
+                    json!({ "ok": false, "code": error["code"], "reason": error["reason"] });
+                if let Some(detail) = error.get("detail") {
+                    out["detail"] = detail.clone();
+                }
+                out
+            };
+            for (index, step) in case["steps"].as_array().expect("steps").iter().enumerate() {
+                let package = step["package"].as_str().unwrap_or_default();
+                let actual = match step["op"].as_str().expect("op") {
+                    "register" => {
+                        let dir =
+                            format!("{}/{package}", suite["package_dir"].as_str().expect("dir"));
+                        let mut wasm = file(suite["wasm_path"].as_str().expect("wasm").to_string());
+                        let mut signature = file(format!("{dir}/model.sig.json"));
+                        match step["tamper"].as_str() {
+                            Some("wasm") => wasm.push(0),
+                            Some(_) => {
+                                let mut document: Value =
+                                    serde_json::from_slice(&signature).expect("sig");
+                                let mut bytes =
+                                    hex_decode(document["signature"].as_str().expect("sig"))
+                                        .expect("hex");
+                                bytes[0] ^= 0x01;
+                                document["signature"] = json!(hex_encode(&bytes));
+                                signature = serde_json::to_vec(&document).expect("sig bytes");
+                            }
+                            None => {}
+                        }
+                        let response = call(
+                            handle,
+                            &json!({ "op": "register" }),
+                            &[
+                                ("manifest", &file(format!("{dir}/model.manifest.json"))),
+                                ("wasm", &wasm),
+                                ("signature", &signature),
+                            ],
+                        );
+                        if response["ok"] == json!(true) {
+                            json!({ "ok": true, "digest": response["digest"] })
+                        } else {
+                            as_error(&response)
+                        }
+                    }
+                    "execute" => {
+                        let pin = pin_for(package);
+                        let input =
+                            hex_decode(run["input_hex"].as_str().expect("input")).expect("hex");
+                        let input_ref = stage(handle, &input);
+                        let mut header = json!({
+                            "op": "execute",
+                            "execution_id": "rights",
+                            "allowed_classifications": run["allowed_classifications"],
+                            "payload": {
+                                "model_ref": { "model_id": pin["model_id"], "version": pin["version"], "digest": pin["digest"] },
+                                "input_ref": input_ref,
+                            }
+                        });
+                        for field in [
+                            "policy_ref",
+                            "data_classification",
+                            "input_schema_ref",
+                            "input_schema_version",
+                            "max_output_bytes",
+                        ] {
+                            header["payload"][field] = run[field].clone();
+                        }
+                        let response = call(handle, &header, &[]);
+                        if response["ok"] == json!(true) {
+                            assert_eq!(
+                                response["trace"]["model_evidence"],
+                                response["model_evidence"]
+                            );
+                            let (_, output) = decode(
+                                &model_call(
+                                    handle,
+                                    &frame(&json!({ "op": "read_output", "output_ref": response["output_ref"], "max_bytes": 4096 }), &[]),
+                                )
+                                .expect("read"),
+                            );
+                            json!({
+                                "ok": true,
+                                "output_hex": hex_encode(&output),
+                                "model_evidence": response["model_evidence"],
+                            })
+                        } else {
+                            as_error(&response)
+                        }
+                    }
+                    "rights_record" => {
+                        let response = call(
+                            handle,
+                            &json!({ "op": "rights_record", "digest": pin_for(package)["digest"] }),
+                            &[],
+                        );
+                        response["record"].clone()
+                    }
+                    _ => {
+                        set_status(&step["entries"]);
+                        continue;
+                    }
+                };
+                assert_eq!(actual, step["expect"], "{id} step {index}");
+            }
+            call(handle, &json!({ "op": "destroy" }), &[]);
+        }
+    }
+
+    #[test]
+    fn set_package_status_rejects_malformed_entries() {
+        let handle = create(json!([digits_pin()]));
+        assert_eq!(
+            model_call(
+                handle,
+                &frame(
+                    &json!({ "op": "set_package_status", "entries": { "d": { "status": "gone" } } }),
+                    &[]
+                ),
+            ),
+            Err(EnvelopeError::InvalidInput("entries"))
+        );
+        assert_eq!(
+            model_call(handle, &frame(&json!({ "op": "rights_record" }), &[])),
+            Err(EnvelopeError::InvalidInput("digest"))
+        );
     }
 
     #[test]

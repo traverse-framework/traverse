@@ -195,10 +195,24 @@ it with identical results.
 Like native offline mode, browser execution is cache-only, so a pin with
 `offline_allowed: false` fails with `model_unavailable`.
 
+**Swift API** (`ExactModelHost`):
+- `init(pins:trustedPublicKeysHex:modelUsage:hostRequiresCommercial:limits:)`;
+- `setPackageStatus([digest: PackageStatusEntry])` and
+  `modelRightsRecord(digest:)`;
+- `ExactModelError.detail`;
+- `ModelRights.derivation`;
+- `ExactModelExecution.modelEvidence`, also carried by the
+  `modelExecuteAdapter` success and failure payloads (`model_evidence`,
+  `detail`).
+
+Behind it, the framed `traverse_swift_host_model_call` adds the
+`rights_record` and `set_package_status` ops. Execute responses carry
+`model_evidence`, and errors carry `detail`. The C symbol is unchanged.
+
 | Embedder | Rights contract |
 |---|---|
 | Rust native (`ExactModelHostConnector`) | Enforced; passes the suite |
-| Swift (`ExactModelHost`, shared Rust core) | `modelUsage` is plumbed and the Rust core enforces the contract; the full Swift API and suite run are `#1601` |
+| Swift (`ExactModelHost`, shared Rust core) | Enforced; passes the suite through the framed C-ABI call and the Swift API (`#1601`; needs xcframework `swift-host-v0.14.0-2` or later) |
 | Web (`ExactModelBrowserHost`) | Enforced; passes the suite (`#1600`) |
 | Kotlin | Can't run models yet (`#1580`) |
 | .NET | Can't run models yet (`#1602`) |
