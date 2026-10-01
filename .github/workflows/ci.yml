@@ -211,6 +211,15 @@ jobs:
       - name: Verify ONNX runner guest rebuilds reproducibly (Decision 105/106)
         run: bash scripts/ci/onnx_runner_guest_check.sh
 
+      - name: Upload the rebuilt ONNX runner when it is not reproducible
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: onnx-runner-rebuilt
+          path: target/onnx-runner-guest/wasm32-unknown-unknown/release/traverse_onnx_runner_guest.wasm
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run event-driven workflow smoke path
         run: bash scripts/ci/event_driven_workflow_smoke.sh
 
