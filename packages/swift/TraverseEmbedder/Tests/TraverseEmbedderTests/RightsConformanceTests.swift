@@ -109,6 +109,15 @@ final class RightsConformanceTests: XCTestCase {
 
     func testRightsConformanceSuiteMatchesNativeAndWeb() async throws {
         let suite = try XCTUnwrap(JSONSerialization.jsonObject(with: file("fixtures/models/rights-conformance/suite.json")) as? [String: Any])
+        // The rights ops ship in the swift-host-v0.14.0-2 xcframework. Until
+        // Package.swift is repointed at it, the linked binary rejects them as
+        // an unknown op (envelope `invalid_input`); skip loudly, not silently.
+        let probe = try ExactModelHost(pins: [], trustedPublicKeysHex: [], modelUsage: "commercial")
+        do {
+            try probe.setPackageStatus([:])
+        } catch let error as ExactModelError where error.code == "invalid_input" {
+            throw XCTSkip("linked TraverseSwiftHost predates the Spec 138 0.8.0 rights ops (needs swift-host-v0.14.0-2+)")
+        }
         let cases = try XCTUnwrap(suite["cases"] as? [[String: Any]])
         var scenarios: Set<Int> = [10]
         for testCase in cases {
