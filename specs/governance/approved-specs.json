@@ -1914,7 +1914,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.10.0",
+      "version": "0.11.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1947,7 +1947,12 @@
         "crates/traverse-model-host-frame/",
         "crates/traverse-android-host/",
         "scripts/build_android_host_jvm.sh",
-        "docs/adr/0079-android-host-model-call-jni.md"
+        "docs/adr/0079-android-host-model-call-jni.md",
+        "keys/model-signing/",
+        "scripts/model-signing/",
+        ".github/workflows/sign-model-packages.yml",
+        "docs/model-signing-key-runbook.md",
+        "docs/adr/0080-model-signing-key-management.md"
       ]
     },
     {

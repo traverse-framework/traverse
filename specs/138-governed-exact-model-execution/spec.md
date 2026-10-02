@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.10.0
+**Version**: 0.11.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -77,6 +77,17 @@ crate, which runs behind the Apple C ABI and a new Android JNI shim
 (`traverse-android-host`, one audited `modelCall`), on `wasmi` with SIMD. A
 host whose native model engine cannot load fails closed with the new
 embedder reason `engine_unavailable` (FR-046 through FR-048). Additive.
+**Amendment (2026-10-01, version 0.10.0 -> 0.11.0, approved 2026-10-01)**: Decision 103 /
+ADR-0080 / `#1567`. Adds **production model-signing key management**:
+- a dedicated Ed25519 key held only in the protected `model-signing`
+  environment;
+- a dispatch-only signing workflow that verifies against the committed
+  public keys;
+- public keys committed under `keys/model-signing/` and mirrored into an
+  opt-in `TRAVERSE_MODEL_SIGNING_KEYS` constant;
+- overlap rotation, and revocation by an emergency patch release.
+
+FR-049 through FR-052. Additive; no format change.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -607,6 +618,20 @@ Traverse MUST:
   (classifier, digits-mlp, digits-onnx) and the shared rights conformance
   suite. Until Android-emulator coverage lands (`#1611`), it runs them on a
   host-JVM build of the same JNI library.
+- **FR-049**: The production model-signing private key MUST exist only as
+  the `MODEL_SIGNING_KEY_HEX` secret of the protected `model-signing`
+  environment. It MUST be used only by the `workflow_dispatch`-only signing
+  workflow, and MUST NOT be available to `pull_request` workflows or written
+  inside the repository.
+- **FR-050**: Production public keys MUST be committed under
+  `keys/model-signing/<key_id>.pub`. `TRAVERSE_MODEL_SIGNING_KEYS` in each
+  embedder MUST mirror that directory exactly, and trust MUST stay opt-in.
+- **FR-051**: The signing workflow MUST verify every signed package against
+  the committed public keys before publishing the signing branch.
+- **FR-052**: Keys MUST rotate with an overlap window of one minor release
+  (yearly or on compromise). A compromised key MUST be revoked by removing it
+  from `TRAVERSE_MODEL_SIGNING_KEYS` in an emergency patch release, with a
+  security advisory.
 
 ## Acceptance scenarios
 

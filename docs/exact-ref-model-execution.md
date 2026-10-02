@@ -7,6 +7,10 @@ Owner-approved Decisions 91–92. Public invoke remains Spec 137
 To package your own model (signing, verification, pins, and cross-engine
 conformance with `traverse-cli model`), see the
 [model packaging guide](model-packaging-guide.md).
+Traverse's own production signing key (custody, signing, rotation and
+revocation) is covered in the
+[model-signing key runbook](model-signing-key-runbook.md). Hosts opt in to
+it through `TRAVERSE_MODEL_SIGNING_KEYS`.
 
 ## Surfaces
 
