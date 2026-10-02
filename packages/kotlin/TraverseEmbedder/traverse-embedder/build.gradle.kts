@@ -21,6 +21,22 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
+// Decision 108: Kotlin unit tests load the host-JVM build of the Android JNI
+// model host (the same Rust + JNI code the AAR ships for arm64-v8a/x86_64).
+val hostModelLibrary = layout.buildDirectory.file("native/" + System.mapLibraryName("traverse_android_host"))
+val buildHostModelLibrary by tasks.registering(Exec::class) {
+    description = "Builds traverse-android-host for the host JVM (Kotlin unit tests)."
+    commandLine(
+        "bash",
+        rootProject.file("../../../scripts/build_android_host_jvm.sh").absolutePath,
+        hostModelLibrary.get().asFile.absolutePath,
+    )
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(buildHostModelLibrary)
+    systemProperty("traverse.android.host.library", hostModelLibrary.get().asFile.absolutePath)
+}
+
 dependencies {
     implementation("com.dylibso.chicory:runtime:1.7.5")
     implementation("com.dylibso.chicory:wasm:1.7.5")

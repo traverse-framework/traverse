@@ -36,6 +36,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Decision 108: Kotlin unit tests build the host-JVM JNI model host.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
       - name: Resolve release tag
         working-directory: .
         shell: bash

@@ -11,6 +11,7 @@ members = [
   "crates/traverse-runtime-wasm",
   "crates/traverse-swift-host",
   "crates/traverse-model-host-frame",
+  "crates/traverse-android-host",
   "crates/traverse-nested-wasm-spike",
 ]
 resolver = "3"

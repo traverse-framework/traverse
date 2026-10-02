@@ -57,3 +57,17 @@ Unreleased changes since `v0.14.0` will be recorded here.
   `swift-host-v0.14.0-2` release, after which `Package.swift` is repointed.
   Until then, the shared-suite Swift test fails against
   `swift-host-v0.14.0-1`.
+
+### Kotlin/Android exact-ref model execution (`#1580`, Decision 108)
+
+- The new `ExactModelHost` in `traverse-embedder` (Kotlin) runs signed
+  Spec 138 packages on `wasmi` (SIMD) through the new Rust JNI shim
+  `traverse-android-host` (ADR-0079). It shares the framed protocol with the
+  Swift host through `traverse-model-host-frame`.
+- It passes the signed vectors byte-for-byte (classifier, digits-mlp,
+  digits-onnx) and the 21-case rights conformance suite.
+- If the native library can't load, model calls fail with
+  `model_unavailable` / `engine_unavailable` (new reason).
+- Kotlin unit tests now need a Rust toolchain (`testDebugUnitTest` builds the
+  host-JVM library). Packaging the `arm64-v8a` / `x86_64` `.so` files into
+  the AAR is the next slice.

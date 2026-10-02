@@ -1,0 +1,21 @@
+[package]
+name = "traverse-android-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Android JNI shim for the framed Spec 138 exact-ref model host (Decision 108)."
+publish = false
+
+[lib]
+# cdylib: the Android .so / host-JVM test library; rlib: Rust unit tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = "0.22.4"
+serde_json = "1.0.145"
+traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.14.0" }
+
+[lints]
+workspace = true

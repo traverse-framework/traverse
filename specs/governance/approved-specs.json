@@ -1914,7 +1914,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1944,7 +1944,10 @@
         "crates/traverse-onnx-runner-guest/",
         "fixtures/onnx/",
         "scripts/ci/onnx_runner_guest_check.sh",
-        "crates/traverse-model-host-frame/"
+        "crates/traverse-model-host-frame/",
+        "crates/traverse-android-host/",
+        "scripts/build_android_host_jvm.sh",
+        "docs/adr/0079-android-host-model-call-jni.md"
       ]
     },
     {

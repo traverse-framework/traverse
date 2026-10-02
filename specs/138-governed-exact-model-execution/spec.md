@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.9.0
+**Version**: 0.10.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -70,6 +70,13 @@ Traverse-published trained packages. Third-party packages MUST instead pass
 from a source artifact record it in `rights.derivation` (Decision 107
 supersedes Decision 105's free-text `rights.attribution` note). FR-043
 through FR-045. Additive; no ABI or schema change.
+**Amendment (2026-10-01, version 0.9.0 -> 0.10.0, approved 2026-10-01)**: Decision 108 /
+ADR-0079 / `#1580`. Adds **Kotlin/Android** model execution. The framed
+model-host protocol moves into the shared safe `traverse-model-host-frame`
+crate, which runs behind the Apple C ABI and a new Android JNI shim
+(`traverse-android-host`, one audited `modelCall`), on `wasmi` with SIMD. A
+host whose native model engine cannot load fails closed with the new
+embedder reason `engine_unavailable` (FR-046 through FR-048). Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -236,7 +243,9 @@ and add a stable `reason`: `pin_mismatch`, `pin_ambiguous`,
 `rights_incomplete`, `rights_mismatch`, `target_unsupported`,
 `crypto_unavailable`, `candidate_unsupported`, `host_limit_exceeded` (0.6.0),
 `usage_undeclared`, `rights_policy_denied`, `rights_inconsistent` (all
-`model_incompatible`), and `package_revoked` (`model_unavailable`) (0.8.0).
+`model_incompatible`), and `package_revoked` (`model_unavailable`) (0.8.0),
+and `engine_unavailable` (`model_unavailable`) (0.10.0) when an embedder's
+native model engine cannot load.
 
 ### Rights denial detail (0.8.0, Decision 107)
 
@@ -587,6 +596,17 @@ Traverse MUST:
 - **FR-045**: `traverse-cli model conformance` MUST run every case through
   the signed register → execute path on `wasmtime` and `wasmi`, and MUST
   fail when the engines' outputs differ or differ from the vector.
+- **FR-046**: The Kotlin/Android embedder MUST run exact-ref packages on
+  `wasmi` (SIMD) through the shared framed protocol, behind one audited JNI
+  method (ADR-0079). It MUST NOT re-implement the verification, rights, or
+  policy rules.
+- **FR-047**: When the native model engine cannot load, every model call MUST
+  fail closed with `model_unavailable` / `engine_unavailable`, with no
+  fallback engine.
+- **FR-048**: The Kotlin embedder MUST pass the signed vectors byte-for-byte
+  (classifier, digits-mlp, digits-onnx) and the shared rights conformance
+  suite. Until Android-emulator coverage lands (`#1611`), it runs them on a
+  host-JVM build of the same JNI library.
 
 ## Acceptance scenarios
 
@@ -669,6 +689,10 @@ Traverse MUST:
     native and web hosts. A tampered, untrusted, rights-inconsistent,
     over-ceiling, or importing package fails `model verify` with the same
     reason a host reports.
+26. (0.10.0) The Kotlin `ExactModelHost` registers and executes the signed
+    vectors byte-identically to native, web, and Swift, passes all 21 rights
+    conformance cases, and fails closed with `engine_unavailable` when the
+    native library is missing.
 
 ## Compatibility and non-goals
 

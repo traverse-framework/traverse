@@ -105,7 +105,7 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   app-state-machine command's Spec 137 `model.execute` payload, plus
   `allowed_classifications`, to it. The digits conformance vector is
   byte-identical on Swift and scores 1,727 / 1,797, as on native and web.
-  Kotlin (`#1580`) and .NET don't execute exact-ref models yet.
+  Kotlin runs them through the JNI shim (Decision 108); .NET doesn't yet (`#1602`).
 
 ## Cache and offline behavior
 
@@ -211,6 +211,19 @@ Like native offline mode, browser execution is cache-only, so a pin with
 
 The framed protocol lives in the safe `traverse-model-host-frame` crate,
 which the Apple C-ABI shim and the Android JNI shim share (Decision 108).
+**Kotlin/Android API** (`ExactModelHost`, Decision 108):
+- `ExactModelHost(pins, trustedPublicKeysHex, modelUsage, hostRequiresCommercial, limits)`;
+- suspend `registerPackage` / `execute` (coroutine cancellation interrupts
+  mid-run);
+- `stageModelInput` / `readModelOutput`, `modelRights` /
+  `modelRightsRecord`, `setPackageStatus`;
+- `ExactModelError.detail`, `ExactModelExecution.modelEvidence`;
+- `modelExecuteAdapter` / `install(on, command)`.
+
+The engine is `traverse-android-host`: one audited JNI method (ADR-0079)
+over the same frames as the Swift shim. If the library can't load, calls
+fail with `model_unavailable` / `engine_unavailable`.
+
 Behind it, the framed `traverse_swift_host_model_call` adds the
 `rights_record` and `set_package_status` ops. Execute responses carry
 `model_evidence`, and errors carry `detail`. The C symbol is unchanged.
@@ -220,7 +233,7 @@ Behind it, the framed `traverse_swift_host_model_call` adds the
 | Rust native (`ExactModelHostConnector`) | Enforced; passes the suite |
 | Swift (`ExactModelHost`, shared Rust core) | Enforced; passes the suite through the framed C-ABI call and the Swift API (`#1601`; needs xcframework `swift-host-v0.14.0-2` or later) |
 | Web (`ExactModelBrowserHost`) | Enforced; passes the suite (`#1600`) |
-| Kotlin | Can't run models yet (`#1580`) |
+| Kotlin/Android (`ExactModelHost`, shared Rust core via JNI) | Enforced; passes the suite on the host-JVM build of the JNI library (`#1580`; emulator coverage `#1611`) |
 | .NET | Can't run models yet (`#1602`) |
 
 ## Browser/native portability boundary
