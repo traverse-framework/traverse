@@ -5911,3 +5911,126 @@ assumptions.
 
 Approved by Enrico in `/brainstorm` (2026-10-01): every recommended option
 accepted.
+
+## Decision 108: Kotlin/Android Exact-Ref Model Execution — Native Rust via JNI, Shared Frame Crate, Fail-Closed Without the Library
+
+- **Date**: 2026-10-01
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amendment lands
+  with the JNI slice)
+- **Related issues**: `#1580`; precedent `#1579` (Swift, Decision 104,
+  ADR-0078); `#1599` (shared rights suite, Decision 107)
+- **Origin**: `/brainstorm` on `#1580`
+
+### Context
+
+The Kotlin embedder is an Android library (`minSdk 28`). It runs the Rust
+core `runtime.wasm` inside Chicory 1.7.5, a pure-JVM interpreter, with an
+`ExecutionListener` instruction and time budget. It has no Spec 138 model
+support at all, so Callweave's Android app cannot run a signed model.
+
+Three facts shaped the design:
+- the JDK's Ed25519 exists only from Android API 33;
+- Chicory's standard interpreter does not execute SIMD (its SIMD module needs
+  the Java Vector API, which Android lacks), so the `+simd128` ONNX runner,
+  and therefore BirdNET, cannot run on Chicory;
+- Swift solved the same problem by wrapping the Rust `ExactModelHostConnector`
+  in a native static library behind one framed C-ABI call (Decision 104).
+
+### Decision
+
+1. **Native Rust via JNI.** An Android shared library wraps the Rust
+   `ExactModelHostConnector` and `wasmi` (SIMD, auto-dispatch, fuel slices),
+   as Swift does. All Spec 138 rules come from the single Rust
+   implementation:
+   - Ed25519 verification;
+   - rights and the usage policy;
+   - package status;
+   - derivation;
+   - ceilings;
+   - evidence.
+2. **A shared frame crate.** The framed model-call protocol (`create`,
+   `register`, `stage_input`, `execute`, `read_output`, `rights`,
+   `rights_record`, `set_package_status`, `cancel`, `drop_ref`, `destroy`)
+   moves from `traverse-swift-host` into a new safe crate. It is used by:
+   - `traverse-swift-host`, which keeps its C-ABI shim;
+   - a new `traverse-android-host`, a JNI shim.
+
+   Parity between Apple and Android is therefore structural.
+3. **One framed `byte[]` JNI call, written with the `jni` crate.** The
+   boundary is `native byte[] modelCall(long handle, byte[] request)` on the
+   same frame format. Its `unsafe` is confined to one audited function,
+   recorded in a new ADR that mirrors ADR-0078.
+4. **Models only.** `runtime.wasm` keeps running on Chicory (Spec 1402 is
+   unchanged). Only `traverse.model-runtime` / `model.execute` goes to the
+   native library.
+5. **ABIs: `arm64-v8a` and `x86_64`, failing closed.** If the library cannot
+   load, model calls fail with `model_unavailable` and a new stable reason,
+   `engine_unavailable`. The rest of the embedder keeps working. There is no
+   Chicory fallback, and 32-bit ARM is not shipped.
+6. **Tests: a host-JVM library in CI now, an emulator later.** The JNI crate
+   also builds for the CI host, as a Linux `.so` or macOS `.dylib`. Kotlin
+   JUnit tests load it and must pass:
+   - the signed vectors byte-for-byte (classifier, digits-mlp, digits-onnx);
+   - the shared 21-case rights conformance suite.
+
+   Android-emulator instrumented tests are a follow-up ticket.
+7. **Distribution: built in the Kotlin publish job.** At release time,
+   `cargo-ndk` builds both ABIs into the AAR's `jniLibs`. No binaries are
+   committed, and there is no separate artifact release.
+8. **The Kotlin API mirrors Swift's `ExactModelHost`:**
+   - the constructor takes pins, trusted keys, `modelUsage`,
+     `hostRequiresCommercial`, and limits (phone defaults: 128 MiB package,
+     256 MiB memory, 2×10¹⁰ fuel);
+   - `registerPackage` and `execute` are suspend functions; coroutine
+     cancellation sends the frame's `cancel` op for mid-run interruption;
+   - staging, `modelRights` / `modelRightsRecord`, `setPackageStatus`, and a
+     `modelExecuteAdapter` for app commands.
+9. **Work split:** three slices under `#1580`, plus a follow-up ticket:
+   - (1) extract the shared frame crate, with `traverse-swift-host`
+     delegating to it and no behaviour change;
+   - (2) `traverse-android-host` plus the Kotlin `ExactModelHost`, with
+     host-JVM tests, the new ADR, and the Spec 138 amendment
+     (`engine_unavailable`);
+   - (3) the publish pipeline (`cargo-ndk` into the AAR);
+   - follow-up: emulator instrumented tests.
+
+### Alternatives Considered
+
+- Architecture:
+  - Rules in `runtime.wasm` with the guest on Chicory. Rejected: no SIMD,
+    so the ONNX runner and BirdNET cannot run, and the interpreter is slow.
+  - Pure Kotlin on Chicory. Rejected: a second rules copy, BouncyCastle or
+    API 33 for Ed25519, and no SIMD.
+- Code sharing:
+  - Copy `model_host.rs`. Rejected: the copies drift.
+  - One crate with two shims. Rejected: mixes Apple and Android release
+    concerns and widens one crate's unsafe surface.
+- JNI binding:
+  - Raw `extern "system"` functions. Rejected: more hand-written unsafe.
+  - Per-operation JNI methods. Rejected: a wider surface that diverges from
+    the Swift frame.
+- Scope: the whole runtime native. Rejected: reopens Spec 1402 and is out of
+  scope for `#1580`.
+- ABIs and fallback:
+  - Adding `armeabi-v7a`. Rejected: BirdNET-class memory doesn't fit, and it
+    is another target to test.
+  - A Chicory fallback. Rejected: a silent second engine path, contrary to
+    fail-closed.
+- Testing:
+  - An emulator job now. Rejected: slow and flaky for the first PR; it is a
+    follow-up instead.
+  - Rust-level tests only. Rejected: they never exercise JNI or the Kotlin
+    API.
+- Distribution:
+  - A separate native artifact release. Rejected: an extra pinning step that
+    only SwiftPM needs.
+  - Committed `.so` files. Rejected: binaries in the repo.
+- API: callback or Future based. Rejected: not idiomatic, and the embedder
+  already uses coroutines.
+- Split: one PR. Rejected: mixes a refactor, new unsafe code, and CI changes.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-10-01): every recommended option
+accepted.
