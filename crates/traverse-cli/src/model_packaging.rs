@@ -368,10 +368,13 @@ fn patch_runner(runner: &[u8], blob: &[u8]) -> Result<(Vec<u8>, Layout), String>
             }
             other => {
                 if let Some((id, range)) = other.as_section() {
-                    module.section(&RawSection {
-                        id,
-                        data: &runner[range],
-                    });
+                    // wasmparser 0.259 reports section ranges as `u64`.
+                    let data = usize::try_from(range.start)
+                        .ok()
+                        .zip(usize::try_from(range.end).ok())
+                        .and_then(|(start, end)| runner.get(start..end))
+                        .ok_or_else(|| "runner section range is out of bounds".to_string())?;
+                    module.section(&RawSection { id, data });
                 }
             }
         }
@@ -765,7 +768,12 @@ mod tests {
                 .parse_all(wasm)
                 .filter_map(|payload| {
                     let (id, range) = payload.expect("payload").as_section()?;
-                    Some((id, wasm[range].to_vec()))
+                    Some((
+                        id,
+                        wasm[usize::try_from(range.start).expect("start")
+                            ..usize::try_from(range.end).expect("end")]
+                            .to_vec(),
+                    ))
                 })
                 .collect()
         };
