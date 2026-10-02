@@ -1,0 +1,60 @@
+name: Sign model packages
+
+# Decision 103 (#1567): re-sign Spec 138 model packages with the production
+# model-signing key. Manual dispatch only, in the protected `model-signing`
+# environment (required reviewer = the maintainer). The secret is never
+# available to pull_request workflows.
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: >-
+          Space-separated package directories under fixtures/models/
+          (for example: digits-mlp-1.0.0).
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: model-signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Sign and verify the listed packages
+        env:
+          MODEL_SIGNING_KEY_HEX: ${{ secrets.MODEL_SIGNING_KEY_HEX }}
+          PACKAGES: ${{ github.event.inputs.packages }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a packages <<< "${PACKAGES}"
+          bash scripts/model-signing/sign-packages.sh "${packages[@]}"
+
+      # Actions may not create pull requests in this repository, so the
+      # workflow pushes the signing branch; the maintainer opens the PR.
+      - name: Push the signing branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="model-signing/run-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add fixtures/models
+          if git diff --cached --quiet; then
+            echo "Signatures unchanged; nothing to push."
+            exit 0
+          fi
+          git commit -m "chore(models): re-sign ${PACKAGES} with the production model-signing key"
+          git push origin "${branch}"
+          echo "::notice::Signed packages pushed to ${branch}. Open a PR from it to main."

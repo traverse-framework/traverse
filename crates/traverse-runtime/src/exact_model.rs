@@ -449,6 +449,14 @@ pub fn sign_model_manifest(secret_key: &[u8; 32], manifest_bytes: &[u8]) -> Mode
     }
 }
 
+/// Production Traverse model-signing public keys (Decision 103), mirroring
+/// `keys/model-signing/*.pub` exactly (a test enforces it). Opt-in only:
+/// a host that wants to run Traverse-published packages passes each entry to
+/// [`TrustedModelKeys::trust`]. Nothing trusts these by default. During a
+/// rotation both the outgoing and incoming keys are listed for one minor
+/// release; a revoked key is removed in an emergency patch release.
+pub const TRAVERSE_MODEL_SIGNING_KEYS: &[[u8; 32]] = &[];
+
 /// Host-owned set of trusted Ed25519 model-signing keys. Application
 /// manifests can never add trust (Decision 101).
 #[derive(Debug, Clone, Default)]
@@ -3593,6 +3601,63 @@ mod tests {
                 .get("reason")
                 .is_none()
         );
+    }
+
+    /// `keys/model-signing`-style directory → its public keys, asserting each
+    /// file is named after its own `key_id` (`:` written as `-`).
+    fn committed_signing_keys(dir: &std::path::Path) -> Vec<[u8; 32]> {
+        let mut keys: Vec<[u8; 32]> = std::fs::read_dir(dir)
+            .expect("key directory")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "pub"))
+            .map(|path| {
+                let text = std::fs::read_to_string(&path).expect("public key");
+                let key: [u8; 32] = hex_decode(text.trim())
+                    .and_then(|bytes| bytes.try_into().ok())
+                    .expect("64 hex characters");
+                let stem = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .expect("stem");
+                assert_eq!(stem.replacen('-', ":", 1), model_signing_key_id(&key));
+                key
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// Decision 103: the opt-in production key constant mirrors the
+    /// committed `keys/model-signing/<key_id>.pub` files exactly.
+    #[test]
+    fn production_signing_keys_mirror_the_committed_public_keys() {
+        // The mirroring rule itself, on a directory holding the test-only key.
+        let scratch = std::env::temp_dir().join(format!("traverse-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let key: Value =
+            serde_json::from_slice(&read_fixture("../test-signing-key.json")).expect("key");
+        let public: [u8; 32] = hex_decode(key["public_key_hex"].as_str().expect("hex"))
+            .and_then(|bytes| bytes.try_into().ok())
+            .expect("32 bytes");
+        let name = model_signing_key_id(&public).replacen(':', "-", 1);
+        std::fs::write(
+            scratch.join(format!("{name}.pub")),
+            format!("{}\n", hex_encode(&public)),
+        )
+        .expect("pub");
+        std::fs::write(scratch.join("README.md"), "keys").expect("readme");
+        assert_eq!(committed_signing_keys(&scratch), vec![public]);
+        std::fs::remove_dir_all(&scratch).expect("cleanup");
+
+        let committed = committed_signing_keys(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../keys/model-signing"
+        )));
+        let mut constant = TRAVERSE_MODEL_SIGNING_KEYS.to_vec();
+        constant.sort_unstable();
+        assert_eq!(constant, committed);
+        let valid = |key: &[u8; 32]| TrustedModelKeys::new().trust(key).is_ok();
+        assert!(TRAVERSE_MODEL_SIGNING_KEYS.iter().all(valid));
     }
 
     #[test]

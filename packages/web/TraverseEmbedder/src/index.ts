@@ -223,6 +223,7 @@ export {
   MODEL_GUEST_ABI_VERSION,
   MODEL_PACKAGE_SCHEMA_VERSION,
   MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION,
+  TRAVERSE_MODEL_SIGNING_KEYS,
   encodeGuestFrame,
   modelSigningKeyId,
 } from "./exactModel.js";

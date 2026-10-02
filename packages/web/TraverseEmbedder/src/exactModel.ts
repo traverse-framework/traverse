@@ -17,6 +17,13 @@ export const MODEL_PACKAGE_SCHEMA_VERSION = "2.0.0" as const;
 export const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION = "2.1.0" as const;
 export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
 
+/**
+ * Production Traverse model-signing public keys (raw 32-byte Ed25519, hex;
+ * Decision 103), mirroring `keys/model-signing/*.pub` exactly. Opt-in only:
+ * pass them in `trustedPublicKeysHex`. Nothing trusts them by default.
+ */
+export const TRAVERSE_MODEL_SIGNING_KEYS: readonly string[] = [];
+
 export type CommercialUse = "allowed" | "restricted" | "prohibited";
 
 /** App manifest `model_usage` (Spec 138 0.8.0, Decision 107). */
