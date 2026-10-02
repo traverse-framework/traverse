@@ -237,7 +237,7 @@ Behind it, the framed `traverse_swift_host_model_call` adds the
 | Rust native (`ExactModelHostConnector`) | Enforced; passes the suite |
 | Swift (`ExactModelHost`, shared Rust core) | Enforced; passes the suite through the framed C-ABI call and the Swift API (`#1601`; needs xcframework `swift-host-v0.14.0-2` or later) |
 | Web (`ExactModelBrowserHost`) | Enforced; passes the suite (`#1600`) |
-| Kotlin/Android (`ExactModelHost`, shared Rust core via JNI) | Enforced; passes the suite on the host-JVM build of the JNI library (`#1580`; emulator coverage `#1611`) |
+| Kotlin/Android (`ExactModelHost`, shared Rust core via JNI) | Enforced; passes the suite on the host-JVM build of the JNI library. The AAR ships `arm64-v8a` and `x86_64` builds, cross-built with `cargo-ndk` and 16 KB page-aligned, and every PR checks them (`#1580`). Emulator coverage is `#1611`. |
 | .NET | Can't run models yet (`#1602`) |
 
 ## Browser/native portability boundary

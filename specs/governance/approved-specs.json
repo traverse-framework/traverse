@@ -1954,7 +1954,9 @@
         "scripts/model-signing/",
         ".github/workflows/sign-model-packages.yml",
         "docs/model-signing-key-runbook.md",
-        "docs/adr/0080-model-signing-key-management.md"
+        "docs/adr/0080-model-signing-key-management.md",
+        "scripts/build_android_host_ndk.sh",
+        "scripts/ci/android_aar_check.sh"
       ]
     },
     {

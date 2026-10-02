@@ -71,3 +71,12 @@ Unreleased changes since `v0.14.0` will be recorded here.
 - Kotlin unit tests now need a Rust toolchain (`testDebugUnitTest` builds the
   host-JVM library). Packaging the `arm64-v8a` / `x86_64` `.so` files into
   the AAR is the next slice.
+
+### Android AAR ships the native model engine (`#1580`, Decision 108)
+
+- The `traverse-embedder` AAR now carries `libtraverse_android_host.so` for
+  `arm64-v8a` and `x86_64`. It is cross-built with `cargo-ndk` at API 28 and
+  16 KB page-aligned, as Android 15+ requires.
+- A PR CI job (`android-native-package`) builds both, checks that each
+  exports exactly the audited JNI method, and verifies the release AAR
+  contains them.

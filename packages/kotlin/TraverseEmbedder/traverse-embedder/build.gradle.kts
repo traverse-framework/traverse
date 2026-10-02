@@ -19,6 +19,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
+    // Decision 108: the arm64-v8a / x86_64 traverse-android-host libraries
+    // that scripts/build_android_host_ndk.sh cross-builds land in
+    // build/jniLibs and ship inside the AAR (nothing binary is committed).
+    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("jniLibs"))
 }
 
 // Decision 108: Kotlin unit tests load the host-JVM build of the Android JNI

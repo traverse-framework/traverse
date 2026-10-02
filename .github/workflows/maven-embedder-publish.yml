@@ -36,11 +36,13 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # Decision 108: Kotlin unit tests build the host-JVM JNI model host.
+      # Decision 108: Kotlin unit tests build the host-JVM JNI model host, and
+      # the AAR ships the arm64-v8a / x86_64 builds.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.94.0
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Resolve release tag
         working-directory: .
@@ -72,6 +74,17 @@ jobs:
 
       - name: Test
         run: gradle --no-daemon testDebugUnitTest
+
+      - name: Cross-build traverse-android-host into the AAR (Decision 108)
+        working-directory: .
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          bash scripts/build_android_host_ndk.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/jniLibs
+
+      - name: Verify the release AAR carries both ABIs
+        run: |
+          gradle --no-daemon -Pversion=${TAG_VERSION} :traverse-embedder:assembleRelease
+          bash ../../../scripts/ci/android_aar_check.sh traverse-embedder/build/outputs/aar/traverse-embedder-release.aar
 
       # Sonatype Central Portal credentials + an in-memory GPG signing key,
       # already provisioned as repo secrets. build.gradle.kts sets

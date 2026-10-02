@@ -279,6 +279,42 @@ jobs:
       - name: Run bounded native cross-host fixture
         run: bash scripts/ci/cross_host_native_fixture.sh
 
+  # Decision 108 (#1580): cross-build the Android JNI model host for the
+  # shipped ABIs and prove the AAR carries it, on every PR.
+  android-native-package:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Cross-build traverse-android-host (arm64-v8a, x86_64)
+        run: bash scripts/build_android_host_ndk.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/jniLibs
+
+      - name: Assemble the release AAR
+        working-directory: packages/kotlin/TraverseEmbedder
+        run: gradle --no-daemon :traverse-embedder:assembleRelease
+
+      - name: Verify the AAR carries both ABIs
+        run: bash scripts/ci/android_aar_check.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/outputs/aar/traverse-embedder-release.aar
+
   coverage-gate:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
