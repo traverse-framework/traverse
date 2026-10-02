@@ -1066,6 +1066,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 dependencies = [
  "foldhash 0.2.0",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2746,7 +2748,7 @@ dependencies = [
  "tungstenite",
  "uuid",
  "wasm-encoder 0.259.0",
- "wasmparser 0.246.2",
+ "wasmparser 0.259.0",
  "wat",
  "zeroize",
 ]
@@ -3227,8 +3229,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f7c12eac7bb587801590f6a67ff0bc84d0748513864b71108e4b311cc3df694"
 dependencies = [
  "bitflags",
+ "hashbrown 0.17.0",
  "indexmap",
  "semver",
+ "serde",
 ]
 
 [[package]]
