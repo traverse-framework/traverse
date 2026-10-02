@@ -209,6 +209,8 @@ Like native offline mode, browser execution is cache-only, so a pin with
   `modelExecuteAdapter` success and failure payloads (`model_evidence`,
   `detail`).
 
+The framed protocol lives in the safe `traverse-model-host-frame` crate,
+which the Apple C-ABI shim and the Android JNI shim share (Decision 108).
 Behind it, the framed `traverse_swift_host_model_call` adds the
 `rights_record` and `set_package_status` ops. Execute responses carry
 `model_evidence`, and errors carry `detail`. The C symbol is unchanged.

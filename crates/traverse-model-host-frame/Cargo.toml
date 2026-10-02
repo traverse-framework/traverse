@@ -1,0 +1,21 @@
+[package]
+name = "traverse-model-host-frame"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Safe framed Spec 138 exact-ref model host protocol shared by the native Apple (C ABI) and Android (JNI) shims."
+publish = false
+
+[dependencies]
+serde_json = "1.0.145"
+# wasmi interpreter only (iOS forbids the wasmtime JIT); traverse-runtime's
+# wasmi dependency enables simd and auto-dispatch (Decision 106).
+traverse-runtime = { path = "../traverse-runtime", version = "0.14.0", default-features = false, features = ["wasmi-executor"] }
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

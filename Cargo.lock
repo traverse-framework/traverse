@@ -2706,6 +2706,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-model-host-frame"
+version = "0.14.0"
+dependencies = [
+ "serde_json",
+ "traverse-runtime",
+ "wat",
+]
+
+[[package]]
 name = "traverse-model-trainer"
 version = "0.14.0"
 dependencies = [
@@ -2782,7 +2791,7 @@ version = "0.14.0"
 dependencies = [
  "serde_json",
  "sha2 0.11.0",
- "traverse-runtime",
+ "traverse-model-host-frame",
  "wasmi",
  "wat",
 ]

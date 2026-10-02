@@ -1,6 +1,8 @@
-//! Spec 138 exact-ref model host behind the sixth audited C-ABI symbol,
-//! `traverse_swift_host_model_call` (Decision 104, ADR-0078). This module is
-//! safe Rust: the only pointer handling stays in `lib.rs`.
+//! Safe, framed Spec 138 exact-ref model host protocol shared by the native
+//! shims (Decision 108): the Apple C ABI (`traverse_swift_host_model_call`,
+//! Decision 104, ADR-0078) and the Android JNI `modelCall`. This crate is
+//! safe Rust; each shim owns its own audited pointer/JNI handling and
+//! forwards one request frame to [`model_call`].
 //!
 //! **Frame** (request and response): `[u32 LE header_len][JSON header][payload]`.
 //! The header's `segments` object maps names to `[offset, length]` in the
@@ -44,7 +46,29 @@ pub enum EnvelopeError {
     InvalidHandle,
 }
 
+/// Identity a native shim stamps on its `model.execute` requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostProfile {
+    /// Host-connector binding id.
+    pub binding_id: &'static str,
+    /// Target family (`apple`, `android`).
+    pub target_family: &'static str,
+}
+
+/// The iOS/macOS shim (`traverse-swift-host`).
+pub const APPLE: HostProfile = HostProfile {
+    binding_id: "swift-exact-model-host",
+    target_family: "apple",
+};
+
+/// The Android shim (`traverse-android-host`, Decision 108).
+pub const ANDROID: HostProfile = HostProfile {
+    binding_id: "android-exact-model-host",
+    target_family: "android",
+};
+
 struct ModelHost {
+    profile: HostProfile,
     connector: Mutex<ExactModelHostConnector>,
     cancel: Arc<AtomicBool>,
     running: Mutex<Option<String>>,
@@ -166,14 +190,18 @@ fn ok(header: Value) -> Vec<u8> {
 /// Returns [`EnvelopeError`] for malformed frames/headers/segments, unknown
 /// operations, or an unknown handle. Model failures are encoded in the
 /// returned response frame instead.
-pub fn model_call(handle: u64, frame: &[u8]) -> Result<Vec<u8>, EnvelopeError> {
+pub fn model_call(
+    profile: &HostProfile,
+    handle: u64,
+    frame: &[u8],
+) -> Result<Vec<u8>, EnvelopeError> {
     let request = Request::parse(frame)?;
     let op = request.str("op")?;
     if op == "create" {
         if handle != 0 {
             return Err(EnvelopeError::InvalidInput("create_requires_handle_zero"));
         }
-        return create(&request);
+        return create(*profile, &request);
     }
     let host = lock(registry())
         .get(&handle)
@@ -197,7 +225,7 @@ pub fn model_call(handle: u64, frame: &[u8]) -> Result<Vec<u8>, EnvelopeError> {
     }
 }
 
-fn create(request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
+fn create(profile: HostProfile, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
     let pins: Vec<ExactModelPin> = request
         .header
         .get("pins")
@@ -261,6 +289,7 @@ fn create(request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
     lock(registry()).insert(
         id,
         Arc::new(ModelHost {
+            profile,
             connector: Mutex::new(connector),
             cancel,
             running: Mutex::new(None),
@@ -341,8 +370,8 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
     let result = connector.invoke(&HostConnectorHostRequest {
         connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
         operation: MODEL_EXECUTE_OPERATION.to_string(),
-        binding_id: "swift-exact-model-host".to_string(),
-        target_family: "apple".to_string(),
+        binding_id: host.profile.binding_id.to_string(),
+        target_family: host.profile.target_family.to_string(),
         correlation_id: request.str("execution_id")?.to_string(),
         payload: payload.clone(),
         cancel_requested: false,
@@ -464,6 +493,8 @@ fn hex_decode(value: &str) -> Option<Vec<u8>> {
 )]
 mod tests {
     use super::*;
+
+    const TEST_PROFILE: HostProfile = APPLE;
     use traverse_runtime::exact_model::{digest_hex, encode_guest_frame, sign_model_manifest};
 
     const MODELS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/models");
@@ -496,7 +527,7 @@ mod tests {
     }
 
     fn call(handle: u64, header: &Value, segments: &[(&str, &[u8])]) -> Value {
-        decode(&model_call(handle, &frame(header, segments)).expect("envelope ok")).0
+        decode(&model_call(&TEST_PROFILE, handle, &frame(header, segments)).expect("envelope ok")).0
     }
 
     fn digits_pin() -> Value {
@@ -677,7 +708,7 @@ mod tests {
                                 response["model_evidence"]
                             );
                             let (_, output) = decode(
-                                &model_call(
+                                &model_call(&TEST_PROFILE,
                                     handle,
                                     &frame(&json!({ "op": "read_output", "output_ref": response["output_ref"], "max_bytes": 4096 }), &[]),
                                 )
@@ -751,7 +782,7 @@ mod tests {
             let executed = call(handle, &header, &[]);
             assert_eq!(executed["ok"], json!(true), "{executed}");
             let (_, output) = decode(
-                &model_call(
+                &model_call(&TEST_PROFILE,
                     handle,
                     &frame(&json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 56 }), &[]),
                 )
@@ -765,11 +796,45 @@ mod tests {
         call(handle, &json!({ "op": "destroy" }), &[]);
     }
 
+    /// Decision 108: both shims run the identical protocol; only the stamped
+    /// host identity differs.
+    #[test]
+    fn android_profile_runs_the_same_signed_vector_as_apple() {
+        assert_eq!(
+            (ANDROID.binding_id, ANDROID.target_family),
+            ("android-exact-model-host", "android")
+        );
+        let pin = digits_pin();
+        let created = decode(
+            &model_call(
+                &ANDROID,
+                0,
+                &frame(
+                    &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits(), "model_usage": "commercial" }),
+                    &[],
+                ),
+            )
+            .expect("create"),
+        )
+        .0;
+        let handle = created["handle"].as_u64().expect("handle");
+        assert_eq!(register_digits(handle)["digest"], pin["digest"]);
+        let vector: Value =
+            serde_json::from_slice(&read("conformance/signed-digits-mlp.json")).expect("vector");
+        let case = &vector["cases"][0];
+        let input = hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
+        let input_ref = stage(handle, &input);
+        let executed = call(handle, &execute_header(&pin, &input_ref, "android"), &[]);
+        assert_eq!(executed["ok"], json!(true), "{executed}");
+        call(handle, &json!({ "op": "destroy" }), &[]);
+    }
+
     #[test]
     fn set_package_status_rejects_malformed_entries() {
         let handle = create(json!([digits_pin()]));
         assert_eq!(
             model_call(
+                &TEST_PROFILE,
                 handle,
                 &frame(
                     &json!({ "op": "set_package_status", "entries": { "d": { "status": "gone" } } }),
@@ -779,7 +844,11 @@ mod tests {
             Err(EnvelopeError::InvalidInput("entries"))
         );
         assert_eq!(
-            model_call(handle, &frame(&json!({ "op": "rights_record" }), &[])),
+            model_call(
+                &TEST_PROFILE,
+                handle,
+                &frame(&json!({ "op": "rights_record" }), &[])
+            ),
             Err(EnvelopeError::InvalidInput("digest"))
         );
     }
@@ -805,7 +874,7 @@ mod tests {
             );
             assert_eq!(executed["trace"]["usage"]["output_bytes"], json!(56));
             let (header, payload) = decode(
-                &model_call(
+                &model_call(&TEST_PROFILE,
                     handle,
                     &frame(
                         &json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 64 }),
@@ -855,6 +924,7 @@ mod tests {
         );
         assert_eq!(
             model_call(
+                &TEST_PROFILE,
                 handle,
                 &frame(&json!({ "op": "rights", "digest": "x" }), &[])
             ),
@@ -921,7 +991,7 @@ mod tests {
 
     #[test]
     fn envelope_errors_are_rejected_before_any_model_work() {
-        let bad = |bytes: &[u8]| model_call(0, bytes).expect_err("envelope");
+        let bad = |bytes: &[u8]| model_call(&TEST_PROFILE, 0, bytes).expect_err("envelope");
         assert!(matches!(bad(b"\x01"), EnvelopeError::InvalidInput(_)));
         assert!(matches!(
             bad(&[9, 0, 0, 0, b'{']),
@@ -939,7 +1009,7 @@ mod tests {
             EnvelopeError::InvalidInput("op")
         );
         assert_eq!(
-            model_call(7, &frame(&json!({ "op": "create" }), &[])),
+            model_call(&TEST_PROFILE, 7, &frame(&json!({ "op": "create" }), &[])),
             Err(EnvelopeError::InvalidInput("create_requires_handle_zero"))
         );
         for (header, field) in [
@@ -968,6 +1038,7 @@ mod tests {
         }
         assert_eq!(
             model_call(
+                &TEST_PROFILE,
                 999_999,
                 &frame(&json!({ "op": "rights", "digest": "x" }), &[])
             ),
@@ -976,7 +1047,7 @@ mod tests {
 
         let handle = create(json!([]));
         let env = |header: Value, segments: &[(&str, &[u8])]| {
-            model_call(handle, &frame(&header, segments)).expect_err("envelope")
+            model_call(&TEST_PROFILE, handle, &frame(&header, segments)).expect_err("envelope")
         };
         assert_eq!(
             env(json!({ "op": "nope" }), &[]),
@@ -1093,8 +1164,9 @@ mod tests {
         let input_ref = stage(handle, &encode_guest_frame(2, &[1], &[0; 4]));
         let header = execute_header(&pin, &input_ref, "exec-long");
         let worker = std::thread::spawn(move || call(handle, &header, &[]));
-        let mut cancelled = false;
-        for _ in 0..500 {
+        // Poll until the execution is running; the timing-dependent retry
+        // count stays out of the coverage-visible control flow.
+        let cancelled = (0..500).any(|_| {
             std::thread::sleep(std::time::Duration::from_millis(10));
             let wrong = call(
                 handle,
@@ -1102,17 +1174,13 @@ mod tests {
                 &[],
             );
             assert_eq!(wrong["cancelled"], json!(false));
-            if call(
+            call(
                 handle,
                 &json!({ "op": "cancel", "execution_id": "exec-long" }),
                 &[],
             )["cancelled"]
                 == json!(true)
-            {
-                cancelled = true;
-                break;
-            }
-        }
+        });
         assert!(cancelled, "execution never became cancellable");
         let result = worker.join().expect("worker");
         assert_eq!(result["ok"], json!(false));
@@ -1150,7 +1218,7 @@ mod tests {
         let executed = call(handle, &header, &[]);
         assert_eq!(executed["ok"], json!(true), "{executed}");
         let (response, payload) = decode(
-            &model_call(
+            &model_call(&TEST_PROFILE,
                 handle,
                 &frame(&json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 4096 }), &[]),
             )

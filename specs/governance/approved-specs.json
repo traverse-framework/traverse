@@ -1943,7 +1943,8 @@
         "crates/traverse-cli/src/model_packaging.rs",
         "crates/traverse-onnx-runner-guest/",
         "fixtures/onnx/",
-        "scripts/ci/onnx_runner_guest_check.sh"
+        "scripts/ci/onnx_runner_guest_check.sh",
+        "crates/traverse-model-host-frame/"
       ]
     },
     {

@@ -8,7 +8,7 @@
 
 #![allow(unsafe_code)] // Audited C-ABI exception; see ADR-0015 and Spec 076.
 
-mod model_host;
+use traverse_model_host_frame as model_host;
 
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -638,7 +638,7 @@ pub unsafe extern "C" fn traverse_swift_host_model_call(
     }
     // SAFETY: `request` is non-null and the caller supplies a readable range of the stated length.
     let frame = unsafe { std::slice::from_raw_parts(request, request_length) };
-    match model_host::model_call(handle, frame) {
+    match model_host::model_call(&model_host::APPLE, handle, frame) {
         Ok(response) => output(&response, output_buffer, output_capacity, output_length_out),
         Err(model_host::EnvelopeError::InvalidHandle) => INVALID_HANDLE,
         Err(model_host::EnvelopeError::InvalidInput(_)) => INVALID_INPUT,

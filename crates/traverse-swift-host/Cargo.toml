@@ -15,9 +15,9 @@ wasmi = { version = "2.0.0", default-features = false, features = ["std", "valid
 wat = "1"
 sha2 = "0.11"
 serde_json = "1.0.145"
-# Spec 138 exact-ref model host (Decision 104): wasmi interpreter only, since
-# iOS forbids the wasmtime JIT.
-traverse-runtime = { path = "../traverse-runtime", version = "0.14.0", default-features = false, features = ["wasmi-executor"] }
+# Spec 138 exact-ref model host (Decision 104): the framed protocol lives in
+# the shared safe crate (Decision 108); this crate keeps only the C-ABI shim.
+traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.14.0" }
 
 [lints]
 workspace = true
