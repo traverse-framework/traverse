@@ -9,7 +9,7 @@ description = "#1590 feasibility spike: BirdNET v2.4 int8 on tract (host + impor
 [workspace]
 
 [dependencies]
-tract-onnx = "0.21"
+tract-onnx = "0.23"
 wasmi = { version = "2.0", features = ["simd"] }
 wasmtime = "44"
 
