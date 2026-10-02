@@ -3,7 +3,19 @@
 **Feature Branch**: `codex/issue-761-swift-resource-profile`
 **Created**: 2026-07-18
 **Status**: Approved
-**Version**: 1.0.0
+**Version**: 1.1.0
+**Amendment (2026-10-02, version 1.0.0 -> 1.1.0)**: `#1615`. Records the
+FR-003 status and code mapping. The Apple host classifies guest traps by
+their typed `wasmi` trap code, never by message string:
+- fuel exhaustion → status `RESOURCE_LIMIT` (`-4`) with code
+  `bridge_timeout`;
+- memory growth refused by the store limiter → `RESOURCE_LIMIT` with
+  `bridge_resource_limit`;
+- any other trap → `INTERNAL_ERROR` (`-5`) with `bridge_trap`.
+
+The WASI command path uses `wasi_timeout`, `wasi_resource_limit`, and
+`wasi_execution_failed` in the same way. No new ABI status is added, so the
+Spec 071 status table is unchanged.
 **Input**: Decision 29, ADR-0011, and Traverse #761.
 
 ## Purpose
@@ -78,7 +90,9 @@ the engine version, API support status, device results, and no-SPI policy.
   memory limit fails deterministically without exceeding that limit.
 - **FR-003**: Certification MUST prove a non-terminating module is stopped
   within the configured execution budget and reports a stable
-  `bridge_timeout` or `bridge_resource_limit` error.
+  `bridge_timeout` or `bridge_resource_limit` error. (1.1.0: both use status
+  `RESOURCE_LIMIT`, and the structured `code` distinguishes them; see the
+  amendment note above.)
 - **FR-004**: A profile MUST NOT depend on `@_spi`, undocumented APIs, a
   watchdog that leaves the untrusted execution alive, or an equivalent
   unsupported escape hatch.

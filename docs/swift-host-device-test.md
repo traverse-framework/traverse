@@ -84,7 +84,8 @@ enum ResourceLimitFixtureResult {
 }
 
 enum ResourceLimitFixtures {
-    private static let internalErrorStatus: Int32 = -5
+    // Spec 074 FR-003 (1.1.0, #1615): both fixtures stop with RESOURCE_LIMIT.
+    private static let resourceLimitStatus: Int32 = -4
 
     static func runAll() -> [(name: String, result: ResourceLimitFixtureResult)] {
         [
@@ -156,9 +157,9 @@ enum ResourceLimitFixtures {
             }
         }
 
-        guard invokeStatus == internalErrorStatus else {
+        guard invokeStatus == resourceLimitStatus else {
             return .failed(
-                "invoke returned \(invokeStatus), expected \(internalErrorStatus) (INTERNAL_ERROR/bridge_trap)"
+                "invoke returned \(invokeStatus), expected \(resourceLimitStatus) (RESOURCE_LIMIT/bridge_timeout or bridge_resource_limit)"
             )
         }
         return .passed("host failed closed as expected (status \(invokeStatus))")
@@ -204,10 +205,16 @@ passed.
 
 - The app launches, the two `precondition` checks pass (ABI version and
   status-message mapping), and it remains responsive with no crash.
-- Both resource-limit fixtures report `passed` (status `-5`,
-  `INTERNAL_ERROR`/`bridge_trap`): the non-terminating guest is stopped by
-  fuel exhaustion, and the memory-growth guest is stopped by the store
-  memory limiter, in both cases without hanging or crashing the app.
+- Both resource-limit fixtures report `passed` with status `-4`
+  (`RESOURCE_LIMIT`, Spec 074 FR-003 1.1.0). The structured code tells them
+  apart:
+  - the non-terminating guest is stopped by fuel exhaustion and reports
+    `bridge_timeout`;
+  - the memory-growth guest is stopped by the store memory limiter and
+    reports `bridge_resource_limit`.
+
+  Neither hangs nor crashes the app. Binaries built before `#1615` reported
+  `-5` / `bridge_trap` for both.
 - This proves the `wasmi`-linked `TraverseSwiftHost.xcframework` slice
   actually links, loads, runs, and fails closed under resource abuse on real
   hardware — CI's `macos-latest` runner and the simulator cannot substitute

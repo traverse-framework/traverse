@@ -200,13 +200,55 @@ fn execute_wasi_command(
         .map_err(|_| HostError::new(INTERNAL_ERROR, "wasi_link_failure"))?;
     let instance = linker
         .instantiate_and_start(&mut store, &module)
-        .map_err(|_| HostError::new(INTERNAL_ERROR, "wasi_execution_failed"))?;
+        .map_err(|error| wasi_trap(&error))?;
     instance
         .get_typed_func::<(), ()>(&store, "_start")
         .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "wasi_missing_start"))?
         .call(&mut store, ())
-        .map_err(|_| HostError::new(INTERNAL_ERROR, "wasi_execution_failed"))?;
+        .map_err(|error| wasi_trap(&error))?;
     Ok(store.into_data().output)
+}
+
+/// Typed classification of a `wasmi` call/instantiate failure (Spec 074
+/// FR-003, #1615): budget exhaustion is a stable resource-limit outcome, not
+/// an opaque internal error. Matches typed trap codes, never message strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrapClass {
+    /// Fuel exhausted (non-terminating or over-budget guest).
+    Timeout,
+    /// Memory growth refused by the host limiter.
+    ResourceLimit,
+    /// Any other trap (`unreachable`, out-of-bounds access, ...).
+    Other,
+}
+
+fn trap_class(error: &wasmi::Error) -> TrapClass {
+    match error.as_trap_code() {
+        Some(wasmi::TrapCode::OutOfFuel) => TrapClass::Timeout,
+        Some(wasmi::TrapCode::GrowthOperationLimited) => TrapClass::ResourceLimit,
+        _ => TrapClass::Other,
+    }
+}
+
+/// Bridge (`runtime.wasm`) failure: `RESOURCE_LIMIT` with `bridge_timeout` /
+/// `bridge_resource_limit`, otherwise `INTERNAL_ERROR` / `bridge_trap`.
+fn bridge_trap(error: &wasmi::Error) -> HostError {
+    match trap_class(error) {
+        TrapClass::Timeout => HostError::new(RESOURCE_LIMIT, "bridge_timeout"),
+        TrapClass::ResourceLimit => HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"),
+        TrapClass::Other => HostError::new(INTERNAL_ERROR, "bridge_trap"),
+    }
+}
+
+/// WASI command failure, with the same classification (the WASI command path
+/// is the cross-host fixture harness, compiled for tests only).
+#[cfg(test)]
+fn wasi_trap(error: &wasmi::Error) -> HostError {
+    match trap_class(error) {
+        TrapClass::Timeout => HostError::new(RESOURCE_LIMIT, "wasi_timeout"),
+        TrapClass::ResourceLimit => HostError::new(RESOURCE_LIMIT, "wasi_resource_limit"),
+        TrapClass::Other => HostError::new(INTERNAL_ERROR, "wasi_execution_failed"),
+    }
 }
 
 impl HostError {
@@ -282,7 +324,7 @@ fn require_exports(
         .map_err(|_| HostError::new(INVALID_DESCRIPTOR, "bridge_invalid_descriptor"))?;
     if version
         .call(&mut *store, ())
-        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+        .map_err(|error| bridge_trap(&error))?
         != BRIDGE_VERSION
     {
         return Err(HostError::new(INVALID_INPUT, "bridge_version_mismatch"));
@@ -335,7 +377,7 @@ fn create_host(runtime: &[u8], expected_digest: &[u8], limits: Limits) -> Result
         .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?;
     let instance = Linker::new(&engine)
         .instantiate_and_start(&mut store, &module)
-        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+        .map_err(|error| bridge_trap(&error))?;
     let memory = require_exports(&mut store, instance)?;
     Ok(Host {
         store,
@@ -392,7 +434,7 @@ fn call_export(
                 ),
             )
     }
-    .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))
+    .map_err(|error| bridge_trap(&error))
 }
 
 fn read_descriptor(host: &Host, descriptor: i32) -> Result<(u32, usize), HostError> {
@@ -451,7 +493,7 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
         .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
     let descriptor = alloc
         .call(&mut host.store, 8)
-        .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?;
+        .map_err(|error| bridge_trap(&error))?;
     let input_pointer = if input.is_empty() {
         0
     } else {
@@ -461,7 +503,7 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
                 i32::try_from(input.len())
                     .map_err(|_| HostError::new(RESOURCE_LIMIT, "bridge_resource_limit"))?,
             )
-            .map_err(|_| HostError::new(INTERNAL_ERROR, "bridge_trap"))?
+            .map_err(|error| bridge_trap(&error))?
     };
     if !input.is_empty() {
         host.memory
@@ -908,8 +950,115 @@ mod tests {
                 &raw mut required,
             )
         };
-        assert_eq!(invoke_status, INTERNAL_ERROR);
+        assert_eq!(invoke_status, RESOURCE_LIMIT);
         assert_eq!(traverse_swift_host_destroy(handle), OK);
+    }
+
+    /// Create a host for `wat`, invoke `submit`, and return the status plus
+    /// the structured error code the host wrote (Spec 074 FR-003, #1615).
+    fn submit_status(wat: &str) -> (i32, String) {
+        let runtime = wat::parse_str(wat).expect("fixture must compile");
+        let expected_digest = digest(&runtime);
+        let limits = limits();
+        let mut handle = 0_u64;
+        // SAFETY: all pointers below are valid for their stated lengths and
+        // live for the duration of this call.
+        let create_status = unsafe {
+            traverse_swift_host_create(
+                runtime.as_ptr(),
+                runtime.len(),
+                expected_digest.as_ptr(),
+                expected_digest.len(),
+                &raw const limits,
+                &raw mut handle,
+            )
+        };
+        assert_eq!(create_status, OK);
+        let operation = b"submit";
+        let input = b"{}";
+        let mut output = [0_u8; 512];
+        let mut required = 0_usize;
+        // SAFETY: `handle` is live from the create call above; all other
+        // pointers are valid for their stated lengths.
+        let invoke_status = unsafe {
+            traverse_swift_host_invoke(
+                handle,
+                operation.as_ptr(),
+                operation.len(),
+                input.as_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &raw mut required,
+            )
+        };
+        assert_eq!(traverse_swift_host_destroy(handle), OK);
+        let details: serde_json::Value =
+            serde_json::from_slice(&output[..required]).expect("structured error JSON");
+        (
+            invoke_status,
+            details["code"].as_str().expect("code").to_string(),
+        )
+    }
+
+    /// Spec 074 FR-003 (#1615): fuel exhaustion is the stable resource-limit
+    /// status with the `bridge_timeout` code, not an opaque internal error.
+    #[test]
+    fn fuel_exhaustion_reports_a_stable_timeout() {
+        assert_eq!(
+            submit_status(INFINITE_LOOP_FIXTURE),
+            (RESOURCE_LIMIT, "bridge_timeout".to_string())
+        );
+    }
+
+    /// Spec 074 FR-003 / US1 (#1615): a refused memory growth is the stable
+    /// resource-limit status with the `bridge_resource_limit` code.
+    #[test]
+    fn memory_growth_past_the_bound_reports_a_stable_resource_limit() {
+        assert_eq!(
+            submit_status(MEMORY_GROWTH_FIXTURE),
+            (RESOURCE_LIMIT, "bridge_resource_limit".to_string())
+        );
+    }
+
+    /// #1615: traps unrelated to the budget still report `bridge_trap`.
+    #[test]
+    fn unrelated_traps_still_report_an_internal_error() {
+        let unreachable =
+            MEMORY_GROWTH_FIXTURE.replace("i32.const 40 memory.grow drop", "unreachable");
+        assert_eq!(
+            submit_status(&unreachable),
+            (INTERNAL_ERROR, "bridge_trap".to_string())
+        );
+    }
+
+    /// #1615: the WASI command path classifies traps the same way.
+    #[test]
+    fn wasi_commands_classify_fuel_exhaustion_and_other_traps() {
+        let run = |body: &str| {
+            let artifact = wat::parse_str(format!(
+                r#"(module
+                     (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
+                     (memory (export "memory") 1)
+                     (func (export "_start") {body}))"#
+            ))
+            .expect("fixture must compile");
+            let error = execute_wasi_command(
+                &artifact,
+                digest(&artifact).as_bytes(),
+                &limits().checked().expect("limits are valid"),
+            )
+            .expect_err("must fail closed");
+            (error.status, error.code)
+        };
+        assert_eq!(
+            run("(loop $forever br $forever)"),
+            (RESOURCE_LIMIT, "wasi_timeout")
+        );
+        assert_eq!(
+            run("unreachable"),
+            (INTERNAL_ERROR, "wasi_execution_failed")
+        );
     }
 
     /// FR-evidence for #1370: a guest that tries to grow memory past the
@@ -953,7 +1102,7 @@ mod tests {
                 &raw mut required,
             )
         };
-        assert_eq!(invoke_status, INTERNAL_ERROR);
+        assert_eq!(invoke_status, RESOURCE_LIMIT);
         assert_eq!(traverse_swift_host_destroy(handle), OK);
     }
 

@@ -13,8 +13,18 @@ results. It never starts `traverse-cli serve` or uses server-discovery files.
 behind a narrow C ABI, verifies `runtime/runtime.wasm` against its declared
 SHA-256 digest before instantiation, and enforces host-owned `TraverseHostLimits`
 (artifact size, linear-memory ceiling, fuel per invocation, and input/output/event
-bounds) on every call. Exceeding any limit fails the call with a stable
-`bridge_resource_limit` error rather than allowing continued unbounded execution.
+bounds) on every call. Exceeding any limit fails the call with status `-4`
+(`RESOURCE_LIMIT`) instead of allowing continued unbounded execution. Its
+`TraverseBridgeError.code` says which limit was hit:
+
+| Cause | `status` | `code` |
+|---|---|---|
+| Fuel exhausted (a non-terminating or over-budget guest) | `-4` | `bridge_timeout` |
+| Memory growth past the ceiling, or another size bound | `-4` | `bridge_resource_limit` |
+| Any other guest trap (for example `unreachable`) | `-5` | `bridge_trap` |
+
+The host classifies traps by their typed `wasmi` trap code (Spec 074 FR-003,
+`#1615`).
 This is the certification path defined by Spec 074 (Swift Native
 Resource-Control Certification) and governed by ADR-0014 (wasmi Apple runtime
 profile) and ADR-0015 (production Swift wasmi C ABI).
