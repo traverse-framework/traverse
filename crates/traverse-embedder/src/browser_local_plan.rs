@@ -396,6 +396,9 @@ pub fn browser_local_plan(
         all_chains.extend(chains);
     }
 
+    // Decision 98 / spec 1277 FR-002: apply the candidate bound only after
+    // ordering the complete bounded search result shortest-chain-first, with
+    // the ordered capability-id chain as the deterministic tie-breaker.
     all_chains.sort_by(|a, b| {
         a.len().cmp(&b.len()).then_with(|| {
             let a_ids: Vec<&str> = a
@@ -669,6 +672,31 @@ mod tests {
     const BASE_CONTRACT: &str = include_str!(
         "../../../contracts/examples/meeting-notes/capabilities/process/contract.json"
     );
+    const PROPOSAL_ORDERING_FIXTURE: &str = include_str!(
+        "../../../specs/1277-browser-local-workflow-composition/fixtures/proposal-ordering.json"
+    );
+
+    #[derive(serde::Deserialize)]
+    struct ProposalOrderingFixture {
+        target: ProposalOrderingTarget,
+        starting_facts: Value,
+        capabilities: Vec<ProposalOrderingCapability>,
+        expected_paths: Vec<Vec<String>>,
+        plan_search_truncated: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ProposalOrderingTarget {
+        capability_id: String,
+        capability_version: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ProposalOrderingCapability {
+        id: String,
+        inputs: std::collections::BTreeMap<String, String>,
+        outputs: std::collections::BTreeMap<String, String>,
+    }
 
     fn digest_for(marker: &str) -> String {
         format!("sha256:{marker:0>64}")
@@ -853,6 +881,68 @@ mod tests {
             .map(|node| node.capability_id.as_str())
             .collect();
         assert_eq!(node_ids, ["evidence.ingest", "evidence.summarize"]);
+    }
+
+    #[test]
+    fn shared_fixture_orders_proposals_shortest_first_then_by_capability_id_chain() {
+        let fixture: ProposalOrderingFixture = serde_json::from_str(PROPOSAL_ORDERING_FIXTURE)
+            .expect("proposal ordering fixture parses");
+        let contracts: Vec<CapabilityContract> = fixture
+            .capabilities
+            .iter()
+            .map(|capability| {
+                let inputs: Vec<(&str, &str)> = capability
+                    .inputs
+                    .iter()
+                    .map(|(name, ty)| (name.as_str(), ty.as_str()))
+                    .collect();
+                let outputs: Vec<(&str, &str)> = capability
+                    .outputs
+                    .iter()
+                    .map(|(name, ty)| (name.as_str(), ty.as_str()))
+                    .collect();
+                contract(&capability.id, "1.0.0", &inputs, &outputs, &[])
+            })
+            .collect();
+        let records: Vec<PublicRegistryCapabilityRecord> = contracts.iter().map(record).collect();
+        let snap = snapshot(&records);
+        let deps: Vec<VerifiedRegistryDependency> = contracts
+            .iter()
+            .map(|candidate| dependency(candidate, &snap))
+            .collect();
+        let target = BrowserPlanTarget::Capability {
+            capability_id: fixture.target.capability_id,
+            capability_version: fixture.target.capability_version,
+        };
+
+        let response = browser_local_plan(
+            &identity(&snap),
+            &snap,
+            &deps,
+            &target,
+            &fixture.starting_facts,
+            "local",
+            &app_manifest(),
+        )
+        .expect("fixture plan succeeds");
+        let paths: Vec<Vec<String>> = response
+            .proposals
+            .iter()
+            .map(|proposal| {
+                proposal
+                    .proposal
+                    .nodes
+                    .iter()
+                    .map(|node| node.capability_id.clone())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(paths, fixture.expected_paths);
+        assert_eq!(
+            response.plan_search_truncated,
+            fixture.plan_search_truncated
+        );
     }
 
     #[test]

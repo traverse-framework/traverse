@@ -27,6 +27,11 @@ goals, model output, recency, or a hidden score. It keeps spec 113's bounds — 
 most 5 candidate proposals, at most 8 nodes deep — and reports
 `plan_search_truncated` rather than returning a silent partial result.
 
+When several chains are valid, the planner orders the complete bounded search
+result by ascending node count, then lexicographically by the ordered
+capability-id chain. It applies the five-proposal limit after sorting. Callers
+do not supply a preference or scoring input that changes this order.
+
 ## Inputs
 
 | Input | Type | Notes |
@@ -80,7 +85,10 @@ projection.
 
 ## Conformance
 
-`crates/traverse-embedder/src/browser_local_plan.rs` tests cover deterministic
+Rust and TypeScript consume the shared proposal-ordering fixture under
+`specs/1277-browser-local-workflow-composition/fixtures/`. It covers mixed
+chain lengths, the lexicographic tie-break, post-ordering candidate limiting,
+and the truncation signal. Rust tests also cover deterministic
 identical-snapshot output, ambiguous producers with no automatic winner, no
 name/namespace inference, each invalid-snapshot-evidence class, prepared
 dependency drift (digest, cross-snapshot, missing record), the size bounds, the

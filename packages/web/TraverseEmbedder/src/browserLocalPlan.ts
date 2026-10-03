@@ -101,6 +101,21 @@ function jsonTypeName(value: JsonValue): string {
 function covers(source: ReadonlyMap<string, string>, requiredNames: readonly string[], target: ReadonlyMap<string, string>): boolean {
   return requiredNames.every(name => { const from = source.get(name); return from !== undefined && from === target.get(name); });
 }
+function compareText(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
+function forwardChain(chain: readonly Declared[]): readonly Declared[] { return [...chain].reverse(); }
+function compareChains(left: readonly Declared[], right: readonly Declared[]): number {
+  if (left.length !== right.length) return left.length - right.length;
+  const leftForward = forwardChain(left);
+  const rightForward = forwardChain(right);
+  for (let index = 0; index < leftForward.length; index += 1) {
+    const compared = compareText(leftForward[index]!.id, rightForward[index]!.id);
+    if (compared !== 0) return compared;
+  }
+  return 0;
+}
+function chainIdentity(chain: readonly Declared[]): string {
+  return forwardChain(chain).map(capability => `${capability.id}\u0000${capability.version}`).join("\u0001");
+}
 function stable(value: JsonValue): string { if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`; if (value !== null && typeof value === "object") return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k] as JsonValue)}`).join(",")}}`; return JSON.stringify(value); }
 async function digest(value: JsonValue): Promise<string> { const bytes = new TextEncoder().encode(stable(value)); const hash = await crypto.subtle.digest("SHA-256", bytes); return `sha256:${[...new Uint8Array(hash)].map(x => x.toString(16).padStart(2, "0")).join("")}`; }
 
@@ -124,7 +139,7 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
     const inputTypes = propertyTypes(record(contract.inputs)?.schema); const outputTypes = propertyTypes(record(contract.outputs)?.schema);
     const emits = Array.isArray(contract.emits) ? contract.emits.flatMap(v => { const e = record(v); return typeof e?.event_id === "string" ? [e.event_id] : []; }) : [];
     return { id: found.id, version: found.version, digest: found.digest, inputs, inputTypes, outputTypes, emits };
-  }).sort((a,b) => a.id.localeCompare(b.id) || a.version.localeCompare(b.version))
+  }).sort((a,b) => compareText(a.id, b.id) || compareText(a.version, b.version))
     .filter((candidate, index, all) => index === 0 || candidate.id !== all[index - 1]!.id || candidate.version !== all[index - 1]!.version);
   // Starting facts are values, unlike contract schemas; their own keys and
   // actual JSON types form the initial structural output schema (Rust
@@ -136,19 +151,16 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
   const factTypes = new Map<string, string>(Object.entries(record(startingFacts) ?? {}).sort(([a],[b]) => a.localeCompare(b)).map(([key, value]) => [key, jsonTypeName(value as JsonValue)]));
   const targets = declared.filter(c => (target.capability_id !== undefined && target.capability_version !== undefined && c.id === target.capability_id && c.version === target.capability_version) || (target.emits_event !== undefined && c.emits.includes(target.emits_event)));
   const chains: Declared[][] = [];
-  // Truncation must mean "candidates were excluded" (issue #1477). The search
-  // therefore keeps going until it has seen one chain more than the candidate
-  // bound, and separately records the eight-node depth cutoff, mirroring Rust
-  // `build_chains`: it flags truncation only when `all_chains.len()` exceeds
-  // PLAN_MAX_CANDIDATES or an edge is skipped at `remaining_budget <= 1`.
-  const searchBound = BROWSER_PLAN_MAX_CANDIDATES + 1;
+  // Decision 98 / spec 1277 FR-002: candidate limiting applies only after the
+  // complete bounded search result is ordered by shortest chain and then by
+  // the ordered capability-id chain. Stopping after the sixth DFS result can
+  // otherwise let an early longer path displace a later shorter path.
   let depthTruncated = false;
   let workTruncated = false;
   // Same defensive work bound as native PLAN_MAX_SEARCH_CALLS. Looking for
   // a sixth candidate must not exhaust an exponentially large dead graph.
   let searchCallsRemaining = 4_000;
   const visit = (node: Declared, chain: Declared[]): void => {
-    if (chains.length >= searchBound) return;
     if (searchCallsRemaining === 0) { workTruncated = true; return; }
     searchCallsRemaining -= 1;
     // Base case: covered by starting facts only — never by this node's outputs.
@@ -158,7 +170,6 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
     // Empty required inputs never gain predecessors (vacuous cover would invent edges).
     if (node.inputs.length === 0) return;
     for (const predecessor of declared) {
-      if (chains.length >= searchBound) return;
       if (predecessor === node || chain.includes(predecessor)) continue;
       // Predecessor outputs alone must cover this node's required inputs,
       // by both property name and declared JSON type.
@@ -170,8 +181,16 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
     }
   };
   for (const candidate of targets) visit(candidate, []);
-  const proposals = chains.slice(0, BROWSER_PLAN_MAX_CANDIDATES).map((chain, index) => {
-    const ordered = [...chain].reverse(); const nodes = ordered.map((c, n) => ({ node_id: `node-${n + 1}`, capability_id: c.id, capability_version: c.version, artifact_digest: c.digest }));
+  chains.sort(compareChains);
+  const seenChains = new Set<string>();
+  const orderedChains = chains.filter(chain => {
+    const identity = chainIdentity(chain);
+    if (seenChains.has(identity)) return false;
+    seenChains.add(identity);
+    return true;
+  });
+  const proposals = orderedChains.slice(0, BROWSER_PLAN_MAX_CANDIDATES).map((chain, index) => {
+    const ordered = forwardChain(chain); const nodes = ordered.map((c, n) => ({ node_id: `node-${n + 1}`, capability_id: c.id, capability_version: c.version, artifact_digest: c.digest }));
     const mappings: BrowserProposalMapping[] = [];
     for (let n = 0; n < ordered.length; n += 1) {
       const node = ordered[n]!;
@@ -185,5 +204,5 @@ export async function browserLocalPlan(identity: BrowserSnapshotIdentity, snapsh
     }
     return { kind: "browser_workflow_proposal" as const, schema_version: BROWSER_WORKFLOW_PROPOSAL_SCHEMA_VERSION, snapshot_digest: identity.registry_snapshot_digest, source_release: identity.source_release, mapping_unconfirmed: true, proposal: { kind: "workflow_proposal" as const, schema_version: "1.0.0", proposal_id: `browser-plan-${index + 1}`, workspace_id: workspaceId, app_manifest: appManifest, nodes, edges: nodes.slice(1).map((node,n) => ({ from_node_id: nodes[n]!.node_id, to_node_id: node.node_id })), mappings, initial_input: startingFacts } };
   });
-  return { proposals, plan_search_truncated: chains.length > BROWSER_PLAN_MAX_CANDIDATES || depthTruncated || workTruncated };
+  return { proposals, plan_search_truncated: orderedChains.length > BROWSER_PLAN_MAX_CANDIDATES || depthTruncated || workTruncated };
 }

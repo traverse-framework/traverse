@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "target": {
+    "capability_id": "period.finalize",
+    "capability_version": "1.0.0"
+  },
+  "starting_facts": {
+    "raw": "available",
+    "seed": "available",
+    "summary": "available"
+  },
+  "capabilities": [
+    {
+      "id": "summary.gamma",
+      "inputs": { "seed": "string" },
+      "outputs": { "summary": "string" }
+    },
+    {
+      "id": "seed.delta",
+      "inputs": { "raw": "string" },
+      "outputs": { "seed": "string" }
+    },
+    {
+      "id": "period.finalize",
+      "inputs": { "summary": "string" },
+      "outputs": { "period": "string" }
+    },
+    {
+      "id": "summary.alpha",
+      "inputs": { "seed": "string" },
+      "outputs": { "summary": "string" }
+    },
+    {
+      "id": "seed.alpha",
+      "inputs": { "raw": "string" },
+      "outputs": { "seed": "string" }
+    },
+    {
+      "id": "summary.epsilon",
+      "inputs": { "seed": "string" },
+      "outputs": { "summary": "string" }
+    },
+    {
+      "id": "seed.charlie",
+      "inputs": { "raw": "string" },
+      "outputs": { "seed": "string" }
+    },
+    {
+      "id": "summary.beta",
+      "inputs": { "seed": "string" },
+      "outputs": { "summary": "string" }
+    },
+    {
+      "id": "seed.bravo",
+      "inputs": { "raw": "string" },
+      "outputs": { "seed": "string" }
+    },
+    {
+      "id": "summary.delta",
+      "inputs": { "seed": "string" },
+      "outputs": { "summary": "string" }
+    }
+  ],
+  "expected_paths": [
+    ["period.finalize"],
+    ["summary.alpha", "period.finalize"],
+    ["summary.beta", "period.finalize"],
+    ["summary.delta", "period.finalize"],
+    ["summary.epsilon", "period.finalize"]
+  ],
+  "plan_search_truncated": true
+}

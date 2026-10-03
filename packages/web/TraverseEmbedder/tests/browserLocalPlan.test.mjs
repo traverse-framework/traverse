@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { browserLocalPlan, BrowserPlanError } from "../dist/index.js";
 
@@ -46,6 +47,22 @@ async function planFor(contracts, target, facts) {
 
 const paths = (response) => response.proposals.map((proposal) => proposal.proposal.nodes.map((node) => node.capability_id));
 const SINK = { capability_id: "sink", capability_version: "1.0.0" };
+
+const orderingFixture = JSON.parse(readFileSync(new URL(
+  "../../../../specs/1277-browser-local-workflow-composition/fixtures/proposal-ordering.json",
+  import.meta.url,
+), "utf8"));
+
+test("browser planner follows the shared shortest-first proposal ordering fixture", async () => {
+  const contracts = orderingFixture.capabilities.map(capability => typedContract(
+    capability.id,
+    capability.inputs,
+    capability.outputs,
+  ));
+  const response = await planFor(contracts, orderingFixture.target, orderingFixture.starting_facts);
+  assert.deepEqual(paths(response), orderingFixture.expected_paths);
+  assert.equal(response.plan_search_truncated, orderingFixture.plan_search_truncated);
+});
 
 test("browser planner is deterministic, structural, and leaves mappings unconfirmed", async () => {
   const { snapshot, identity, dependencies } = inputs();
