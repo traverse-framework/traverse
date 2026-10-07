@@ -1761,12 +1761,16 @@
     },
     {
       "id": "1277-browser-local-workflow-composition",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/1277-browser-local-workflow-composition/spec.md",
       "governs": [
         "specs/1277-browser-local-workflow-composition/",
+        "crates/traverse-embedder/src/browser_local_plan.rs",
+        "packages/web/TraverseEmbedder/src/browserLocalPlan.ts",
+        "packages/web/TraverseEmbedder/tests/browserLocalPlan.test.mjs",
+        "docs/browser-local-workflow-composition.md",
         "docs/adr/0062-browser-local-workflow-composition.md"
       ]
     },

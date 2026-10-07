@@ -2,11 +2,14 @@
 
 **Status**: Approved (2026-09-08)
 **Canonical governing ID**: `1277-browser-local-workflow-composition`
-**Version**: 0.1.0
+**Version**: 0.2.0
+**Amended**: 2026-10-03 (Decision 98 / #1399): deterministic
+multi-proposal ordering.
 **Extends**: `108-governed-runtime-workflow-composition`,
 `109-runtime-workflow-proposals`, `113-declarative-workflow-planning`, and
 `1258-offline-cache-activation`.
-**Decision evidence**: Traverse #1271 decision record (2026-09-08).
+**Decision evidence**: Traverse #1271 decision record (2026-09-08) and
+Decision 98 in Traverse #1399 (2026-10-03).
 
 ## Purpose and boundary
 
@@ -27,8 +30,13 @@ planning service.
 - **FR-002**: Planning MUST be deterministic and read-only over that exact
   snapshot. It MUST derive candidates only from the structural and declared
   event relationships allowed by Spec 113, enumerate ambiguity rather than
-  choose it, retain Spec 113's five-plan/eight-node bounds, and expose stable
-  `plan_search_truncated` and no-candidate outcomes.
+  choose it, and retain Spec 113's five-plan/eight-node bounds. When more than
+  one valid proposal exists, it MUST order the complete bounded search result
+  by ascending node count and then lexicographically by the ordered
+  capability-id chain. It MUST apply the five-plan limit only after that
+  ordering, set `plan_search_truncated` when valid proposals are omitted, and
+  expose a stable no-candidate outcome. Callers MUST NOT supply a preference
+  or scoring input that changes this order.
 - **FR-003**: The browser planner MUST NOT infer a plan from capability names,
   namespaces, natural-language goals, prompt/model output, recency, or an
   undisclosed scoring rule. It MUST NOT fetch, sync, refresh, mutate, or
@@ -66,9 +74,11 @@ planning service.
 1. A browser receives a verified pinned public snapshot and a structured
    target; it deterministically returns all bounded candidate proposals with
    mappings marked unconfirmed, without making a network request.
-2. Two candidate producers structurally satisfy a consumer; the browser
-   returns separate proposals and no automatic winner. A name-only apparent
-   match returns no candidate.
+2. Candidate chains of different lengths structurally satisfy a consumer; the
+   browser returns at most five proposals shortest-chain-first, breaks equal
+   lengths lexicographically by their ordered capability-id chains, and marks
+   the result truncated when another valid proposal exists. It applies no
+   caller preference. A name-only apparent match returns no candidate.
 3. A changed snapshot digest, absent verification evidence, or unsupported
    schema version fails before planning with a stable redacted error.
 4. A reviewed proposal with exact prepared `registry_ref` components passes
@@ -91,8 +101,11 @@ manifest mutation, or network activity after preparation.
 
 ## Validation
 
-Conformance fixtures must cover deterministic identical-snapshot output,
-ambiguity, no name/namespace inference, invalid snapshot evidence, offline
-handoff, prepared-component drift, authorization/policy denial, resource
-bounds, and evidence redaction. Run `bash scripts/ci/spec_alignment_check.sh`
-with the PR body and the repository documentation checks.
+A shared Rust/TypeScript conformance fixture must cover multiple valid chain
+lengths, shortest-first ordering, the lexicographic tie-break, post-ordering
+candidate limiting, and truncation. Conformance fixtures must also cover
+deterministic identical-snapshot output, ambiguity, no name/namespace
+inference, invalid snapshot evidence, offline handoff, prepared-component
+drift, authorization/policy denial, resource bounds, and evidence redaction.
+Run `bash scripts/ci/spec_alignment_check.sh` with the PR body and the
+repository documentation checks.
