@@ -6187,3 +6187,189 @@ exports the symbol table and rejects dangling operators. The CLI now
 resolves ids only through that vendored table and drops the `spdx` crate.
 The fuzz rerun showed 0 disagreements across 27,263 cases.
 
+## Decision 110: On-Device Model Latency — Pristine-Snapshot Reuse (Guest ABI v3), Then Policy-Selected Native Accelerator Adapters
+
+- **Date**: 2026-10-07
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended to
+  `0.12.0` in the first slice PR)
+- **Related issues**: `#1623` (umbrella), `#1591` (iPhone measurement),
+  `#1590` / Decision 106 (spike bar and int8 tolerance), `#1579` /
+  Decision 104 (Swift `wasmi` host)
+- **Origin**: `/brainstorm` on `#1623`
+
+### Context
+
+`#1591` measured BirdNET v2.4 int8 on the governed path on a physical
+iPhone 14 Pro Max:
+- execution takes 3.86–3.95 s per 3 s clip (mean 3.90 s), about 1.3× slower
+  than real time;
+- outputs are byte-identical to native wasmtime/`wasmi`.
+
+About 0.7 s of each call is tract loading and optimizing the model in a
+fresh instance (`model_prepare`), because Spec 138 gives every execute a
+fresh `Store` and instance. Even with that cost removed, a call takes about
+3.2 s. That still misses real time, and an interpreted wasm-cpu path leaves
+no headroom for older or throttled phones.
+
+### Decision
+
+These are project-wide rules for every model package and every host, not
+rules for BirdNET or iOS alone.
+
+1. **Two stages.** Stage 1 is prepared-snapshot reuse on every host, for
+   every guest that opts in. Stage 2 is a generic native-accelerator adapter
+   rule under FR-012, with Core ML as the first adapter. Each stage ships on
+   its own merits.
+2. **Reuse restores a pristine snapshot.** The host runs the guest's
+   `prepare` once, then snapshots linear memory and the exported mutable
+   globals. Every execute restores that snapshot into a fresh `Store` and
+   instance, so each call starts from identical, untouched state. Per-call
+   isolation and determinism are unchanged. Warm-instance reuse is not
+   allowed.
+3. **Guest ABI v3, selected by the manifest.** v3 requires a `prepare`
+   export and exports the guest's mutable globals (e.g. the stack pointer).
+   The manifest's `abi_version` selects it (it extends FR-032). Hosts never
+   switch to reuse because an export happens to exist. v1 and v2 packages
+   keep the fresh-per-call path. Every host supports v1, v2 and v3.
+4. **Snapshot lifetime.**
+   - The first execute creates the snapshot.
+   - The host owns it, inside a host-configured snapshot budget (an FR-028
+     ceiling).
+   - When over budget, the host evicts snapshots and falls back to the fresh
+     path. Output is byte-identical; the call is only slower.
+   - Snapshots are dropped on unregister, on a package status change
+     (FR-038), and at shutdown.
+   - There is no new public command, so FR-003 still holds.
+5. **Prepare has its own budget.**
+   - Prepare runs under its own ceiling: manifest-declared prepare
+     fuel/memory ∩ host.
+   - A call's `max_fuel` covers `run` only, whether the cache is cold or
+     warm, so a call's success never depends on cache state.
+   - Cancelling or timing out the triggering call aborts prepare, and no
+     snapshot is kept.
+   - A prepare failure maps to an existing public failure code.
+   - The triggering call's wall-clock deadline still includes prepare time,
+     because the caller does wait for it.
+6. **Snapshot conformance.** A v3 conformance fixture MUST produce output
+   that is byte-identical between the snapshot path and the fresh path, on
+   every host.
+7. **Accelerator models are signed variants inside the package.**
+   - The package can carry optional per-adapter variants (e.g. `coreml/`).
+   - Each variant has its own digest in the manifest, and a deterministic
+     conversion provenance in `rights.derivation`.
+   - Each variant carries conformance vectors.
+   - The FR-018 manifest signature covers every variant. The pin, the
+     identity and the rights record are unchanged.
+   - Hosts fetch only the variants they can use, and verify each one by its
+     manifest digest.
+   - There are no companion packages and no host-side conversion.
+8. **Placement is chosen by policy, and fallback is explicit.**
+   - `policy_ref` lists the allowed placements in preference order (e.g.
+     `[coreml, wasm-cpu]`).
+   - The host uses the first placement that is available and has passed its
+     self-check.
+   - Fallback is allowed only to a placement the policy lists.
+   - A policy with no usable placement fails closed with a stable reason.
+   - The trace and the envelope record the actual placement and compute
+     unit.
+9. **Accelerator conformance.** The bar is Decision 106's tolerance against
+   the wasm-cpu reference output: top-5 identical and |Δ score| ≤ 5×10⁻³.
+   The first time a variant loads on a device, the host runs the variant's
+   conformance vectors. If they fail, the variant is unavailable on that
+   device and policy fallback applies. wasm-cpu remains the only
+   byte-identical placement.
+10. **Each adapter declares which ceilings it enforces.**
+    - Fuel is engine-relative (FR-030). An adapter that cannot meter fuel
+      says so, and the trace records "fuel: not applicable".
+    - Core ML enforces:
+      - the wall-clock deadline;
+      - `max_output_bytes`;
+      - input and output shape and dtype checks;
+      - the package-declared peak memory.
+    - Cancellation is checked before and after the prediction. A result
+      that arrives after cancellation is discarded (`cancelled`).
+    - A policy can require fuel metering, which excludes adapters that
+      cannot meter.
+11. **Spec home.** All of these rules go into Spec 138 `0.12.0`, which
+    extends FR-012 and the "later accelerators" text. There is no new spec.
+12. **Tracking.** `#1623` is the umbrella, with one ticket per slice:
+    1. the Spec 138 `0.12.0` amendment;
+    2. ABI v3 and snapshot reuse on every host, with the byte-identical
+       fixture;
+    3. the generic ONNX runner's `prepare` export and a v3 rebuild;
+    4. in-package variants: manifest fields, selective fetch, and conversion
+       tooling in `traverse-cli model`;
+    5. the generic adapter framework, plus the Core ML adapter and
+       self-check in the Swift host;
+    6. the physical-device evidence.
+13. **Closing bar.** `#1623` closes when evidence shows BirdNET on the
+    governed path on a physical iPhone 14 Pro Max at **≤ 1.5 s per 3 s clip,
+    p95 over the clip set** (0.5× real time), using the placement the policy
+    selects. The evidence records:
+    - the device and the build;
+    - per-clip timings;
+    - the placement and compute unit;
+    - the tolerance result;
+    - for comparison, wasm-cpu with snapshot reuse.
+
+### Alternatives Considered
+
+- Strategy:
+  - Accelerator only. Rejected: it gives nothing to wasm-cpu hosts or the
+    browser.
+  - wasm-cpu reuse plus tuning only. Rejected: about 3.2 s after reuse, and
+    no headroom.
+  - A measurement spike first. Rejected: the levers are already understood
+    well enough to govern.
+- Reuse model:
+  - A warm instance that the guest declares stateless. Rejected: isolation
+    would rest on the guest's promise.
+  - A warm instance under a scoped reuse key. Rejected: it still leaks
+    within the scope.
+- Opting in:
+  - An optional `prepare` export in v2. Rejected: the ABI becomes implicit.
+  - Host-transparent snapshots. Rejected: there is no pristine point.
+- When to prepare:
+  - Eagerly at registration. Rejected: registration gets slower and memory
+    is held whether or not the model runs.
+  - Lazily plus a host-level warm hint. Rejected for now: more surface on
+    four hosts.
+- Ceilings:
+  - Charge prepare to the triggering call. Rejected: outcomes would depend
+    on cache state.
+  - Charge every call a fixed prepare cost. Rejected: wastes the fuel
+    budget and makes fuel numbers misleading.
+- Accelerator artifact:
+  - A companion package. Rejected: two pins, and rights or status could
+    drift between them.
+  - Host-side conversion. Rejected: there is no on-device converter, and
+    the result would be unsigned.
+- Selection:
+  - Host-default acceleration. Rejected: placement becomes implicit.
+  - Per-call placement chosen by the app. Rejected: it goes against FR-009's
+    separation.
+- Accelerator conformance:
+  - Checked in CI only. Rejected: untested devices could drift without
+    anyone noticing.
+  - Pinning Core ML to the CPU compute unit. Rejected: it gives up the
+    Neural Engine.
+- Adapter ceilings:
+  - Require fuel-equivalent metering. Rejected: it rules out Core ML.
+  - Deadline only, with nothing declared. Rejected: the gaps in enforcement
+    stay hidden.
+- Spec home:
+  - Two new specs, or a split between 138 and a new spec. Rejected: model
+    execution would be governed in several places.
+- Tracking:
+  - Two large tickets. Rejected: PRs that touch every host at once.
+  - Splitting `#1623`'s DoD per stage. Rejected: it changes the ticket's
+    goal.
+- Bar:
+  - < 3 s on a 14 Pro Max. Rejected: no headroom.
+  - < 3 s on an older device. Rejected: no such device is available.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-10-07). Every recommended option
+was accepted.
