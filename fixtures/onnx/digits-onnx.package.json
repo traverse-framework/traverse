@@ -19,6 +19,7 @@
   "max_input_bytes": 272,
   "max_output_bytes": 56,
   "max_execution_ms": 10000,
+  "max_prepare_fuel": 2000000000,
   "offline_allowed": true,
   "source": {
     "license_id": "CC-BY-4.0",

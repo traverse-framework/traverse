@@ -215,6 +215,10 @@ fn runner_package_scores_the_same_held_out_accuracy_as_the_hand_written_guest() 
     let module = Module::new(&engine, read(&format!("{DIR}/model.wasm"))).expect("module");
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &module, &[]).expect("import-free");
+    let prepare = instance
+        .get_typed_func::<(), i32>(&mut store, "model_prepare")
+        .expect("model_prepare");
+    assert_eq!(prepare.call(&mut store, ()).expect("prepare"), 0);
     let alloc = instance
         .get_typed_func::<i32, i32>(&mut store, "model_alloc")
         .expect("model_alloc");

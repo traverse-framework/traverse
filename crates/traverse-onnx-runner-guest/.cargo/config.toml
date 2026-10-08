@@ -1,4 +1,4 @@
 # Decision 106: the runner ships as a simd128 build (1.84 s vs 3.23 s per
 # BirdNET clip on wasmi).
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=+simd128"]
+rustflags = ["-C", "target-feature=+simd128", "-C", "link-arg=--export=__stack_pointer"]

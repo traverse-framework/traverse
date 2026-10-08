@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### ONNX runner guest ABI v3 prepare (Decision 110, #1627)
+
+- The runner's `model_prepare` loads and optimizes the model; `model_execute`
+  runs only a prepared model. The mutable `__stack_pointer` global is exported.
+- `model package-onnx` emits schema `2.2.0`, `abi_version: 3`, and
+  `max_prepare_fuel`, so the snapshot host from #1626 can prepare this runner
+  once and reuse that snapshot.
+
 ### Guest ABI v3 pristine-snapshot reuse on every host (Decision 110, #1626)
 
 - Manifest `abi_version: 3` (schema `2.2.0` with `max_prepare_fuel`). The

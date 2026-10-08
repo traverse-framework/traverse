@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use traverse_runtime::exact_model::{
-    CommercialUse, DerivationKind, MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION, ModelDerivation,
+    CommercialUse, DerivationKind, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED, ModelDerivation,
     ModelPackageManifest, ModelRights,
 };
 use wasm_encoder::{
@@ -31,10 +31,10 @@ pub const BLOB_MAGIC: &[u8; 8] = b"TVONNX01";
 pub const BLOB_EXPORT: &str = "TRAVERSE_MODEL_BLOB";
 /// Executable format of runner-built packages.
 pub const EXECUTABLE_FORMAT: &str = "traverse-model-wasm";
-/// Runner guests speak guest ABI v2 (guest-exported `model_alloc`).
-pub const RUNNER_ABI_VERSION: u16 = 2;
+/// Runner guests speak guest ABI v3 (`model_prepare` then `model_alloc`).
+pub const RUNNER_ABI_VERSION: u16 = 3;
 const PAGE: u64 = 65_536;
-const REQUIRED_EXPORTS: [&str; 3] = ["model_alloc", "model_execute", "memory"];
+const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 
 /// Tensor config fixed at package time; mirrors the runner's `TensorConfig`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +71,8 @@ pub struct OnnxPackageSpec {
     pub max_output_bytes: u64,
     pub max_execution_ms: u64,
     pub offline_allowed: bool,
+    /// Fuel ceiling for ABI v3 `model_prepare`.
+    pub max_prepare_fuel: u64,
     pub tensor: TensorConfig,
     /// Rights of the source ONNX model; recorded with its SHA-256 as
     /// `rights.derivation` (manifest schema 2.1.0, Decision 107).
@@ -326,7 +328,7 @@ fn patch_runner(runner: &[u8], blob: &[u8]) -> Result<(Vec<u8>, Layout), String>
         .find(|name| !facts.exports.iter().any(|e| e == *name))
     {
         return Err(format!(
-            "runner is missing the guest ABI v2 export {missing}"
+            "runner is missing the guest ABI v3 export {missing}"
         ));
     }
     let blob_bytes = u64::try_from(blob.len()).map_err(|e| e.to_string())?;
@@ -472,7 +474,7 @@ fn manifest_bytes(
         source_url: spec.source.url.clone(),
     });
     let manifest = ModelPackageManifest {
-        schema_version: MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION.to_string(),
+        schema_version: MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string(),
         model_id: spec.model_id.clone(),
         version: spec.version.clone(),
         wasm_digest: wasm_digest.to_string(),
@@ -491,7 +493,7 @@ fn manifest_bytes(
         max_output_bytes: spec.max_output_bytes,
         max_execution_ms: spec.max_execution_ms,
         offline_allowed: spec.offline_allowed,
-        max_prepare_fuel: None,
+        max_prepare_fuel: Some(spec.max_prepare_fuel),
     };
     manifest
         .validate()
@@ -540,6 +542,7 @@ mod tests {
                 (global (export "TRAVERSE_MODEL_BLOB") i32 (i32.const 1024))
                 {data}
                 (func (export "model_alloc") (param i32) (result i32) i32.const 0)
+                (func (export "model_prepare") (result i32) i32.const 0)
                 (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const -1))"#
         ))
         .expect("wat")
@@ -629,7 +632,7 @@ mod tests {
         assert_eq!(manifest.executable_format, EXECUTABLE_FORMAT);
         assert_eq!(
             manifest.schema_version,
-            MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
         );
         let derivation = manifest.rights.derivation.expect("derivation");
         assert_eq!(derivation.kind, DerivationKind::Converted);
@@ -678,7 +681,7 @@ mod tests {
             (
                 wat::parse_str(r#"(module (memory (export "memory") 1) (global (export "TRAVERSE_MODEL_BLOB") i32 (i32.const 8)))"#)
                     .unwrap(),
-                "missing the guest ABI v2 export",
+                "missing the guest ABI v3 export",
             ),
             (
                 wat::parse_str(
