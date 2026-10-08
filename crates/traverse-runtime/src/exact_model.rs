@@ -4242,7 +4242,7 @@ mod tests {
         );
 
         // Burns one fuel slice, then traps on resume.
-        let resume_trap = wat::parse_str(&format!(
+        let resume_trap = wat::parse_str(format!(
             "(module {memory_and_execute}
                (func (export \"model_prepare\") (result i32)
                  (local $i i32)
