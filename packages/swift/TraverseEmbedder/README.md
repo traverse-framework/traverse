@@ -50,9 +50,12 @@ defaults to the package's `TraverseEmbedder.apiVersion`. Initialization rejects
 a bundle declaring a different version with `incompatibleBundle`; it does not
 start a sidecar or attempt a network fallback.
 
-The package pins `TraverseSwiftHost` to a specific released XCFramework
-checksum (currently swift-host-v1.1.0) for the production `wasmi` bridge. The
-accompanying `dependency-review.json` records that engine selection.
+The package pins `TraverseSwiftHost` for the production `wasmi` bridge at the
+XCFramework URL and checksum in `Package.swift` (the `TraverseSwiftHost`
+binary target). That file is the only pin. The accompanying
+`dependency-review.json` records the engine selection; a later rebuild that
+only updates the `Package.swift` URL and checksum does not require a new
+engine-selection review.
 
 `RuntimeTraverseEmbedder.submit(TraverseAppCommand)` submits Spec 139
 `app_command` envelopes; the state machine runs in `runtime.wasm` and the
