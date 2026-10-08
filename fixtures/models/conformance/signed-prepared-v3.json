@@ -1,0 +1,38 @@
+{
+  "governing_spec": "138-governed-exact-model-execution",
+  "package_dir": "fixture-prepared-v3-1.0.0",
+  "trusted_public_key_hex": "97002eba1e28b582a739eb48750a5f0822b2bbcb61e6bcedd2fada36b51af355",
+  "pin": {
+    "model_id": "fixture.prepared-v3",
+    "version": "1.0.0",
+    "digest": "b804d992a8b3454ddf79c492ff64ddcbf355e6c0dea4822d0384e67d00ba33fd",
+    "offline_allowed": true,
+    "target": "wasm-cpu",
+    "rights": {
+      "license_id": "Apache-2.0",
+      "commercial_use": "allowed"
+    },
+    "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+  },
+  "request": {
+    "policy_ref": "policy-1",
+    "data_classification": "sensitive",
+    "input_schema_ref": "schema:fixture-in",
+    "input_schema_version": "1.0.0",
+    "max_output_bytes": 4096
+  },
+  "cases": [
+    {
+      "input_frame_hex": "616263",
+      "output_frame_hex": "6a523601"
+    },
+    {
+      "input_frame_hex": "736e617073686f74207265757365206d75737420626520696e76697369626c65",
+      "output_frame_hex": "785e340aecac867a132a18d7b489315b2ef3d1ea8d711937eddea4817e5e0de301"
+    },
+    {
+      "input_frame_hex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "output_frame_hex": "516a0f20c59eb354690227f89db64b6c01daff90b54e6304d9f297a84d663bdcf18aaf40653ed3f489a247183dd6eb8ca17a1f30d5ee83a4791237c8ed865b7c112acfe0855e731429c2e7b85d760b2cc19abf50750e23c499b257680d26fb9cb14a6f0025fe93b4496207d8fd96ab4c613adff095ae436439d2f788ad461b3cd1ea8fa0451e33d4e982a7781d36cbec815a7f1035cee38459721728cde6bb5c710a2fc0e5be53740922c798bd566b0c21fa9fb0556e0324f992b7486d06dbfc91aa4f6005def394a9426738ddf68bac411a3fd0f58ea3441932d7e88da67b1c31caef80a57e1334c9e287587d162bcce1ba5f70152ec3e4b95277082dc69bbc0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d4201"
+    }
+  ]
+}

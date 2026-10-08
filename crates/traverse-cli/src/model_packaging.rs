@@ -491,6 +491,7 @@ fn manifest_bytes(
         max_output_bytes: spec.max_output_bytes,
         max_execution_ms: spec.max_execution_ms,
         offline_allowed: spec.offline_allowed,
+        max_prepare_fuel: None,
     };
     manifest
         .validate()

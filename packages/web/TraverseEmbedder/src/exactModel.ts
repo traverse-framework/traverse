@@ -3,18 +3,36 @@
  * Matches native `traverse_runtime::exact_model` envelopes and guest ABI v1.
  */
 
+import { MODEL_PREPARE_EXPORT, checkGuestAbiV3 } from "./guestAbiV3.js";
+
+export { MODEL_PREPARE_EXPORT };
+
 export const MODEL_GUEST_ABI_VERSION = 1 as const;
 export const MODEL_EXECUTE_EXPORT = "model_execute" as const;
 /** Guest ABI v2 buffer allocator export (Decision 105). */
 export const MODEL_ALLOC_EXPORT = "model_alloc" as const;
-/** Highest supported manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`). */
-export const MAX_MODEL_ABI_VERSION = 2 as const;
+/**
+ * Highest supported manifest `abi_version`: 1 = fixed offsets, 2 = guest
+ * `model_alloc`, 3 = v2 plus a one-time `model_prepare` the host may
+ * snapshot (Spec 138 0.12, Decision 110).
+ */
+export const MAX_MODEL_ABI_VERSION = 3 as const;
+/** Guest ABI version that adds `model_prepare` and snapshot reuse. */
+export const MODEL_GUEST_ABI_PREPARED = 3 as const;
 export const PLACEMENT_WASM_CPU = "wasm-cpu" as const;
 
 /** Model package manifest schema version (Spec 138 0.4.0, Decision 101). */
 export const MODEL_PACKAGE_SCHEMA_VERSION = "2.0.0" as const;
 /** Manifest schema adding optional `rights.derivation` (Spec 138 0.8.0, Decision 107). Both are accepted. */
 export const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION = "2.1.0" as const;
+/**
+ * Manifest schema adding `max_prepare_fuel` for guest ABI v3 (Spec 138
+ * 0.12.0). Accelerator variants (also 2.2.0) land with #1628 and fail closed
+ * as unknown fields until then.
+ */
+export const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED = "2.2.0" as const;
+/** Default `maxSnapshotBytes`, the same as the native default. */
+export const DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024;
 export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
 
 /**
@@ -114,6 +132,8 @@ export type ModelPackageManifest = {
   readonly max_output_bytes: number;
   readonly max_execution_ms: number;
   readonly offline_allowed: boolean;
+  /** Fuel ceiling for `model_prepare`; required when and only when `abi_version` is 3 (schema 2.2.0). */
+  readonly max_prepare_fuel?: number;
 };
 
 /** Detached `model.sig.json` over the exact manifest bytes. */
@@ -292,8 +312,12 @@ function parseManifest(bytes: Uint8Array): ModelPackageManifest {
   const text = MANIFEST_KEYS.filter(
     (key) => !numeric.includes(key) && !["rights", "supported_profiles", "offline_allowed"].includes(key),
   );
+  const prepare = isRecord(value) && Object.hasOwn(value, "max_prepare_fuel");
+  if (prepare) {
+    numeric.push("max_prepare_fuel");
+  }
   if (
-    !hasExactKeys(value, MANIFEST_KEYS) ||
+    !hasExactKeys(value, prepare ? [...MANIFEST_KEYS, "max_prepare_fuel"] : MANIFEST_KEYS) ||
     !isValidRights(value.rights) ||
     !text.every((key) => typeof value[key] === "string") ||
     !numeric.every((key) => Number.isInteger(value[key]) && (value[key] as number) >= 0) ||
@@ -360,12 +384,20 @@ function validateManifest(manifest: ModelPackageManifest): void {
   ) {
     throw incompatible("manifest_invalid", "model manifest missing required field");
   }
+  const preparedSchema = manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
   const schemaSupported =
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION ||
-    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION ||
+    preparedSchema;
+  // abi_version 3 needs schema 2.2.0 and a positive prepare budget; no other ABI may carry one.
+  const prepareValid =
+    manifest.abi_version === MODEL_GUEST_ABI_PREPARED
+      ? preparedSchema && (manifest.max_prepare_fuel ?? 0) > 0
+      : manifest.max_prepare_fuel === undefined;
   if (
     !schemaSupported ||
-    (rights.derivation !== undefined && manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION) ||
+    !prepareValid ||
+    (rights.derivation !== undefined && manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION) ||
     (rights.derivation !== undefined && !isSha256Hex(rights.derivation.source_digest)) ||
     manifest.abi_version > MAX_MODEL_ABI_VERSION ||
     [
@@ -412,6 +444,26 @@ type StoredPackage = {
   readonly manifest: ModelPackageManifest;
   readonly manifestBytes: Uint8Array;
   readonly wasm: Uint8Array;
+  /** Guest ABI v3: exported mutable globals a snapshot records, sorted by name. */
+  readonly snapshotGlobals?: readonly string[];
+};
+
+/** Post-`model_prepare` guest state (guest ABI v3). */
+type Snapshot = {
+  readonly memory: Uint8Array;
+  readonly globals: readonly (readonly [string, number | bigint])[];
+};
+
+function snapshotBytes(snapshot: Snapshot): number {
+  return snapshot.globals.reduce((total, [name]) => total + name.length + 8, snapshot.memory.length);
+}
+
+/** Where an ABI v3 call looks up and stores its post-prepare snapshot. */
+type SnapshotReuse = {
+  readonly globals: readonly string[];
+  /** The cached snapshot, when it fits the call's memory ceiling (0.12.1). */
+  usable(memoryCeiling: number): Snapshot | undefined;
+  store(snapshot: Snapshot): void;
 };
 
 /** Encode Spec 138 little-endian guest frame. */
@@ -531,6 +583,12 @@ export type ExactModelBrowserHostOptions = {
   readonly modelUsage?: ModelUsage;
   /** Host tightening: the effective usage is always `commercial`. A host can never relax it. */
   readonly hostRequiresCommercial?: boolean;
+  /**
+   * Max bytes of guest ABI v3 snapshots kept in memory (FR-055). Over budget,
+   * snapshots are evicted (least recently used) or not stored and calls take
+   * the fresh path; `0` disables reuse.
+   */
+  readonly maxSnapshotBytes?: number;
 };
 
 /**
@@ -548,6 +606,10 @@ export class ExactModelBrowserHost {
   private readonly modelUsage: ModelUsage | undefined;
   private readonly hostRequiresCommercial: boolean;
   private packageStatus = new Map<string, PackageStatusEntry>();
+  private readonly maxSnapshotBytes: number;
+  private readonly snapshots = new Map<string, { snapshot: Snapshot; used: number }>();
+  private snapshotTick = 0;
+  private snapshotTotal = 0;
 
   constructor(pins: readonly ExactModelPin[], options: ExactModelBrowserHostOptions) {
     for (const pin of pins) {
@@ -563,13 +625,73 @@ export class ExactModelBrowserHost {
     this.trustedPublicKeysHex = options.trustedPublicKeysHex;
     this.modelUsage = options.modelUsage;
     this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
+    this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
+  }
+
+  /** Invalidate every staged ref and drop every snapshot (FR-055). */
+  shutdown(): void {
+    this.io.shutdown();
+    this.snapshots.clear();
+    this.snapshotTotal = 0;
+  }
+
+  /** Bytes of guest ABI v3 snapshots currently held. */
+  snapshotBytes(): number {
+    return this.snapshotTotal;
+  }
+
+  private dropSnapshot(digest: string): void {
+    const entry = this.snapshots.get(digest);
+    if (entry) {
+      this.snapshotTotal -= snapshotBytes(entry.snapshot);
+      this.snapshots.delete(digest);
+    }
+  }
+
+  private snapshotReuse(digest: string, globals: readonly string[]): SnapshotReuse {
+    return {
+      globals,
+      usable: (memoryCeiling) => {
+        const entry = this.snapshots.get(digest);
+        if (!entry || entry.snapshot.memory.length > memoryCeiling) {
+          return undefined;
+        }
+        entry.used = ++this.snapshotTick;
+        return entry.snapshot;
+      },
+      store: (snapshot) => {
+        const bytes = snapshotBytes(snapshot);
+        if (bytes > this.maxSnapshotBytes) {
+          return;
+        }
+        this.dropSnapshot(digest);
+        const byAge = [...this.snapshots.entries()].sort((a, b) => a[1].used - b[1].used);
+        for (const [key] of byAge) {
+          if (this.snapshotTotal + bytes <= this.maxSnapshotBytes) {
+            break;
+          }
+          this.dropSnapshot(key);
+        }
+        this.snapshots.set(digest, { snapshot, used: ++this.snapshotTick });
+        this.snapshotTotal += bytes;
+      },
+    };
   }
 
   /** Replace the host-owned package status map (digest → status); takes effect at the next register or execute. */
   setPackageStatus(entries: Readonly<Record<string, PackageStatusEntry>>): void {
+    const previous = this.packageStatus;
     this.packageStatus = new Map(
       Object.entries(entries).map(([digest, entry]) => [normalizeDigest(digest), entry]),
     );
+    // A status change drops the package's snapshot (FR-055).
+    for (const digest of new Set([...previous.keys(), ...this.packageStatus.keys()])) {
+      const before = previous.get(digest);
+      const after = this.packageStatus.get(digest);
+      if (before?.status !== after?.status || before?.reason !== after?.reason) {
+        this.dropSnapshot(digest);
+      }
+    }
   }
 
   /** `commercial` when the host requires it, otherwise the app's `model_usage`. */
@@ -726,10 +848,19 @@ export class ExactModelBrowserHost {
     if (normalizeDigest(manifest.wasm_digest) !== (await digestHex(wasm))) {
       throw incompatible("digest_mismatch", "model wasm digest mismatch");
     }
+    let snapshotGlobals: readonly string[] | undefined;
+    if (manifest.abi_version === MODEL_GUEST_ABI_PREPARED) {
+      const shape = checkGuestAbiV3(wasm);
+      if (typeof shape === "string") {
+        throw new ExactModelError("model_incompatible", shape);
+      }
+      snapshotGlobals = shape.mutableGlobals;
+    }
     this.packages.set(digest, {
       manifest,
       manifestBytes: new Uint8Array(manifestBytes),
       wasm: new Uint8Array(wasm),
+      ...(snapshotGlobals ? { snapshotGlobals } : {}),
     });
     return digest;
   }
@@ -787,6 +918,7 @@ export class ExactModelBrowserHost {
       (await digestHex(pack.manifestBytes)) !== digest ||
       (await digestHex(pack.wasm)) !== normalizeDigest(pack.manifest.wasm_digest)
     ) {
+      this.dropSnapshot(digest);
       throw incompatible("digest_mismatch", "cached model package bytes no longer match the pinned digest");
     }
     const evidence = this.checkRightsAndStatus(pack.manifest, digest);
@@ -803,7 +935,15 @@ export class ExactModelBrowserHost {
     const ceiling = Math.min(args.max_output_bytes, pack.manifest.max_output_bytes);
     const timeout = Math.min(args.timeout_ms ?? pack.manifest.max_execution_ms, pack.manifest.max_execution_ms);
     const started = performance.now();
-    const output = await runWasmCpu(pack.wasm, input, ceiling, pack.manifest.max_memory_bytes, pack.manifest.abi_version);
+    const reuse = pack.snapshotGlobals ? this.snapshotReuse(digest, pack.snapshotGlobals) : undefined;
+    const output = await runWasmCpu(
+      pack.wasm,
+      input,
+      ceiling,
+      pack.manifest.max_memory_bytes,
+      pack.manifest.abi_version,
+      reuse,
+    );
     const durationMs = performance.now() - started;
     if (args.signal?.aborted) {
       throw new ExactModelError("cancelled", "model.execute cancelled during invoke");
@@ -835,6 +975,7 @@ async function runWasmCpu(
   maxOutputBytes: number,
   maxMemoryBytes: number,
   abiVersion: number,
+  reuse: SnapshotReuse | undefined,
 ): Promise<Uint8Array> {
   const module = await WebAssembly.compile(new Uint8Array(wasm));
   // Deny-by-default: no imports.
@@ -843,6 +984,9 @@ async function runWasmCpu(
   const execute = instance.exports[MODEL_EXECUTE_EXPORT];
   if (!(memory instanceof WebAssembly.Memory) || typeof execute !== "function") {
     throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
+  }
+  if (reuse) {
+    prepareOrRestore(instance, memory, maxMemoryBytes, reuse);
   }
   const [inPtr, outPtr] = abiVersion >= 2
     ? placeV2(instance, memory, input.length, maxOutputBytes, maxMemoryBytes)
@@ -863,6 +1007,53 @@ async function runWasmCpu(
     throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
   }
   return new Uint8Array(memory.buffer.slice(outPtr, outPtr + outLen));
+}
+
+/**
+ * Guest ABI v3 (Decision 110): restore the cached post-prepare snapshot into
+ * this fresh instance, or run `model_prepare` and store a snapshot. The
+ * browser has no fuel metering (FR-030); the memory ceiling is checked after
+ * prepare as after `model_alloc`.
+ */
+function prepareOrRestore(
+  instance: WebAssembly.Instance,
+  memory: WebAssembly.Memory,
+  maxMemoryBytes: number,
+  reuse: SnapshotReuse,
+): void {
+  const globals = reuse.globals.map((name) => [name, instance.exports[name] as WebAssembly.Global] as const);
+  const snapshot = reuse.usable(maxMemoryBytes);
+  if (snapshot) {
+    const missing = Math.ceil((snapshot.memory.length - memory.buffer.byteLength) / 65536);
+    if (missing > 0) {
+      memory.grow(missing);
+    }
+    new Uint8Array(memory.buffer).set(snapshot.memory);
+    for (const [name, value] of snapshot.globals) {
+      (instance.exports[name] as WebAssembly.Global).value = value;
+    }
+    return;
+  }
+  const prepare = instance.exports[MODEL_PREPARE_EXPORT];
+  if (typeof prepare !== "function") {
+    throw new ExactModelError("model_incompatible", "abi_version 3 model wasm missing model_prepare export");
+  }
+  let prepared: unknown;
+  try {
+    prepared = (prepare as () => unknown)();
+  } catch {
+    throw new ExactModelError("execution_failed", "model_prepare trapped");
+  }
+  if (prepared !== 0) {
+    throw new ExactModelError("execution_failed", "model_prepare returned non-zero");
+  }
+  if (memory.buffer.byteLength > maxMemoryBytes) {
+    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
+  }
+  reuse.store({
+    memory: new Uint8Array(memory.buffer.slice(0)),
+    globals: globals.map(([name, global]) => [name, global.value as number | bigint] as const),
+  });
 }
 
 /** Guest ABI v1: host-chosen fixed offsets, grown by the host. */

@@ -69,17 +69,62 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 `rights_mismatch`, `target_unsupported`, `crypto_unavailable`,
 `candidate_unsupported`, `host_limit_exceeded`.
 
-## Guest ABI v1 and v2 (Spec 138 0.7.0, Decision 105)
+## Guest ABI v1, v2 and v3 (Spec 138 0.7.0 and 0.12, Decisions 105 and 110)
 
 | `abi_version` | Buffers | For |
 | --- | --- | --- |
 | `1` | The host writes input at offset 64 and reserves output after it | Tiny guests with a small reserved stack (the fixtures, digits) |
 | `2` | The host calls the guest's `model_alloc(len) -> ptr` for the input and output regions | Guests with a heap (for example the ONNX runner, #1591) |
+| `3` | As v2, after a one-time `model_prepare() -> i32` the host may snapshot (manifest schema `2.2.0`, `max_prepare_fuel`) | Guests with expensive one-time setup (for example an ONNX runner loading its model, #1623) |
 
 For v2, returned regions must be positive, in bounds, and disjoint, and
 `model_alloc` must exist and not trap; otherwise the call fails closed. The
 frame format is the same for both. `fixtures/models/fixture-echo-v2-1.0.0` is
 the signed v2 conformance guest, a bump allocator with echo semantics.
+
+### Guest ABI v3: pristine-snapshot reuse (#1626)
+
+- **Registration.** A v3 module must:
+  - export `model_prepare`;
+  - define and export exactly one memory;
+  - export every mutable global, and type each one `i32`, `i64`, `f32` or
+    `f64`;
+  - import nothing;
+  - use no table- or segment-mutating instruction (`table.set`,
+    `table.grow`, `table.fill`, `table.copy`, `table.init`, `elem.drop`,
+    `data.drop`).
+
+  Otherwise registration fails with `model_incompatible`. These checks
+  guarantee that memory and those globals are the guest's only mutable state.
+- **Every execute** uses a fresh `Store` and instance.
+  - **Fresh path.** The host runs `model_prepare` under `max_prepare_fuel` ∩
+    the host fuel ceiling (in fuel slices on `wasmi`, so cancellation and
+    deadlines interrupt it). It then snapshots memory and the exported
+    mutable globals, and runs the v2 sequence.
+  - **Snapshot path.** The host restores the snapshot and runs the v2
+    sequence.
+
+  A call's `max_fuel` covers instantiation and the v2 sequence only, so a
+  call's result never depends on whether a snapshot existed.
+- **Snapshots** are host-owned and in memory only, keyed by package digest
+  and engine.
+  - They are bounded by `max_snapshot_bytes` (native `HostModelLimits`,
+    default 512 MiB; Swift and Kotlin `ExactModelHostLimits`, default
+    256 MiB; web `maxSnapshotBytes`, default 512 MiB), with
+    least-recently-used eviction. `0` disables reuse.
+  - A snapshot is used only when it fits the call's memory ceiling.
+  - Snapshots are dropped on a package status change, a failed digest
+    re-check, and `shutdown()`.
+- **Conformance.** `fixtures/models/fixture-prepared-v3-1.0.0` is the signed
+  v3 guest. Its output proves that each call started from the pristine
+  post-prepare state, because any carried memory or global changes it.
+  `conformance/signed-prepared-v3.json` must match byte-for-byte on
+  wasmtime, `wasmi`, the Swift and Android frame profiles, Kotlin, and the
+  browser, on both paths.
+- **Not yet supported.** Swift package tests run against the published
+  xcframework, so they pick up v3 after the next `swift-host` rebuild. The
+  browser cannot meter fuel, so it ignores `max_prepare_fuel`. Like `model_alloc`, it
+  checks the memory ceiling after `model_prepare`.
 
 ## Engines, host ceilings, and interruption (Spec 138 0.6.0, Decision 104)
 
@@ -261,8 +306,9 @@ Behind it, the framed `traverse_swift_host_model_call` adds the
 signatures, and conformance vectors deterministically with the **test-only**
 key in `fixtures/models/test-signing-key.json`. No host trusts that key by
 default; production signing is `#1567`. `echo`, `classifier`, and `responder`
-are hand-written deterministic fixtures. `digits-mlp-1.0.0` is a real trained
-model (below).
+are hand-written deterministic fixtures. `fixture-echo-v2-1.0.0` and
+`fixture-prepared-v3-1.0.0` are the guest ABI v2 and v3 conformance guests.
+`digits-mlp-1.0.0` is a real trained model (below).
 
 ## Trained model: `digits-mlp-1.0.0` (Spec 138 0.5.0, Decision 102)
 

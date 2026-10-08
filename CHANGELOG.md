@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Guest ABI v3 pristine-snapshot reuse on every host (Decision 110, #1626)
+
+- Manifest `abi_version: 3` (schema `2.2.0` with `max_prepare_fuel`). The
+  host runs the guest's `model_prepare` once and snapshots its memory and
+  exported mutable globals. Every later execute restores that snapshot into
+  a fresh instance instead of preparing again.
+- Supported on:
+  - wasmtime and `wasmi` (`ExactModelHostConnector`);
+  - the Swift and Android frame profiles;
+  - the browser (`ExactModelBrowserHost`).
+- Registration rejects v3 guests whose state the host cannot snapshot. The
+  Rust check uses `wasmparser`; the browser uses a module scanner in
+  TypeScript.
+- Output is byte-identical whether a call takes the fresh path or the
+  snapshot path, proven by the new signed `fixture-prepared-v3-1.0.0`
+  vector.
+- A call's `max_fuel` covers only instantiation and the run; `model_prepare`
+  has its own budget.
+- New host ceiling `max_snapshot_bytes`, with least-recently-used eviction:
+  - `HostModelLimits` and the frame `limits` header (optional);
+  - Swift and Kotlin `ExactModelHostLimits.maxSnapshotBytes`;
+  - web `maxSnapshotBytes`.
+
+  Snapshots are dropped on a status change, a failed digest re-check, and
+  `shutdown()`.
+- Spec 138 amended to 0.12.1:
+  - numeric mutable globals only;
+  - a snapshot is used only when it fits the call's memory ceiling;
+  - instantiation fuel is charged to the call.
+
 ### Spec 138 0.12.0: guest ABI v3 snapshot reuse and native accelerator adapters (Decision 110, #1625)
 
 - Spec only; hosts implement it in #1626–#1629.

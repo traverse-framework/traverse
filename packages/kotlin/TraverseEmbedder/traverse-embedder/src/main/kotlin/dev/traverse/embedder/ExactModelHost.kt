@@ -125,6 +125,11 @@ data class ExactModelHostLimits(
     val maxMemoryBytes: Long = 256L * 1024 * 1024,
     /** `wasmi` fuel units (engine-relative; Spec 138 FR-030). */
     val maxFuel: Long = 20_000_000_000L,
+    /**
+     * Bytes of guest ABI v3 post-prepare snapshots kept in memory (Spec 138 FR-055). Over budget,
+     * calls take the slower fresh path; `0` disables reuse.
+     */
+    val maxSnapshotBytes: Long = 256L * 1024 * 1024,
 )
 
 /** Typed `model.execute` result with identity, placement, usage, and rights evidence. */
@@ -187,6 +192,7 @@ class ExactModelHost(
                 put("max_package_bytes", limits.maxPackageBytes)
                 put("max_memory_bytes", limits.maxMemoryBytes)
                 put("max_fuel", limits.maxFuel)
+                put("max_snapshot_bytes", limits.maxSnapshotBytes)
             })
             modelUsage?.let { put("model_usage", it) }
             put("host_requires_commercial", hostRequiresCommercial)
