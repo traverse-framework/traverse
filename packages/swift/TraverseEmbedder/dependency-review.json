@@ -1,8 +1,9 @@
 {
-  "reviewed_at": "2026-09-18",
+  "reviewed_at": "2026-10-08",
   "engine": "wasmi",
   "source": "TraverseSwiftHost XCFramework (crates/traverse-swift-host)",
-  "exact_version": "swift-host-v1.1.0",
+  "exact_version": "Package.swift TraverseSwiftHost binaryTarget",
+  "pin_policy": "Package.swift is the only XCFramework pin (release URL and checksum). This record reviews the engine selection, not a release tag. Rebuilding the same wasmi TraverseSwiftHost and updating that binary target does not require a new engine-selection review.",
   "license": "same as Traverse",
   "compatibility": {
     "swift_tools": "6.0",
