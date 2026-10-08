@@ -226,7 +226,7 @@ writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
 });
 
 // ONNX runner digits vector: the same 10 held-out rows through the signed
-// runner-built package (guest ABI v2). Every engine must match byte-for-byte.
+// runner-built package (guest ABI v3). Every engine must match byte-for-byte.
 const onnxWasm = readFileSync(join(modelsDir, "digits-onnx-1.0.0", "model.wasm"));
 const onnxRunner = new WebAssembly.Instance(new WebAssembly.Module(onnxWasm), {});
 writeJson(join(modelsDir, "conformance", "signed-digits-onnx.json"), {
@@ -292,6 +292,10 @@ function runGuest(wasm, inputFrame, cap) {
 }
 
 function runGuestV2(instance, inputFrame, cap) {
+  if (typeof instance.exports.model_prepare === "function") {
+    const prepared = instance.exports.model_prepare();
+    if (prepared !== 0) throw new Error("model_prepare failed");
+  }
   const inPtr = instance.exports.model_alloc(inputFrame.length);
   const outPtr = instance.exports.model_alloc(cap);
   new Uint8Array(instance.exports.memory.buffer, inPtr, inputFrame.length).set(inputFrame);

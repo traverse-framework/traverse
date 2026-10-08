@@ -7,14 +7,18 @@ export const MODEL_GUEST_ABI_VERSION = 1 as const;
 export const MODEL_EXECUTE_EXPORT = "model_execute" as const;
 /** Guest ABI v2 buffer allocator export (Decision 105). */
 export const MODEL_ALLOC_EXPORT = "model_alloc" as const;
-/** Highest supported manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`). */
-export const MAX_MODEL_ABI_VERSION = 2 as const;
+/** Guest ABI v3 prepare export (Decision 110). */
+export const MODEL_PREPARE_EXPORT = "model_prepare" as const;
+/** Highest supported manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`, 3 = v2 plus `model_prepare`). */
+export const MAX_MODEL_ABI_VERSION = 3 as const;
 export const PLACEMENT_WASM_CPU = "wasm-cpu" as const;
 
 /** Model package manifest schema version (Spec 138 0.4.0, Decision 101). */
 export const MODEL_PACKAGE_SCHEMA_VERSION = "2.0.0" as const;
 /** Manifest schema adding optional `rights.derivation` (Spec 138 0.8.0, Decision 107). Both are accepted. */
 export const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION = "2.1.0" as const;
+/** Manifest schema adding ABI v3 `max_prepare_fuel` (Spec 138 0.12.0). */
+export const MODEL_PACKAGE_SCHEMA_VERSION_PREPARE = "2.2.0" as const;
 export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
 
 /**
@@ -114,6 +118,8 @@ export type ModelPackageManifest = {
   readonly max_output_bytes: number;
   readonly max_execution_ms: number;
   readonly offline_allowed: boolean;
+  /** Present when and only when `abi_version` is 3. */
+  readonly max_prepare_fuel?: number;
 };
 
 /** Detached `model.sig.json` over the exact manifest bytes. */
@@ -293,17 +299,28 @@ function parseManifest(bytes: Uint8Array): ModelPackageManifest {
     (key) => !numeric.includes(key) && !["rights", "supported_profiles", "offline_allowed"].includes(key),
   );
   if (
-    !hasExactKeys(value, MANIFEST_KEYS) ||
+    !isManifestRecord(value) ||
     !isValidRights(value.rights) ||
     !text.every((key) => typeof value[key] === "string") ||
     !numeric.every((key) => Number.isInteger(value[key]) && (value[key] as number) >= 0) ||
     !Array.isArray(value.supported_profiles) ||
     !value.supported_profiles.every((profile) => typeof profile === "string") ||
-    typeof value.offline_allowed !== "boolean"
+    typeof value.offline_allowed !== "boolean" ||
+    (Object.hasOwn(value, "max_prepare_fuel") &&
+      !(Number.isInteger(value.max_prepare_fuel) && (value.max_prepare_fuel as number) >= 1))
   ) {
     throw incompatible("manifest_invalid", "model manifest is malformed or has unknown fields");
   }
   return value as unknown as ModelPackageManifest;
+}
+
+/** Required manifest keys, plus optional `max_prepare_fuel` (schema 2.2.0). */
+function isManifestRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const extras = Object.keys(value).filter((key) => !MANIFEST_KEYS.includes(key as (typeof MANIFEST_KEYS)[number]));
+  return MANIFEST_KEYS.every((key) => Object.hasOwn(value, key)) && extras.every((key) => key === "max_prepare_fuel");
 }
 
 /** `rights` shape with optional `derivation` (mirrors serde deny_unknown_fields). */
@@ -362,10 +379,21 @@ function validateManifest(manifest: ModelPackageManifest): void {
   }
   const schemaSupported =
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION ||
-    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION ||
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARE;
+  const derivationSchema =
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION ||
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARE;
+  const prepareFuelOk =
+    manifest.abi_version === 3
+      ? manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARE &&
+        manifest.max_prepare_fuel !== undefined &&
+        manifest.max_prepare_fuel > 0
+      : manifest.max_prepare_fuel === undefined;
   if (
     !schemaSupported ||
-    (rights.derivation !== undefined && manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION) ||
+    !prepareFuelOk ||
+    (rights.derivation !== undefined && !derivationSchema) ||
     (rights.derivation !== undefined && !isSha256Hex(rights.derivation.source_digest)) ||
     manifest.abi_version > MAX_MODEL_ABI_VERSION ||
     [
@@ -843,6 +871,16 @@ async function runWasmCpu(
   const execute = instance.exports[MODEL_EXECUTE_EXPORT];
   if (!(memory instanceof WebAssembly.Memory) || typeof execute !== "function") {
     throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
+  }
+  if (abiVersion === 3) {
+    const prepare = instance.exports[MODEL_PREPARE_EXPORT];
+    if (typeof prepare !== "function") {
+      throw new ExactModelError("model_incompatible", "abi_version 3 model wasm missing model_prepare export");
+    }
+    const prepared = Number((prepare as () => number)());
+    if (prepared !== 0) {
+      throw new ExactModelError("execution_failed", "model_prepare returned failure");
+    }
   }
   const [inPtr, outPtr] = abiVersion >= 2
     ? placeV2(instance, memory, input.length, maxOutputBytes, maxMemoryBytes)

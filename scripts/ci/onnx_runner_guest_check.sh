@@ -40,7 +40,7 @@ CARGO_TARGET_DIR="${target_dir}" cargo clippy --locked --all-targets -- -D warni
 # RUSTFLAGS replaces .cargo/config.toml's rustflags, so it repeats +simd128.
 # Panic locations embed dependency source paths; remap them so the bytes do
 # not depend on where CARGO_HOME or the checkout lives.
-export RUSTFLAGS="-C target-feature=+simd128 --remap-path-prefix=${cargo_home}/registry/src=/cargo/registry/src --remap-path-prefix=${guest_dir}=/traverse-onnx-runner-guest"
+export RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--export=__stack_pointer --remap-path-prefix=${cargo_home}/registry/src=/cargo/registry/src --remap-path-prefix=${guest_dir}=/traverse-onnx-runner-guest"
 CARGO_TARGET_DIR="${target_dir}" cargo clippy --locked --release --target wasm32-unknown-unknown -- -D warnings
 CARGO_TARGET_DIR="${target_dir}" cargo build --locked --release --target wasm32-unknown-unknown
 
@@ -54,7 +54,7 @@ if (imports.length !== 0) {
   process.exit(1);
 }
 const exports = WebAssembly.Module.exports(module).map((entry) => entry.name);
-for (const name of ["memory", "model_alloc", "model_execute", "TRAVERSE_MODEL_BLOB"]) {
+for (const name of ["memory", "model_alloc", "model_prepare", "model_execute", "TRAVERSE_MODEL_BLOB", "__stack_pointer"]) {
   if (!exports.includes(name)) {
     console.error(`ONNX runner is missing the ${name} export`);
     process.exit(1);

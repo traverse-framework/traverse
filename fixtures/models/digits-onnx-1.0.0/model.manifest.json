@@ -1,11 +1,11 @@
 {
-  "schema_version": "2.1.0",
+  "schema_version": "2.2.0",
   "model_id": "traverse.digits-onnx",
   "version": "1.0.0",
   "wasm_digest": "6678b355b99987224de7c158a8a7790c8c31010ee61633776c399b57a232fa6d",
   "registry_ref": "registry:traverse.digits-onnx@1.0.0",
   "executable_format": "traverse-model-wasm",
-  "abi_version": 2,
+  "abi_version": 3,
   "input_schema_ref": "schema:traverse-digits-onnx-in",
   "input_schema_version": "1.0.0",
   "output_schema_ref": "schema:traverse-digits-onnx-out",
@@ -32,5 +32,6 @@
   "max_input_bytes": 272,
   "max_output_bytes": 56,
   "max_execution_ms": 10000,
-  "offline_allowed": true
+  "offline_allowed": true,
+  "max_prepare_fuel": 2000000000
 }

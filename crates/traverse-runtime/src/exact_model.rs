@@ -24,16 +24,21 @@ pub const PLACEMENT_WASM_CPU: &str = "wasm-cpu";
 pub const MODEL_EXECUTE_EXPORT: &str = "model_execute";
 /// Guest ABI v2 buffer allocator export (`model_alloc(len) -> ptr`, Decision 105).
 pub const MODEL_ALLOC_EXPORT: &str = "model_alloc";
+/// Guest ABI v3 prepare export (`model_prepare() -> i32`, Decision 110).
+pub const MODEL_PREPARE_EXPORT: &str = "model_prepare";
 /// Highest supported manifest `abi_version`: 1 = host places buffers at fixed
-/// offsets; 2 = the guest allocates them via [`MODEL_ALLOC_EXPORT`]. The
-/// little-endian frame format ([`MODEL_GUEST_ABI_VERSION`]) is unchanged.
-pub const MAX_MODEL_ABI_VERSION: u16 = 2;
+/// offsets; 2 = the guest allocates them via [`MODEL_ALLOC_EXPORT`]; 3 = v2
+/// plus [`MODEL_PREPARE_EXPORT`] (Spec 138 0.12.0). The little-endian frame
+/// format ([`MODEL_GUEST_ABI_VERSION`]) is unchanged.
+pub const MAX_MODEL_ABI_VERSION: u16 = 3;
 
 /// Model package manifest schema version (Spec 138 0.4.0, Decision 101).
 pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
 /// Manifest schema version that adds optional `rights.derivation`
 /// (Spec 138 0.8.0, Decision 107). Hosts accept both versions.
 pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
+/// Manifest schema that adds ABI v3 `max_prepare_fuel` (Spec 138 0.12.0).
+pub const MODEL_PACKAGE_SCHEMA_VERSION_PREPARE: &str = "2.2.0";
 /// The only accepted package signature algorithm.
 pub const MODEL_SIGNATURE_ALG_ED25519: &str = "ed25519";
 
@@ -247,6 +252,10 @@ pub struct ModelPackageManifest {
     pub max_execution_ms: u64,
     /// Offline allowed after provisioning.
     pub offline_allowed: bool,
+    /// Fuel ceiling for `model_prepare`. Required when and only when
+    /// `abi_version` is 3 (schema `2.2.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_prepare_fuel: Option<u64>,
 }
 
 fn model_error(
@@ -303,6 +312,28 @@ fn for_package(
 }
 
 impl ModelPackageManifest {
+    fn schema_supported(&self) -> bool {
+        self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARE
+    }
+
+    fn derivation_schema(&self) -> bool {
+        self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARE
+    }
+
+    /// ABI v3 requires schema 2.2.0 and `max_prepare_fuel`; other ABIs forbid it.
+    fn prepare_fuel_matches_abi(&self) -> bool {
+        match (self.abi_version, self.max_prepare_fuel) {
+            (3, Some(fuel)) => {
+                fuel > 0 && self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARE
+            }
+            (3, None) | (_, Some(_)) => false,
+            (_, None) => true,
+        }
+    }
+
     /// Fail closed if required governance fields are missing or empty.
     ///
     /// # Errors
@@ -355,12 +386,10 @@ impl ModelPackageManifest {
                 ));
             }
         }
-        let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
-            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
-        let derivation_allowed = self.rights.derivation.is_none()
-            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
-        if !schema_supported
+        let derivation_allowed = self.rights.derivation.is_none() || self.derivation_schema();
+        if !self.schema_supported()
             || !derivation_allowed
+            || !self.prepare_fuel_matches_abi()
             || self
                 .rights
                 .derivation
@@ -1367,9 +1396,19 @@ impl HostConnectorPort for ExactModelHostConnector {
         );
 
         let _ = &payload.feature_metadata;
+        let prepare_fuel = if package.manifest.abi_version == 3 {
+            package
+                .manifest
+                .max_prepare_fuel
+                .unwrap_or(0)
+                .min(self.host_limits.max_fuel)
+        } else {
+            0
+        };
         let guest_limits = GuestLimits {
             memory,
             fuel,
+            prepare_fuel,
             max_output: call_max_out,
             abi: package.manifest.abi_version,
         };
@@ -1604,6 +1643,32 @@ fn execute_wasm_cpu_model(
         ));
     };
 
+    if guest.prepare_fuel > 0 {
+        let Some(prepare) = instance
+            .get_typed_func::<(), i32>(&mut store, MODEL_PREPARE_EXPORT)
+            .ok()
+        else {
+            return Err(missing_prepare());
+        };
+        let _ = store.set_fuel(guest.prepare_fuel);
+        match prepare.call(&mut store, ()) {
+            Ok(0) => {}
+            Ok(_) => {
+                return Err(model_host_err(
+                    HostConnectorErrorCode::ExecutionFailed,
+                    "model_prepare returned failure",
+                ));
+            }
+            Err(_) => {
+                return Err(model_host_err(
+                    HostConnectorErrorCode::ExecutionFailed,
+                    "model_prepare trap or fuel exhausted",
+                ));
+            }
+        }
+        let _ = store.set_fuel(max_fuel);
+    }
+
     let out_cap = output_capacity(max_output_bytes);
     let (in_ptr, out_ptr) = place_wasmtime_buffers(
         &mut store,
@@ -1740,8 +1805,11 @@ impl CompiledGuests {
 struct GuestLimits {
     memory: u64,
     fuel: u64,
+    /// `0` unless `abi` is 3. Covers `model_prepare` only.
+    prepare_fuel: u64,
     max_output: u64,
-    /// Manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`).
+    /// Manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`,
+    /// 3 = v2 plus `model_prepare`).
     abi: u16,
 }
 
@@ -1798,6 +1866,13 @@ fn alloc_failed() -> HostConnectorError {
     model_error_plain(
         HostConnectorErrorCode::ExecutionFailed,
         "model_alloc trapped or ran out of fuel",
+    )
+}
+
+fn missing_prepare() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ModelIncompatible,
+        "abi_version 3 model wasm missing model_prepare export",
     )
 }
 
@@ -1858,6 +1933,11 @@ fn execute_wasmi_model(
         ));
     };
 
+    if limits.prepare_fuel > 0 {
+        run_wasmi_prepare(&mut store, instance, limits, control)?;
+        let _ = store.set_fuel(limits.fuel.min(WASMI_FUEL_SLICE));
+    }
+
     let out_cap = output_capacity(limits.max_output);
     let (in_ptr, out_ptr) = if limits.abi >= 2 {
         let alloc = instance
@@ -1911,6 +1991,68 @@ fn execute_wasmi_model(
     let mut output = vec![0_u8; out_len as usize];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
+}
+
+/// Runs ABI v3 `model_prepare` under `prepare_fuel`, in fuel slices.
+#[cfg(feature = "wasmi-executor")]
+fn run_wasmi_prepare(
+    store: &mut wasmi::Store<wasmi::StoreLimits>,
+    instance: wasmi::Instance,
+    limits: &GuestLimits,
+    control: &SliceControl<'_>,
+) -> Result<(), HostConnectorError> {
+    use wasmi::TypedResumableCall as Call;
+
+    let prepare = instance
+        .get_typed_func::<(), i32>(&*store, MODEL_PREPARE_EXPORT)
+        .map_err(|_| missing_prepare())?;
+    let mut granted = limits.prepare_fuel.min(WASMI_FUEL_SLICE);
+    let _ = store.set_fuel(granted);
+    let trapped = || {
+        model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model_prepare trap or fuel exhausted",
+        )
+    };
+    let mut call = prepare
+        .call_resumable(&mut *store, ())
+        .map_err(|_| trapped())?;
+    let code = loop {
+        let Call::OutOfFuel(paused) = call else {
+            break if let Call::Finished(code) = call {
+                code
+            } else {
+                -1
+            };
+        };
+        if control.cancel.load(Ordering::SeqCst) {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::Cancelled,
+                "model.execute cancelled during prepare",
+            ));
+        }
+        if Instant::now() > control.deadline {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::Timeout,
+                "model.execute exceeded timeout during prepare",
+            ));
+        }
+        if granted >= limits.prepare_fuel {
+            return Err(trapped());
+        }
+        let next = (limits.prepare_fuel - granted).min(WASMI_FUEL_SLICE);
+        granted += next;
+        let _ = store.set_fuel(next);
+        call = paused.resume(&mut *store).map_err(|_| trapped())?;
+    };
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "model_prepare returned failure",
+        ))
+    }
 }
 
 /// Drives a resumable `wasmi` call in fuel slices, checking cancellation and
@@ -2209,9 +2351,25 @@ mod tests {
             Some(ModelFailureReason::ManifestInvalid)
         );
         let mut unknown_schema = fixture_package().manifest;
-        unknown_schema.schema_version = "2.2.0".to_string();
+        unknown_schema.schema_version = "2.3.0".to_string();
         assert_eq!(
             reason(&unknown_schema),
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let mut abi3 = fixture_package().manifest;
+        abi3.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARE.to_string();
+        abi3.abi_version = 3;
+        assert_eq!(
+            reason(&abi3),
+            Some(ModelFailureReason::ManifestInvalid),
+            "abi 3 requires max_prepare_fuel"
+        );
+        abi3.max_prepare_fuel = Some(1_000);
+        assert_eq!(reason(&abi3), None);
+        let mut prepare_on_v2 = fixture_package().manifest;
+        prepare_on_v2.max_prepare_fuel = Some(1_000);
+        assert_eq!(
+            reason(&prepare_on_v2),
             Some(ModelFailureReason::ManifestInvalid)
         );
         let kinds: Vec<Value> = [
@@ -2301,6 +2459,7 @@ mod tests {
             max_output_bytes: 4096,
             max_execution_ms: 5_000,
             offline_allowed: true,
+            max_prepare_fuel: None,
         };
         seal(VerifiedModelPackage {
             manifest,
@@ -3113,6 +3272,7 @@ mod tests {
             max_output_bytes: 4096,
             max_execution_ms: 5_000,
             offline_allowed: true,
+            max_prepare_fuel: None,
         };
         seal(VerifiedModelPackage {
             manifest,

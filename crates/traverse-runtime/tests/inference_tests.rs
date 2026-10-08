@@ -1197,6 +1197,7 @@ fn seeded_exact_ref_host() -> (ExactModelHostConnector, ExactModelPin) {
         max_output_bytes: 4096,
         max_execution_ms: 5_000,
         offline_allowed: true,
+        max_prepare_fuel: None,
     };
     let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest json");
     let signature = serde_json::to_vec(&sign_model_manifest(
