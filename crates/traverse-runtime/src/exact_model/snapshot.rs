@@ -267,7 +267,10 @@ mod tests {
     #[test]
     fn v3_module_check_accepts_only_snapshot_safe_guests() {
         assert_eq!(
-            check_v3_module(&module(r#"(global (export "g") (mut i32) (i32.const 0))"#)),
+            check_v3_module(&module(
+                r#"(global (export "g") (mut i32) (i32.const 0)) (global i32 (i32.const 7))
+                   (table (export "t") 1 funcref)"#
+            )),
             Ok(())
         );
         let rejected = [
