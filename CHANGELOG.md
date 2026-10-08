@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Spec 138 0.12.0: guest ABI v3 snapshot reuse and native accelerator adapters (Decision 110, #1625)
+
+- Spec only; hosts implement it in #1626–#1629.
+- **Guest ABI v3:**
+  - the guest exports `model_prepare`;
+  - the host prepares once under `max_prepare_fuel`, and then restores a
+    pristine post-prepare snapshot into a fresh instance on every execute;
+  - snapshots live in a host-owned, in-memory cache bounded by
+    `max_snapshot_bytes`;
+  - results are byte-identical whether the cache is cold or warm.
+- **Native accelerator adapters:**
+  - signed per-adapter `accelerator_variants` inside the package;
+  - a policy `placements` order with explicit, traced fallback;
+  - a declared tolerance (at most 5×10⁻³) against wasm-cpu, checked on the
+    device;
+  - a ceiling profile per adapter.
+
+  Core ML is the first adapter.
+- Manifest schema `2.2.0`, `traverse.model-runtime` connector `2.2.0`
+  (additive `placement_evidence`), and new reason `placement_unavailable`.
+
 ### Generic ONNX runner guest and `model package-onnx` (Decision 105/106, #1591)
 
 - New audited, import-free `traverse-onnx-runner-guest` (tract, `+simd128`,

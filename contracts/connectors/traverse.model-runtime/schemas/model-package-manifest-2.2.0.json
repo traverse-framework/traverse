@@ -1,0 +1,359 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://traverse-framework.github.io/schemas/model-runtime/model-package-manifest-2.2.0.json",
+  "title": "Spec 138 model package manifest (model.manifest.json)",
+  "description": "Schema 2.2.0 (Spec 138 0.12.0, Decision 110): 2.1.0 plus max_prepare_fuel (required when and only when abi_version is 3) and optional accelerator_variants. Every variant digest is covered by the model.sig.json signature over these exact bytes. accelerator_variants requires rights.derivation, and each conversion.source_digest MUST equal rights.derivation.source_digest (rights_inconsistent).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "model_id",
+    "version",
+    "wasm_digest",
+    "registry_ref",
+    "executable_format",
+    "abi_version",
+    "input_schema_ref",
+    "input_schema_version",
+    "output_schema_ref",
+    "output_schema_version",
+    "rights",
+    "supported_profiles",
+    "max_memory_bytes",
+    "max_fuel",
+    "max_input_bytes",
+    "max_output_bytes",
+    "max_execution_ms",
+    "offline_allowed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.2.0"
+    },
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wasm_digest": {
+      "type": "string",
+      "pattern": "^(sha256:)?[0-9a-f]{64}$"
+    },
+    "registry_ref": {
+      "type": "string"
+    },
+    "executable_format": {
+      "type": "string",
+      "minLength": 1
+    },
+    "abi_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "input_schema_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input_schema_version": {
+      "type": "string"
+    },
+    "output_schema_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_schema_version": {
+      "type": "string"
+    },
+    "rights": {
+      "$ref": "#/$defs/rights"
+    },
+    "supported_profiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "contains": {
+        "const": "wasm-cpu"
+      }
+    },
+    "max_memory_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_fuel": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_input_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_output_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_execution_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "offline_allowed": {
+      "type": "boolean"
+    },
+    "max_prepare_fuel": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Engine-relative fuel ceiling for model_prepare (ABI v3 only); a call max_fuel covers only the run sequence."
+    },
+    "accelerator_variants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/accelerator_variant"
+      },
+      "maxItems": 1,
+      "description": "At most one entry per adapter id (FR-058); maxItems tracks the closed adapter list (FR-066)."
+    }
+  },
+  "$defs": {
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "license_id",
+        "attribution",
+        "redistribution",
+        "commercial_use",
+        "source_url"
+      ],
+      "properties": {
+        "license_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier"
+        },
+        "attribution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redistribution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commercial_use": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "restricted",
+            "prohibited"
+          ]
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Informational; identity is always the digest."
+        },
+        "derivation": {
+          "$ref": "#/$defs/derivation"
+        }
+      }
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source_digest",
+        "source_license_id",
+        "source_commercial_use",
+        "source_url"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "converted",
+            "quantized",
+            "fine_tuned"
+          ]
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-fA-F]{64}$",
+          "description": "SHA-256 of the source artifact"
+        },
+        "source_license_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier of the source"
+        },
+        "source_commercial_use": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "restricted",
+            "prohibited"
+          ]
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "accelerator_variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "format",
+        "path",
+        "digest",
+        "conversion",
+        "conformance_vector_path",
+        "conformance_vector_digest",
+        "tolerance",
+        "peak_memory_bytes"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": [
+            "coreml"
+          ],
+          "description": "Closed adapter id list (Spec 138 FR-066); one entry per adapter."
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Adapter variant format; coreml requires mlmodel."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^variants/[a-z0-9_-]+/[^/].*$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        },
+        "conversion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool",
+            "tool_version",
+            "source_digest"
+          ],
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_digest": {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"
+            }
+          }
+        },
+        "conformance_vector_path": {
+          "type": "string",
+          "pattern": "^variants/[a-z0-9_-]+/[^/].*$"
+        },
+        "conformance_vector_digest": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_abs_diff",
+            "top_k"
+          ],
+          "properties": {
+            "max_abs_diff": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.005
+            },
+            "top_k": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "peak_memory_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter": {
+                "const": "coreml"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "format": {
+                "const": "mlmodel"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "abi_version": {
+            "const": 3
+          }
+        },
+        "required": [
+          "abi_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "max_prepare_fuel"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "max_prepare_fuel"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "accelerator_variants"
+        ]
+      },
+      "then": {
+        "properties": {
+          "rights": {
+            "required": [
+              "derivation"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
