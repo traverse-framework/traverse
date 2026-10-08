@@ -2,7 +2,7 @@
 //! The only module allowed `unsafe`: it reads the packager-patched blob
 //! location, and views host-staged regions of this module's own memory.
 
-use crate::runner::{parse_blob, Model};
+use crate::runner::{Model, parse_blob};
 use std::sync::OnceLock;
 
 /// `[blob_ptr, blob_len]`, patched by `traverse-cli model package-onnx`. The
