@@ -2,7 +2,7 @@
   "kind": "connector_contract",
   "schema_version": "1.0.0",
   "connector_id": "traverse.model-runtime",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "capabilities_provided": [
     "traverse.model-runtime.execute"
   ],
@@ -151,6 +151,16 @@
           },
           "model_evidence": {
             "$ref": "schemas/model-rights-record-1.0.0.json"
+          },
+          "placement_evidence": {
+            "type": "object",
+            "required": ["placement", "compute_units", "fuel_metering"],
+            "properties": {
+              "placement": { "type": "string", "minLength": 1 },
+              "compute_units": { "type": "string", "minLength": 1 },
+              "fuel_metering": { "type": "string", "enum": ["metered", "not_applicable"] }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -183,6 +193,7 @@
     "Breaking bump from 1.0.0 per Decision 92 / Spec 138: artifact_ref model picker replaced by must-match model_ref + host-staged input_ref/output_ref.",
     "Binary tensors MUST NOT appear as unbounded JSON base64 on this operation; use host stage_model_input / read_model_output.",
     "policy_ref is an execution-policy handle, not model identity.",
-    "2.1.0 (Spec 138 0.8.0, Decision 107): additive optional success model_evidence (verified rights record); rights failures carry error.detail (schemas/model-rights-denial-detail-1.0.0.json)."
+    "2.1.0 (Spec 138 0.8.0, Decision 107): additive optional success model_evidence (verified rights record); rights failures carry error.detail (schemas/model-rights-denial-detail-1.0.0.json).",
+    "2.2.0 (Spec 138 0.12.0, Decision 110): additive optional success placement_evidence. placement is wasm-cpu or an adapter id (coreml). resource_usage.fuel_consumed is omitted when fuel_metering is not_applicable. New failure reason placement_unavailable (model_unavailable). The host-owned execution policy behind policy_ref carries an ordered placements list (default [\"wasm-cpu\"]) and require_fuel_metering."
   ]
 }

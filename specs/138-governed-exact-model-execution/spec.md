@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.11.0
+**Version**: 0.12.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -88,6 +88,22 @@ ADR-0080 / `#1567`. Adds **production model-signing key management**:
 - overlap rotation, and revocation by an emergency patch release.
 
 FR-049 through FR-052. Additive; no format change.
+**Amendment (2026-10-08, version 0.11.0 -> 0.12.0, approved 2026-10-07)**: Decision 110 /
+`#1623` / `#1625`. Adds two project-wide rules for on-device latency:
+- **Guest ABI v3 with pristine-snapshot reuse.** The guest exports
+  `model_prepare`. The host prepares once under a separate prepare budget,
+  snapshots the guest state, and restores that snapshot into a fresh
+  instance on every execute. Snapshots live in a host-owned, budgeted,
+  in-memory cache. Output is byte-identical to the fresh path.
+- **Native accelerator adapters.** Signed per-adapter variants live inside
+  the package. Execution policy lists allowed placements in preference
+  order, with explicit, traced fallback. Accelerated output meets a declared
+  tolerance against wasm-cpu, checked on the device. Each adapter declares a
+  ceiling profile. Core ML is the first adapter.
+
+Manifest schema `2.2.0` (additive), connector contract `2.2.0` (additive
+`placement_evidence`), new reason `placement_unavailable`. FR-032 is
+amended; FR-053 through FR-066 are new.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -212,11 +228,17 @@ least:
   allowed`; a violation is `rights_inconsistent`;
 - optional quantization / numeric precision metadata;
 - provenance / source revision and build reproducibility evidence;
-- whether offline execution is allowed after provisioning.
+- whether offline execution is allowed after provisioning;
+- schema `2.2.0` only (0.12.0): `max_prepare_fuel`, required when and only
+  when `abi_version` is `3` (see "Guest ABI v3"), and optional
+  `accelerator_variants` (see "Native accelerator adapters").
 
 Validation MUST reject missing rights, digest, ABI, schema refs, or
-resource limits, and any `schema_version` other than `2.0.0` or `2.1.0`
-(0.8.0). `rights.derivation` in a `2.0.0` manifest is `manifest_invalid`. A model URL
+resource limits, and any `schema_version` other than `2.0.0`, `2.1.0` or
+`2.2.0` (0.8.0; `2.2.0` since 0.12.0). `rights.derivation` in a `2.0.0`
+manifest is `manifest_invalid`. `abi_version: 3`, `max_prepare_fuel` or
+`accelerator_variants` in a `2.0.0` or `2.1.0` manifest is
+`manifest_invalid`. A model URL
 alone (including `rights.source_url`) is never an acceptable identity.
 Unknown fields fail closed.
 
@@ -256,7 +278,9 @@ and add a stable `reason`: `pin_mismatch`, `pin_ambiguous`,
 `usage_undeclared`, `rights_policy_denied`, `rights_inconsistent` (all
 `model_incompatible`), and `package_revoked` (`model_unavailable`) (0.8.0),
 and `engine_unavailable` (`model_unavailable`) (0.10.0) when an embedder's
-native model engine cannot load.
+native model engine cannot load, and `placement_unavailable`
+(`model_unavailable`) (0.12.0) when no placement listed by the execution
+policy can run the package.
 
 ### Rights denial detail (0.8.0, Decision 107)
 
@@ -351,7 +375,8 @@ candidate kind fails closed with `candidate_unsupported`. Mixed-candidate
 - Deny-by-default: no filesystem or network imports.
 - Later accelerators (SIMD, WebGPU, Metal, Core ML, native ML) are
   policy-selected adapters that MUST preserve public envelopes, limits, and
-  failure codes; detect independently; fail or fall back explicitly.
+  failure codes; detect independently; fail or fall back explicitly. The
+  governed rules are under "Native accelerator adapters" (0.12.0).
 - Large models MAY declare a target unsupported rather than OOM or silent
   degrade.
 
@@ -370,7 +395,193 @@ candidate kind fails closed with `candidate_unsupported`. Mixed-candidate
   (engine limiter, or a post-allocation size check where there is none)
   → `resource_exhausted`.
 - The little-endian frame format (frame `abi_version` field `1`) is
-  unchanged. `abi_version` values above 2 are `manifest_invalid`.
+  unchanged. `abi_version` values above 2 are `manifest_invalid` (0.12.0:
+  above 3; see "Guest ABI v3").
+
+### Guest ABI v3 (0.12.0, Decision 110)
+
+v3 is v2 plus a separate prepare step, so a host can snapshot the guest
+after expensive one-time work (for example an ONNX runner loading and
+optimizing its model) and skip that work on later calls.
+
+- `abi_version: 3` requires manifest schema `2.2.0` and `max_prepare_fuel`.
+  The guest exports `model_alloc` and `model_execute` exactly as in v2, plus
+  `model_prepare() -> i32`. `0` means prepared; any other value is a
+  failure.
+- A v3 guest's only mutable state is its linear memory and its mutable
+  globals. Registration MUST reject a v3 module with `model_incompatible`
+  when:
+  - it defines a mutable global that it does not export;
+  - it imports anything (as for every guest);
+  - it uses any table- or segment-mutating instruction (`table.set`,
+    `table.grow`, `table.fill`, `table.copy`, `table.init`, `elem.drop`,
+    `data.drop`);
+  - it does not export exactly one memory;
+  - `model_prepare` is missing.
+- **Fresh path.** The host instantiates a new `Store` and instance, calls
+  `model_prepare` under the prepare budget, then runs the v2 sequence
+  (`model_alloc`, input write, `model_execute`).
+- **Snapshot path.** See "Prepared-snapshot reuse". Both paths MUST produce
+  byte-identical output and byte-identical failures for the same input.
+- A trapping or fuel-exhausted `model_prepare`, or a non-zero return, fails
+  the call with `execution_failed`.
+
+### Prepared-snapshot reuse (0.12.0, Decision 110)
+
+- **Snapshot.** Right after a successful `model_prepare` on the fresh path,
+  and before `model_alloc`, the host MAY record a snapshot. A snapshot holds
+  the full linear memory bytes, the memory size in pages, and the value of
+  every exported mutable global.
+- **Restore.** Every execute that uses a snapshot creates a new `Store` and
+  instance from the verified module. It grows memory to the snapshot size,
+  overwrites the whole memory with the snapshot bytes, and sets every
+  exported mutable global to its snapshot value. It then runs the v2
+  sequence. Hosts MUST NOT reuse a live instance or `Store` across calls,
+  so per-call isolation is unchanged.
+- **Cache.** Snapshots belong to a host-owned in-memory cache:
+  - It is keyed by package digest and engine, with at most one snapshot per
+    key. Concurrent cold calls MAY each run prepare.
+  - A host-configured `max_snapshot_bytes` ceiling (FR-028) bounds the
+    total, with a safe default. Over budget, the host evicts snapshots
+    (least recently used first) or declines to store one. The affected call
+    takes the fresh path, which only costs time.
+  - Snapshots are dropped when the package is unregistered, when its status
+    changes in the package status map (FR-038), when an execute's digest
+    re-check fails (FR-021), and at shutdown.
+  - Snapshots are never persisted, shared between hosts, or exposed to
+    applications. There is no public warm-up command (FR-003).
+- **Prepare budget.**
+  - `model_prepare` runs under its own fuel ceiling: manifest
+    `max_prepare_fuel` ∩ the host fuel ceiling. It runs in fuel slices like
+    execution (FR-029).
+  - Its memory is bounded by the same memory ceiling as execution.
+  - A call's `max_fuel` (manifest ∩ policy ∩ per-call) covers only the
+    v2 sequence, so a call's outcome never depends on whether a snapshot
+    existed.
+  - Cancellation or a deadline that interrupts `model_prepare` fails the
+    triggering call with `cancelled` / `timeout`, and no snapshot is kept.
+  - The call's wall-clock deadline (`max_execution_ms` / `timeout_ms`)
+    includes prepare time.
+- **Evidence.** `resource_usage.fuel_consumed` reports only the v2 sequence.
+  Whether a snapshot was used MAY appear in the host's internal trace, but
+  MUST NOT appear in the public result, so results stay identical across
+  cache states.
+
+## Native accelerator adapters (0.12.0, Decision 110)
+
+An **adapter** runs a package on a native accelerator instead of the
+`wasm-cpu` guest, while keeping every public envelope, limit and failure
+code of FR-012. These rules apply to every adapter and every host. Core ML
+(`coreml`, Apple hosts) is the first adapter. Each new adapter id is added
+by amending this list:
+
+| Adapter id | Variant `format` | Hosts |
+|---|---|---|
+| `coreml` | `mlmodel` (one uncompressed Core ML model file, compiled on the device and cached by variant digest) | Swift (iOS/macOS) |
+
+### Variants inside the package
+
+A manifest (schema `2.2.0`) MAY carry `accelerator_variants`, an array with
+at most one entry per adapter id. Each entry has these fields, all required:
+- `adapter`: an adapter id from the table above;
+- `format`: the adapter's variant format;
+- `path`: the variant file's path relative to the package root, under
+  `variants/<adapter>/`;
+- `digest`: SHA-256 of the variant file bytes;
+- `conversion`: `{ tool, tool_version, source_digest }`. It records a
+  deterministic conversion from the package's source artifact.
+  `source_digest` MUST equal `rights.derivation.source_digest`, so a
+  package with variants MUST carry `rights.derivation`. A mismatch is
+  `rights_inconsistent`;
+- `conformance_vector_path` and `conformance_vector_digest`: the variant's
+  conformance vector. The vector's cases are inputs, each with the
+  `wasm-cpu` reference output that the signed package produces;
+- `tolerance`: `{ max_abs_diff, top_k }`.
+  - `max_abs_diff` is a number in `[0, 5e-3]` (Decision 106), compared
+    element-wise on `f32` outputs.
+  - `top_k` is an integer `≥ 0`. When it is above `0`, the indices of the
+    `top_k` largest output values MUST be identical in the same order.
+  - Outputs whose dtype is not `f32` MUST match byte-for-byte.
+- `peak_memory_bytes`: the declared peak memory for one execution.
+
+The FR-018 manifest signature covers every variant through its digest.
+Variants never change the package's pin, identity, rights or status:
+- A host fetches and verifies only the variants it may use. A host with no
+  matching adapter ignores `accelerator_variants`, but still validates their
+  shape.
+- A variant file whose bytes do not match its digest fails the call with
+  `model_incompatible` / `digest_mismatch`. This is an integrity failure,
+  so the host MUST NOT fall back.
+- When a variant's `peak_memory_bytes` exceeds the host memory ceiling, the
+  host treats that variant as unavailable. The package still registers on
+  its other placements.
+
+### Placement selection
+
+The host-owned execution policy named by `policy_ref` carries `placements`:
+an ordered, duplicate-free list of placement ids, for example
+`["coreml", "wasm-cpu"]`. The default is `["wasm-cpu"]`. Activating a
+policy fails closed when it lists an id that is neither `wasm-cpu` nor a
+known adapter id.
+
+For each execute, the host takes the first listed placement that meets all
+of these:
+- the host supports it;
+- the package carries it (`wasm-cpu` always, an adapter only through its
+  variant);
+- it passed its device self-check (below);
+- it meets the policy's `require_fuel_metering` flag (below).
+
+Placements not listed are never used. If no listed placement qualifies, the
+call fails closed with `model_unavailable` / `placement_unavailable`, before
+any input is consumed. The result's `placement` and the trace record the
+placement that actually ran.
+
+### Device self-check
+
+The first time a host loads a variant, it runs every case of the variant's
+conformance vector through the adapter and compares each output with the
+reference under the variant's `tolerance`. The host stores the result in
+host-owned state, keyed by variant digest, adapter, OS version, and the
+compute units the adapter may use. It runs the check again when any part of
+that key changes.
+
+A failed self-check makes the variant unavailable on that device, and
+placement selection moves on. The failure appears in the host's trace with
+the worst case found. A self-check is not a public call, so its cost is not
+charged to any call's ceilings.
+
+### Ceiling profile
+
+Each adapter declares which ceilings it enforces. Every adapter MUST
+enforce:
+- the call's wall-clock deadline;
+- `max_output_bytes`;
+- input and output frame dtype and shape checks against the manifest
+  schemas;
+- the variant's `peak_memory_bytes` against the host memory ceiling.
+
+Cancellation and deadlines MUST be checked before and after the native
+prediction. An adapter that cannot interrupt a prediction MUST discard a
+result that completes after cancellation (`cancelled`) or after the
+deadline (`timeout`).
+
+Fuel is engine-relative (FR-030). An adapter that cannot meter fuel
+declares `fuel_metering: not_applicable`. The success result then omits
+`resource_usage.fuel_consumed`, and `placement_evidence` records that fuel
+was not metered. A policy with `require_fuel_metering: true` excludes every
+such adapter.
+
+| Adapter | Fuel | Mid-run interruption | Compute units recorded |
+|---|---|---|---|
+| `coreml` | `not_applicable` | No: checked before and after; a late result is discarded | the configured `MLComputeUnits` |
+
+### Adapter I/O
+
+An adapter consumes the same staged input frame and produces the same
+little-endian output frame, output schema and `output_ref` as the `wasm-cpu`
+guest. Converting to and from native tensors is the adapter's job; guests
+and applications never see native tensor types.
 
 ## `model.execute` request payload (Spec 137 command `payload`)
 
@@ -402,7 +613,9 @@ Success/failure on the Spec 137 result path MUST surface:
 - `output_ref` and `output_schema_ref` on success (always opaque; never
   inline tensor bytes on the command result);
 - exact model identity and digest;
-- placement (`wasm-cpu` initially);
+- placement (`wasm-cpu` initially; an adapter id such as `coreml` since
+  0.12.0), plus `placement_evidence` (0.12.0): `{ placement, compute_units,
+  fuel_metering: metered | not_applicable }`;
 - trace ID and redacted evidence, including the rights record
   (`model_evidence`, 0.8.0);
 - measured resource usage;
@@ -548,9 +761,10 @@ Traverse MUST:
 - **FR-031**: On JIT-forbidden targets (iOS/macOS Swift host) the `wasm-cpu`
   guest MUST execute on `wasmi` behind the audited Swift-host ABI
   (ADR-0078), reusing the same verification as native hosts.
-- **FR-032**: Hosts MUST support guest ABI v1 and v2, selected by the
-  manifest `abi_version`, and MUST reject any other value as
-  `manifest_invalid`.
+- **FR-032**: Hosts MUST support guest ABI v1, v2 and v3 (v3 since 0.12.0),
+  selected by the manifest `abi_version`, and MUST reject any other value as
+  `manifest_invalid`. `abi_version: 3` is valid only in manifest schema
+  `2.2.0`.
 - **FR-033**: For ABI v2, hosts MUST obtain both buffers from
   `model_alloc` and MUST reject non-positive, out-of-bounds, or overlapping
   regions, a missing `model_alloc`, or a trapping `model_alloc`, before
@@ -632,6 +846,84 @@ Traverse MUST:
   (yearly or on compromise). A compromised key MUST be revoked by removing it
   from `TRAVERSE_MODEL_SIGNING_KEYS` in an emergency patch release, with a
   security advisory.
+- **FR-053**: For ABI v3, registration MUST reject with `model_incompatible`
+  a module that:
+  - lacks `model_prepare`;
+  - defines a non-exported mutable global;
+  - uses a table- or segment-mutating instruction;
+  - does not export exactly one memory;
+  - imports anything.
+
+  A failing `model_prepare` (trap, exhausted fuel, non-zero return) MUST
+  fail the call with `execution_failed`.
+- **FR-054**: A v3 execute MUST run in a fresh `Store` and instance. It
+  either runs `model_prepare` (fresh path) or restores the pristine
+  post-prepare snapshot (memory bytes, memory size, exported mutable
+  globals). Hosts MUST NOT reuse a live instance or `Store` across calls.
+- **FR-055**: Snapshots MUST live in a host-owned in-memory cache keyed by
+  package digest and engine. A host-configured `max_snapshot_bytes` ceiling
+  with a safe default MUST bound the cache. Over budget, the host evicts a
+  snapshot or does not store one, and falls back to the fresh path.
+  Snapshots MUST be dropped:
+  - on unregister;
+  - on a package status change;
+  - on a failed digest re-check;
+  - at shutdown.
+
+  Snapshots MUST NOT be persisted or exposed to applications.
+- **FR-056**: `model_prepare` MUST run under `max_prepare_fuel` ∩ the host
+  fuel ceiling, in fuel slices, within the execution memory ceiling. A
+  call's `max_fuel` MUST cover only the v2 sequence. Cancellation or a
+  deadline during prepare MUST fail the call (`cancelled` / `timeout`) and
+  keep no snapshot.
+- **FR-057**: For the same package and input, a v3 call's public result
+  (status, output bytes, failure code and reason, `resource_usage` except
+  `duration_ms`) MUST be identical whether it took the fresh path or the
+  snapshot path. A v3 conformance fixture MUST prove this on wasmtime,
+  `wasmi`, the browser, the Swift host, and the Kotlin host.
+- **FR-058**: Manifest schema `2.2.0` MUST validate `accelerator_variants`:
+  - at most one entry per known adapter id;
+  - every field present;
+  - `path` under `variants/<adapter>/`;
+  - `tolerance.max_abs_diff` in `[0, 5e-3]` and `tolerance.top_k ≥ 0`;
+  - `conversion.source_digest` equal to `rights.derivation.source_digest`
+    (`rights_inconsistent` otherwise).
+
+  Any other violation is `manifest_invalid`.
+- **FR-059**: Hosts MUST fetch and verify only the variants they may use. A
+  variant whose bytes differ from its manifest digest MUST fail the call
+  with `digest_mismatch`, without falling back.
+- **FR-060**: Execution policy MUST carry an ordered `placements` list
+  (default `["wasm-cpu"]`). Activating a policy that names an unknown id
+  MUST fail. Each execute MUST use the first listed placement that the host
+  supports, the package carries, has passed its self-check, and meets
+  `require_fuel_metering`. If none qualifies, the call MUST fail with
+  `model_unavailable` / `placement_unavailable` before consuming the input.
+- **FR-061**: The success result and the public trace MUST record the
+  placement that ran and `placement_evidence` (`placement`,
+  `compute_units`, `fuel_metering`).
+- **FR-062**: Before first use on a device, a host MUST check a variant
+  against its conformance vector under its declared `tolerance`. The result
+  MUST be kept per variant digest, adapter, OS version and compute units,
+  and the check MUST run again when any of these change. A failed variant
+  MUST be unavailable on that device.
+- **FR-063**: Every adapter MUST enforce the deadline, `max_output_bytes`,
+  frame dtype and shape, and `peak_memory_bytes` against the host memory
+  ceiling. It MUST check cancellation and the deadline before and after a
+  prediction it cannot interrupt, and MUST discard a late result as
+  `cancelled` / `timeout`.
+- **FR-064**: An adapter that cannot meter fuel MUST declare
+  `fuel_metering: not_applicable` and omit `fuel_consumed`. A policy with
+  `require_fuel_metering: true` MUST exclude it.
+- **FR-065**: Adapters MUST consume and produce the same frames, output
+  schema and opaque refs as the `wasm-cpu` guest. They MUST NOT
+  re-implement verification, rights, status or policy rules: every
+  placement shares the host's single registration and execute checks.
+- **FR-066**: The adapter id list in "Native accelerator adapters" is
+  closed. Adding an adapter (for example for Android or the browser)
+  requires a Spec 138 amendment that gives its variant format and ceiling
+  profile. Adapter rules MUST NOT encode application-, model- or
+  platform-specific behaviour beyond that table.
 
 ## Acceptance scenarios
 
@@ -658,6 +950,16 @@ Traverse MUST:
    ≥ 95% on the 1,797-sample held-out split through signed native
    execution. The browser matches the native conformance vector
    byte-for-byte.
+10. (0.12.0) A v3 package's first execute prepares and stores a snapshot.
+    Later executes restore it in a fresh instance without calling
+    `model_prepare`. Every result is byte-identical to the fresh path on
+    every host, including after an eviction.
+11. (0.12.0) With policy `["coreml", "wasm-cpu"]`, a package carrying a
+    `coreml` variant that has passed its self-check runs on `coreml`.
+    Output is within the variant's tolerance of `wasm-cpu`, and
+    `placement_evidence` records `coreml`, the compute units and
+    `fuel_metering: not_applicable`. On a host without Core ML, the same
+    call runs on `wasm-cpu`.
 
 ### Unhappy paths
 
@@ -697,7 +999,8 @@ Traverse MUST:
     (`timeout`), and a stale cancellation never affects a later execution.
 21. (0.7.0) A v2 guest whose `model_alloc` is missing, traps, or returns a
     zero, negative, out-of-bounds, or overlapping region fails closed before
-    any input is written; `abi_version: 3` is `manifest_invalid`.
+    any input is written; `abi_version: 3` is `manifest_invalid` (0.12.0:
+    only in schemas `2.0.0` / `2.1.0`; `abi_version: 4` always).
 22. (0.8.0) A `commercial` app registering a `prohibited` package →
     `rights_policy_denied` with `detail`; a `non_commercial` app accepts it;
     a host requiring commercial usage denies it even for a `non_commercial`
@@ -718,6 +1021,24 @@ Traverse MUST:
     vectors byte-identically to native, web, and Swift, passes all 21 rights
     conformance cases, and fails closed with `engine_unavailable` when the
     native library is missing.
+27. (0.12.0) A v3 module with a non-exported mutable global, a
+    `table.set` / `data.drop`, or no `model_prepare` → `model_incompatible`
+    at registration. A trapping, out-of-fuel or non-zero `model_prepare` →
+    `execution_failed`, with no snapshot stored. A cancellation during
+    prepare → `cancelled`, with no snapshot stored.
+28. (0.12.0) A call whose `max_fuel` covers `run` but not prepare plus run
+    succeeds on both a cold and a warm cache. A package revocation or a
+    status change drops its snapshot.
+29. (0.12.0) A tampered variant file → `digest_mismatch`, with no fallback.
+    A variant whose `conversion.source_digest` differs from
+    `rights.derivation.source_digest` → `rights_inconsistent`. A
+    `tolerance.max_abs_diff` above `5e-3` → `manifest_invalid`.
+30. (0.12.0) A policy listing only `coreml`, on a host without Core ML or
+    after a failed self-check → `placement_unavailable`, and the input is
+    not consumed. A policy naming an unknown placement id fails activation.
+    A policy with `require_fuel_metering: true` never selects `coreml`.
+31. (0.12.0) A cancellation or deadline that lands during a Core ML
+    prediction → `cancelled` / `timeout`, and the late result is discarded.
 
 ## Compatibility and non-goals
 
@@ -727,7 +1048,11 @@ distribution/rotation service; key revocation after registration (takes
 effect on re-activation); a Traverse-published or online package status
 list (0.8.0: hosts supply the map); SPDX license-compatibility evaluation; microphone/codecs; UI; Callweave workflow composition;
 cloud LMM transport; training; guest `model_invoke` in v1; Spec 045
-candidate semantics.
+candidate semantics. (0.12.0) Persisting snapshots, or sharing them between
+hosts; reusing a live instance; a public warm-up command; per-call
+placement chosen by the app; companion accelerator packages; converting
+models on the host; accelerator adapters other than those in the adapter
+table.
 
 Browser embedder cross-target report is sequenced after native conformance
 under this same governing ID.
