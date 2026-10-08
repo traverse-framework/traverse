@@ -47,7 +47,7 @@ class ExactModelHostTest {
 
     private fun pin(value: JsonElement) = ExactModelPin.fromJson(value.toString())
 
-    private fun vectorCheck(vectorPath: String, maxOutput: Int) = runBlocking {
+    private fun vectorCheck(vectorPath: String, maxOutput: Int, rounds: Int = 1) = runBlocking {
         val vector = json("fixtures/models/conformance/$vectorPath")
         val pin = pin(vector["pin"]!!)
         ExactModelHost(listOf(pin), listOf(vector.s("trusted_public_key_hex")), "commercial").use { host ->
@@ -64,7 +64,7 @@ class ExactModelHostTest {
                     put("input_frame_hex", request.s("input_frame_hex"))
                     put("output_frame_hex", vector["expected"]!!.jsonObject.s("output_frame_hex"))
                 })
-            for (case in cases) {
+            for (case in List(rounds) { cases }.flatten()) {
                 val inputRef = host.stageModelInput(hex(case.s("input_frame_hex")), 4096)
                 val result = host.execute(
                     pin.modelId, pin.version, pin.digest, inputRef, "policy-1", "sensitive",
@@ -85,6 +85,10 @@ class ExactModelHostTest {
 
     @Test
     fun onnxRunnerVectorIsByteIdenticalWithSimd() = vectorCheck("signed-digits-onnx.json", 56)
+
+    /** Guest ABI v3 (Decision 110): the first round prepares, later rounds restore the snapshot. */
+    @Test
+    fun preparedV3VectorIsByteIdenticalFreshAndWarm() = vectorCheck("signed-prepared-v3.json", 4096, rounds = 3)
 
     /** The public error shape every embedder compares: code, reason, detail. */
     private fun errorJson(error: ExactModelError): JsonObject = buildJsonObject {

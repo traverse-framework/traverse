@@ -259,10 +259,19 @@ fn create(profile: HostProfile, request: &Request<'_>) -> Result<Vec<u8>, Envelo
             .filter(|value| *value > 0)
             .ok_or(EnvelopeError::InvalidInput(name))
     };
+    // `max_snapshot_bytes` is optional (guest ABI v3, FR-055); `0` disables
+    // snapshot reuse and absent keeps the runtime default.
+    let max_snapshot_bytes = match limits.get("max_snapshot_bytes") {
+        None => HostModelLimits::default().max_snapshot_bytes,
+        Some(value) => value
+            .as_u64()
+            .ok_or(EnvelopeError::InvalidInput("max_snapshot_bytes"))?,
+    };
     let host_limits = HostModelLimits {
         max_package_bytes: limit("max_package_bytes")?,
         max_memory_bytes: limit("max_memory_bytes")?,
         max_fuel: limit("max_fuel")?,
+        max_snapshot_bytes,
     };
     // App `model_usage` (Decision 107): absent stays undeclared so
     // registration fails closed with `usage_undeclared`.
@@ -794,6 +803,94 @@ mod tests {
             );
         }
         call(handle, &json!({ "op": "destroy" }), &[]);
+    }
+
+    /// Guest ABI v3 (Decision 110, #1626): both shims run the signed v3
+    /// vector byte-identically on the fresh path (first round, or reuse
+    /// disabled with `max_snapshot_bytes: 0`) and the snapshot path.
+    #[test]
+    fn prepared_v3_vector_matches_on_both_profiles_with_and_without_reuse() {
+        let vector: Value =
+            serde_json::from_slice(&read("conformance/signed-prepared-v3.json")).expect("vector");
+        let pin = vector["pin"].clone();
+        for profile in [&APPLE, &ANDROID] {
+            for snapshot_bytes in [None, Some(0_u64), Some(1 << 20)] {
+                let mut limits = limits();
+                if let Some(bytes) = snapshot_bytes {
+                    limits["max_snapshot_bytes"] = json!(bytes);
+                }
+                let created = decode(
+                    &model_call(
+                        profile,
+                        0,
+                        &frame(
+                            &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits, "model_usage": "commercial" }),
+                            &[],
+                        ),
+                    )
+                    .expect("create"),
+                )
+                .0;
+                let handle = created["handle"].as_u64().expect("handle");
+                let registered = call(
+                    handle,
+                    &json!({ "op": "register" }),
+                    &[
+                        (
+                            "manifest",
+                            &read("fixture-prepared-v3-1.0.0/model.manifest.json"),
+                        ),
+                        ("wasm", &read("fixture-prepared-v3-1.0.0/model.wasm")),
+                        (
+                            "signature",
+                            &read("fixture-prepared-v3-1.0.0/model.sig.json"),
+                        ),
+                    ],
+                );
+                assert_eq!(registered["digest"], pin["digest"], "{registered}");
+                for round in 0..3 {
+                    for case in vector["cases"].as_array().expect("cases") {
+                        let input =
+                            hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
+                        let input_ref = stage(handle, &input);
+                        let mut header = execute_header(&pin, &input_ref, "v3");
+                        header["payload"]["input_schema_ref"] =
+                            vector["request"]["input_schema_ref"].clone();
+                        header["payload"]["max_output_bytes"] = json!(4096);
+                        let executed = call(handle, &header, &[]);
+                        assert_eq!(executed["ok"], json!(true), "{executed}");
+                        let (_, output) = decode(
+                            &model_call(
+                                profile,
+                                handle,
+                                &frame(&json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 4096 }), &[]),
+                            )
+                            .expect("read"),
+                        );
+                        assert_eq!(
+                            hex_encode(&output),
+                            case["output_frame_hex"].as_str().expect("out"),
+                            "{} {snapshot_bytes:?} round {round}",
+                            profile.target_family
+                        );
+                    }
+                }
+                call(handle, &json!({ "op": "destroy" }), &[]);
+            }
+        }
+        let mut bad = limits();
+        bad["max_snapshot_bytes"] = json!("lots");
+        assert!(
+            model_call(
+                &TEST_PROFILE,
+                0,
+                &frame(
+                    &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": [key("public_key_hex")], "limits": bad, "model_usage": "commercial" }),
+                    &[],
+                ),
+            )
+            .is_err()
+        );
     }
 
     /// Decision 108: both shims run the identical protocol; only the stamped

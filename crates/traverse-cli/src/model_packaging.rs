@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use traverse_runtime::exact_model::{
-    CommercialUse, DerivationKind, MODEL_PACKAGE_SCHEMA_VERSION_PREPARE, ModelDerivation,
+    CommercialUse, DerivationKind, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED, ModelDerivation,
     ModelPackageManifest, ModelRights,
 };
 use wasm_encoder::{
@@ -474,7 +474,7 @@ fn manifest_bytes(
         source_url: spec.source.url.clone(),
     });
     let manifest = ModelPackageManifest {
-        schema_version: MODEL_PACKAGE_SCHEMA_VERSION_PREPARE.to_string(),
+        schema_version: MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string(),
         model_id: spec.model_id.clone(),
         version: spec.version.clone(),
         wasm_digest: wasm_digest.to_string(),
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(manifest.executable_format, EXECUTABLE_FORMAT);
         assert_eq!(
             manifest.schema_version,
-            MODEL_PACKAGE_SCHEMA_VERSION_PREPARE
+            MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
         );
         let derivation = manifest.rights.derivation.expect("derivation");
         assert_eq!(derivation.kind, DerivationKind::Converted);

@@ -1340,6 +1340,7 @@ mod tests {
                     max_package_bytes: 1,
                     max_memory_bytes: 2,
                     max_fuel: 3,
+                    ..HostModelLimits::default()
                 },
                 json: false,
             })

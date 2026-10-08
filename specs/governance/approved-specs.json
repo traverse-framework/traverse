@@ -1920,7 +1920,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
