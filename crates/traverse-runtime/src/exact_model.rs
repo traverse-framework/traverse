@@ -2019,11 +2019,8 @@ fn run_wasmi_prepare(
         .map_err(|_| trapped())?;
     let code = loop {
         let Call::OutOfFuel(paused) = call else {
-            break if let Call::Finished(code) = call {
-                code
-            } else {
-                -1
-            };
+            // No host imports exist, so the only other outcome is Finished.
+            break if let Call::Finished(n) = call { n } else { -1 };
         };
         if control.cancel.load(Ordering::SeqCst) {
             return Err(model_error_plain(
@@ -4165,6 +4162,103 @@ mod tests {
                 .code,
             HostConnectorErrorCode::ExecutionFailed
         );
+    }
+
+    fn abi3(manifest: &mut ModelPackageManifest, prepare_fuel: u64) {
+        manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARE.to_string();
+        manifest.abi_version = 3;
+        manifest.max_prepare_fuel = Some(prepare_fuel);
+    }
+
+    #[test]
+    fn abi_v3_prepare_fails_closed_on_both_engines() {
+        let memory_and_execute = r#"(memory (export "memory") 1)
+               (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0)"#;
+        let cases = [
+            (
+                format!("(module {memory_and_execute})"),
+                HostConnectorErrorCode::ModelIncompatible,
+                "missing model_prepare",
+            ),
+            (
+                format!(
+                    "(module {memory_and_execute} (func (export \"model_prepare\") (result i32) i32.const 1))"
+                ),
+                HostConnectorErrorCode::ExecutionFailed,
+                "model_prepare returned failure",
+            ),
+            (
+                format!(
+                    "(module {memory_and_execute} (func (export \"model_prepare\") (result i32) unreachable))"
+                ),
+                HostConnectorErrorCode::ExecutionFailed,
+                "model_prepare trap or fuel exhausted",
+            ),
+        ];
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, _) = seeded_host();
+            host.engine = engine;
+            for (wat, code, message) in &cases {
+                let digest = add_variant(&mut host, wat::parse_str(wat).expect("wat"), |m| {
+                    abi3(m, 100_000);
+                });
+                let err = run(&mut host, &digest, serde_json::Map::new()).expect_err("prepare");
+                assert_eq!(err.code, *code);
+                assert!(err.message.contains(message), "{}", err.message);
+            }
+        }
+
+        let spinner = format!(
+            "(module {memory_and_execute}
+               (func (export \"model_prepare\") (result i32) (loop $spin (br $spin)) i32.const 0))"
+        );
+        let spinner = wat::parse_str(&spinner).expect("wat");
+        let (mut host, _) = seeded_host();
+        host.engine = ModelEngine::Wasmi;
+        let multi = add_variant(&mut host, spinner.clone(), |m| {
+            abi3(m, 3 * WASMI_FUEL_SLICE + 7);
+        });
+        let err = run(&mut host, &multi, serde_json::Map::new()).expect_err("prepare fuel");
+        assert_eq!(err.code, HostConnectorErrorCode::ExecutionFailed);
+        assert!(err.message.contains("model_prepare trap or fuel exhausted"));
+
+        let long = add_variant(&mut host, spinner, |m| {
+            abi3(m, 1_000 * WASMI_FUEL_SLICE);
+        });
+        let mut zero = serde_json::Map::new();
+        zero.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            run(&mut host, &long, zero)
+                .expect_err("prepare timeout")
+                .code,
+            HostConnectorErrorCode::Timeout
+        );
+        host.cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            run(&mut host, &long, serde_json::Map::new())
+                .expect_err("prepare cancel")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+
+        // Burns one fuel slice, then traps on resume.
+        let resume_trap = wat::parse_str(&format!(
+            "(module {memory_and_execute}
+               (func (export \"model_prepare\") (result i32)
+                 (local $i i32)
+                 (loop $spin
+                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                   (br_if $spin (i32.lt_u (local.get $i) (i32.const 300000))))
+                 unreachable))"
+        ))
+        .expect("wat");
+        let digest = add_variant(&mut host, resume_trap, |m| {
+            abi3(m, 30 * WASMI_FUEL_SLICE);
+        });
+        host.cancel.store(false, Ordering::SeqCst);
+        let err = run(&mut host, &digest, serde_json::Map::new()).expect_err("resume trap");
+        assert_eq!(err.code, HostConnectorErrorCode::ExecutionFailed);
+        assert!(err.message.contains("model_prepare trap or fuel exhausted"));
     }
 
     #[test]
