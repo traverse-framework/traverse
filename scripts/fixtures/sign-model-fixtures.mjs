@@ -65,6 +65,18 @@ const fixtures = [
     input: ["schema:fixture-in", "schema:fixture-out"],
     abi_version: 2,
   },
+  // Guest ABI v3 conformance fixture (Decision 110, #1626): model_prepare
+  // builds state the host snapshots; output proves every call started from
+  // the pristine post-prepare state. Schema 2.2.0 carries max_prepare_fuel.
+  {
+    dir: "fixture-prepared-v3-1.0.0",
+    model_id: "fixture.prepared-v3",
+    attribution: "Traverse Spec 138 guest ABI v3 conformance fixture",
+    input: ["schema:fixture-in", "schema:fixture-out"],
+    abi_version: 3,
+    schema_version: "2.2.0",
+    max_prepare_fuel: 100000,
+  },
   // First trained model (Decision 102, #1461). model.wasm is built from
   // crates/traverse-digits-mlp-guest; limits come from measured usage
   // (~56k fuel per inference, one 64 KiB page, 268-byte input, 56-byte output).
@@ -113,7 +125,7 @@ for (const fixture of fixtures) {
     continue;
   }
   const manifest = {
-    schema_version: "2.0.0",
+    schema_version: fixture.schema_version ?? "2.0.0",
     model_id: fixture.model_id,
     version: "1.0.0",
     wasm_digest: sha256(wasm),
@@ -142,6 +154,7 @@ for (const fixture of fixtures) {
       max_execution_ms: 5000,
     }),
     offline_allowed: true,
+    ...(fixture.max_prepare_fuel ? { max_prepare_fuel: fixture.max_prepare_fuel } : {}),
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(dir, "model.manifest.json"), manifestBytes);
@@ -259,6 +272,36 @@ writeJson(join(modelsDir, "conformance", "signed-digits-onnx.json"), {
       output_frame_hex: out.toString("hex"),
     };
     }),
+});
+
+// Guest ABI v3 vector (Decision 110, #1626): each case runs in a fresh,
+// freshly prepared instance, the reference every host must match on both
+// the fresh path and the snapshot path, call after call.
+const preparedWasm = readFileSync(join(modelsDir, "fixture-prepared-v3-1.0.0", "model.wasm"));
+writeJson(join(modelsDir, "conformance", "signed-prepared-v3.json"), {
+  governing_spec: "138-governed-exact-model-execution",
+  package_dir: "fixture-prepared-v3-1.0.0",
+  trusted_public_key_hex: publicKey.toString("hex"),
+  pin: pins["fixture.prepared-v3"],
+  request: {
+    policy_ref: "policy-1",
+    data_classification: "sensitive",
+    input_schema_ref: "schema:fixture-in",
+    input_schema_version: "1.0.0",
+    max_output_bytes: 4096,
+  },
+  cases: [
+    Buffer.from("abc"),
+    Buffer.from("snapshot reuse must be invisible"),
+    Buffer.alloc(300, 0x5a),
+  ].map((input) => {
+    const instance = new WebAssembly.Instance(new WebAssembly.Module(preparedWasm), {});
+    if (instance.exports.model_prepare() !== 0) throw new Error("prepare failed");
+    return {
+      input_frame_hex: input.toString("hex"),
+      output_frame_hex: Buffer.from(runGuestV2(instance, input, 4096)).toString("hex"),
+    };
+  }),
 });
 
 function writeJson(path, value) {

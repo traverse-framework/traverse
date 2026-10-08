@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.12.0
+**Version**: 0.12.1
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -104,6 +104,18 @@ FR-049 through FR-052. Additive; no format change.
 Manifest schema `2.2.0` (additive), connector contract `2.2.0` (additive
 `placement_evidence`), new reason `placement_unavailable`. FR-032 is
 amended; FR-053 through FR-066 are new.
+**Amendment (2026-10-08, version 0.12.0 -> 0.12.1, approved under Decision 110)**: `#1626`.
+Three clarifications needed to implement ABI v3 identically on every host:
+- **Numeric globals only.** A v3 guest's mutable globals MUST be `i32`,
+  `i64`, `f32` or `f64`. JavaScript cannot read or set `v128` globals, and
+  reference values cannot move between stores.
+- **Snapshot only when it fits.** A host uses a snapshot only when its
+  memory fits the call's memory ceiling. Otherwise the call takes the fresh
+  path, so both paths fail identically.
+- **Instantiation fuel.** Instantiation, including any start function, is
+  charged to the call's `max_fuel` on both paths.
+
+FR-053 and FR-056 are amended.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -411,7 +423,8 @@ optimizing its model) and skip that work on later calls.
 - A v3 guest's only mutable state is its linear memory and its mutable
   globals. Registration MUST reject a v3 module with `model_incompatible`
   when:
-  - it defines a mutable global that it does not export;
+  - it defines a mutable global that it does not export, or a mutable
+    global whose type is not `i32`, `i64`, `f32` or `f64` (0.12.1);
   - it imports anything (as for every guest);
   - it uses any table- or segment-mutating instruction (`table.set`,
     `table.grow`, `table.fill`, `table.copy`, `table.init`, `elem.drop`,
@@ -437,7 +450,9 @@ optimizing its model) and skip that work on later calls.
   overwrites the whole memory with the snapshot bytes, and sets every
   exported mutable global to its snapshot value. It then runs the v2
   sequence. Hosts MUST NOT reuse a live instance or `Store` across calls,
-  so per-call isolation is unchanged.
+  so per-call isolation is unchanged. A host uses a snapshot only when its
+  memory size fits the call's memory ceiling (manifest ∩ host ∩ per-call).
+  Otherwise the call takes the fresh path (0.12.1).
 - **Cache.** Snapshots belong to a host-owned in-memory cache:
   - It is keyed by package digest and engine, with at most one snapshot per
     key. Concurrent cold calls MAY each run prepare.
@@ -455,9 +470,10 @@ optimizing its model) and skip that work on later calls.
     `max_prepare_fuel` ∩ the host fuel ceiling. It runs in fuel slices like
     execution (FR-029).
   - Its memory is bounded by the same memory ceiling as execution.
-  - A call's `max_fuel` (manifest ∩ policy ∩ per-call) covers only the
-    v2 sequence, so a call's outcome never depends on whether a snapshot
-    existed.
+  - A call's `max_fuel` (manifest ∩ policy ∩ per-call) covers only
+    instantiation (including any start function) and the v2 sequence, on
+    both paths (0.12.1). A call's outcome therefore never depends on whether
+    a snapshot existed.
   - Cancellation or a deadline that interrupts `model_prepare` fails the
     triggering call with `cancelled` / `timeout`, and no snapshot is kept.
   - The call's wall-clock deadline (`max_execution_ms` / `timeout_ms`)
@@ -849,7 +865,8 @@ Traverse MUST:
 - **FR-053**: For ABI v3, registration MUST reject with `model_incompatible`
   a module that:
   - lacks `model_prepare`;
-  - defines a non-exported mutable global;
+  - defines a non-exported mutable global, or a mutable global that is not
+    `i32`, `i64`, `f32` or `f64` (0.12.1);
   - uses a table- or segment-mutating instruction;
   - does not export exactly one memory;
   - imports anything.
@@ -873,7 +890,9 @@ Traverse MUST:
   Snapshots MUST NOT be persisted or exposed to applications.
 - **FR-056**: `model_prepare` MUST run under `max_prepare_fuel` ∩ the host
   fuel ceiling, in fuel slices, within the execution memory ceiling. A
-  call's `max_fuel` MUST cover only the v2 sequence. Cancellation or a
+  call's `max_fuel` MUST cover only instantiation and the v2 sequence, and a
+  snapshot MUST be used only when it fits the call's memory ceiling
+  (0.12.1). Cancellation or a
   deadline during prepare MUST fail the call (`cancelled` / `timeout`) and
   keep no snapshot.
 - **FR-057**: For the same package and input, a v3 call's public result

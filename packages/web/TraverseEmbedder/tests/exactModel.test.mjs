@@ -535,3 +535,194 @@ test("TRAVERSE_MODEL_SIGNING_KEYS mirrors keys/model-signing", async () => {
   }
   assert.deepEqual([...TRAVERSE_MODEL_SIGNING_KEYS].sort(), committed.sort());
 });
+
+// Guest ABI v3 (Decision 110, #1626): the same signed vector native hosts
+// run, on the fresh path and the snapshot path, with reuse on and off.
+const V3_VECTOR = JSON.parse(readFileSync(new URL("conformance/signed-prepared-v3.json", MODELS), "utf8"));
+
+async function v3Host(options = {}) {
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const pin = await pinFor("fixture.prepared-v3", pkg.manifest);
+  const host = new ExactModelBrowserHost([pin], { ...TRUST, ...options });
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  return { host, digest, pkg };
+}
+
+async function runV3(host, digest, bytes, modelId = "fixture.prepared-v3") {
+  const input_ref = host.io.stageModelInput(bytes, 4096);
+  const result = await host.execute(executeArgs(modelId, digest, input_ref, "schema:fixture-in"));
+  return Buffer.from(host.io.readModelOutput(result.output_ref, 4096)).toString("hex");
+}
+
+test("guest ABI v3 (#1626): signed vector matches fresh, warm, and with reuse disabled", async () => {
+  assert.equal(V3_VECTOR.pin.digest, await sha256Hex(fixture("fixture-prepared-v3-1.0.0").manifest));
+  for (const maxSnapshotBytes of [undefined, 0]) {
+    const { host, digest } = await v3Host(maxSnapshotBytes === undefined ? {} : { maxSnapshotBytes });
+    for (let round = 0; round < 3; round++) {
+      for (const testCase of V3_VECTOR.cases) {
+        assert.equal(
+          await runV3(host, digest, Buffer.from(testCase.input_frame_hex, "hex")),
+          testCase.output_frame_hex,
+          `budget ${maxSnapshotBytes} round ${round}`,
+        );
+      }
+    }
+    assert.equal(host.snapshotBytes() > 0, maxSnapshotBytes === undefined);
+    host.shutdown();
+    assert.equal(host.snapshotBytes(), 0);
+  }
+});
+
+test("guest ABI v3: status changes, digest failures, and eviction drop snapshots", async () => {
+  const { host, digest } = await v3Host();
+  const warm = async () => {
+    await runV3(host, digest, Buffer.from("abc"));
+    assert.ok(host.snapshotBytes() > 0);
+  };
+  await warm();
+  host.setPackageStatus({});
+  assert.ok(host.snapshotBytes() > 0, "an identical status map keeps the snapshot");
+  host.setPackageStatus({ [digest]: { status: "deprecated", reason: "superseded" } });
+  assert.equal(host.snapshotBytes(), 0);
+  await warm();
+  host.setPackageStatus({ [digest]: { status: "deprecated", reason: "other" } });
+  assert.equal(host.snapshotBytes(), 0);
+  await warm();
+  host.packages.get(digest).wasm[0] ^= 0xff;
+  await assert.rejects(() => runV3(host, digest, Buffer.from("abc")), reason("digest_mismatch"));
+  assert.equal(host.snapshotBytes(), 0);
+
+  // Two packages under a budget for one: the least recently used is evicted.
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const second = resigned(pkg.manifest, (m) => {
+    m.model_id = "fixture.prepared-v3-b";
+  });
+  const pins = [await pinFor("fixture.prepared-v3", pkg.manifest), await pinFor("fixture.prepared-v3-b", second.bytes)];
+  const budgeted = new ExactModelBrowserHost(pins, { ...TRUST, maxSnapshotBytes: 100_000 });
+  const a = await budgeted.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const b = await budgeted.registerPackage(second.bytes, pkg.wasm, second.sig);
+  await runV3(budgeted, a, Buffer.from("abc"));
+  const one = budgeted.snapshotBytes();
+  await runV3(budgeted, b, Buffer.from("abc"), "fixture.prepared-v3-b");
+  assert.equal(budgeted.snapshotBytes(), one, "b replaced a");
+  assert.equal(await runV3(budgeted, a, Buffer.from("abc")), "6a523601");
+});
+
+test("guest ABI v3: registration rejects snapshot-unsafe guests (FR-053)", async () => {
+  const { default: wabtInit } = await import("wabt");
+  const wabt = await wabtInit();
+  const features = { simd: true, bulk_memory: true, reference_types: true, tail_call: true, sign_extension: true, sat_float_to_int: true, multi_value: true };
+  const wat = (source) => new Uint8Array(wabt.parseWat("v3.wat", source, features).toBinary({}).buffer);
+  const module = (body) =>
+    wat(`(module (memory (export "memory") 1) ${body}
+           (func (export "model_prepare") (result i32) i32.const 0)
+           (func (export "model_alloc") (param i32) (result i32) i32.const 64)
+           (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))`);
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const register = async (wasm) => {
+    const { bytes, sig } = resigned(pkg.manifest, (m) => {
+      m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
+    });
+    const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
+    return host.registerPackage(bytes, wasm, sig);
+  };
+  // A guest exercising every decoded immediate shape still registers.
+  await register(
+    module(`(type $t (func (param i32) (result i32)))
+      (table 1 funcref) (elem (i32.const 0) $id)
+      (global (export "g") (mut i64) (i64.const -1))
+      (global (export "h") (mut f64) (f64.const 1.5))
+      (global $k i32 (i32.const 7))
+      (data "abc")
+      (func $id (type $t) (local f32) (local.get 0))
+      (func (param i32) (result i32) (local i64 v128)
+        (block $out (result i32)
+          (loop $l
+            (br_table $out $l (i32.const 0) (local.get 0))))
+        (drop)
+        (if (result i32) (local.get 0) (then (i32.const 1)) (else (i32.const 2)))
+        (drop)
+        (call_indirect (type $t) (i32.const 1) (i32.const 0))
+        (drop)
+        (i64.store offset=8 (i32.const 0) (i64.const 9))
+        (drop (memory.size)) (drop (memory.grow (i32.const 0)))
+        (drop (f32.const 1)) (drop (i64.extend8_s (i64.const 1)))
+        (drop (i32.trunc_sat_f32_s (f32.const 2)))
+        (memory.init 0 (i32.const 0) (i32.const 0) (i32.const 0))
+        (memory.copy (i32.const 0) (i32.const 1) (i32.const 1))
+        (memory.fill (i32.const 0) (i32.const 0) (i32.const 1))
+        (drop (table.size 0)) (drop (table.get 0 (i32.const 0)))
+        (drop (ref.is_null (ref.null func))) (drop (ref.func $id))
+        (drop (select (result i32) (i32.const 1) (i32.const 2) (i32.const 1)))
+        (local.set 2 (v128.const i32x4 1 2 3 4))
+        (local.set 2 (i8x16.shuffle 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 (local.get 2) (local.get 2)))
+        (drop (i32x4.extract_lane 1 (local.get 2)))
+        (local.set 2 (v128.load32_lane 1 (i32.const 0) (local.get 2)))
+        (local.set 2 (v128.load64_zero (i32.const 0)))
+        (local.set 2 (i32x4.add (v128.load (i32.const 0)) (local.get 2)))
+        (drop (global.get $k))
+        (return_call $id (local.get 0)))`),
+  );
+  const unsafe = [
+    module(`(global (mut i32) (i32.const 0))`),
+    module(`(global (export "v") (mut v128) (v128.const i64x2 0 0))`),
+    module(`(table 1 funcref) (func (table.set 0 (i32.const 0) (ref.null func)))`),
+    module(`(table 1 funcref) (func (drop (table.grow 0 (ref.null func) (i32.const 1))))`),
+    module(`(data "x") (func (data.drop 0))`),
+    wat(`(module (memory 1) (func (export "model_prepare") (result i32) i32.const 0))`),
+    wat(`(module (memory (export "memory") 1))`),
+    wat(`(module (import "env" "f" (func)) (memory (export "memory") 1)
+           (func (export "model_prepare") (result i32) i32.const 0))`),
+    Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1]),
+    Uint8Array.from([0, 0x61, 0x73, 0x6e, 1, 0, 0, 0]),
+  ];
+  for (const [index, wasm] of unsafe.entries()) {
+    await assert.rejects(() => register(wasm), (e) => e.code === "model_incompatible", `case ${index}`);
+  }
+});
+
+test("guest ABI v3: prepare failures fail closed; manifests gate the ABI", async () => {
+  const { default: wabtInit } = await import("wabt");
+  const wabt = await wabtInit();
+  const guest = (prepare, extra = "") =>
+    new Uint8Array(
+      wabt
+        .parseWat(
+          "p.wat",
+          `(module (memory (export "memory") 1) ${extra}
+             (func (export "model_prepare") (result i32) ${prepare})
+             (func (export "model_alloc") (param i32) (result i32) i32.const 64)
+             (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))`,
+        )
+        .toBinary({}).buffer,
+    );
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const cases = [
+    [guest("i32.const 1"), "execution_failed"],
+    [guest("unreachable"), "execution_failed"],
+    [guest("(drop (memory.grow (i32.const 4))) i32.const 0"), "resource_exhausted"],
+  ];
+  for (const [wasm, code] of cases) {
+    const { bytes, sig } = resigned(pkg.manifest, (m) => {
+      m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
+    });
+    const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
+    const digest = await host.registerPackage(bytes, wasm, sig);
+    await assert.rejects(() => runV3(host, digest, Buffer.from("abc")), (e) => e.code === code, code);
+    assert.equal(host.snapshotBytes(), 0);
+  }
+  const invalid = [
+    (m) => delete m.max_prepare_fuel,
+    (m) => (m.max_prepare_fuel = 0),
+    (m) => (m.schema_version = "2.1.0"),
+    (m) => (m.abi_version = 2),
+  ];
+  for (const edit of invalid) {
+    const { bytes, sig } = resigned(pkg.manifest, edit);
+    const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
+    await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig), reason("manifest_invalid"));
+  }
+  const { bytes, sig } = resigned(pkg.manifest, (m) => (m.max_prepare_fuel = "lots"));
+  const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
+  await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig), reason("manifest_invalid"));
+});

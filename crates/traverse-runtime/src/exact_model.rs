@@ -14,6 +14,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod snapshot;
+pub use snapshot::MODEL_PREPARE_EXPORT;
+use snapshot::{GlobalValue, Snapshot, SnapshotCache, check_v3_module};
+
 /// Governing spec id.
 pub const GOVERNING_SPEC: &str = "138-governed-exact-model-execution";
 /// First guest ABI version.
@@ -25,15 +29,23 @@ pub const MODEL_EXECUTE_EXPORT: &str = "model_execute";
 /// Guest ABI v2 buffer allocator export (`model_alloc(len) -> ptr`, Decision 105).
 pub const MODEL_ALLOC_EXPORT: &str = "model_alloc";
 /// Highest supported manifest `abi_version`: 1 = host places buffers at fixed
-/// offsets; 2 = the guest allocates them via [`MODEL_ALLOC_EXPORT`]. The
-/// little-endian frame format ([`MODEL_GUEST_ABI_VERSION`]) is unchanged.
-pub const MAX_MODEL_ABI_VERSION: u16 = 2;
+/// offsets; 2 = the guest allocates them via [`MODEL_ALLOC_EXPORT`]; 3 = v2
+/// plus a one-time [`MODEL_PREPARE_EXPORT`] the host may snapshot (Spec 138
+/// 0.12, Decision 110). The little-endian frame format
+/// ([`MODEL_GUEST_ABI_VERSION`]) is unchanged.
+pub const MAX_MODEL_ABI_VERSION: u16 = 3;
+/// Guest ABI version that adds `model_prepare` and snapshot reuse.
+pub const MODEL_GUEST_ABI_PREPARED: u16 = 3;
 
 /// Model package manifest schema version (Spec 138 0.4.0, Decision 101).
 pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
 /// Manifest schema version that adds optional `rights.derivation`
 /// (Spec 138 0.8.0, Decision 107). Hosts accept both versions.
 pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
+/// Manifest schema version that adds `max_prepare_fuel` for guest ABI v3
+/// (Spec 138 0.12.0, Decision 110). Accelerator variants (also `2.2.0`) are
+/// not accepted yet and fail closed as unknown fields (#1628).
+pub const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED: &str = "2.2.0";
 /// The only accepted package signature algorithm.
 pub const MODEL_SIGNATURE_ALG_ED25519: &str = "ed25519";
 
@@ -247,6 +259,10 @@ pub struct ModelPackageManifest {
     pub max_execution_ms: u64,
     /// Offline allowed after provisioning.
     pub offline_allowed: bool,
+    /// Fuel ceiling for `model_prepare`: required when and only when
+    /// `abi_version` is 3 (schema `2.2.0`, FR-056).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_prepare_fuel: Option<u64>,
 }
 
 fn model_error(
@@ -355,12 +371,7 @@ impl ModelPackageManifest {
                 ));
             }
         }
-        let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
-            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
-        let derivation_allowed = self.rights.derivation.is_none()
-            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION;
-        if !schema_supported
-            || !derivation_allowed
+        if !self.schema_fields_valid()
             || self
                 .rights
                 .derivation
@@ -408,6 +419,27 @@ impl ModelPackageManifest {
             ));
         }
         Ok(())
+    }
+}
+
+impl ModelPackageManifest {
+    /// The schema version is supported and allows the fields present:
+    /// `rights.derivation` needs `2.1.0`+, and `abi_version` 3 needs `2.2.0`
+    /// with a positive prepare budget, which no other ABI may carry (FR-032,
+    /// FR-039, FR-056).
+    fn schema_fields_valid(&self) -> bool {
+        let prepared_schema = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+        let supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            || prepared_schema;
+        let derivation_allowed =
+            self.rights.derivation.is_none() || self.schema_version != MODEL_PACKAGE_SCHEMA_VERSION;
+        let prepare_valid = if self.abi_version == MODEL_GUEST_ABI_PREPARED {
+            prepared_schema && self.max_prepare_fuel.is_some_and(|fuel| fuel > 0)
+        } else {
+            self.max_prepare_fuel.is_none()
+        };
+        supported && derivation_allowed && prepare_valid
     }
 }
 
@@ -584,6 +616,11 @@ impl ModelPackageStore {
                 ModelFailureReason::DigestMismatch,
                 "model wasm digest mismatch",
             ));
+        }
+        if package.manifest.abi_version == MODEL_GUEST_ABI_PREPARED {
+            check_v3_module(&package.wasm).map_err(|message| {
+                model_error_plain(HostConnectorErrorCode::ModelIncompatible, message)
+            })?;
         }
         let key = digest_hex(&package.manifest_bytes);
         self.by_digest.insert(key.clone(), package);
@@ -800,7 +837,7 @@ pub struct ExecutionPolicy {
 }
 
 /// Engine that executes the `wasm-cpu` model guest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelEngine {
     /// Cranelift JIT (desktop/server native hosts).
     Wasmtime,
@@ -832,8 +869,13 @@ pub struct HostModelLimits {
     pub max_package_bytes: u64,
     /// Max guest linear memory bytes.
     pub max_memory_bytes: u64,
-    /// Max fuel (engine-relative units) per execution.
+    /// Max fuel (engine-relative units) per execution, and per
+    /// `model_prepare` (guest ABI v3).
     pub max_fuel: u64,
+    /// Max bytes held by the guest ABI v3 snapshot cache (FR-055). Over the
+    /// budget, snapshots are evicted or not stored and calls take the fresh
+    /// path; `0` disables reuse.
+    pub max_snapshot_bytes: u64,
 }
 
 impl Default for HostModelLimits {
@@ -843,6 +885,7 @@ impl Default for HostModelLimits {
             max_package_bytes: 256 * 1024 * 1024,
             max_memory_bytes: 1024 * 1024 * 1024,
             max_fuel: 50_000_000_000,
+            max_snapshot_bytes: 512 * 1024 * 1024,
         }
     }
 }
@@ -881,6 +924,8 @@ pub struct ExactModelHostConnector {
     package_status: HashMap<String, PackageStatusEntry>,
     /// Engines and compiled guests reused across executions.
     compiled: CompiledGuests,
+    /// Guest ABI v3 post-prepare snapshots (FR-055).
+    snapshots: SnapshotCache,
 }
 
 impl ExactModelHostConnector {
@@ -901,7 +946,14 @@ impl ExactModelHostConnector {
             host_requires_commercial: false,
             package_status: HashMap::new(),
             compiled: CompiledGuests::default(),
+            snapshots: SnapshotCache::default(),
         }
+    }
+
+    /// Invalidate every staged ref and drop every snapshot (FR-055).
+    pub fn shutdown(&mut self) {
+        self.io.shutdown();
+        self.snapshots.clear();
     }
 
     /// Replace the host-owned package status map (digest → status). Takes
@@ -910,10 +962,19 @@ impl ExactModelHostConnector {
         &mut self,
         entries: impl IntoIterator<Item = (String, PackageStatusEntry)>,
     ) {
-        self.package_status = entries
-            .into_iter()
-            .map(|(digest, entry)| (normalize_digest(&digest), entry))
-            .collect();
+        let previous = std::mem::replace(
+            &mut self.package_status,
+            entries
+                .into_iter()
+                .map(|(digest, entry)| (normalize_digest(&digest), entry))
+                .collect(),
+        );
+        // A status change drops the package's snapshots (FR-055).
+        for digest in previous.keys().chain(self.package_status.keys()) {
+            if previous.get(digest) != self.package_status.get(digest) {
+                self.snapshots.drop_package(digest);
+            }
+        }
     }
 
     /// The usage rights are checked against: `commercial` when the host
@@ -1119,6 +1180,7 @@ fn check_host_limits(
     if package_bytes > host.max_package_bytes
         || manifest.max_memory_bytes > host.max_memory_bytes
         || manifest.max_fuel > host.max_fuel
+        || manifest.max_prepare_fuel.unwrap_or(0) > host.max_fuel
     {
         return Err(incompatible(
             ModelFailureReason::HostLimitExceeded,
@@ -1299,12 +1361,13 @@ impl HostConnectorPort for ExactModelHostConnector {
             });
         }
 
-        let package = self.packages.resolve_offline(&payload.model_ref.digest)?;
-        package.recheck(&payload.model_ref.digest)?;
-        let evidence = self.check_rights_and_status(
-            &package.manifest,
-            &normalize_digest(&payload.model_ref.digest),
-        )?;
+        let digest = normalize_digest(&payload.model_ref.digest);
+        let package = self.packages.resolve_offline(&digest)?;
+        if let Err(error) = package.recheck(&digest) {
+            self.snapshots.drop_package(&digest);
+            return Err(error);
+        }
+        let evidence = self.check_rights_and_status(&package.manifest, &digest)?;
         if package.manifest.model_id != payload.model_ref.model_id
             || package.manifest.version != payload.model_ref.version
         {
@@ -1372,6 +1435,16 @@ impl HostConnectorPort for ExactModelHostConnector {
             fuel,
             max_output: call_max_out,
             abi: package.manifest.abi_version,
+            prepare_fuel: package
+                .manifest
+                .max_prepare_fuel
+                .map(|prepare| prepare.min(self.host_limits.max_fuel)),
+        };
+        let mut reuse = SnapshotReuse {
+            cache: &mut self.snapshots,
+            digest: &digest,
+            engine: self.engine,
+            budget: self.host_limits.max_snapshot_bytes,
         };
         let started = Instant::now();
         // `recheck` above proved the bytes still hash to `wasm_digest`.
@@ -1383,6 +1456,7 @@ impl HostConnectorPort for ExactModelHostConnector {
                 &package.wasm,
                 &input,
                 &guest_limits,
+                &mut reuse,
             )?,
             ModelEngine::Wasmi => execute_wasmi_model(
                 &mut self.compiled,
@@ -1394,6 +1468,7 @@ impl HostConnectorPort for ExactModelHostConnector {
                     cancel: &self.cancel,
                     deadline: started + timeout,
                 },
+                &mut reuse,
             )?,
         };
         if started.elapsed() > timeout {
@@ -1564,6 +1639,7 @@ fn execute_wasm_cpu_model(
     wasm: &[u8],
     input: &[u8],
     guest: &GuestLimits,
+    reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     use wasmtime::{Linker, Store, StoreLimitsBuilder};
     let (max_memory_bytes, max_fuel, max_output_bytes) =
@@ -1604,6 +1680,17 @@ fn execute_wasm_cpu_model(
         ));
     };
 
+    if let Some(prepare_fuel) = guest.prepare_fuel {
+        prepare_or_restore_wasmtime(
+            &mut store,
+            &instance,
+            memory,
+            prepare_fuel,
+            max_memory_bytes,
+            reuse,
+        )?;
+    }
+
     let out_cap = output_capacity(max_output_bytes);
     let (in_ptr, out_ptr) = place_wasmtime_buffers(
         &mut store,
@@ -1643,6 +1730,98 @@ fn execute_wasm_cpu_model(
     let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
+}
+
+/// Guest ABI v3 on wasmtime: restore the cached post-prepare snapshot into
+/// this fresh instance, or run `model_prepare` under its own fuel budget and
+/// store a snapshot (FR-054 to FR-056). The call's own fuel is untouched.
+#[cfg(feature = "wasmtime-executor")]
+fn prepare_or_restore_wasmtime(
+    store: &mut wasmtime::Store<wasmtime::StoreLimits>,
+    instance: &wasmtime::Instance,
+    memory: wasmtime::Memory,
+    prepare_fuel: u64,
+    memory_ceiling: u64,
+    reuse: &mut SnapshotReuse<'_>,
+) -> Result<(), HostConnectorError> {
+    if let Some(snapshot) = reuse.usable(memory_ceiling) {
+        let (current, needed) = (
+            pages_for(memory.data_size(&*store)),
+            pages_for(snapshot.memory.len()),
+        );
+        if needed > current {
+            require_ok(
+                memory.grow(&mut *store, needed - current).is_ok(),
+                HostConnectorErrorCode::ResourceExhausted,
+                "model memory grow failed",
+            )?;
+        }
+        // The grow above made the whole snapshot fit.
+        let _ = memory.write(&mut *store, 0, &snapshot.memory);
+        for (name, value) in &snapshot.globals {
+            if let Some(global) = instance.get_global(&mut *store, name) {
+                // Registration proved every snapshot global is mutable and
+                // numeric, so setting its own type cannot fail.
+                let _ = global.set(&mut *store, to_wasmtime(*value));
+            }
+        }
+        return Ok(());
+    }
+    let prepare = instance
+        .get_typed_func::<(), i32>(&mut *store, MODEL_PREPARE_EXPORT)
+        .map_err(|_| missing_prepare())?;
+    let saved = store.get_fuel().unwrap_or(0);
+    let _ = store.set_fuel(prepare_fuel);
+    if prepare
+        .call(&mut *store, ())
+        .map_err(|_| prepare_failed())?
+        != 0
+    {
+        return Err(prepare_failed());
+    }
+    let _ = store.set_fuel(saved);
+    let exported: Vec<(String, wasmtime::Global)> = instance
+        .exports(&mut *store)
+        .filter_map(|export| {
+            let name = export.name().to_string();
+            export.into_global().map(|global| (name, global))
+        })
+        .collect();
+    let mut globals: Vec<(String, GlobalValue)> = Vec::new();
+    for (name, global) in exported {
+        if global.ty(&*store).mutability() == wasmtime::Mutability::Var
+            && let Some(value) = from_wasmtime(&global.get(&mut *store))
+        {
+            globals.push((name, value));
+        }
+    }
+    globals.sort_by(|left, right| left.0.cmp(&right.0));
+    reuse.store(Snapshot {
+        memory: memory.data(&*store).to_vec(),
+        globals,
+    });
+    Ok(())
+}
+
+#[cfg(feature = "wasmtime-executor")]
+fn to_wasmtime(value: GlobalValue) -> wasmtime::Val {
+    match value {
+        GlobalValue::I32(v) => wasmtime::Val::I32(v),
+        GlobalValue::I64(v) => wasmtime::Val::I64(v),
+        GlobalValue::F32(bits) => wasmtime::Val::F32(bits),
+        GlobalValue::F64(bits) => wasmtime::Val::F64(bits),
+    }
+}
+
+#[cfg(feature = "wasmtime-executor")]
+fn from_wasmtime(value: &wasmtime::Val) -> Option<GlobalValue> {
+    match value {
+        wasmtime::Val::I32(v) => Some(GlobalValue::I32(*v)),
+        wasmtime::Val::I64(v) => Some(GlobalValue::I64(*v)),
+        wasmtime::Val::F32(bits) => Some(GlobalValue::F32(*bits)),
+        wasmtime::Val::F64(bits) => Some(GlobalValue::F64(*bits)),
+        _ => None,
+    }
 }
 
 /// Engines and compiled guests reused across executions, keyed by the
@@ -1741,8 +1920,53 @@ struct GuestLimits {
     memory: u64,
     fuel: u64,
     max_output: u64,
-    /// Manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`).
+    /// Manifest `abi_version` (1 = fixed offsets, 2 = guest `model_alloc`,
+    /// 3 = v2 plus `model_prepare`).
     abi: u16,
+    /// ABI v3 prepare budget: manifest `max_prepare_fuel` ∩ host fuel.
+    prepare_fuel: Option<u64>,
+}
+
+/// Where an ABI v3 call looks up and stores its post-prepare snapshot.
+struct SnapshotReuse<'a> {
+    cache: &'a mut SnapshotCache,
+    digest: &'a str,
+    engine: ModelEngine,
+    budget: u64,
+}
+
+impl SnapshotReuse<'_> {
+    /// The cached snapshot, when it fits the call's memory ceiling
+    /// (0.12.1); otherwise the call takes the fresh path.
+    fn usable(&mut self, memory_ceiling: u64) -> Option<Arc<Snapshot>> {
+        self.cache
+            .get(self.digest, self.engine)
+            .filter(|snapshot| snapshot.memory.len() as u64 <= memory_ceiling)
+    }
+
+    fn store(&mut self, snapshot: Snapshot) {
+        self.cache
+            .insert(self.digest, self.engine, snapshot, self.budget);
+    }
+}
+
+fn missing_prepare() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ModelIncompatible,
+        "abi_version 3 model wasm missing model_prepare export",
+    )
+}
+
+fn prepare_failed() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ExecutionFailed,
+        "model_prepare trapped, ran out of fuel, or returned non-zero",
+    )
+}
+
+/// Pages needed to hold `bytes` of linear memory.
+fn pages_for(bytes: usize) -> u64 {
+    (bytes as u64).div_ceil(65_536)
 }
 
 /// Output capacity handed to the guest, clamped to `i32`.
@@ -1823,6 +2047,7 @@ fn execute_wasmi_model(
     input: &[u8],
     limits: &GuestLimits,
     control: &SliceControl<'_>,
+    reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     use wasmi::{Linker, Store, StoreLimitsBuilder};
 
@@ -1857,6 +2082,18 @@ fn execute_wasmi_model(
             "model wasm missing model_execute export",
         ));
     };
+
+    if let Some(prepare_fuel) = limits.prepare_fuel {
+        prepare_or_restore_wasmi(
+            &mut store,
+            instance,
+            memory,
+            prepare_fuel,
+            limits.memory,
+            control,
+            reuse,
+        )?;
+    }
 
     let out_cap = output_capacity(limits.max_output);
     let (in_ptr, out_ptr) = if limits.abi >= 2 {
@@ -1901,7 +2138,7 @@ fn execute_wasmi_model(
         out_ptr,
         out_cap,
     );
-    let out_len = run_fuel_slices(&mut store, func, args, limits, control)?;
+    let out_len = run_fuel_slices(&mut store, func, args, limits.fuel, control, execute_failed)?;
     if out_len < 0 || out_len as u64 > limits.max_output {
         return Err(model_error_plain(
             HostConnectorErrorCode::ResourceExhausted,
@@ -1913,25 +2150,114 @@ fn execute_wasmi_model(
     Ok(output)
 }
 
-/// Drives a resumable `wasmi` call in fuel slices, checking cancellation and
-/// the deadline between slices (Decision 104).
+fn execute_failed() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::ExecutionFailed,
+        "model_execute trap or fuel exhausted",
+    )
+}
+
+/// Guest ABI v3 on `wasmi`: restore the cached post-prepare snapshot into
+/// this fresh instance, or run `model_prepare` in fuel slices under its own
+/// budget and store a snapshot (FR-054 to FR-056). The call's own fuel is
+/// untouched; cancellation and deadlines interrupt prepare like execution.
 #[cfg(feature = "wasmi-executor")]
-fn run_fuel_slices(
+fn prepare_or_restore_wasmi(
     store: &mut wasmi::Store<wasmi::StoreLimits>,
-    func: wasmi::TypedFunc<(i32, i32, i32, i32), i32>,
-    args: (i32, i32, i32, i32),
-    limits: &GuestLimits,
+    instance: wasmi::Instance,
+    memory: wasmi::Memory,
+    prepare_fuel: u64,
+    memory_ceiling: u64,
     control: &SliceControl<'_>,
+    reuse: &mut SnapshotReuse<'_>,
+) -> Result<(), HostConnectorError> {
+    if let Some(snapshot) = reuse.usable(memory_ceiling) {
+        let (current, needed) = (
+            pages_for(memory.data_size(&*store)),
+            pages_for(snapshot.memory.len()),
+        );
+        if needed > current && memory.grow(&mut *store, needed - current).is_err() {
+            return Err(model_error_plain(
+                HostConnectorErrorCode::ResourceExhausted,
+                "model memory grow failed",
+            ));
+        }
+        // The grow above made the whole snapshot fit.
+        let _ = memory.write(&mut *store, 0, &snapshot.memory);
+        for (name, value) in &snapshot.globals {
+            if let Some(global) = instance.get_global(&*store, name) {
+                // Registration proved every snapshot global is mutable and
+                // numeric, so setting its own type cannot fail.
+                let _ = global.set(&mut *store, to_wasmi(*value));
+            }
+        }
+        return Ok(());
+    }
+    let prepare = instance
+        .get_typed_func::<(), i32>(&*store, MODEL_PREPARE_EXPORT)
+        .map_err(|_| missing_prepare())?;
+    let saved = store.get_fuel().unwrap_or(0);
+    let _ = store.set_fuel(prepare_fuel.min(WASMI_FUEL_SLICE));
+    if run_fuel_slices(store, prepare, (), prepare_fuel, control, prepare_failed)? != 0 {
+        return Err(prepare_failed());
+    }
+    let _ = store.set_fuel(saved);
+    let exported: Vec<(String, wasmi::Global)> = instance
+        .exports(&*store)
+        .filter_map(|export| {
+            let name = export.name().to_string();
+            export.into_global().map(|global| (name, global))
+        })
+        .collect();
+    let mut globals: Vec<(String, GlobalValue)> = exported
+        .into_iter()
+        .filter(|(_, global)| global.ty(&*store).mutability().is_mut())
+        .filter_map(|(name, global)| from_wasmi(&global.get(&*store)).map(|v| (name, v)))
+        .collect();
+    globals.sort_by(|left, right| left.0.cmp(&right.0));
+    reuse.store(Snapshot {
+        memory: memory.data(&*store).to_vec(),
+        globals,
+    });
+    Ok(())
+}
+
+#[cfg(feature = "wasmi-executor")]
+fn to_wasmi(value: GlobalValue) -> wasmi::Val {
+    match value {
+        GlobalValue::I32(v) => wasmi::Val::I32(v),
+        GlobalValue::I64(v) => wasmi::Val::I64(v),
+        GlobalValue::F32(bits) => wasmi::Val::F32(wasmi::F32::from_bits(bits)),
+        GlobalValue::F64(bits) => wasmi::Val::F64(wasmi::F64::from_bits(bits)),
+    }
+}
+
+#[cfg(feature = "wasmi-executor")]
+fn from_wasmi(value: &wasmi::Val) -> Option<GlobalValue> {
+    match value {
+        wasmi::Val::I32(v) => Some(GlobalValue::I32(*v)),
+        wasmi::Val::I64(v) => Some(GlobalValue::I64(*v)),
+        wasmi::Val::F32(bits) => Some(GlobalValue::F32(bits.to_bits())),
+        wasmi::Val::F64(bits) => Some(GlobalValue::F64(bits.to_bits())),
+        _ => None,
+    }
+}
+
+/// Drives a resumable `wasmi` call in fuel slices, checking cancellation and
+/// the deadline between slices (Decision 104). The caller has already
+/// granted the first slice (`min(fuel, WASMI_FUEL_SLICE)`).
+#[cfg(feature = "wasmi-executor")]
+fn run_fuel_slices<Params: wasmi::WasmParams>(
+    store: &mut wasmi::Store<wasmi::StoreLimits>,
+    func: wasmi::TypedFunc<Params, i32>,
+    args: Params,
+    fuel: u64,
+    control: &SliceControl<'_>,
+    trapped: fn() -> HostConnectorError,
 ) -> Result<i32, HostConnectorError> {
     use wasmi::TypedResumableCall as Call;
 
-    let mut granted = limits.fuel.min(WASMI_FUEL_SLICE);
-    let trapped = || {
-        model_error_plain(
-            HostConnectorErrorCode::ExecutionFailed,
-            "model_execute trap or fuel exhausted",
-        )
-    };
+    let mut granted = fuel.min(WASMI_FUEL_SLICE);
     let mut call = func
         .call_resumable(&mut *store, args)
         .map_err(|_| trapped())?;
@@ -1953,10 +2279,10 @@ fn run_fuel_slices(
                 "model.execute exceeded timeout mid-run",
             ));
         }
-        if granted >= limits.fuel {
+        if granted >= fuel {
             return Err(trapped());
         }
-        let next = (limits.fuel - granted).min(WASMI_FUEL_SLICE);
+        let next = (fuel - granted).min(WASMI_FUEL_SLICE);
         granted += next;
         let _ = store.set_fuel(next);
         call = paused.resume(&mut *store).map_err(|_| trapped())?;
@@ -1971,6 +2297,7 @@ fn execute_wasmi_model(
     _input: &[u8],
     _limits: &GuestLimits,
     _control: &SliceControl<'_>,
+    _reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     Err(model_error_plain(
         HostConnectorErrorCode::Unavailable,
@@ -2043,6 +2370,7 @@ fn execute_wasm_cpu_model(
     _wasm: &[u8],
     _input: &[u8],
     _guest: &GuestLimits,
+    _reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     Err(HostConnectorError {
         code: HostConnectorErrorCode::Unavailable,
@@ -2209,7 +2537,7 @@ mod tests {
             Some(ModelFailureReason::ManifestInvalid)
         );
         let mut unknown_schema = fixture_package().manifest;
-        unknown_schema.schema_version = "2.2.0".to_string();
+        unknown_schema.schema_version = "9.9.9".to_string();
         assert_eq!(
             reason(&unknown_schema),
             Some(ModelFailureReason::ManifestInvalid)
@@ -2301,6 +2629,7 @@ mod tests {
             max_output_bytes: 4096,
             max_execution_ms: 5_000,
             offline_allowed: true,
+            max_prepare_fuel: None,
         };
         seal(VerifiedModelPackage {
             manifest,
@@ -3113,6 +3442,7 @@ mod tests {
             max_output_bytes: 4096,
             max_execution_ms: 5_000,
             offline_allowed: true,
+            max_prepare_fuel: None,
         };
         seal(VerifiedModelPackage {
             manifest,
@@ -4042,6 +4372,7 @@ mod tests {
             max_package_bytes: package_bytes,
             max_memory_bytes: parsed.max_memory_bytes,
             max_fuel: parsed.max_fuel,
+            ..HostModelLimits::default()
         };
         host.register_package(&manifest, wasm, &sig)
             .expect("exactly at the ceilings registers");
@@ -4158,6 +4489,494 @@ mod tests {
         assert_eq!(
             future.manifest.validate().expect_err("abi 3").reason,
             Some(ModelFailureReason::ManifestInvalid)
+        );
+    }
+    const PREPARED_V3_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/models/fixture-prepared-v3-1.0.0"
+    );
+    const PREPARED_V3_VECTOR: &str =
+        include_str!("../../../fixtures/models/conformance/signed-prepared-v3.json");
+
+    fn policy() -> ExecutionPolicy {
+        ExecutionPolicy {
+            policy_ref: "policy-1".to_string(),
+            allowed_classifications: vec!["sensitive".to_string()],
+            max_output_bytes: 4096,
+        }
+    }
+
+    /// Host with the checked-in signed v3 fixture registered on `engine`.
+    fn prepared_v3_host(engine: ModelEngine) -> (ExactModelHostConnector, String) {
+        let read = |name: &str| std::fs::read(format!("{PREPARED_V3_DIR}/{name}")).expect(name);
+        let manifest = read("model.manifest.json");
+        let digest = digest_hex(&manifest);
+        let mut host = trusted_host(vec![test_pin("fixture.prepared-v3", &digest)]);
+        host.engine = engine;
+        host.policies.insert("policy-1".to_string(), policy());
+        host.register_package(&manifest, read("model.wasm"), &read("model.sig.json"))
+            .expect("signed v3 fixture registers");
+        (host, digest)
+    }
+
+    fn run_prepared(
+        host: &mut ExactModelHostConnector,
+        digest: &str,
+        input: &[u8],
+        extras: serde_json::Map<String, Value>,
+    ) -> Result<Vec<u8>, HostConnectorError> {
+        let input_ref = host.io.stage_model_input(input, 4096).expect("stage");
+        let mut extras = extras;
+        extras.insert(
+            "model_ref".to_string(),
+            json!({"model_id": "fixture.prepared-v3", "version": "1.0.0", "digest": digest}),
+        );
+        let result = host.invoke(&execute_request(digest, &input_ref, extras))?;
+        Ok(host
+            .io
+            .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
+            .expect("read"))
+    }
+
+    #[test]
+    fn signed_v3_vector_is_identical_fresh_warm_and_without_reuse_on_both_engines() {
+        let vector: Value = serde_json::from_str(PREPARED_V3_VECTOR).expect("vector");
+        let cases = vector["cases"].as_array().expect("cases");
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            for budget in [HostModelLimits::default().max_snapshot_bytes, 0] {
+                let (mut host, digest) = prepared_v3_host(engine);
+                host.host_limits.max_snapshot_bytes = budget;
+                // Every case three times: cold (fresh path), then warm
+                // (snapshot path) twice. Any carried state changes the output.
+                for round in 0..3 {
+                    for case in cases {
+                        let input =
+                            hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
+                        let out = run_prepared(&mut host, &digest, &input, serde_json::Map::new())
+                            .expect("v3 execute");
+                        assert_eq!(
+                            hex_encode(&out),
+                            case["output_frame_hex"].as_str().expect("out"),
+                            "{engine:?} budget {budget} round {round}"
+                        );
+                    }
+                }
+                assert_eq!(host.snapshots.total_bytes() > 0, budget > 0, "{engine:?}");
+                host.shutdown();
+                assert_eq!(host.snapshots.total_bytes(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn v3_call_fuel_covers_only_the_run_on_cold_and_warm_caches() {
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, digest) = prepared_v3_host(engine);
+            // Enough for instantiate + alloc + execute, not for the
+            // ~256-iteration prepare loop as well.
+            let mut tight = serde_json::Map::new();
+            tight.insert("max_fuel".to_string(), json!(1_000));
+            for _ in 0..2 {
+                assert_eq!(
+                    run_prepared(&mut host, &digest, b"abc", tight.clone()).expect("fits"),
+                    [0x6a, 0x52, 0x36, 0x01],
+                    "{engine:?}"
+                );
+            }
+            // A prepare budget below the loop's need fails closed and keeps
+            // no snapshot.
+            let mut starved = prepared_package(engine, |m| m.max_prepare_fuel = Some(100));
+            let package_digest = starved.1.clone();
+            assert_eq!(
+                run_prepared(
+                    &mut starved.0,
+                    &package_digest,
+                    b"abc",
+                    serde_json::Map::new()
+                )
+                .expect_err("prepare fuel")
+                .code,
+                HostConnectorErrorCode::ExecutionFailed,
+                "{engine:?}"
+            );
+            assert_eq!(starved.0.snapshots.total_bytes(), 0);
+        }
+    }
+
+    /// Host whose only package is the v3 fixture with a mutated manifest
+    /// (bypasses signing: executor behaviour only).
+    fn prepared_package(
+        engine: ModelEngine,
+        tweak: impl FnOnce(&mut ModelPackageManifest),
+    ) -> (ExactModelHostConnector, String) {
+        prepared_guest(
+            engine,
+            std::fs::read(format!("{PREPARED_V3_DIR}/model.wasm")).expect("wasm"),
+            tweak,
+        )
+    }
+
+    fn prepared_guest(
+        engine: ModelEngine,
+        wasm: Vec<u8>,
+        tweak: impl FnOnce(&mut ModelPackageManifest),
+    ) -> (ExactModelHostConnector, String) {
+        let mut pkg = fixture_package();
+        pkg.wasm = wasm;
+        pkg.manifest.model_id = "fixture.prepared-v3".to_string();
+        pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
+        pkg.manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        pkg.manifest.abi_version = MODEL_GUEST_ABI_PREPARED;
+        pkg.manifest.max_prepare_fuel = Some(100_000);
+        pkg.manifest.max_memory_bytes = 4 * 65_536;
+        tweak(&mut pkg.manifest);
+        let digest = manifest_digest(&pkg.manifest);
+        let mut host = ExactModelHostConnector::new(
+            vec![test_pin("fixture.prepared-v3", &digest)],
+            TrustedModelKeys::new(),
+        );
+        host.model_usage = Some(ModelUsage::Commercial);
+        host.engine = engine;
+        host.policies.insert("policy-1".to_string(), policy());
+        host.packages.insert_verified(seal(pkg)).expect("insert");
+        (host, digest)
+    }
+
+    /// A snapshot-safe v3 guest: bump allocator over an exported heap, echo
+    /// execute, and `prepare` as the `model_prepare` body.
+    fn v3_guest(prepare: &str) -> Vec<u8> {
+        wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1 4)
+               (global $heap (export "heap") (mut i32) (i32.const 1024))
+               (func (export "model_prepare") (result i32) {prepare})
+               (func (export "model_alloc") (param $len i32) (result i32)
+                 (global.get $heap)
+                 (global.set $heap (i32.add (global.get $heap) (i32.const 4096))))
+               (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+                 (memory.copy (local.get 2) (local.get 0) (local.get 1))
+                 (local.get 1)))"#
+        ))
+        .expect("wat")
+    }
+
+    #[test]
+    fn v3_prepare_failures_fail_closed_and_store_no_snapshot() {
+        let cases = [
+            (v3_guest("i32.const 1"), HostConnectorErrorCode::ExecutionFailed),
+            (v3_guest("unreachable"), HostConnectorErrorCode::ExecutionFailed),
+            // The right name with the wrong signature cannot be called.
+            (
+                wat::parse_str(
+                    r#"(module (memory (export "memory") 1)
+                       (func (export "model_prepare") (param i32) (result i32) i32.const 0)
+                       (func (export "model_alloc") (param i32) (result i32) i32.const 64)
+                       (func (export "model_execute") (param i32 i32 i32 i32) (result i32) i32.const 0))"#,
+                )
+                .expect("wat"),
+                HostConnectorErrorCode::ModelIncompatible,
+            ),
+        ];
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            for (index, (wasm, code)) in cases.iter().enumerate() {
+                let (mut host, digest) = prepared_guest(engine, wasm.clone(), |_| {});
+                for _ in 0..2 {
+                    assert_eq!(
+                        run_prepared(&mut host, &digest, b"abc", serde_json::Map::new())
+                            .expect_err("fails closed")
+                            .code,
+                        *code,
+                        "{engine:?} case {index}"
+                    );
+                }
+                assert_eq!(host.snapshots.total_bytes(), 0);
+            }
+            let (mut ok, digest) = prepared_guest(engine, v3_guest("i32.const 0"), |_| {});
+            assert_eq!(
+                run_prepared(&mut ok, &digest, b"abc", serde_json::Map::new()).expect("echo"),
+                b"abc"
+            );
+        }
+    }
+
+    #[test]
+    fn wasmi_interrupts_a_running_prepare_and_keeps_no_snapshot() {
+        let spin = v3_guest("(loop $spin (br $spin)) i32.const 0");
+        let (mut host, digest) = prepared_guest(ModelEngine::Wasmi, spin.clone(), |m| {
+            m.max_prepare_fuel = Some(1_000 * WASMI_FUEL_SLICE);
+            m.max_fuel = 1_000 * WASMI_FUEL_SLICE;
+        });
+        let mut zero = serde_json::Map::new();
+        zero.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            run_prepared(&mut host, &digest, b"abc", zero)
+                .expect_err("timeout")
+                .code,
+            HostConnectorErrorCode::Timeout
+        );
+        host.cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            run_prepared(&mut host, &digest, b"abc", serde_json::Map::new())
+                .expect_err("cancel")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        assert_eq!(host.snapshots.total_bytes(), 0);
+        // Exhausting the prepare budget across several slices.
+        let (mut slices, digest) = prepared_guest(ModelEngine::Wasmi, spin, |m| {
+            m.max_prepare_fuel = Some(3 * WASMI_FUEL_SLICE + 7);
+        });
+        assert_eq!(
+            run_prepared(&mut slices, &digest, b"abc", serde_json::Map::new())
+                .expect_err("prepare fuel")
+                .code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
+    }
+
+    #[test]
+    fn snapshots_too_big_for_the_call_memory_ceiling_take_the_fresh_path() {
+        // Prepare grows memory to two pages and fails closed when it cannot.
+        let grower = v3_guest(
+            "(if (result i32) (i32.eq (memory.grow (i32.const 1)) (i32.const -1)) \
+             (then (i32.const 1)) (else (i32.const 0)))",
+        );
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, digest) = prepared_guest(engine, grower.clone(), |_| {});
+            let mut one_page = serde_json::Map::new();
+            one_page.insert("max_memory_bytes".to_string(), json!(65_536));
+            // Cold and warm give the same failure: the two-page snapshot is
+            // never forced into a one-page call.
+            let cold = run_prepared(&mut host, &digest, b"abc", one_page.clone())
+                .expect_err("cold")
+                .code;
+            run_prepared(&mut host, &digest, b"abc", serde_json::Map::new()).expect("warms");
+            assert!(host.snapshots.total_bytes() >= 2 * 65_536);
+            let warm = run_prepared(&mut host, &digest, b"abc", one_page)
+                .expect_err("warm")
+                .code;
+            assert_eq!(cold, HostConnectorErrorCode::ExecutionFailed, "{engine:?}");
+            assert_eq!(warm, cold, "{engine:?}");
+            // The restored two-page instance runs normally.
+            assert_eq!(
+                run_prepared(&mut host, &digest, b"xyz", serde_json::Map::new()).expect("warm"),
+                b"xyz"
+            );
+        }
+    }
+
+    #[test]
+    fn status_changes_digest_failures_and_shutdown_drop_snapshots() {
+        let (mut host, digest) = prepared_v3_host(ModelEngine::Wasmi);
+        let warm = |host: &mut ExactModelHostConnector| {
+            run_prepared(host, &digest, b"abc", serde_json::Map::new()).expect("run");
+            assert!(host.snapshots.total_bytes() > 0);
+        };
+        warm(&mut host);
+        // Re-applying an identical status map keeps the snapshot.
+        host.set_package_status(Vec::new());
+        assert!(host.snapshots.total_bytes() > 0);
+        let deprecated = PackageStatusEntry {
+            status: PackageStatus::Deprecated,
+            reason: "superseded".to_string(),
+        };
+        host.set_package_status([(digest.clone(), deprecated)]);
+        assert_eq!(host.snapshots.total_bytes(), 0);
+        warm(&mut host);
+        host.set_package_status(Vec::new());
+        assert_eq!(host.snapshots.total_bytes(), 0);
+        warm(&mut host);
+        if let Some(package) = host.packages.by_digest.get_mut(&digest) {
+            package.wasm.push(0);
+        }
+        assert_eq!(
+            run_prepared(&mut host, &digest, b"abc", serde_json::Map::new())
+                .expect_err("tampered")
+                .reason,
+            Some(ModelFailureReason::DigestMismatch)
+        );
+        assert_eq!(host.snapshots.total_bytes(), 0);
+    }
+
+    #[test]
+    fn manifest_and_registration_gate_guest_abi_v3() {
+        let reason =
+            |manifest: &ModelPackageManifest| manifest.validate().err().and_then(|e| e.reason);
+        let mut v3 = fixture_package().manifest;
+        v3.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        v3.abi_version = MODEL_GUEST_ABI_PREPARED;
+        v3.max_prepare_fuel = Some(1);
+        assert_eq!(reason(&v3), None);
+        let invalid = [
+            ModelPackageManifest {
+                max_prepare_fuel: None,
+                ..v3.clone()
+            },
+            ModelPackageManifest {
+                max_prepare_fuel: Some(0),
+                ..v3.clone()
+            },
+            ModelPackageManifest {
+                schema_version: MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION.to_string(),
+                ..v3.clone()
+            },
+            ModelPackageManifest {
+                abi_version: 2,
+                ..v3.clone()
+            },
+        ];
+        for manifest in &invalid {
+            assert_eq!(reason(manifest), Some(ModelFailureReason::ManifestInvalid));
+        }
+        // Schema 2.2.0 also carries v1/v2 packages and derivations.
+        let v2 = ModelPackageManifest {
+            abi_version: 2,
+            max_prepare_fuel: None,
+            ..v3.clone()
+        };
+        assert_eq!(reason(&v2), None);
+        let mut derived = derivative_manifest(CommercialUse::Allowed, CommercialUse::Allowed);
+        derived.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        assert_eq!(reason(&derived), None);
+        // The host fuel ceiling bounds the prepare budget too.
+        let limits = HostModelLimits {
+            max_fuel: 10,
+            ..HostModelLimits::default()
+        };
+        let mut over = v3.clone();
+        over.max_fuel = 10;
+        over.max_prepare_fuel = Some(11);
+        assert_eq!(
+            check_host_limits(&limits, &over, 0, 0)
+                .expect_err("prepare over host fuel")
+                .reason,
+            Some(ModelFailureReason::HostLimitExceeded)
+        );
+        // Registration runs the FR-053 module check.
+        let mut unsafe_guest = fixture_package();
+        unsafe_guest.wasm = wat::parse_str(
+            r#"(module (memory (export "memory") 1) (global (mut i32) (i32.const 0))
+               (func (export "model_prepare") (result i32) i32.const 0))"#,
+        )
+        .expect("wat");
+        unsafe_guest.manifest = ModelPackageManifest {
+            wasm_digest: digest_hex(&unsafe_guest.wasm),
+            ..v3
+        };
+        let error = ModelPackageStore::new()
+            .insert_verified(seal(unsafe_guest))
+            .expect_err("non-exported mutable global");
+        assert_eq!(error.code, HostConnectorErrorCode::ModelIncompatible);
+    }
+
+    #[test]
+    fn manifest_schema_2_2_0_matches_the_rust_type() {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../../contracts/connectors/traverse.model-runtime/schemas/model-package-manifest-2.2.0.json"
+        ))
+        .expect("schema");
+        assert_eq!(
+            schema["properties"]["schema_version"]["const"],
+            json!(MODEL_PACKAGE_SCHEMA_VERSION_PREPARED)
+        );
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(format!("{PREPARED_V3_DIR}/model.manifest.json")).expect("manifest"),
+        )
+        .expect("manifest json");
+        let mut expected: Vec<String> = manifest
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect();
+        // Accelerator variants are schema 2.2.0 but land with #1628.
+        expected.push("accelerator_variants".to_string());
+        expected.sort();
+        let mut properties: Vec<String> = schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect();
+        properties.sort();
+        assert_eq!(properties, expected);
+    }
+
+    #[test]
+    fn restore_fails_closed_when_the_store_cannot_hold_the_snapshot() {
+        let wasm = v3_guest("i32.const 0");
+        let snapshot = || Snapshot {
+            memory: vec![0; 2 * 65_536],
+            globals: Vec::new(),
+        };
+        let mut cache = SnapshotCache::default();
+        cache.insert("d", ModelEngine::Wasmtime, snapshot(), u64::MAX);
+        cache.insert("d", ModelEngine::Wasmi, snapshot(), u64::MAX);
+        let mut compiled = CompiledGuests::default();
+        {
+            use wasmtime::{Linker, Store, StoreLimitsBuilder};
+            let (engine, module) = compiled.wasmtime("k", &wasm).expect("compile");
+            let mut store = Store::new(
+                &engine,
+                StoreLimitsBuilder::new().memory_size(65_536).build(),
+            );
+            store.limiter(|state| state);
+            let _ = store.set_fuel(1_000);
+            let instance = Linker::new(&engine)
+                .instantiate(&mut store, &module)
+                .expect("instance");
+            let memory = instance.get_memory(&mut store, "memory").expect("memory");
+            let mut reuse = SnapshotReuse {
+                cache: &mut cache,
+                digest: "d",
+                engine: ModelEngine::Wasmtime,
+                budget: u64::MAX,
+            };
+            let error =
+                prepare_or_restore_wasmtime(&mut store, &instance, memory, 1, u64::MAX, &mut reuse)
+                    .expect_err("cannot grow");
+            assert_eq!(error.code, HostConnectorErrorCode::ResourceExhausted);
+        }
+        {
+            use wasmi::{Linker, Store, StoreLimitsBuilder};
+            let (engine, module) = compiled.wasmi("k", &wasm).expect("compile");
+            let mut store = Store::new(
+                &engine,
+                StoreLimitsBuilder::new().memory_size(65_536).build(),
+            );
+            store.limiter(|state| state);
+            let _ = store.set_fuel(1_000);
+            let instance = Linker::new(&engine)
+                .instantiate_and_start(&mut store, &module)
+                .expect("instance");
+            let memory = instance.get_memory(&store, "memory").expect("memory");
+            let mut reuse = SnapshotReuse {
+                cache: &mut cache,
+                digest: "d",
+                engine: ModelEngine::Wasmi,
+                budget: u64::MAX,
+            };
+            let cancel = AtomicBool::new(false);
+            let control = SliceControl {
+                cancel: &cancel,
+                deadline: Instant::now() + Duration::from_secs(5),
+            };
+            let error = prepare_or_restore_wasmi(
+                &mut store,
+                instance,
+                memory,
+                1,
+                u64::MAX,
+                &control,
+                &mut reuse,
+            )
+            .expect_err("cannot grow");
+            assert_eq!(error.code, HostConnectorErrorCode::ResourceExhausted);
+        }
+        // Reference values never reach a snapshot (registration rejects them).
+        assert_eq!(from_wasmtime(&wasmtime::Val::FuncRef(None)), None);
+        assert_eq!(
+            from_wasmi(&wasmi::Val::default_for_ty(wasmi::ValType::FuncRef)),
+            None
         );
     }
 }

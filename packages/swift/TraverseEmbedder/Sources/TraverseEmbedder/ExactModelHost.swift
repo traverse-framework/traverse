@@ -150,13 +150,18 @@ public struct ExactModelHostLimits: Sendable, Equatable {
     public let maxMemoryBytes: UInt64
     /// `wasmi` fuel units (engine-relative; Spec 138 FR-030).
     public let maxFuel: UInt64
+    /// Bytes of guest ABI v3 post-prepare snapshots kept in memory (Spec 138
+    /// FR-055). Over budget, calls take the slower fresh path; `0` disables reuse.
+    public let maxSnapshotBytes: UInt64
 
     public init(maxPackageBytes: UInt64 = 128 * 1024 * 1024,
                 maxMemoryBytes: UInt64 = 256 * 1024 * 1024,
-                maxFuel: UInt64 = 20_000_000_000) {
+                maxFuel: UInt64 = 20_000_000_000,
+                maxSnapshotBytes: UInt64 = 256 * 1024 * 1024) {
         self.maxPackageBytes = maxPackageBytes
         self.maxMemoryBytes = maxMemoryBytes
         self.maxFuel = maxFuel
+        self.maxSnapshotBytes = maxSnapshotBytes
     }
 }
 
@@ -202,6 +207,7 @@ public final class ExactModelHost: @unchecked Sendable {
                 "max_package_bytes": limits.maxPackageBytes,
                 "max_memory_bytes": limits.maxMemoryBytes,
                 "max_fuel": limits.maxFuel,
+                "max_snapshot_bytes": limits.maxSnapshotBytes,
             ],
         ]
         if let modelUsage { header["model_usage"] = modelUsage }
