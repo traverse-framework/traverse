@@ -11,6 +11,9 @@ android {
     defaultConfig {
         minSdk = 28
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // #1611: each instrumented test runs in its own process (orchestrator), so one test can
+        // make the native library fail to load without affecting the others.
+        testInstrumentationRunnerArguments["clearPackageData"] = "true"
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -24,6 +27,12 @@ android {
     // that scripts/build_android_host_ndk.sh cross-builds land in
     // build/jniLibs and ship inside the AAR (nothing binary is committed).
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("jniLibs"))
+
+    // #1611: instrumented tests read the signed fixtures and the rights suite
+    // from the test APK's assets (repository `fixtures/models`).
+    sourceSets["androidTest"].assets.srcDir(rootProject.file("../../../fixtures/models"))
+
+    testOptions { execution = "ANDROIDX_TEST_ORCHESTRATOR" }
 }
 
 // Decision 108: Kotlin unit tests load the host-JVM build of the Android JNI
@@ -49,6 +58,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.dylibso.chicory:wabt:1.7.5")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestUtil("androidx.test:orchestrator:1.5.1")
 }
 
 mavenPublishing {

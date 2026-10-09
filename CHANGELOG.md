@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Android emulator tests for Kotlin exact-ref model execution (#1611)
+
+- New `android-emulator-tests` CI job. It boots an `x86_64` API 34
+  emulator with KVM and a cached AVD snapshot, and runs the Kotlin model
+  host's instrumented tests against the cargo-ndk library the AAR ships,
+  loaded with `System.loadLibrary`:
+  - the signed vectors byte-for-byte (classifier, digits-mlp, digits-onnx,
+    and prepared-v3 fresh and warm);
+  - the shared 21-case rights suite;
+  - a fail-closed load test (`engine_unavailable`).
+- Tests run under the Android Test Orchestrator, one process per test. The
+  job is documented in `docs/android-emulator-tests.md`.
+- Spec 138 0.13.1 amends FR-048.
+
 ### .NET exact-ref model execution (Decision 111, #1642)
 
 - New `ExactModelHost` in the .NET `TraverseEmbedder`, built on the shared

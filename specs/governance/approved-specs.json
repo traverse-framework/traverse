@@ -1920,7 +1920,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1954,6 +1954,7 @@
         "crates/traverse-android-host/",
         "scripts/build_android_host_jvm.sh",
         "docs/adr/0079-android-host-model-call-jni.md",
+        "docs/android-emulator-tests.md",
         "crates/traverse-dotnet-host/",
         "scripts/build_dotnet_host_native.sh",
         "docs/adr/0081-dotnet-host-model-call-pinvoke.md",

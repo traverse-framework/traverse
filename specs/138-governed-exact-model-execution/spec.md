@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.13.0
+**Version**: 0.13.1
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -127,6 +127,12 @@ ADR-0081 / `#1642`. Adds **.NET** model execution:
   interruption without an in-process signer.
 
 FR-067 is new; FR-057 names the .NET host. Additive.
+**Amendment (2026-10-09, version 0.13.0 -> 0.13.1, approved under Decision 108)**: `#1611`.
+Android-emulator coverage has landed, so FR-048 is amended. The Kotlin
+embedder MUST also pass the signed vectors and the rights suite as
+instrumented tests on an `x86_64` emulator, loading the AAR's cargo-ndk
+library, and MUST prove the fail-closed load there. Testing only; no
+behaviour change.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -857,8 +863,11 @@ Traverse MUST:
   fallback engine.
 - **FR-048**: The Kotlin embedder MUST pass the signed vectors byte-for-byte
   (classifier, digits-mlp, digits-onnx) and the shared rights conformance
-  suite. Until Android-emulator coverage lands (`#1611`), it runs them on a
-  host-JVM build of the same JNI library.
+  suite. It runs them both on a host-JVM build of the same JNI library (unit
+  tests) and as instrumented tests on an `x86_64` Android emulator that
+  loads the AAR's cargo-ndk library through `System.loadLibrary`, where a
+  failed load MUST give `engine_unavailable` (0.13.1, `#1611`,
+  `docs/android-emulator-tests.md`).
 - **FR-049**: The production model-signing private key MUST exist only as
   the `MODEL_SIGNING_KEY_HEX` secret of the protected `model-signing`
   environment. It MUST be used only by the `workflow_dispatch`-only signing

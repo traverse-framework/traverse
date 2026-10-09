@@ -340,6 +340,87 @@ jobs:
       - name: Test the .NET embedder against the linux-x64 model host
         run: dotnet test packages/dotnet/TraverseEmbedder/TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj
 
+  # #1611 (Decision 108 follow-up): boot an x86_64 Android emulator and run
+  # the Kotlin model host's instrumented tests against the cargo-ndk library
+  # the AAR ships (signed vectors, rights suite, fail-closed loading). See
+  # docs/android-emulator-tests.md for runtime, flakiness mitigations, and
+  # how to run it locally.
+  android-emulator-tests:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      API_LEVEL: 34
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Cross-build traverse-android-host (arm64-v8a, x86_64)
+        run: bash scripts/build_android_host_ndk.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/jniLibs
+
+      - name: Cache the emulator image and snapshot
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ env.API_LEVEL }}-x86_64-google_apis
+
+      - name: Create the emulator snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.API_LEVEL }}
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Created the emulator snapshot for caching."
+
+      - name: Run the instrumented model-host tests on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ env.API_LEVEL }}
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: packages/kotlin/TraverseEmbedder
+          script: gradle --no-daemon :traverse-embedder:connectedDebugAndroidTest
+
+      - name: Upload instrumented test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-emulator-test-reports
+          path: packages/kotlin/TraverseEmbedder/traverse-embedder/build/reports/androidTests/
+
   coverage-gate:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
