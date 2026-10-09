@@ -2044,6 +2044,48 @@ mod tests {
     }
 
     #[test]
+    fn read_zip_member_bounded_rejects_a_member_whose_bytes_exceed_the_declared_size() {
+        let root = temp_root("lying-member-size");
+        let path = root.join("lie.zip");
+        let payload = b"hello";
+        {
+            let file = File::create(&path).expect("create");
+            let mut zip = ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zip.start_file("a", options).expect("start");
+            zip.write_all(payload).expect("write");
+            zip.finish().expect("finish");
+        }
+        let mut bytes = fs::read(&path).expect("read zip");
+        patch_uncompressed_size(&mut bytes, 1);
+        fs::write(&path, &bytes).expect("rewrite zip");
+        let file = File::open(&path).expect("open");
+        let mut archive = ZipArchive::new(file).expect("archive");
+        let mut member = archive.by_index(0).expect("member");
+        assert!(member.size() <= 3);
+        let mut output = Vec::new();
+        let error = super::read_zip_member_bounded(&mut member, 3, &mut output)
+            .expect_err("bytes past the ceiling");
+        assert_eq!(error.to_string(), "member_too_large");
+    }
+
+    fn patch_uncompressed_size(bytes: &mut [u8], size: u32) {
+        let local = b"PK\x03\x04";
+        let central = b"PK\x01\x02";
+        let encoded = size.to_le_bytes();
+        let mut index = 0;
+        while index + 28 < bytes.len() {
+            if bytes[index..].starts_with(local) {
+                bytes[index + 22..index + 26].copy_from_slice(&encoded);
+            } else if bytes[index..].starts_with(central) {
+                bytes[index + 24..index + 28].copy_from_slice(&encoded);
+            }
+            index += 1;
+        }
+    }
+
+    #[test]
     fn open_and_backup_surface_io_failures_without_weakening_fail_closed() {
         let file_root = temp_root("file-root");
         fs::remove_dir(&file_root).expect("remove dir");

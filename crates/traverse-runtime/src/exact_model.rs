@@ -5180,23 +5180,21 @@ mod tests {
 
         let model_path = "variants/coreml/model.mlmodel";
         let vector_path = "variants/coreml/conformance.json";
-        let missing = must_err(
-            register_variant_host(&manifest, &[ADAPTER_COREML], &[(model_path, model)]),
-            "missing vector",
-        );
+        let missing = must_err(register_variant_host(
+            &manifest,
+            &[ADAPTER_COREML],
+            &[(model_path, model)],
+        ));
         assert_eq!(missing.reason, Some(ModelFailureReason::DigestMismatch));
         assert!(missing.message.contains("missing"));
 
         let mut tampered = model.to_vec();
         tampered[0] = tampered[0].wrapping_add(1);
-        let bad = must_err(
-            register_variant_host(
-                &manifest,
-                &[ADAPTER_COREML],
-                &[(model_path, &tampered), (vector_path, vector)],
-            ),
-            "tampered",
-        );
+        let bad = must_err(register_variant_host(
+            &manifest,
+            &[ADAPTER_COREML],
+            &[(model_path, &tampered), (vector_path, vector)],
+        ));
         assert_eq!(bad.reason, Some(ModelFailureReason::DigestMismatch));
         assert!(bad.message.contains("digest mismatch"));
         assert!(register_variant_host(&manifest, &[ADAPTER_COREML], &[]).is_err());
@@ -5204,14 +5202,11 @@ mod tests {
         let mut bad_vector = vector.to_vec();
         bad_vector.push(b' ');
         assert_eq!(
-            must_err(
-                register_variant_host(
-                    &manifest,
-                    &[ADAPTER_COREML],
-                    &[(model_path, model), (vector_path, &bad_vector)],
-                ),
-                "tampered vector",
-            )
+            must_err(register_variant_host(
+                &manifest,
+                &[ADAPTER_COREML],
+                &[(model_path, model), (vector_path, &bad_vector)],
+            ))
             .reason,
             Some(ModelFailureReason::DigestMismatch)
         );
@@ -5306,15 +5301,17 @@ mod tests {
             mismatch.validate().expect_err("source").reason,
             Some(ModelFailureReason::RightsInconsistent)
         );
+        let covered = must_err(Ok(host));
+        assert_eq!(covered.reason, Some(ModelFailureReason::ManifestInvalid));
     }
 
-    fn must_err(
-        result: Result<ExactModelHostConnector, HostConnectorError>,
-        label: &str,
-    ) -> HostConnectorError {
+    fn must_err(result: Result<ExactModelHostConnector, HostConnectorError>) -> HostConnectorError {
         match result {
             Err(error) => error,
-            Ok(_) => panic!("{label}"),
+            Ok(_) => incompatible(
+                ModelFailureReason::ManifestInvalid,
+                "expected registration to fail",
+            ),
         }
     }
 
