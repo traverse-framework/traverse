@@ -76,5 +76,21 @@ to v3 all come from Rust.
 
 The tests build the library for the current machine
 (`scripts/build_dotnet_host_native.sh`), so `dotnet test` needs a Rust
-toolchain. Shipped native assets for `win-x64`, `win-arm64`, and `linux-x64`
-come from the publish workflow (#1643).
+toolchain.
+
+The NuGet package ships the library for `win-x64`, `win-arm64`, and
+`linux-x64` under `runtimes/<rid>/native/`, and .NET loads the right one
+automatically (#1643). The publish workflow
+(`.github/workflows/dotnet-embedder-publish.yml`) does the following:
+- builds both Windows libraries with MSVC on `windows-latest`, and runs the
+  .NET tests against `win-x64` (`win-arm64` is built but not run);
+- builds `linux-x64` and runs the tests there;
+- packs all three, verifies they are in the `.nupkg`
+  (`scripts/ci/dotnet_nupkg_native_check.sh`), and loads the engine from the
+  installed package in a throwaway console app
+  (`scripts/ci/dotnet_nupkg_consumer_smoke.sh`).
+
+Pull requests that change the .NET package, the native host, or the
+pipeline run the same steps as a dry run, which never pushes. On other
+platforms (for example macOS) the package still installs, and model calls
+fail closed with `engine_unavailable`.

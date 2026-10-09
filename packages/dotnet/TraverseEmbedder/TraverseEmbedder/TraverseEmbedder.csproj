@@ -15,4 +15,14 @@
   <ItemGroup>
     <PackageReference Include="Wasmtime" Version="44.0.0" />
   </ItemGroup>
+  <!--
+    Decision 111 / #1643: the traverse-dotnet-host model engine for each shipped
+    runtime ID (win-x64, win-arm64, linux-x64). The publish workflow stages them
+    under runtimes/<rid>/native/ before `dotnet pack`; nothing is committed, and
+    a build without them still works (model calls then fail closed with
+    engine_unavailable).
+  -->
+  <ItemGroup Condition="Exists('runtimes')">
+    <None Include="runtimes/**/native/*" Pack="true" PackagePath="runtimes/" />
+  </ItemGroup>
 </Project>

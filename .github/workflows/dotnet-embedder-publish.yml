@@ -13,13 +13,73 @@ on:
           fix (e.g. main), not the tag itself, since a tag's own copy of this
           file is frozen at whatever it looked like when the tag was pushed.
         required: true
+  # Decision 111 / #1643: a dry run (build, test, pack, verify; never push) on
+  # pull requests that change the .NET package, its native model host, or this
+  # pipeline, so the Windows build is proven before a release depends on it.
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-embedder-publish.yml"
+      - "packages/dotnet/**"
+      - "crates/traverse-dotnet-host/**"
+      - "crates/traverse-model-host-frame/**"
+      - "scripts/build_dotnet_host_native.sh"
+      - "scripts/ci/dotnet_nupkg_*.sh"
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
+  # Decision 111: build the traverse-dotnet-host model engine for win-x64 and
+  # win-arm64 with native MSVC, and run the .NET model tests against the
+  # win-x64 library before it ships. win-arm64 is built, not run (no arm64
+  # runner).
+  windows-native:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+
+      - name: Build traverse-dotnet-host (win-x64, win-arm64)
+        run: |
+          cargo build --release --locked -p traverse-dotnet-host --target x86_64-pc-windows-msvc
+          cargo build --release --locked -p traverse-dotnet-host --target aarch64-pc-windows-msvc
+          New-Item -ItemType Directory -Force native/runtimes/win-x64/native, native/runtimes/win-arm64/native | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/traverse_dotnet_host.dll native/runtimes/win-x64/native/
+          Copy-Item target/aarch64-pc-windows-msvc/release/traverse_dotnet_host.dll native/runtimes/win-arm64/native/
+
+      # The test project's own native build step uses bash, which on Windows
+      # can resolve to WSL; skip it and place the win-x64 library that ships.
+      - name: Test the .NET embedder against the win-x64 library
+        working-directory: packages/dotnet/TraverseEmbedder
+        run: |
+          dotnet build TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj --configuration Release -p:TraverseSkipNativeModelHost=true
+          Copy-Item ../../../native/runtimes/win-x64/native/traverse_dotnet_host.dll TraverseEmbedder.Tests/bin/Release/net8.0/
+          dotnet test TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj --configuration Release --no-build
+
+      - name: Upload the Windows native libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: dotnet-native-windows
+          path: native/runtimes/
+          if-no-files-found: error
+
   publish:
+    needs: windows-native
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,14 +99,13 @@ jobs:
         with:
           toolchain: 1.94.0
 
-      - name: Resolve release tag
+      - name: Resolve the package version
         working-directory: .
         shell: bash
-        run: echo "RELEASE_TAG=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
-
-      - name: Verify release tag matches Cargo workspace version
-        working-directory: .
-        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           workspace_version="$(awk '
@@ -60,9 +119,15 @@ jobs:
             }
             END { if (!found) exit 1 }
           ' Cargo.toml)"
-          tag_version="${RELEASE_TAG#v}"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            # Dry run: the workspace version, never pushed.
+            echo "TAG_VERSION=${workspace_version}" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          release_tag="${INPUT_TAG:-${REF_NAME}}"
+          tag_version="${release_tag#v}"
           if [[ "${workspace_version}" != "${tag_version}" ]]; then
-            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${RELEASE_TAG}." >&2
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${release_tag}." >&2
             exit 1
           fi
           echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
@@ -73,21 +138,41 @@ jobs:
       - name: Test
         run: dotnet test TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj --configuration Release
 
+      - name: Download the Windows native libraries
+        uses: actions/download-artifact@v7
+        with:
+          name: dotnet-native-windows
+          path: packages/dotnet/TraverseEmbedder/TraverseEmbedder/runtimes/
+
+      - name: Build traverse-dotnet-host (linux-x64)
+        working-directory: .
+        run: bash scripts/build_dotnet_host_native.sh packages/dotnet/TraverseEmbedder/TraverseEmbedder/runtimes/linux-x64/native
+
       - name: Pack
         run: dotnet pack TraverseEmbedder/TraverseEmbedder.csproj --configuration Release -p:Version=${TAG_VERSION} --output ./artifacts
+
+      - name: Verify the package carries every native model host
+        working-directory: .
+        run: bash scripts/ci/dotnet_nupkg_native_check.sh "packages/dotnet/TraverseEmbedder/artifacts/TraverseEmbedder.${TAG_VERSION}.nupkg"
+
+      - name: Load the native model host from the installed package (linux-x64)
+        working-directory: .
+        run: bash scripts/ci/dotnet_nupkg_consumer_smoke.sh packages/dotnet/TraverseEmbedder/artifacts "${TAG_VERSION}"
 
       # Trusted Publishing (OIDC): the id-token above is exchanged for a
       # short-lived nuget.org API key, so no long-lived secret is stored in
       # this repo. Requires the "dotnet-embedder-publish.yml" trusted
       # publisher policy already configured on nuget.org for this exact
-      # workflow file name and repository.
+      # workflow file name and repository. Never runs for a pull-request dry run.
       - name: NuGet login (OIDC -> temp API key)
+        if: github.event_name != 'pull_request'
         uses: NuGet/login@v1
         id: login
         with:
           user: enrico.piovesan
 
       - name: Push (idempotent on an already-published version)
+        if: github.event_name != 'pull_request'
         run: |
           dotnet nuget push "./artifacts/TraverseEmbedder.${TAG_VERSION}.nupkg" \
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \

@@ -1,0 +1,3 @@
+# Decision 111 / #1643: native model hosts staged by the publish workflow
+# (runtimes/<rid>/native/), never committed.
+runtimes/

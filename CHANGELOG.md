@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### .NET native model host in the NuGet package (Decision 111, #1643)
+
+- `TraverseEmbedder` now ships `traverse_dotnet_host` for `win-x64`,
+  `win-arm64` and `linux-x64` under `runtimes/<rid>/native/`. Nothing is
+  committed; the publish workflow builds the libraries.
+- A new `windows-native` job builds both Windows libraries with MSVC and runs
+  the .NET model tests against `win-x64`.
+- Before any push, the publish job checks that the package carries all three
+  libraries (and that the `linux-x64` one exports exactly the two audited
+  functions). It also loads the engine from the installed package in a
+  throwaway console app.
+- Pull requests that touch the .NET package, the native host, or the
+  pipeline run the publish workflow as a dry run, which never pushes.
+
 ### Android emulator tests for Kotlin exact-ref model execution (#1611)
 
 - New `android-emulator-tests` CI job. It boots an `x86_64` API 34
