@@ -21,7 +21,7 @@ wasmtime-wasi = { version = "44", optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "auto-dispatch", "simd"], optional = true }
 # Guest ABI v3 registration checks (Spec 138 FR-053). Same version and
 # features wasmi already uses, so native hosts gain no new code.
-wasmparser = { version = "0.228.0", default-features = false, features = ["std", "simd"] }
+wasmparser = { version = "0.259.0", default-features = false, features = ["std", "simd"] }
 uuid = { version = "1", features = ["v4", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 rayon = { version = "1.11", optional = true }

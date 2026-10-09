@@ -2863,7 +2863,7 @@ dependencies = [
  "traverse-registry",
  "uuid",
  "wasmi",
- "wasmparser 0.228.0",
+ "wasmparser 0.259.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
