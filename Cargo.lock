@@ -2764,6 +2764,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-dotnet-host"
+version = "0.14.0"
+dependencies = [
+ "serde_json",
+ "traverse-model-host-frame",
+]
+
+[[package]]
 name = "traverse-embedder"
 version = "0.14.0"
 dependencies = [

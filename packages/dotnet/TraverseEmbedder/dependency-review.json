@@ -5,5 +5,13 @@
   "license": "Apache-2.0",
   "source": "https://github.com/bytecodealliance/wasmtime-dotnet",
   "supported_hosts": "net8.0 and Windows/WinUI targets compatible with net8.0",
-  "security_boundary": "No WASI linkage or host imports; SHA-256 verified before compilation; 32 MiB default artifact and runtime-memory limits; 10,000,000 fuel and 30-second epoch deadline per bridge call"
+  "security_boundary": "No WASI linkage or host imports; SHA-256 verified before compilation; 32 MiB default artifact and runtime-memory limits; 10,000,000 fuel and 30-second epoch deadline per bridge call",
+  "native_model_host": {
+    "reviewed_at": "2026-10-09",
+    "library": "traverse_dotnet_host (crates/traverse-dotnet-host, built from this repository)",
+    "engine": "wasmi (via traverse-model-host-frame), the same engine as the Swift and Kotlin hosts",
+    "license": "same as Traverse",
+    "boundary": "Two audited P/Invoke functions (ADR-0081); Spec 138 rules stay in Rust; fails closed with engine_unavailable when the library cannot load",
+    "shipped_rids": "win-x64, win-arm64, linux-x64 (publish workflow, #1643)"
+  }
 }
