@@ -77,6 +77,22 @@ const fixtures = [
     schema_version: "2.2.0",
     max_prepare_fuel: 100000,
   },
+  // Interruption fixture (Decision 111, #1642): model_execute never returns,
+  // so hosts without an in-process signer (.NET) can prove mid-run
+  // cancellation and deadlines against a signed package.
+  {
+    dir: "fixture-looper-1.0.0",
+    model_id: "fixture.looper",
+    attribution: "Traverse Spec 138 interruption conformance fixture",
+    input: ["schema:fixture-in", "schema:fixture-out"],
+    limits: {
+      max_memory_bytes: 131072,
+      max_fuel: 9000000000,
+      max_input_bytes: 4096,
+      max_output_bytes: 64,
+      max_execution_ms: 60000,
+    },
+  },
   // First trained model (Decision 102, #1461). model.wasm is built from
   // crates/traverse-digits-mlp-guest; limits come from measured usage
   // (~56k fuel per inference, one 64 KiB page, 268-byte input, 56-byte output).

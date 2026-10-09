@@ -315,6 +315,31 @@ jobs:
       - name: Verify the AAR carries both ABIs
         run: bash scripts/ci/android_aar_check.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/outputs/aar/traverse-embedder-release.aar
 
+  # Decision 111 (#1642): build the .NET P/Invoke model host for linux-x64
+  # and run the .NET model tests (signed vectors, rights suite, mid-run
+  # cancellation, fail-closed loading) against it, on every PR.
+  dotnet-model-host:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test the .NET embedder against the linux-x64 model host
+        run: dotnet test packages/dotnet/TraverseEmbedder/TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj
+
   coverage-gate:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'

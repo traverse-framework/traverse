@@ -3,6 +3,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- LibraryImport for the audited traverse-dotnet-host P/Invoke boundary (ADR-0081). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>TraverseEmbedder</PackageId>
     <Version>0.1.0</Version>
     <Description>Traverse embedder-api/1.1.0 public .NET boundary.</Description>

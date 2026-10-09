@@ -6,6 +6,8 @@ readonly swift_boundary="crates/traverse-swift-host/src/lib.rs"
 readonly runtime_wasm_boundary="crates/traverse-runtime-wasm/src/lib.rs"
 # ADR-0079 / Decision 108: the Android JNI shim for Spec 138 model execution.
 readonly android_boundary="crates/traverse-android-host/src/lib.rs"
+# ADR-0081 / Decision 111: the .NET P/Invoke shim for Spec 138 model execution.
+readonly dotnet_boundary="crates/traverse-dotnet-host/src/lib.rs"
 readonly expedition_boundary="crates/traverse-expedition-wasm/src/wasi_stdio.rs"
 readonly expedition_root="crates/traverse-expedition-wasm/src/main.rs"
 # ADR-0077: the trained digits MLP guest's Spec 138 ABI boundary.
@@ -23,7 +25,7 @@ fi
 # ADR-0073 / spec 1402 FR-011: a second, independently audited crate-level
 # opt-out for the runtime.wasm nested-executor's C-ABI export boundary —
 # same pattern as the Swift boundary, not a general loosening.
-allowed_opt_outs=("${swift_boundary}" "${runtime_wasm_boundary}" "${android_boundary}")
+allowed_opt_outs=("${swift_boundary}" "${runtime_wasm_boundary}" "${android_boundary}" "${dotnet_boundary}")
 opt_outs=()
 while IFS= read -r path; do
   opt_outs+=("${path}")
@@ -42,8 +44,8 @@ while IFS= read -r path; do
   unsafe_files+=("${path}")
 done < <(grep -RIl --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
 for path in "${unsafe_files[@]}"; do
-  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${android_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" && "${path}" != "${onnx_runner_boundary}" ]]; then
-    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${android_boundary}, ${expedition_boundary}, ${digits_guest_boundary}, or ${onnx_runner_boundary}." >&2
+  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${android_boundary}" && "${path}" != "${dotnet_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" && "${path}" != "${onnx_runner_boundary}" ]]; then
+    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${android_boundary}, ${dotnet_boundary}, ${expedition_boundary}, ${digits_guest_boundary}, or ${onnx_runner_boundary}." >&2
     exit 1
   fi
 done
@@ -185,6 +187,14 @@ if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${android_boundary}")" -ne 1 ]] ||
 fi
 if grep -Eq 'unsafe[[:space:]]*(\{|fn|impl|trait|extern)' "${android_boundary}"; then
   echo "The Android host may not contain unsafe blocks, functions, impls, or extern blocks." >&2
+  exit 1
+fi
+
+# ADR-0081: exactly two exported C functions, the framed call and its free.
+if [[ "$(grep -Fc '#[unsafe(no_mangle)]' "${dotnet_boundary}")" -ne 2 ]] ||
+  [[ "$(grep -Fc 'pub unsafe extern "C" fn traverse_dotnet_host_model_call(' "${dotnet_boundary}")" -ne 1 ]] ||
+  [[ "$(grep -Fc 'pub unsafe extern "C" fn traverse_dotnet_host_free(' "${dotnet_boundary}")" -ne 1 ]]; then
+  echo "The .NET host must export exactly two audited C functions (model_call and free)." >&2
   exit 1
 fi
 

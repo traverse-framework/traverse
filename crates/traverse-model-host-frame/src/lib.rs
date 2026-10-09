@@ -51,7 +51,7 @@ pub enum EnvelopeError {
 pub struct HostProfile {
     /// Host-connector binding id.
     pub binding_id: &'static str,
-    /// Target family (`apple`, `android`).
+    /// Target family (`apple`, `android`, `dotnet`).
     pub target_family: &'static str,
 }
 
@@ -65,6 +65,12 @@ pub const APPLE: HostProfile = HostProfile {
 pub const ANDROID: HostProfile = HostProfile {
     binding_id: "android-exact-model-host",
     target_family: "android",
+};
+
+/// The .NET P/Invoke shim (`traverse-dotnet-host`, Decision 111).
+pub const DOTNET: HostProfile = HostProfile {
+    binding_id: "dotnet-exact-model-host",
+    target_family: "dotnet",
 };
 
 struct ModelHost {

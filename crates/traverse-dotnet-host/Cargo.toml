@@ -1,0 +1,20 @@
+[package]
+name = "traverse-dotnet-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = ".NET P/Invoke shim for the framed Spec 138 exact-ref model host (Decision 111)."
+publish = false
+
+[lib]
+# cdylib: the .dll / .so / .dylib the .NET package loads; rlib: Rust unit tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = "1.0.145"
+traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.14.0" }
+
+[lints]
+workspace = true
