@@ -18,7 +18,8 @@ public sealed class ExactModelHostTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, path);
+            // Join, unlike Combine, never drops the directory for a rooted path.
+            var candidate = Path.Join(directory.FullName, path);
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -399,12 +400,10 @@ public sealed class ExactModelHostTests
     [Fact]
     public void MalformedResponsesAndPinsFailClosed()
     {
-        foreach (var response in new[] { Array.Empty<byte>(), [200, 0, 0, 0, 1], Encoding.UTF8.GetBytes("\u0001\0\0\0[") })
-        {
-            var error = Assert.Throws<ExactModelException>(() => new ExactModelHost(
-                [], [], "commercial", false, null, (_, _) => response));
-            Assert.Equal("unavailable", error.Code);
-        }
+        var codes = new[] { Array.Empty<byte>(), [200, 0, 0, 0, 1], Encoding.UTF8.GetBytes("\u0001\0\0\0[") }
+            .Select(response => Assert.Throws<ExactModelException>(() => new ExactModelHost(
+                [], [], "commercial", false, null, (_, _) => response)).Code);
+        Assert.All(codes, code => Assert.Equal("unavailable", code));
 
         var noHandle = Assert.Throws<ExactModelException>(() => new ExactModelHost(
             [], [], "commercial", false, null,
