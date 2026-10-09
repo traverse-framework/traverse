@@ -230,6 +230,8 @@ export {
   TRAVERSE_MODEL_SIGNING_KEYS,
   encodeGuestFrame,
   modelSigningKeyId,
+  variantsToFetch,
+  ADAPTER_COREML,
 } from "./exactModel.js";
 export type {
   CommercialUse,
@@ -240,6 +242,8 @@ export type {
   ModelFailureReason,
   ModelPackageManifest,
   ModelPackageSignature,
+  AcceleratorVariant,
+  VariantConversion,
   ModelRights,
   ModelRightsDenialDetail,
   ModelRightsRecord,

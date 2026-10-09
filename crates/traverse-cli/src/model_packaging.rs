@@ -494,6 +494,7 @@ fn manifest_bytes(
         max_execution_ms: spec.max_execution_ms,
         offline_allowed: spec.offline_allowed,
         max_prepare_fuel: Some(spec.max_prepare_fuel),
+        accelerator_variants: None,
     };
     manifest
         .validate()
@@ -521,6 +522,112 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
+/// `conversion.tool` recorded on a variant `model convert-coreml` produced.
+pub(crate) const COREML_CONVERT_TOOL: &str = "traverse-coreml";
+/// `conversion.tool_version` for [`convert_onnx_to_mlmodel`].
+pub(crate) const COREML_CONVERT_TOOL_VERSION: &str = "1";
+
+/// Deterministic ONNX → uncompressed Core ML `.mlmodel` (Spec 138 FR-058).
+///
+/// The document is a specificationVersion 3 `CustomModel` whose `onnx`
+/// parameter is the exact source bytes, so the same ONNX always yields the
+/// same file. Device compilation and the Swift adapter are #1629.
+///
+/// # Errors
+///
+/// Returns an error when `onnx` is empty.
+pub(crate) fn convert_onnx_to_mlmodel(onnx: &[u8]) -> Result<Vec<u8>, String> {
+    if onnx.is_empty() {
+        return Err("ONNX model is empty".to_string());
+    }
+    let custom = custom_model(onnx);
+    let description = model_description();
+    let mut model = Vec::new();
+    model.extend(proto_varint_field(1, 3));
+    model.extend(proto_bytes_field(2, &description));
+    model.extend(proto_bytes_field(555, &custom));
+    Ok(model)
+}
+
+fn custom_model(onnx: &[u8]) -> Vec<u8> {
+    let param = proto_bytes_field(60, onnx);
+    let mut entry = proto_string_field(1, "onnx");
+    entry.extend(proto_bytes_field(2, &param));
+    let mut model = proto_string_field(10, "dev.traverse.model.OnnxBlob");
+    model.extend(proto_bytes_field(30, &entry));
+    model.extend(proto_string_field(
+        40,
+        "Deterministic ONNX source packed as one uncompressed Core ML model.",
+    ));
+    model
+}
+
+fn model_description() -> Vec<u8> {
+    let input = feature("input");
+    let output = feature("output");
+    let mut metadata = proto_string_field(1, "traverse-coreml ONNX variant");
+    for (key, value) in [
+        ("source_role", "onnx"),
+        ("tool", COREML_CONVERT_TOOL),
+        ("tool_version", COREML_CONVERT_TOOL_VERSION),
+    ] {
+        let mut entry = proto_string_field(1, key);
+        entry.extend(proto_string_field(2, value));
+        metadata.extend(proto_bytes_field(100, &entry));
+    }
+    let mut description = proto_bytes_field(1, &input);
+    description.extend(proto_bytes_field(10, &output));
+    description.extend(proto_bytes_field(100, &metadata));
+    description
+}
+
+fn feature(name: &str) -> Vec<u8> {
+    let mut array = proto_bytes_field(1, &proto_varint(1));
+    array.extend(proto_varint_field(2, 65_568));
+    let array_type = proto_bytes_field(5, &array);
+    let mut feature = proto_string_field(1, name);
+    feature.extend(proto_bytes_field(3, &array_type));
+    feature
+}
+
+fn proto_varint(mut value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let mut byte = u8::try_from(value & 0x7f).unwrap_or(0);
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+    out
+}
+
+fn proto_key(field: u32, wire: u8) -> Vec<u8> {
+    proto_varint(u64::from(field << 3 | u32::from(wire)))
+}
+
+fn proto_varint_field(field: u32, value: u64) -> Vec<u8> {
+    let mut out = proto_key(field, 0);
+    out.extend(proto_varint(value));
+    out
+}
+
+fn proto_bytes_field(field: u32, bytes: &[u8]) -> Vec<u8> {
+    let mut out = proto_key(field, 2);
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    out.extend(proto_varint(len));
+    out.extend(bytes);
+    out
+}
+
+fn proto_string_field(field: u32, value: &str) -> Vec<u8> {
+    proto_bytes_field(field, value.as_bytes())
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -530,6 +637,25 @@ mod tests {
 
     fn root(relative: &str) -> PathBuf {
         Path::new(ROOT).join(relative)
+    }
+
+    #[test]
+    fn conversion_is_reproducible_and_embeds_the_onnx_bytes() {
+        let onnx = b"onnx-stand-in";
+        let first = convert_onnx_to_mlmodel(onnx).expect("convert");
+        let second = convert_onnx_to_mlmodel(onnx).expect("convert again");
+        assert_eq!(first, second);
+        assert_ne!(convert_onnx_to_mlmodel(b"other").expect("other"), first);
+        let start = first
+            .windows(onnx.len())
+            .position(|window| window == onnx)
+            .expect("onnx bytes embedded once");
+        assert!(
+            first[start + onnx.len()..]
+                .windows(onnx.len())
+                .all(|window| window != onnx)
+        );
+        assert!(convert_onnx_to_mlmodel(&[]).is_err());
     }
 
     /// Smallest module with the runner's shape: one memory, the blob static

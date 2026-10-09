@@ -36,6 +36,18 @@
 - New `dotnet-model-host` CI job on `linux-x64`.
 - Spec 138 0.13.0 adds FR-067.
 
+### In-package Core ML variants (Decision 110, #1628)
+
+- Schema `2.2.0` accepts optional `accelerator_variants`. Each entry carries
+  its digest, a conformance vector, and conversion provenance whose
+  `source_digest` must match `rights.derivation.source_digest`.
+- A host fetches only the variants its adapters can use. A missing or
+  tampered variant fails `digest_mismatch` with no fallback. Hosts with no
+  matching adapter still validate the variant shape and skip the files.
+- `traverse-cli model convert-coreml` writes a deterministic uncompressed
+  Core ML model, and `model add-variant` records it on the package.
+  `model verify` checks every variant file.
+
 ### ONNX runner guest ABI v3 prepare (Decision 110, #1627)
 
 - The runner's `model_prepare` loads and optimizes the model; `model_execute`

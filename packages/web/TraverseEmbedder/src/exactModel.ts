@@ -134,7 +134,40 @@ export type ModelPackageManifest = {
   readonly offline_allowed: boolean;
   /** Fuel ceiling for `model_prepare`; required when and only when `abi_version` is 3 (schema 2.2.0). */
   readonly max_prepare_fuel?: number;
+  /** Optional per-adapter variants (schema 2.2.0, FR-058). */
+  readonly accelerator_variants?: readonly AcceleratorVariant[];
 };
+
+/** Closed adapter list (FR-066). Core ML is the first adapter. */
+export const ADAPTER_COREML = "coreml";
+const COREML_VARIANT_FORMAT = "mlmodel";
+const MAX_VARIANT_ABS_DIFF = 5e-3;
+
+export type VariantConversion = {
+  readonly tool: string;
+  readonly tool_version: string;
+  readonly source_digest: string;
+};
+
+export type AcceleratorVariant = {
+  readonly adapter: string;
+  readonly format: string;
+  readonly path: string;
+  readonly digest: string;
+  readonly conversion: VariantConversion;
+  readonly conformance_vector_path: string;
+  readonly conformance_vector_digest: string;
+  readonly tolerance: { readonly max_abs_diff: number; readonly top_k: number };
+  readonly peak_memory_bytes: number;
+};
+
+/** Variant files a host may fetch. Hosts with no matching adapter get none (FR-059). */
+export function variantsToFetch(
+  manifest: ModelPackageManifest,
+  adapters: readonly string[],
+): readonly AcceleratorVariant[] {
+  return (manifest.accelerator_variants ?? []).filter((variant) => adapters.includes(variant.adapter));
+}
 
 /** Detached `model.sig.json` over the exact manifest bytes. */
 export type ModelPackageSignature = {
@@ -267,6 +300,12 @@ const RIGHTS_KEYS = ["license_id", "attribution", "redistribution", "commercial_
 const DERIVATION_KEYS = ["kind", "source_digest", "source_license_id", "source_commercial_use", "source_url"] as const;
 const DERIVATION_KINDS: readonly string[] = ["converted", "quantized", "fine_tuned"];
 const SIGNATURE_KEYS = ["alg", "key_id", "signature"] as const;
+const VARIANT_KEYS = [
+  "adapter", "format", "path", "digest", "conversion", "conformance_vector_path",
+  "conformance_vector_digest", "tolerance", "peak_memory_bytes",
+] as const;
+const CONVERSION_KEYS = ["tool", "tool_version", "source_digest"] as const;
+const TOLERANCE_KEYS = ["max_abs_diff", "top_k"] as const;
 const COMMERCIAL_USE: readonly string[] = ["allowed", "restricted", "prohibited"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -313,11 +352,14 @@ function parseManifest(bytes: Uint8Array): ModelPackageManifest {
     (key) => !numeric.includes(key) && !["rights", "supported_profiles", "offline_allowed"].includes(key),
   );
   const prepare = isRecord(value) && Object.hasOwn(value, "max_prepare_fuel");
+  const hasVariants = isRecord(value) && Object.hasOwn(value, "accelerator_variants");
   if (prepare) {
     numeric.push("max_prepare_fuel");
   }
+  const keys = [...MANIFEST_KEYS, ...(prepare ? ["max_prepare_fuel"] : []), ...(hasVariants ? ["accelerator_variants"] : [])];
   if (
-    !hasExactKeys(value, prepare ? [...MANIFEST_KEYS, "max_prepare_fuel"] : MANIFEST_KEYS) ||
+    !hasExactKeys(value, keys) ||
+    (hasVariants && !Array.isArray(value.accelerator_variants)) ||
     !isValidRights(value.rights) ||
     !text.every((key) => typeof value[key] === "string") ||
     !numeric.every((key) => Number.isInteger(value[key]) && (value[key] as number) >= 0) ||
@@ -420,6 +462,86 @@ function validateManifest(manifest: ModelPackageManifest): void {
         rights.commercial_use,
       ),
     );
+  }
+  validateAcceleratorVariants(manifest);
+}
+
+function variantPathOk(adapter: string, path: string): boolean {
+  const parts = path.split("/");
+  return (
+    parts[0] === "variants" &&
+    parts[1] === adapter &&
+    parts.length > 2 &&
+    parts.slice(2).every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+function validateAcceleratorVariants(manifest: ModelPackageManifest): void {
+  const variants = manifest.accelerator_variants;
+  if (variants === undefined) {
+    return;
+  }
+  if (manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_PREPARED || variants.length === 0) {
+    throw incompatible("manifest_invalid", "accelerator variant fields are invalid");
+  }
+  const seen = new Set<string>();
+  for (const variant of variants) {
+    if (
+      !hasExactKeys(variant, VARIANT_KEYS) ||
+      typeof variant.adapter !== "string" ||
+      typeof variant.format !== "string" ||
+      typeof variant.path !== "string" ||
+      typeof variant.digest !== "string" ||
+      typeof variant.conformance_vector_path !== "string" ||
+      typeof variant.conformance_vector_digest !== "string" ||
+      typeof variant.peak_memory_bytes !== "number" ||
+      !Number.isInteger(variant.peak_memory_bytes)
+    ) {
+      throw incompatible("manifest_invalid", "accelerator variant fields are invalid");
+    }
+    if (seen.has(variant.adapter)) {
+      throw incompatible("manifest_invalid", "accelerator_variants has more than one entry for an adapter");
+    }
+    seen.add(variant.adapter);
+    const format = variant.adapter === ADAPTER_COREML ? COREML_VARIANT_FORMAT : undefined;
+    const tolerance = variant.tolerance;
+    const conversion = variant.conversion;
+    if (
+      format === undefined ||
+      variant.format !== format ||
+      !variantPathOk(variant.adapter, variant.path) ||
+      !variantPathOk(variant.adapter, variant.conformance_vector_path) ||
+      !isSha256Hex(variant.digest) ||
+      !isSha256Hex(variant.conformance_vector_digest) ||
+      !hasExactKeys(conversion, CONVERSION_KEYS) ||
+      typeof conversion.tool !== "string" ||
+      typeof conversion.tool_version !== "string" ||
+      typeof conversion.source_digest !== "string" ||
+      conversion.tool.trim() === "" ||
+      conversion.tool_version.trim() === "" ||
+      !isSha256Hex(conversion.source_digest) ||
+      !hasExactKeys(tolerance, TOLERANCE_KEYS) ||
+      typeof tolerance.max_abs_diff !== "number" ||
+      !Number.isFinite(tolerance.max_abs_diff) ||
+      tolerance.max_abs_diff < 0 ||
+      tolerance.max_abs_diff > MAX_VARIANT_ABS_DIFF ||
+      typeof tolerance.top_k !== "number" ||
+      !Number.isInteger(tolerance.top_k) ||
+      tolerance.top_k < 0 ||
+      variant.peak_memory_bytes < 1
+    ) {
+      throw incompatible("manifest_invalid", "accelerator variant fields are invalid");
+    }
+    const derivation = manifest.rights.derivation;
+    if (!derivation) {
+      throw incompatible("rights_inconsistent", "accelerator variants require rights.derivation");
+    }
+    if (normalizeDigest(conversion.source_digest) !== normalizeDigest(derivation.source_digest)) {
+      throw incompatible(
+        "rights_inconsistent",
+        "accelerator variant conversion.source_digest does not match rights.derivation.source_digest",
+      );
+    }
   }
 }
 
