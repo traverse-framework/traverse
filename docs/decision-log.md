@@ -6373,3 +6373,123 @@ rules for BirdNET or iOS alone.
 
 Approved by Enrico in `/brainstorm` (2026-10-07). Every recommended option
 was accepted.
+
+## Decision 111: .NET Exact-Ref Model Execution — Native Rust via P/Invoke on the Shared Frame Crate, wasmi, Desktop Ceilings
+
+- **Date**: 2026-10-09
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended in
+  slice 1 with a .NET FR, like FR-046 for Kotlin)
+- **Related issues**: `#1602`; precedents `#1579` (Swift, Decision 104,
+  ADR-0078) and `#1580` (Kotlin, Decision 108, ADR-0079); `#1599` (rights
+  suite, Decision 107); `#1626` (guest ABI v3)
+- **Origin**: `/brainstorm` on `#1602`
+
+### Context
+
+The .NET `TraverseEmbedder` (net8.0, Windows/WinUI scope) runs
+`runtime.wasm` on Wasmtime .NET 44, but has no Spec 138 model support:
+- no `model.execute`;
+- no package registration or Ed25519 verification;
+- no model I/O staging.
+
+It is the only embedder that is not model-capable. Decision 107 requires
+every model-capable embedder to pass the shared rights suite.
+
+Two facts frame the choice:
+- .NET 8 has no built-in Ed25519.
+- Swift and Android already run every Spec 138 rule from one Rust
+  implementation, the shared `traverse-model-host-frame` crate.
+
+### Decision
+
+1. **Native Rust via P/Invoke.** The .NET model host wraps the shared frame
+   crate, as Swift and Android do. Every Spec 138 rule comes from the single
+   Rust implementation:
+   - Ed25519 verification;
+   - rights, the usage policy, package status, and derivation;
+   - ceilings and evidence;
+   - guest ABI v1 to v3, including snapshot reuse.
+
+   There is no C# copy of the rules.
+2. **Engine: `wasmi`, the same as Swift and Android.** The frame crate is
+   used unchanged, so mid-run cancellation and deadlines work through fuel
+   slices. wasmtime JIT was not chosen, because it lacks mid-run
+   interruption (`#1582`) and would add a second engine path.
+3. **Runtime IDs: `win-x64`, `win-arm64`, `linux-x64`.**
+   - The two Windows targets cover the WinUI scope.
+   - `linux-x64` lets the ubuntu CI load the real shipped library.
+   - macOS is not shipped.
+   - If the library cannot load, model calls fail closed with
+     `model_unavailable` / `engine_unavailable` (FR-047), with no fallback
+     engine.
+4. **Builds.**
+   - The .NET publish workflow gains a `windows-latest` job. It builds
+     `win-x64` and `win-arm64` with native MSVC and runs the .NET model tests
+     against `win-x64`.
+   - PR CI tests `linux-x64` on every PR.
+   - The NuGet package bundles all three under `runtimes/<rid>/native/`.
+   - No binaries are committed. `win-arm64` is built but not run.
+5. **Boundary: a new `traverse-dotnet-host` `cdylib`.**
+   - It exports one audited `extern "C"` framed call (request frame in,
+     response frame out) plus a function that frees the response buffer.
+   - A .NET host profile stamps the binding and target.
+   - C# calls it through `LibraryImport` with byte spans.
+   - A new ADR mirrors ADR-0078 and ADR-0079.
+   - The crate's safe logic is unit tested, and the exported function gets
+     an audited coverage floor in `ci/coverage-targets.txt`.
+6. **API: mirrors Swift and Kotlin `ExactModelHost`.**
+   - `ExactModelHost : IDisposable` takes pins, trusted keys, `modelUsage`,
+     `hostRequiresCommercial`, and an `ExactModelHostLimits` record.
+   - `RegisterPackageAsync` and `ExecuteAsync(..., CancellationToken)`.
+     Cancelling the token sends the frame's `cancel` op for mid-run
+     interruption.
+   - Staging and output reads, `ModelRights` / `ModelRightsRecord`, and
+     `SetPackageStatus`.
+   - A `ModelExecuteAdapter` for `RegisterHostConnectorAdapter`.
+   - Errors are `ExactModelException`, carrying the code, reason and detail.
+7. **Default ceilings are the native desktop defaults**, the same as
+   `HostModelLimits::default()`: 256 MiB package, 1 GiB guest memory, 5×10¹⁰
+   fuel, and 512 MiB of snapshots. They are not the phone defaults.
+8. **Work split: two slices under `#1602`.**
+   1. The crate, the ADR, the Spec 138 amendment, the C# `ExactModelHost`,
+      and `linux-x64` PR CI. That CI runs the signed vectors (classifier,
+      digits-mlp, digits-onnx, prepared-v3) byte-for-byte and the 21-case
+      rights suite.
+   2. The publish pipeline: the Windows build-and-test job, and NuGet
+      `runtimes/` packaging for all three runtime IDs.
+
+### Alternatives Considered
+
+- Architecture:
+  - Pure C# on Wasmtime .NET with NSec or BouncyCastle. Rejected: a third
+    copy of the rules that could drift, with every Spec 138 amendment
+    written three times.
+  - Deferring .NET model support. Rejected: .NET would stay the only
+    embedder without models.
+- Engine:
+  - wasmtime JIT. Rejected: no mid-run interruption, a larger library, and
+    a second engine path.
+  - Selectable by the host. Rejected: both binaries ship, and both paths
+    need conformance testing.
+- Runtime IDs:
+  - Adding `osx-arm64`. Rejected: outside the WinUI scope.
+  - Windows only. Rejected: ubuntu CI couldn't load the shipped library.
+- Builds:
+  - A Windows job on every PR. Rejected: slow and costly for a host with no
+    consumer yet.
+  - Cross-compiling with `cargo-xwin`. Rejected: the shipped Windows binary
+    would never run before release.
+- Boundary: reusing the Swift C-ABI crate as a `cdylib`. Rejected: it mixes
+  Apple and .NET release concerns, as Decision 108 found.
+- API: an app-command adapter only. Rejected: unlike every other embedder,
+  and apps couldn't register packages or show rights.
+- Defaults: phone ceilings. Rejected: needlessly tight on desktop.
+- Split:
+  - One PR. Rejected: it mixes new unsafe code, a public API, and CI.
+  - Three slices. Rejected: the crate would land with no consumer.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-10-09). Every recommended option
+was accepted.
