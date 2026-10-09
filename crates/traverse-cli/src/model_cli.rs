@@ -10,15 +10,19 @@
 //! and `wasmi` and requires byte-identical output.
 
 use crate::CliError;
+use crate::model_packaging::{
+    COREML_CONVERT_TOOL, COREML_CONVERT_TOOL_VERSION, convert_onnx_to_mlmodel,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use traverse_runtime::exact_model::{
-    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits, ModelEngine,
-    ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU, PinRights,
-    TrustedModelKeys, sign_model_manifest,
+    ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
+    ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
+    ModelEngine, ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU,
+    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -66,6 +70,24 @@ pub(crate) enum ModelCommand {
         vector_path: PathBuf,
         json: bool,
     },
+    /// Attach one `coreml` variant and drop a stale `model.sig.json`.
+    AddVariant {
+        package_dir: PathBuf,
+        file: PathBuf,
+        conformance: PathBuf,
+        peak_memory_bytes: u64,
+        max_abs_diff: String,
+        top_k: u32,
+        tool: String,
+        tool_version: String,
+        json: bool,
+    },
+    /// Write a deterministic uncompressed Core ML model for an ONNX file.
+    ConvertCoreml {
+        onnx_path: PathBuf,
+        out_path: PathBuf,
+        json: bool,
+    },
 }
 
 /// Parse `traverse-cli model <subcommand> ...`.
@@ -100,6 +122,12 @@ pub(crate) fn parse(args: &[String]) -> Result<ModelCommand, String> {
                 json,
             })
         }
+        ["add-variant", package_dir, flags @ ..] => parse_add_variant(package_dir, flags, json),
+        ["convert-coreml", onnx, out] => Ok(ModelCommand::ConvertCoreml {
+            onnx_path: PathBuf::from(onnx),
+            out_path: PathBuf::from(out),
+            json,
+        }),
         _ => Err(help(None)),
     }
 }
@@ -137,6 +165,70 @@ fn parse_verify(package_dir: &str, flags: &[&str], json: bool) -> Result<ModelCo
         limits,
         json,
     })
+}
+
+fn parse_add_variant(
+    package_dir: &str,
+    flags: &[&str],
+    json: bool,
+) -> Result<ModelCommand, String> {
+    let mut file = None;
+    let mut conformance = None;
+    let mut peak_memory_bytes = None;
+    let mut max_abs_diff = None;
+    let mut top_k = None;
+    let mut tool = None;
+    let mut tool_version = None;
+    for pair in flags.chunks(2) {
+        match pair {
+            ["--file", value] => file = Some(PathBuf::from(value)),
+            ["--conformance", value] => conformance = Some(PathBuf::from(value)),
+            ["--peak-memory-bytes", value] => {
+                peak_memory_bytes = Some(parse_u64("--peak-memory-bytes", value)?);
+            }
+            ["--max-abs-diff", value] => max_abs_diff = Some((*value).to_string()),
+            ["--top-k", value] => {
+                top_k = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("--top-k must be an integer ≥ 0, got '{value}'"))?,
+                );
+            }
+            ["--tool", value] => tool = Some((*value).to_string()),
+            ["--tool-version", value] => tool_version = Some((*value).to_string()),
+            _ => return Err(help(Some("add-variant"))),
+        }
+    }
+    match (
+        file,
+        conformance,
+        peak_memory_bytes,
+        max_abs_diff,
+        top_k,
+        tool,
+        tool_version,
+    ) {
+        (
+            Some(file),
+            Some(conformance),
+            Some(peak_memory_bytes),
+            Some(max_abs_diff),
+            Some(top_k),
+            Some(tool),
+            Some(tool_version),
+        ) => Ok(ModelCommand::AddVariant {
+            package_dir: PathBuf::from(package_dir),
+            file,
+            conformance,
+            peak_memory_bytes,
+            max_abs_diff,
+            top_k,
+            tool,
+            tool_version,
+            json,
+        }),
+        _ => Err(help(Some("add-variant"))),
+    }
 }
 
 /// `--trusted-key <hex>` pairs only; at least one is required.
@@ -238,6 +330,27 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
   Example:
     traverse-cli model conformance generate out/my-model --trusted-key <public-key-hex> --input in.bin --out out/my-model/conformance.json"
             .to_string(),
+        Some("add-variant") => "traverse-cli model add-variant <package-dir> --file <model.mlmodel> --conformance <vector.json> --peak-memory-bytes N --max-abs-diff N --top-k N --tool <name> --tool-version <version> [--json]
+
+  Purpose:
+    Copy a Core ML variant and its conformance vector into variants/coreml/,
+    record their digests, and set conversion.source_digest from
+    rights.derivation.source_digest. Removes model.sig.json because the
+    manifest bytes changed; sign again before verify.
+
+  Example:
+    traverse-cli model add-variant out/birdnet --file birdnet.mlmodel --conformance vector.json --peak-memory-bytes 180000000 --max-abs-diff 0.005 --top-k 5 --tool traverse-coreml --tool-version 1"
+            .to_string(),
+        Some("convert-coreml") => "traverse-cli model convert-coreml <model.onnx> <out.mlmodel> [--json]
+
+  Purpose:
+    Write a deterministic uncompressed Core ML model. The same ONNX bytes
+    always produce the same file. Record tool, tool_version, and
+    source_digest on the variant.
+
+  Example:
+    traverse-cli model convert-coreml model.onnx out/model.mlmodel --json"
+            .to_string(),
         _ => "traverse-cli model <subcommand> [options]
 
   Subcommands:
@@ -246,6 +359,9 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
     verify <package-dir> --trusted-key <hex>...     Verify a package as a host registers it.
     pin <package-dir>                               Print the exact_model_dependencies entry.
     conformance generate|check <package-dir> ...    Cross-engine (wasmtime + wasmi) conformance vectors.
+    convert-coreml <model.onnx> <out.mlmodel>       Deterministic ONNX → Core ML variant file.
+    add-variant <package-dir> --file <model.mlmodel> ...
+                                                    Add a signed-ready coreml variant. Re-sign after.
     package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir>
                                                     Package an ONNX model on the audited runner guest.
 
@@ -295,6 +411,32 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             vector_path,
             json,
         } => conformance_check(package_dir, trusted_keys_hex, vector_path, *json),
+        ModelCommand::AddVariant {
+            package_dir,
+            file,
+            conformance,
+            peak_memory_bytes,
+            max_abs_diff,
+            top_k,
+            tool,
+            tool_version,
+            json,
+        } => add_variant(&AddVariantRequest {
+            package_dir,
+            file,
+            conformance,
+            peak_memory_bytes: *peak_memory_bytes,
+            max_abs_diff,
+            top_k: *top_k,
+            tool,
+            tool_version,
+            json: *json,
+        }),
+        ModelCommand::ConvertCoreml {
+            onnx_path,
+            out_path,
+            json,
+        } => convert_coreml(onnx_path, out_path, *json),
     }
 }
 
@@ -495,7 +637,25 @@ fn verify(
     let files = package_files(package_dir)?;
     let pin = pin_for(package_dir)?;
     let mut host = host_for(&pin, trusted_keys_hex, limits)?;
-    let registered = host.register_package(&files.manifest, files.wasm.clone(), &files.signature);
+    let variant_files = variant_files(package_dir, &files.manifest)?;
+    let variant_refs: Vec<(&str, &[u8])> = variant_files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        .collect();
+    if let Ok(manifest) = parse_manifest(&files.manifest) {
+        host.supported_adapters = manifest
+            .accelerator_variants
+            .unwrap_or_default()
+            .into_iter()
+            .map(|variant| variant.adapter)
+            .collect();
+    }
+    let registered = host.register_package_with_variants(
+        &files.manifest,
+        files.wasm.clone(),
+        &files.signature,
+        &variant_refs,
+    );
     let imports = wasm_import_count(&files.wasm);
     let mut report = json!({
         "ok": registered.is_ok() && imports == Some(0),
@@ -743,6 +903,171 @@ fn conformance_check(
     } else {
         Err(CliError::ValidationFailed(text))
     }
+}
+
+fn variant_files(
+    package_dir: &Path,
+    manifest_bytes: &[u8],
+) -> Result<Vec<(String, Vec<u8>)>, CliError> {
+    let Ok(manifest) = parse_manifest(manifest_bytes) else {
+        return Ok(Vec::new());
+    };
+    let Some(variants) = manifest.accelerator_variants else {
+        return Ok(Vec::new());
+    };
+    let mut files = Vec::new();
+    for variant in variants {
+        for rel in [variant.path, variant.conformance_vector_path] {
+            let Some(path) = package_child(package_dir, &rel) else {
+                continue;
+            };
+            match fs::read(&path) {
+                Ok(bytes) => files.push((rel, bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(CliError::IoError(format!("{}: {error}", path.display())));
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn package_child(root: &Path, rel: &str) -> Option<PathBuf> {
+    if Path::new(rel).is_absolute()
+        || rel
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return None;
+    }
+    Some(root.join(rel))
+}
+
+struct AddVariantRequest<'a> {
+    package_dir: &'a Path,
+    file: &'a Path,
+    conformance: &'a Path,
+    peak_memory_bytes: u64,
+    max_abs_diff: &'a str,
+    top_k: u32,
+    tool: &'a str,
+    tool_version: &'a str,
+    json: bool,
+}
+
+fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
+    let &AddVariantRequest {
+        package_dir,
+        file,
+        conformance,
+        peak_memory_bytes,
+        max_abs_diff,
+        top_k,
+        tool,
+        tool_version,
+        json,
+    } = request;
+    let manifest_path = package_dir.join(MANIFEST_FILE);
+    let mut manifest = parse_manifest(&read(&manifest_path)?)?;
+    let derivation = manifest.rights.derivation.clone().ok_or_else(|| {
+        CliError::ValidationFailed("accelerator variants require rights.derivation".to_string())
+    })?;
+    let max_abs_diff = max_abs_diff
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            CliError::ValidationFailed(format!(
+                "--max-abs-diff must be a number in [0, 0.005], got '{max_abs_diff}'"
+            ))
+        })?;
+    let model_bytes = read(file)?;
+    let vector_bytes = read(conformance)?;
+    let model_rel = format!("variants/{ADAPTER_COREML}/model.mlmodel");
+    let vector_rel = format!("variants/{ADAPTER_COREML}/conformance.json");
+    let model_path = package_dir.join(&model_rel);
+    let vector_path = package_dir.join(&vector_rel);
+    if let Some(parent) = model_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| CliError::IoError(format!("{}: {error}", parent.display())))?;
+    }
+    fs::write(&model_path, &model_bytes)
+        .map_err(|error| CliError::IoError(format!("{}: {error}", model_path.display())))?;
+    fs::write(&vector_path, &vector_bytes)
+        .map_err(|error| CliError::IoError(format!("{}: {error}", vector_path.display())))?;
+    let mut variants = manifest.accelerator_variants.take().unwrap_or_default();
+    variants.retain(|existing| existing.adapter != ADAPTER_COREML);
+    variants.push(AcceleratorVariant {
+        adapter: ADAPTER_COREML.to_string(),
+        format: COREML_VARIANT_FORMAT.to_string(),
+        path: model_rel,
+        digest: sha256_hex(&model_bytes),
+        conversion: VariantConversion {
+            tool: tool.to_string(),
+            tool_version: tool_version.to_string(),
+            source_digest: derivation.source_digest,
+        },
+        conformance_vector_path: vector_rel,
+        conformance_vector_digest: sha256_hex(&vector_bytes),
+        tolerance: VariantTolerance {
+            max_abs_diff,
+            top_k,
+        },
+        peak_memory_bytes,
+    });
+    manifest.accelerator_variants = Some(variants);
+    manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+    manifest
+        .validate()
+        .map_err(|error| CliError::ValidationFailed(error.message))?;
+    let mut bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| CliError::IoError(error.to_string()))?;
+    bytes.push(b'\n');
+    fs::write(&manifest_path, &bytes)
+        .map_err(|error| CliError::IoError(format!("{}: {error}", manifest_path.display())))?;
+    let signature = package_dir.join(SIGNATURE_FILE);
+    let signature_removed = signature.exists();
+    if signature_removed {
+        fs::remove_file(&signature)
+            .map_err(|error| CliError::IoError(format!("{}: {error}", signature.display())))?;
+    }
+    let report = json!({
+        "model_id": manifest.model_id,
+        "adapter": ADAPTER_COREML,
+        "schema_version": manifest.schema_version,
+        "signature_removed": signature_removed,
+    });
+    Ok(render(json, &report, || {
+        format!(
+            "added {ADAPTER_COREML} variant to {}; sign the manifest before verify",
+            package_dir.display()
+        )
+    }))
+}
+
+fn convert_coreml(onnx_path: &Path, out_path: &Path, json: bool) -> Result<String, CliError> {
+    let onnx = read(onnx_path)?;
+    let model = convert_onnx_to_mlmodel(&onnx).map_err(CliError::ValidationFailed)?;
+    if let Some(parent) = out_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| CliError::IoError(format!("{}: {error}", parent.display())))?;
+    }
+    fs::write(out_path, &model)
+        .map_err(|error| CliError::IoError(format!("{}: {error}", out_path.display())))?;
+    let report = json!({
+        "tool": COREML_CONVERT_TOOL,
+        "tool_version": COREML_CONVERT_TOOL_VERSION,
+        "source_digest": sha256_hex(&onnx),
+        "digest": sha256_hex(&model),
+        "path": out_path.display().to_string(),
+    });
+    Ok(render(json, &report, || {
+        format!("wrote {}", out_path.display())
+    }))
 }
 
 #[cfg(test)]
@@ -1438,5 +1763,124 @@ mod tests {
             ]),
             Err(CliError::IoError(_))
         ));
+    }
+
+    /// BirdNET-shaped package: signed `coreml` variant, reproducible conversion,
+    /// and verify failures for a tampered digest and a missing variant file.
+    /// The ONNX bytes are a stand-in; BirdNET weights are not in the repo.
+    #[test]
+    fn birdnet_package_signed_coreml_variant_verifies() {
+        let package = unsigned_copy(
+            &repo("fixtures/models/rights-conformance/packages/derivative/model.manifest.json"),
+            &repo("fixtures/models/fixture-echo-1.0.0/model.wasm"),
+        );
+        let manifest_path = package.join(MANIFEST_FILE);
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+        manifest["model_id"] = json!("birdnet-v2.4-int8");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("json"),
+        )
+        .expect("write");
+
+        let onnx_path = package.join("source.onnx");
+        fs::write(&onnx_path, b"birdnet-onnx-stand-in").expect("onnx");
+        let mlmodel = package.join("converted.mlmodel");
+        let converted = json_out(cli(&[
+            "convert-coreml",
+            path(&onnx_path),
+            path(&mlmodel),
+            "--json",
+        ]));
+        assert_eq!(converted["tool"], json!(COREML_CONVERT_TOOL));
+        assert_eq!(
+            converted["tool_version"],
+            json!(COREML_CONVERT_TOOL_VERSION)
+        );
+        let again = json_out(cli(&[
+            "convert-coreml",
+            path(&onnx_path),
+            path(&package.join("converted-again.mlmodel")),
+            "--json",
+        ]));
+        assert_eq!(converted["digest"], again["digest"]);
+        assert_eq!(
+            fs::read(&mlmodel).expect("mlmodel"),
+            fs::read(package.join("converted-again.mlmodel")).expect("again")
+        );
+
+        manifest["rights"]["derivation"]["source_digest"] = converted["source_digest"].clone();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("json"),
+        )
+        .expect("write");
+        let vector = package.join("vector.json");
+        fs::write(&vector, b"{\"cases\":[]}").expect("vector");
+        let added = json_out(cli(&[
+            "add-variant",
+            path(&package),
+            "--file",
+            path(&mlmodel),
+            "--conformance",
+            path(&vector),
+            "--peak-memory-bytes",
+            "1048576",
+            "--max-abs-diff",
+            "0.005",
+            "--top-k",
+            "5",
+            "--tool",
+            COREML_CONVERT_TOOL,
+            "--tool-version",
+            COREML_CONVERT_TOOL_VERSION,
+            "--json",
+        ]));
+        assert_eq!(added["model_id"], json!("birdnet-v2.4-int8"));
+        assert_eq!(added["adapter"], json!("coreml"));
+
+        let key = package.join("key.hex");
+        fs::write(&key, format!("{}\n", test_key("secret_key_hex"))).expect("key");
+        cli(&["sign", path(&manifest_path), "--key", path(&key)]).expect("sign");
+        let verified = json_out(cli(&[
+            "verify",
+            path(&package),
+            "--trusted-key",
+            &test_key("public_key_hex"),
+            "--json",
+        ]));
+        assert_eq!(verified["ok"], json!(true), "{verified}");
+
+        let variant_path = package.join("variants/coreml/model.mlmodel");
+        let mut tampered = fs::read(&variant_path).expect("variant");
+        tampered[0] = tampered[0].wrapping_add(1);
+        fs::write(&variant_path, &tampered).expect("tamper");
+        let failed = json_out(cli(&[
+            "verify",
+            path(&package),
+            "--trusted-key",
+            &test_key("public_key_hex"),
+            "--json",
+        ]));
+        assert_eq!(failed["ok"], json!(false));
+        assert_eq!(failed["error"]["reason"], json!("digest_mismatch"));
+
+        fs::remove_file(&variant_path).expect("remove");
+        let missing = json_out(cli(&[
+            "verify",
+            path(&package),
+            "--trusted-key",
+            &test_key("public_key_hex"),
+            "--json",
+        ]));
+        assert_eq!(missing["ok"], json!(false));
+        assert_eq!(missing["error"]["reason"], json!("digest_mismatch"));
+        assert!(
+            missing["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("missing")
+        );
     }
 }

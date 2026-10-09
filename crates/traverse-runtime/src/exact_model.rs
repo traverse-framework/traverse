@@ -9,7 +9,7 @@ use crate::host_connector_dispatch::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -42,10 +42,15 @@ pub const MODEL_PACKAGE_SCHEMA_VERSION: &str = "2.0.0";
 /// Manifest schema version that adds optional `rights.derivation`
 /// (Spec 138 0.8.0, Decision 107). Hosts accept both versions.
 pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
-/// Manifest schema version that adds `max_prepare_fuel` for guest ABI v3
-/// (Spec 138 0.12.0, Decision 110). Accelerator variants (also `2.2.0`) are
-/// not accepted yet and fail closed as unknown fields (#1628).
+/// Manifest schema version that adds `max_prepare_fuel` for guest ABI v3 and
+/// optional `accelerator_variants` (Spec 138 0.12.0, Decision 110).
 pub const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED: &str = "2.2.0";
+/// First native accelerator adapter (Decision 110). Closed list: FR-066.
+pub const ADAPTER_COREML: &str = "coreml";
+/// Uncompressed Core ML model file produced for [`ADAPTER_COREML`].
+pub const COREML_VARIANT_FORMAT: &str = "mlmodel";
+/// Decision 106 / FR-058 ceiling for `tolerance.max_abs_diff`.
+pub const MAX_VARIANT_ABS_DIFF: f64 = 5e-3;
 /// The only accepted package signature algorithm.
 pub const MODEL_SIGNATURE_ALG_ED25519: &str = "ed25519";
 
@@ -120,6 +125,68 @@ pub struct ModelDerivation {
     pub source_commercial_use: CommercialUse,
     /// Source URL (identity is `source_digest`, never this URL).
     pub source_url: String,
+}
+
+/// Tooling that produced one accelerator variant (`conversion`, FR-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariantConversion {
+    /// Converter name (`traverse-coreml` for `model convert-coreml`).
+    pub tool: String,
+    /// Converter version. Same tool version and source bytes must match.
+    pub tool_version: String,
+    /// SHA-256 of the source artifact. Must equal
+    /// `rights.derivation.source_digest`.
+    pub source_digest: String,
+}
+
+/// Conformance tolerance against the wasm-cpu reference (Decision 106).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariantTolerance {
+    /// Element-wise `f32` ceiling, in `[0, 5e-3]`.
+    pub max_abs_diff: f64,
+    /// When above 0, the top-k indices must match in order.
+    pub top_k: u32,
+}
+
+/// One signed accelerator variant inside a schema `2.2.0` package (FR-058).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceleratorVariant {
+    /// Adapter id from the closed list ([`ADAPTER_COREML`]).
+    pub adapter: String,
+    /// Adapter variant format ([`COREML_VARIANT_FORMAT`] for Core ML).
+    pub format: String,
+    /// Path relative to the package root, under `variants/<adapter>/`.
+    pub path: String,
+    /// SHA-256 of the variant file bytes.
+    pub digest: String,
+    /// Deterministic conversion provenance.
+    pub conversion: VariantConversion,
+    /// Path of the variant conformance vector, under `variants/<adapter>/`.
+    pub conformance_vector_path: String,
+    /// SHA-256 of the conformance vector bytes.
+    pub conformance_vector_digest: String,
+    /// Comparison against the wasm-cpu reference output.
+    pub tolerance: VariantTolerance,
+    /// Declared peak memory for one execution of this variant.
+    pub peak_memory_bytes: u64,
+}
+
+/// Variant files a host fetched into the verified cache (FR-059).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedAcceleratorVariant {
+    /// Adapter id.
+    pub adapter: String,
+    /// Variant file path.
+    pub path: String,
+    /// Variant file bytes.
+    pub bytes: Vec<u8>,
+    /// Conformance vector path.
+    pub conformance_vector_path: String,
+    /// Conformance vector bytes.
+    pub conformance_vector: Vec<u8>,
 }
 
 /// Host-owned lifecycle status of a package (Decision 107).
@@ -263,6 +330,10 @@ pub struct ModelPackageManifest {
     /// `abi_version` is 3 (schema `2.2.0`, FR-056).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_prepare_fuel: Option<u64>,
+    /// Optional per-adapter variants (schema `2.2.0` only, FR-058). At most
+    /// one entry per adapter. Absent on packages that ship wasm-cpu only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accelerator_variants: Option<Vec<AcceleratorVariant>>,
 }
 
 fn model_error(
@@ -418,15 +489,15 @@ impl ModelPackageManifest {
                 ),
             ));
         }
-        Ok(())
+        self.validate_accelerator_variants()
     }
 }
 
 impl ModelPackageManifest {
     /// The schema version is supported and allows the fields present:
-    /// `rights.derivation` needs `2.1.0`+, and `abi_version` 3 needs `2.2.0`
-    /// with a positive prepare budget, which no other ABI may carry (FR-032,
-    /// FR-039, FR-056).
+    /// `rights.derivation` needs `2.1.0`+, `abi_version` 3 needs `2.2.0`
+    /// with a positive prepare budget, which no other ABI may carry, and
+    /// `accelerator_variants` need `2.2.0` (FR-032, FR-039, FR-056, FR-058).
     fn schema_fields_valid(&self) -> bool {
         let prepared_schema = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
         let supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
@@ -439,8 +510,101 @@ impl ModelPackageManifest {
         } else {
             self.max_prepare_fuel.is_none()
         };
-        supported && derivation_allowed && prepare_valid
+        let variants_allowed = self.accelerator_variants.is_none() || prepared_schema;
+        supported && derivation_allowed && prepare_valid && variants_allowed
     }
+
+    /// Variants this host may use. A host with no matching adapter fetches
+    /// nothing (FR-059); shape is still checked by [`Self::validate`].
+    #[must_use]
+    pub fn variants_to_fetch<'a>(&'a self, adapters: &[&str]) -> Vec<&'a AcceleratorVariant> {
+        self.accelerator_variants
+            .as_ref()
+            .map(|variants| {
+                variants
+                    .iter()
+                    .filter(|variant| adapters.iter().any(|adapter| *adapter == variant.adapter))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn validate_accelerator_variants(&self) -> Result<(), HostConnectorError> {
+        let Some(variants) = &self.accelerator_variants else {
+            return Ok(());
+        };
+        if variants.is_empty() {
+            return Err(incompatible(
+                ModelFailureReason::ManifestInvalid,
+                "accelerator_variants must not be empty",
+            ));
+        }
+        let mut seen = HashSet::new();
+        for variant in variants {
+            if !seen.insert(variant.adapter.clone()) {
+                return Err(incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    "accelerator_variants has more than one entry for an adapter",
+                ));
+            }
+            let Some(format) = adapter_format(&variant.adapter) else {
+                return Err(incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    "accelerator variant adapter is not in the closed list",
+                ));
+            };
+            if variant.format != format
+                || !variant_package_path(&variant.adapter, &variant.path)
+                || !variant_package_path(&variant.adapter, &variant.conformance_vector_path)
+                || !is_sha256_hex(&variant.digest)
+                || !is_sha256_hex(&variant.conformance_vector_digest)
+                || variant.conversion.tool.trim().is_empty()
+                || variant.conversion.tool_version.trim().is_empty()
+                || !is_sha256_hex(&variant.conversion.source_digest)
+                || !tolerance_ok(variant.tolerance.max_abs_diff)
+                || variant.peak_memory_bytes == 0
+            {
+                return Err(incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    "accelerator variant fields are invalid",
+                ));
+            }
+            let Some(derivation) = &self.rights.derivation else {
+                return Err(incompatible(
+                    ModelFailureReason::RightsInconsistent,
+                    "accelerator variants require rights.derivation",
+                ));
+            };
+            if normalize_digest(&variant.conversion.source_digest)
+                != normalize_digest(&derivation.source_digest)
+            {
+                return Err(incompatible(
+                    ModelFailureReason::RightsInconsistent,
+                    "accelerator variant conversion.source_digest does not match rights.derivation.source_digest",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn adapter_format(adapter: &str) -> Option<&'static str> {
+    match adapter {
+        ADAPTER_COREML => Some(COREML_VARIANT_FORMAT),
+        _ => None,
+    }
+}
+
+fn variant_package_path(adapter: &str, path: &str) -> bool {
+    let mut parts = path.split('/');
+    parts.next() == Some("variants")
+        && parts.next() == Some(adapter)
+        && parts.clone().next().is_some()
+        && parts.all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn tolerance_ok(value: f64) -> bool {
+    value.is_finite() && (0.0..=MAX_VARIANT_ABS_DIFF).contains(&value)
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -568,6 +732,9 @@ pub struct VerifiedModelPackage {
     pub manifest_bytes: Vec<u8>,
     /// WASM bytes.
     pub wasm: Vec<u8>,
+    /// Variant files this host fetched. Empty when the host has no matching
+    /// adapter (FR-059).
+    pub variants: Vec<CachedAcceleratorVariant>,
 }
 
 impl VerifiedModelPackage {
@@ -575,6 +742,10 @@ impl VerifiedModelPackage {
     fn recheck(&self, pinned_digest: &str) -> Result<(), HostConnectorError> {
         if digest_hex(&self.manifest_bytes) != normalize_digest(pinned_digest)
             || digest_hex(&self.wasm) != normalize_digest(&self.manifest.wasm_digest)
+            || self
+                .variants
+                .iter()
+                .any(|variant| !variant_bytes_match(&self.manifest, variant))
         {
             return Err(incompatible(
                 ModelFailureReason::DigestMismatch,
@@ -583,6 +754,18 @@ impl VerifiedModelPackage {
         }
         Ok(())
     }
+}
+
+fn variant_bytes_match(manifest: &ModelPackageManifest, cached: &CachedAcceleratorVariant) -> bool {
+    manifest
+        .accelerator_variants
+        .as_ref()
+        .and_then(|variants| variants.iter().find(|variant| variant.path == cached.path))
+        .is_some_and(|variant| {
+            digest_hex(&cached.bytes) == normalize_digest(&variant.digest)
+                && digest_hex(&cached.conformance_vector)
+                    == normalize_digest(&variant.conformance_vector_digest)
+        })
 }
 
 /// Content-addressed model package store keyed by manifest-bytes digest
@@ -615,6 +798,16 @@ impl ModelPackageStore {
             return Err(incompatible(
                 ModelFailureReason::DigestMismatch,
                 "model wasm digest mismatch",
+            ));
+        }
+        if package
+            .variants
+            .iter()
+            .any(|variant| !variant_bytes_match(&package.manifest, variant))
+        {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "accelerator variant digest mismatch",
             ));
         }
         if package.manifest.abi_version == MODEL_GUEST_ABI_PREPARED {
@@ -926,6 +1119,10 @@ pub struct ExactModelHostConnector {
     compiled: CompiledGuests,
     /// Guest ABI v3 post-prepare snapshots (FR-055).
     snapshots: SnapshotCache,
+    /// Adapter ids this host may fetch. Empty skips every variant file
+    /// (FR-059). `model verify` sets this to the package's adapters so the
+    /// complete package is checked.
+    pub supported_adapters: Vec<String>,
 }
 
 impl ExactModelHostConnector {
@@ -947,6 +1144,7 @@ impl ExactModelHostConnector {
             package_status: HashMap::new(),
             compiled: CompiledGuests::default(),
             snapshots: SnapshotCache::default(),
+            supported_adapters: Vec::new(),
         }
     }
 
@@ -1081,6 +1279,27 @@ impl ExactModelHostConnector {
         wasm: Vec<u8>,
         signature_bytes: &[u8],
     ) -> Result<String, HostConnectorError> {
+        self.register_package_with_variants(manifest_bytes, wasm, signature_bytes, &[])
+    }
+
+    /// [`Self::register_package`] plus the variant files this host fetched.
+    ///
+    /// Files for adapters outside [`Self::supported_adapters`] are ignored.
+    /// A selected variant whose file is missing or whose bytes differ from
+    /// the manifest digest fails with `digest_mismatch` and is not admitted
+    /// (FR-059). There is no fallback to another placement in this step.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_unavailable` / `model_incompatible` with a stable
+    /// [`ModelFailureReason`].
+    pub fn register_package_with_variants(
+        &mut self,
+        manifest_bytes: &[u8],
+        wasm: Vec<u8>,
+        signature_bytes: &[u8],
+        variant_files: &[(&str, &[u8])],
+    ) -> Result<String, HostConnectorError> {
         let signature: ModelPackageSignature =
             serde_json::from_slice(signature_bytes).map_err(|_| {
                 incompatible(
@@ -1112,11 +1331,19 @@ impl ExactModelHostConnector {
         check_pin_against_manifest(pin, &signature, &manifest)
             .map_err(|error| for_package(error, &manifest, &digest))?;
         self.check_rights_and_status(&manifest, &digest)?;
+        let adapters: Vec<&str> = self.supported_adapters.iter().map(String::as_str).collect();
+        let variants = cache_selected_variants(&manifest, &adapters, variant_files)?;
+        let variant_bytes = variants.iter().fold(0usize, |total, variant| {
+            total
+                .saturating_add(variant.bytes.len())
+                .saturating_add(variant.conformance_vector.len())
+        });
         check_host_limits(
             &self.host_limits,
             &manifest,
             manifest_bytes.len(),
             wasm.len(),
+            variant_bytes,
         )?;
         // Compile once at registration so execute deadlines cover guest
         // execution only. Keyed by the bytes' own hash, so the cache can never
@@ -1127,6 +1354,7 @@ impl ExactModelHostConnector {
             manifest,
             manifest_bytes: manifest_bytes.to_vec(),
             wasm,
+            variants,
         })
     }
 
@@ -1170,13 +1398,60 @@ impl ExactModelHostConnector {
     }
 }
 
+fn cache_selected_variants(
+    manifest: &ModelPackageManifest,
+    adapters: &[&str],
+    files: &[(&str, &[u8])],
+) -> Result<Vec<CachedAcceleratorVariant>, HostConnectorError> {
+    let mut cached = Vec::new();
+    for variant in manifest.variants_to_fetch(adapters) {
+        let bytes = variant_file(files, &variant.path)?;
+        let vector = variant_file(files, &variant.conformance_vector_path)?;
+        if digest_hex(bytes) != normalize_digest(&variant.digest)
+            || digest_hex(vector) != normalize_digest(&variant.conformance_vector_digest)
+        {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "accelerator variant digest mismatch",
+            ));
+        }
+        cached.push(CachedAcceleratorVariant {
+            adapter: variant.adapter.clone(),
+            path: variant.path.clone(),
+            bytes: bytes.to_vec(),
+            conformance_vector_path: variant.conformance_vector_path.clone(),
+            conformance_vector: vector.to_vec(),
+        });
+    }
+    Ok(cached)
+}
+
+fn variant_file<'a>(
+    files: &[(&str, &'a [u8])],
+    path: &str,
+) -> Result<&'a [u8], HostConnectorError> {
+    files
+        .iter()
+        .find(|(candidate, _)| *candidate == path)
+        .map(|(_, bytes)| *bytes)
+        .ok_or_else(|| {
+            incompatible(
+                ModelFailureReason::DigestMismatch,
+                "accelerator variant file is missing",
+            )
+        })
+}
+
 fn check_host_limits(
     host: &HostModelLimits,
     manifest: &ModelPackageManifest,
     manifest_len: usize,
     wasm_len: usize,
+    variant_len: usize,
 ) -> Result<(), HostConnectorError> {
-    let package_bytes = (manifest_len as u64).saturating_add(wasm_len as u64);
+    let package_bytes = (manifest_len as u64)
+        .saturating_add(wasm_len as u64)
+        .saturating_add(variant_len as u64);
     if package_bytes > host.max_package_bytes
         || manifest.max_memory_bytes > host.max_memory_bytes
         || manifest.max_fuel > host.max_fuel
@@ -2630,11 +2905,13 @@ mod tests {
             max_execution_ms: 5_000,
             offline_allowed: true,
             max_prepare_fuel: None,
+            accelerator_variants: None,
         };
         seal(VerifiedModelPackage {
             manifest,
             manifest_bytes: Vec::new(),
             wasm,
+            variants: Vec::new(),
         })
     }
 
@@ -3443,11 +3720,13 @@ mod tests {
             max_execution_ms: 5_000,
             offline_allowed: true,
             max_prepare_fuel: None,
+            accelerator_variants: None,
         };
         seal(VerifiedModelPackage {
             manifest,
             manifest_bytes: Vec::new(),
             wasm,
+            variants: Vec::new(),
         })
     }
 
@@ -4846,7 +5125,7 @@ mod tests {
         over.max_fuel = 10;
         over.max_prepare_fuel = Some(11);
         assert_eq!(
-            check_host_limits(&limits, &over, 0, 0)
+            check_host_limits(&limits, &over, 0, 0, 0)
                 .expect_err("prepare over host fuel")
                 .reason,
             Some(ModelFailureReason::HostLimitExceeded)
@@ -4869,6 +5148,233 @@ mod tests {
     }
 
     #[test]
+    fn accelerator_variants_validate_fetch_and_fail_closed_on_digest_mismatch() {
+        let model = b"coreml-bytes";
+        let vector = b"{\"cases\":[]}";
+        let manifest = variant_package_manifest(model, vector);
+        assert!(manifest.variants_to_fetch(&[]).is_empty());
+        assert!(manifest.variants_to_fetch(&["wasm-cpu"]).is_empty());
+        assert_eq!(manifest.variants_to_fetch(&[ADAPTER_COREML]).len(), 1);
+        assert!(
+            fixture_package()
+                .manifest
+                .variants_to_fetch(&[ADAPTER_COREML])
+                .is_empty()
+        );
+
+        let digest = digest_hex(&serde_json::to_vec(&manifest).expect("json"));
+        let skipped = register_variant_host(
+            &manifest,
+            &[],
+            &[("variants/coreml/model.mlmodel", b"not-fetched".as_slice())],
+        )
+        .expect("wasm-cpu host skips unusable variants");
+        assert!(
+            skipped
+                .packages
+                .resolve_offline(&digest)
+                .expect("cached")
+                .variants
+                .is_empty()
+        );
+
+        let model_path = "variants/coreml/model.mlmodel";
+        let vector_path = "variants/coreml/conformance.json";
+        let missing = must_err(
+            register_variant_host(&manifest, &[ADAPTER_COREML], &[(model_path, model)]),
+            "missing vector",
+        );
+        assert_eq!(missing.reason, Some(ModelFailureReason::DigestMismatch));
+        assert!(missing.message.contains("missing"));
+
+        let mut tampered = model.to_vec();
+        tampered[0] = tampered[0].wrapping_add(1);
+        let bad = must_err(
+            register_variant_host(
+                &manifest,
+                &[ADAPTER_COREML],
+                &[(model_path, &tampered), (vector_path, vector)],
+            ),
+            "tampered",
+        );
+        assert_eq!(bad.reason, Some(ModelFailureReason::DigestMismatch));
+        assert!(bad.message.contains("digest mismatch"));
+        assert!(register_variant_host(&manifest, &[ADAPTER_COREML], &[]).is_err());
+
+        let mut bad_vector = vector.to_vec();
+        bad_vector.push(b' ');
+        assert_eq!(
+            must_err(
+                register_variant_host(
+                    &manifest,
+                    &[ADAPTER_COREML],
+                    &[(model_path, model), (vector_path, &bad_vector)],
+                ),
+                "tampered vector",
+            )
+            .reason,
+            Some(ModelFailureReason::DigestMismatch)
+        );
+
+        let host = register_variant_host(
+            &manifest,
+            &[ADAPTER_COREML],
+            &[(model_path, model), (vector_path, vector)],
+        )
+        .expect("fetched");
+        let cached = host.packages.resolve_offline(&digest).expect("cached");
+        assert_eq!(cached.variants.len(), 1);
+        assert_eq!(cached.variants[0].bytes, model);
+        cached.recheck(&digest).expect("recheck");
+        let mut dirty = cached.clone();
+        dirty.variants[0].bytes.push(0);
+        assert_eq!(
+            dirty.recheck(&digest).expect_err("dirty").reason,
+            Some(ModelFailureReason::DigestMismatch)
+        );
+        assert_eq!(
+            ModelPackageStore::new()
+                .insert_verified(dirty)
+                .expect_err("insert")
+                .reason,
+            Some(ModelFailureReason::DigestMismatch)
+        );
+
+        let mut empty = manifest.clone();
+        empty.accelerator_variants = Some(Vec::new());
+        assert_eq!(
+            empty.validate().expect_err("empty").reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let mut dup = manifest.clone();
+        let again = dup.accelerator_variants.as_ref().expect("one").clone();
+        dup.accelerator_variants
+            .as_mut()
+            .expect("one")
+            .push(again[0].clone());
+        assert_eq!(
+            dup.validate().expect_err("duplicate").reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let mut unknown = manifest.clone();
+        unknown.accelerator_variants.as_mut().expect("one")[0].adapter = "metal".to_string();
+        assert!(unknown.validate().is_err());
+        let mut format = manifest.clone();
+        format.accelerator_variants.as_mut().expect("one")[0].format = "mlpackage".to_string();
+        assert!(format.validate().is_err());
+        let mut path = manifest.clone();
+        path.accelerator_variants.as_mut().expect("one")[0].path =
+            "variants/coreml/../x".to_string();
+        assert!(path.validate().is_err());
+        let mut digest_field = manifest.clone();
+        digest_field.accelerator_variants.as_mut().expect("one")[0].digest = "zz".to_string();
+        assert!(digest_field.validate().is_err());
+        let mut tool = manifest.clone();
+        tool.accelerator_variants.as_mut().expect("one")[0]
+            .conversion
+            .tool
+            .clear();
+        assert!(tool.validate().is_err());
+        let mut tolerance = manifest.clone();
+        tolerance.accelerator_variants.as_mut().expect("one")[0]
+            .tolerance
+            .max_abs_diff = 0.006;
+        assert!(tolerance.validate().is_err());
+        let mut peak = manifest.clone();
+        peak.accelerator_variants.as_mut().expect("one")[0].peak_memory_bytes = 0;
+        assert!(peak.validate().is_err());
+        let mut old_schema = manifest.clone();
+        old_schema.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION.to_string();
+        assert_eq!(
+            old_schema.validate().expect_err("schema").reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+        let mut missing_derivation = manifest.clone();
+        missing_derivation.rights.derivation = None;
+        assert_eq!(
+            missing_derivation
+                .validate()
+                .expect_err("derivation")
+                .reason,
+            Some(ModelFailureReason::RightsInconsistent)
+        );
+        let mut mismatch = manifest.clone();
+        mismatch.accelerator_variants.as_mut().expect("one")[0]
+            .conversion
+            .source_digest = "cd".repeat(32);
+        assert_eq!(
+            mismatch.validate().expect_err("source").reason,
+            Some(ModelFailureReason::RightsInconsistent)
+        );
+    }
+
+    fn must_err(
+        result: Result<ExactModelHostConnector, HostConnectorError>,
+        label: &str,
+    ) -> HostConnectorError {
+        match result {
+            Err(error) => error,
+            Ok(_) => panic!("{label}"),
+        }
+    }
+
+    fn variant_package_manifest(model: &[u8], vector: &[u8]) -> ModelPackageManifest {
+        let mut manifest = fixture_package().manifest;
+        manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        let source = "ab".repeat(32);
+        manifest.rights.derivation = Some(ModelDerivation {
+            kind: DerivationKind::Converted,
+            source_digest: source.clone(),
+            source_license_id: "Apache-2.0".to_string(),
+            source_commercial_use: CommercialUse::Allowed,
+            source_url: "https://example.invalid/source".to_string(),
+        });
+        manifest.accelerator_variants = Some(vec![AcceleratorVariant {
+            adapter: ADAPTER_COREML.to_string(),
+            format: COREML_VARIANT_FORMAT.to_string(),
+            path: "variants/coreml/model.mlmodel".to_string(),
+            digest: digest_hex(model),
+            conversion: VariantConversion {
+                tool: "traverse-coreml".to_string(),
+                tool_version: "1".to_string(),
+                source_digest: format!("sha256:{source}"),
+            },
+            conformance_vector_path: "variants/coreml/conformance.json".to_string(),
+            conformance_vector_digest: digest_hex(vector),
+            tolerance: VariantTolerance {
+                max_abs_diff: MAX_VARIANT_ABS_DIFF,
+                top_k: 5,
+            },
+            peak_memory_bytes: 1024,
+        }]);
+        manifest
+    }
+
+    fn register_variant_host(
+        manifest: &ModelPackageManifest,
+        adapters: &[&str],
+        files: &[(&str, &[u8])],
+    ) -> Result<ExactModelHostConnector, HostConnectorError> {
+        let wasm = fixture_package().wasm;
+        let bytes = serde_json::to_vec(manifest).expect("json");
+        let (secret, public_key) = test_key();
+        let signature = serde_json::to_vec(&sign_model_manifest(&secret, &bytes)).expect("sig");
+        let mut pin = test_pin(&manifest.model_id, &digest_hex(&bytes));
+        pin.rights.license_id = manifest.rights.license_id.clone();
+        pin.rights.commercial_use = manifest.rights.commercial_use;
+        let mut keys = TrustedModelKeys::new();
+        keys.trust(&public_key).expect("trust");
+        let mut host = ExactModelHostConnector::new(vec![pin], keys);
+        host.model_usage = Some(ModelUsage::NonCommercial);
+        host.supported_adapters = adapters
+            .iter()
+            .map(|adapter| (*adapter).to_string())
+            .collect();
+        host.register_package_with_variants(&bytes, wasm, &signature, files)?;
+        Ok(host)
+    }
+
+    #[test]
     fn manifest_schema_2_2_0_matches_the_rust_type() {
         let schema: Value = serde_json::from_str(include_str!(
             "../../../contracts/connectors/traverse.model-runtime/schemas/model-package-manifest-2.2.0.json"
@@ -4888,7 +5394,7 @@ mod tests {
             .keys()
             .cloned()
             .collect();
-        // Accelerator variants are schema 2.2.0 but land with #1628.
+        // `accelerator_variants` is optional; this fixture omits it.
         expected.push("accelerator_variants".to_string());
         expected.sort();
         let mut properties: Vec<String> = schema["properties"]
