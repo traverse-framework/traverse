@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.12.1
+**Version**: 0.13.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -116,6 +116,17 @@ Three clarifications needed to implement ABI v3 identically on every host:
   charged to the call's `max_fuel` on both paths.
 
 FR-053 and FR-056 are amended.
+**Amendment (2026-10-09, version 0.12.1 -> 0.13.0, approved 2026-10-09)**: Decision 111 /
+ADR-0081 / `#1642`. Adds **.NET** model execution:
+- the .NET embedder calls the shared `traverse-model-host-frame` crate
+  through two audited P/Invoke functions in `traverse-dotnet-host`, on
+  `wasmi`;
+- it fails closed with `engine_unavailable` when the native library cannot
+  load;
+- a new signed `fixture-looper-1.0.0` lets every host prove mid-run
+  interruption without an in-process signer.
+
+FR-067 is new; FR-057 names the .NET host. Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -899,7 +910,8 @@ Traverse MUST:
   (status, output bytes, failure code and reason, `resource_usage` except
   `duration_ms`) MUST be identical whether it took the fresh path or the
   snapshot path. A v3 conformance fixture MUST prove this on wasmtime,
-  `wasmi`, the browser, the Swift host, and the Kotlin host.
+  `wasmi`, the browser, the Swift host, the Kotlin host, and the .NET host
+  (0.13.0).
 - **FR-058**: Manifest schema `2.2.0` MUST validate `accelerator_variants`:
   - at most one entry per known adapter id;
   - every field present;
@@ -943,6 +955,18 @@ Traverse MUST:
   requires a Spec 138 amendment that gives its variant format and ceiling
   profile. Adapter rules MUST NOT encode application-, model- or
   platform-specific behaviour beyond that table.
+- **FR-067**: The .NET embedder MUST run exact-ref packages on `wasmi`
+  through the shared framed protocol (0.13.0, Decision 111):
+  - behind exactly two audited P/Invoke functions, a framed call and its
+    free (ADR-0081);
+  - without re-implementing the verification, rights, status, or policy
+    rules;
+  - matching the signed vectors byte-for-byte, and passing the shared rights
+    conformance suite;
+  - interrupting a running inference when its `CancellationToken` is
+    cancelled;
+  - failing closed with `engine_unavailable` (FR-047) when the native library
+    cannot load.
 
 ## Acceptance scenarios
 
@@ -1058,6 +1082,15 @@ Traverse MUST:
     A policy with `require_fuel_metering: true` never selects `coreml`.
 31. (0.12.0) A cancellation or deadline that lands during a Core ML
     prediction → `cancelled` / `timeout`, and the late result is discarded.
+32. (0.13.0) The .NET `ExactModelHost` meets the following:
+    - It registers and executes the signed vectors byte-identically to every
+      other host, including prepared-v3 on both paths.
+    - It passes all 21 rights conformance cases.
+    - Cancelling a `CancellationToken` interrupts the signed
+      `fixture-looper-1.0.0` mid-run (`cancelled`); a deadline gives
+      `timeout`.
+    - It fails closed with `engine_unavailable` when the native library is
+      missing.
 
 ## Compatibility and non-goals
 

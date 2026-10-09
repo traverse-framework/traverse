@@ -47,3 +47,34 @@ A command the runtime rejects (no transition, or issued during a wait) returns a
 `capability_*`, `error`) as `TraverseRuntimeEvent`s with `EventType`, `SessionId`, and
 `Output` (the event `data` as JSON), numbered in arrival order; unknown runtime types
 surface as `error`. Legacy bridge events keep their original shape.
+
+## Exact-ref model execution (Spec 138, Decision 111)
+
+`ExactModelHost` runs signed exact-ref model packages through the same Rust
+code as the native, Swift, and Kotlin hosts. That code is the shared
+`traverse-model-host-frame` crate, on `wasmi`, behind two audited P/Invoke
+functions in the `traverse-dotnet-host` native library (ADR-0081). No
+Spec 138 rule is re-implemented in C#: Ed25519 verification, rights, the
+usage policy, package status, derivation, host ceilings, and guest ABI v1
+to v3 all come from Rust.
+
+- `new ExactModelHost(pins, trustedPublicKeysHex, modelUsage,
+  hostRequiresCommercial, limits)`. `ExactModelHostLimits` defaults to the
+  native desktop ceilings: 256 MiB package, 1 GiB memory, 5×10¹⁰ fuel, and
+  512 MiB of snapshots.
+- `RegisterPackageAsync`, `StageModelInput` / `ReadModelOutput`,
+  `ModelRights` / `ModelRightsRecord`, `SetPackageStatus`, and `DropRef`.
+- `ExecuteAsync(..., timeoutMs, cancellationToken)`. Cancelling the token
+  interrupts the running inference mid-run (`cancelled`).
+- `Install(runtimeEmbedder, command)`, or `ModelExecuteAdapter`, routes an
+  app command's Spec 137 `model.execute` payload (plus
+  `allowed_classifications`) to the host.
+- Failures are `ExactModelException`, carrying `Code`, `Reason` and the rights
+  `Detail`. If the native library cannot load, every model call fails with
+  `model_unavailable` / `engine_unavailable`, and the rest of the embedder
+  keeps working.
+
+The tests build the library for the current machine
+(`scripts/build_dotnet_host_native.sh`), so `dotnet test` needs a Rust
+toolchain. Shipped native assets for `win-x64`, `win-arm64`, and `linux-x64`
+come from the publish workflow (#1643).

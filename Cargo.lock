@@ -2764,6 +2764,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "traverse-dotnet-host"
+version = "0.14.0"
+dependencies = [
+ "serde_json",
+ "traverse-model-host-frame",
+]
+
+[[package]]
 name = "traverse-embedder"
 version = "0.14.0"
 dependencies = [
@@ -3124,16 +3132,6 @@ checksum = "61fb705ce81adde29d2a8e99d87995e39a6e927358c91398f374474746070ef7"
 dependencies = [
  "leb128fmt",
  "wasmparser 0.246.2",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.259.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1d0246511d901aacf25d2dc9111f0054947de5e093fe662099e709ff7530dc3"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.259.0",
 ]
 
 [[package]]

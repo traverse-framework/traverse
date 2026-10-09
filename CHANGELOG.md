@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### .NET exact-ref model execution (Decision 111, #1642)
+
+- New `ExactModelHost` in the .NET `TraverseEmbedder`, built on the shared
+  Rust `traverse-model-host-frame` crate on `wasmi`, through the new
+  `traverse-dotnet-host` library. That library exports two audited P/Invoke
+  functions (ADR-0081): a framed call and its free.
+  - Its API mirrors Swift and Kotlin: async registration and execution,
+    `CancellationToken` mid-run interruption, rights records, package status,
+    and an app-command adapter.
+  - It uses the native desktop default ceilings.
+  - If the library cannot load, every model call fails closed with
+    `engine_unavailable`.
+- The .NET tests pass the signed vectors byte-for-byte (classifier,
+  digits-mlp, digits-onnx, and prepared-v3 fresh and warm) and the shared
+  21-case rights suite.
+- New signed `fixture-looper-1.0.0` (a guest that never returns) for testing
+  mid-run interruption.
+- New `dotnet-model-host` CI job on `linux-x64`.
+- Spec 138 0.13.0 adds FR-067.
+
 ### ONNX runner guest ABI v3 prepare (Decision 110, #1627)
 
 - The runner's `model_prepare` loads and optimizes the model; `model_execute`

@@ -20,6 +20,10 @@ traverse-model-host-frame 100
 # (ExactModelHostTest), not Rust unit tests; the safe `respond` logic is
 # unit tested. 80 is the measured floor for the crate.
 traverse-android-host 80
+# Audited .NET P/Invoke shim (ADR-0081): both exported C functions are unit
+# tested directly; the one uncovered line is `respond`'s panic arm, which
+# turns a model-host panic into an error frame and is unreachable without one.
+traverse-dotnet-host 98
 # Audited runtime.wasm C-ABI boundary (ADR-0073): the exported extern "C"
 # functions take raw i32 addresses that are only valid pointers on an actual
 # wasm32 target's 32-bit address space — reconstructing them on this native

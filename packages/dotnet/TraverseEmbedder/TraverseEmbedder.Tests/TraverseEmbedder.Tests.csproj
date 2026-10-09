@@ -12,4 +12,12 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <ProjectReference Include="../TraverseEmbedder/TraverseEmbedder.csproj" />
   </ItemGroup>
+  <!--
+    Decision 111: build the traverse-dotnet-host model engine for this machine
+    into the test output directory, so the model tests load the identical Rust
+    code the NuGet package ships under runtimes/<rid>/native/.
+  -->
+  <Target Name="BuildTraverseDotnetHost" AfterTargets="Build" Condition="'$(TraverseSkipNativeModelHost)' != 'true'">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../../../scripts/build_dotnet_host_native.sh&quot; &quot;$(MSBuildProjectDirectory)/$(OutDir)&quot;" />
+  </Target>
 </Project>

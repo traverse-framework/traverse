@@ -33,6 +33,12 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      # Decision 111: the model tests build the traverse-dotnet-host engine.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
       - name: Resolve release tag
         working-directory: .
         shell: bash

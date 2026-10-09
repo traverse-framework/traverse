@@ -133,6 +133,7 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
 | Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | `wasmi`: yes; wasmtime: #1582 |
 | Swift (`ExactModelHost`, over `traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (`ExactModelHostLimits`, phone-sized defaults) | yes (Swift `Task` cancellation; fuel slices) |
 | Web (`ExactModelBrowserHost`) | browser WebAssembly | #1582 | #1582 |
+| .NET (`ExactModelHost`, over `traverse_dotnet_host_model_call`, ADR-0081) | `wasmi` (Decision 111) | yes (`ExactModelHostLimits`, desktop defaults) | yes (`CancellationToken`; fuel slices) |
 
 - **Host ceilings:** a host caps package bytes, guest memory, and fuel.
   Registration fails with `host_limit_exceeded` when a package's size or
@@ -154,7 +155,10 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   app-state-machine command's Spec 137 `model.execute` payload, plus
   `allowed_classifications`, to it. The digits conformance vector is
   byte-identical on Swift and scores 1,727 / 1,797, as on native and web.
-  Kotlin runs them through the JNI shim (Decision 108); .NET doesn't yet (`#1602`).
+  Kotlin runs them through the JNI shim (Decision 108), and .NET through the
+  P/Invoke shim (Decision 111, `#1642`). The signed `fixture-looper-1.0.0`
+  never returns, so hosts without an in-process signer can test mid-run
+  cancellation and deadlines.
 
 ## Cache and offline behavior
 
