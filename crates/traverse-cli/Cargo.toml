@@ -23,7 +23,7 @@ sha2 = "0.11"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8"
-wasm-encoder = "0.259"
+wasm-encoder = "0.261"
 wasmparser = "0.259"
 traverse-contracts = { workspace = true }
 traverse-registry = { workspace = true }
