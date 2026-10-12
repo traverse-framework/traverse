@@ -166,18 +166,22 @@ same Host ABI — the browser is one target among several, not the default.
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
 | **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned `runtime.wasm`) | Published (npm `traverse-embedder-web@0.14.0`) |
-| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published (SwiftPM, binary xcframework release) |
-| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published (Maven Central, `com.traverse-framework:traverse-embedder`) |
-| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published (nuget.org, `TraverseEmbedder`) |
+| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.14.0-4`) |
+| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.14.0) |
+| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.14.0) |
 | **AI agent** | `traverse-mcp` stdio server | via the host embedder | Published on crates.io |
 
 All five embedders run against one CI-enforced conformance suite (spec
 `068-public-platform-embedder-packages`), so a capability that passes on one
 platform behaves the same on the rest. Desktop targets (Linux x86_64/aarch64,
 macOS x86_64/arm64, Windows x86_64) are covered by the CI matrix on every PR.
+No host is Certified under spec
+[`529-production-platform-certification`](specs/529-production-platform-certification/spec.md)
+yet. The Kotlin and .NET `ExactModelHost` (signed exact-ref model execution) is
+on `main` but not in the published 0.14.0 Maven/NuGet packages (#1651).
 
-**Cloud and edge** placement targets are specified and on the roadmap, not yet
-shipped.
+**Edge** placement is planned, not shipped. **Cloud** placement is an explicit
+non-goal for v0.1.
 
 Scaffold your own governed bundle with `traverse-cli app new <id>` —
 [docs/expedition-example-authoring.md](docs/expedition-example-authoring.md).
