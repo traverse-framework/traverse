@@ -140,7 +140,7 @@ export type ModelPackageManifest = {
 
 /** Closed adapter list (FR-066). Core ML is the first adapter. */
 export const ADAPTER_COREML = "coreml";
-const COREML_VARIANT_FORMAT = "mlmodel";
+const COREML_VARIANT_FORMAT = "mlpackage-zip";
 const MAX_VARIANT_ABS_DIFF = 5e-3;
 
 export type VariantConversion = {

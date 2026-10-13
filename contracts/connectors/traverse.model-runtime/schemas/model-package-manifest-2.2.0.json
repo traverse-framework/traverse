@@ -229,7 +229,7 @@
         "format": {
           "type": "string",
           "minLength": 1,
-          "description": "Adapter variant format; coreml requires mlmodel."
+          "description": "Adapter variant format; coreml requires mlpackage-zip (the canonical zip of a Core ML ML Program, Spec 138 0.13.3)."
         },
         "path": {
           "type": "string",
@@ -316,7 +316,7 @@
           "then": {
             "properties": {
               "format": {
-                "const": "mlmodel"
+                "const": "mlpackage-zip"
               }
             }
           }

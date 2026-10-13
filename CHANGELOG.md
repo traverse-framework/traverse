@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Real ONNX → Core ML conversion (Decisions 112 and 113, #1663 slice 1)
+
+- `traverse-cli model convert-coreml` now drives the pinned converter in
+  `tools/coreml/`:
+  - a deterministic pre-pass, then onnx2torch, then coremltools;
+  - the output is an fp32 ML Program, written as a canonical zip;
+  - the #1628 stub that wrapped the ONNX bytes in a protobuf shell is gone.
+- New flags:
+  - `--python` (or `TRAVERSE_COREML_PYTHON`) and `--converter` on
+    `convert-coreml`;
+  - a repeatable `--f32-dtype` on `add-variant`, which records
+    `tolerance.f32_dtypes`.
+- **Breaking:** Spec 138 0.13.3 replaces the `coreml` variant format
+  `mlmodel` with `mlpackage-zip`, in the runtime, the web embedder and
+  manifest schema 2.2.0. No signed package carried an `mlmodel` variant.
+- `conversion.tool_version` is now `lock-sha256:<digest of
+  tools/coreml/requirements.lock>`.
+- New fixture `digits-onnx-coreml-1.0.0`: the ONNX digits package plus a real
+  Core ML variant (worst |Δlogit| 3.8×10⁻⁶ against `wasm-cpu`).
+- New CI job `coreml-variant-reconvert` (`macos-14`):
+  - installs the hash-locked environment;
+  - re-converts every committed Core ML variant and requires its committed
+    digest (FR-068).
+
 ### Native accelerator adapter framework (Decision 112, #1629 slice 2)
 
 - New `AcceleratorAdapter` trait in `traverse-runtime`: availability,

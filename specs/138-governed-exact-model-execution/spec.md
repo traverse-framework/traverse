@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.13.2
+**Version**: 0.13.3
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -140,6 +140,16 @@ dtypes are floats. `tolerance.f32_dtypes` lists them (optional, defaulting to
 none). Only those outputs are compared element-wise; every other output MUST
 match byte-for-byte. The generic adapter framework (FR-060 to FR-065) now has
 a reference implementation in `traverse-runtime`. Additive.
+**Amendment (2026-10-13, version 0.13.2 -> 0.13.3, approved under Decisions 112 and 113)**: `#1663`.
+The `coreml` variant format is now `mlpackage-zip`: the canonical zip of a
+Core ML ML Program `.mlpackage`, produced by the pinned converter in
+`tools/coreml/`. It replaces `mlmodel`, which only the #1628 stub ever
+produced and which never ran. `traverse-cli model convert-coreml` drives that
+converter. Committed variants are re-converted in CI (FR-068) on a macOS
+arm64 runner that installs the hash-locked environment. This replaces the
+pinned Linux container that Decision 112 proposed; it was the owner's choice
+for this slice. Breaking for `mlmodel` variants; no signed package carries
+one.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -517,7 +527,33 @@ by amending this list:
 
 | Adapter id | Variant `format` | Hosts |
 |---|---|---|
-| `coreml` | `mlmodel` (one uncompressed Core ML model file, compiled on the device and cached by variant digest) | Swift (iOS/macOS) |
+| `coreml` | `mlpackage-zip` (the canonical zip of a Core ML ML Program `.mlpackage`, compiled on the device and cached by variant digest; 0.13.3) | Swift (iOS/macOS) |
+
+### Core ML variant format (0.13.3, Decisions 112 and 113)
+
+An `mlpackage-zip` variant is the canonical zip of one ML Program
+`.mlpackage`, using fp32 compute precision and a minimum deployment target
+of iOS 17. The zip MUST be canonical, so the same source and converter
+produce the same bytes:
+- `model.mlmodel` inside the package is re-serialized with deterministic
+  protobuf serialization;
+- the `Manifest.json` item identifiers are UUIDv5 values derived from each
+  item's path, not random UUIDs, and the file is written with sorted keys;
+- entries are sorted by path, stored without compression, and carry the
+  timestamp 1980-01-01 00:00:00 and mode `0644`.
+
+The converter is `tools/coreml/convert_variant.py`, run in the environment
+that `tools/coreml/requirements.lock` pins by hash. A variant it produced
+records `conversion.tool = "traverse-coreml"` and
+`conversion.tool_version = "lock-sha256:<SHA-256 of requirements.lock>"`.
+The converter applies only model-agnostic, semantics-preserving rewrites
+before conversion, and only where their construct appears:
+- `auto_pad = SAME_UPPER` becomes explicit pads;
+- a full-axis reverse `Slice` becomes `Gather`;
+- the ONNX dynamic int8 matmul becomes exact float ops.
+
+Any converted model must still pass its conformance vector within
+`tolerance`, like every other variant.
 
 ### Variants inside the package
 
@@ -987,6 +1023,15 @@ Traverse MUST:
     cancelled;
   - failing closed with `engine_unavailable` (FR-047) when the native library
     cannot load.
+- **FR-068**: Every committed `coreml` variant MUST be reproducible (0.13.3,
+  Decision 113). CI re-converts its source ONNX (the `fixtures/onnx/` file
+  whose SHA-256 equals `conversion.source_digest`) with the pinned converter
+  on a macOS arm64 runner, in the environment installed from
+  `tools/coreml/requirements.lock` with `--require-hashes`. The result MUST
+  have exactly the variant's `digest`, and `conversion.tool_version` MUST
+  name the current lock digest. If byte reproducibility ever fails, the
+  check falls back to the variant's conformance tolerance only through a
+  further amendment (Decision 112 rule 3).
 
 ## Acceptance scenarios
 
