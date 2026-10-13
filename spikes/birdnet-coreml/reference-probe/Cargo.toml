@@ -1,0 +1,14 @@
+[package]
+name = "birdnet-tract-reference"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Same tract as the shipped ONNX runner guest (crates/traverse-onnx-runner-guest).
+tract-onnx = "=0.21.18"
+
+[profile.release]
+opt-level = 3
+
+[workspace]
