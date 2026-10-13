@@ -291,11 +291,8 @@ impl WasmExecutor {
         capability_id: &str,
         resources: &ExecutionResources,
     ) -> Result<(), ExecutorError> {
-        let Ok(host_memory) = u64::try_from(self.limits.memory_bytes) else {
-            return Err(ExecutorError::RuntimeSetupFailed(
-                "host memory ceiling exceeds u64".to_string(),
-            ));
-        };
+        // Host packages target 64-bit platforms where `usize` fits in `u64`.
+        let host_memory = self.limits.memory_bytes as u64;
         host_meets_execution_resources(
             capability_id,
             resources,
@@ -1759,6 +1756,25 @@ mod binary_cache_tests {
                 "expected fail-fast memory detail, got {detail}"
             );
         }
+    }
+
+    #[test]
+    fn ensure_meets_wasm_initial_memory_accepts_module_within_host_ceiling() {
+        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+            memory_bytes: 256 * 1024,
+            ..WasmExecutionLimits::default()
+        }) else {
+            return;
+        };
+        // WASM header + memory section: one memory, min 2 pages (128 KiB).
+        let with_memory = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
+        ];
+        assert!(
+            executor
+                .ensure_meets_wasm_initial_memory("example.cap", &with_memory)
+                .is_ok()
+        );
     }
 
     #[test]
