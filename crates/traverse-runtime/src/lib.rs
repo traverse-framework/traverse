@@ -3142,9 +3142,7 @@ fn validate_properties(
     path: &str,
     errors: &mut Vec<Value>,
 ) {
-    let properties = schema_object
-        .get("properties")
-        .and_then(Value::as_object);
+    let properties = schema_object.get("properties").and_then(Value::as_object);
     let additional_allowed = schema_object
         .get("additionalProperties")
         .and_then(Value::as_bool)
@@ -5034,13 +5032,15 @@ mod tests {
                 "text": {"type": "string", "maxLength": 20}
             }
         });
-        assert!(validate_payload_against_contract(
-            &json!({"text": "ok"}),
-            &schema,
-            super::RuntimeErrorCode::RequestInvalid,
-            "valid",
-        )
-        .is_ok());
+        assert!(
+            validate_payload_against_contract(
+                &json!({"text": "ok"}),
+                &schema,
+                super::RuntimeErrorCode::RequestInvalid,
+                "valid",
+            )
+            .is_ok()
+        );
         let unknown = validate_payload_against_contract(
             &json!({"text": "ok", "skip_redaction": true, "return_raw": true}),
             &schema,
@@ -5048,7 +5048,9 @@ mod tests {
             "unknown fields",
         )
         .expect_err("additionalProperties");
-        let violations = unknown.details["violations"].as_array().expect("violations");
+        let violations = unknown.details["violations"]
+            .as_array()
+            .expect("violations");
         let paths: Vec<&str> = violations
             .iter()
             .filter_map(|v| v["path"].as_str())
@@ -5072,7 +5074,10 @@ mod tests {
         )
         .expect_err("maxLength");
         assert_eq!(too_long.details["violations"][0]["path"], json!("/text"));
-        assert_eq!(too_long.details["violations"][0]["keyword"], json!("maxLength"));
+        assert_eq!(
+            too_long.details["violations"][0]["keyword"],
+            json!("maxLength")
+        );
     }
 
     #[test]
