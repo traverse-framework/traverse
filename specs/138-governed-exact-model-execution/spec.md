@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.13.1
+**Version**: 0.13.2
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -133,6 +133,13 @@ embedder MUST also pass the signed vectors and the rights suite as
 instrumented tests on an `x86_64` emulator, loading the AAR's cargo-ndk
 library, and MUST prove the fail-closed load there. Testing only; no
 behaviour change.
+**Amendment (2026-10-13, version 0.13.1 -> 0.13.2, approved under Decision 112)**: `#1629`.
+Guest frame dtype codes are guest-defined (for example `f32` is `2` for the
+digits input and `3` for its output), so a variant declares which output
+dtypes are floats. `tolerance.f32_dtypes` lists them (optional, defaulting to
+none). Only those outputs are compared element-wise; every other output MUST
+match byte-for-byte. The generic adapter framework (FR-060 to FR-065) now has
+a reference implementation in `traverse-runtime`. Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -529,12 +536,16 @@ at most one entry per adapter id. Each entry has these fields, all required:
 - `conformance_vector_path` and `conformance_vector_digest`: the variant's
   conformance vector. The vector's cases are inputs, each with the
   `wasm-cpu` reference output that the signed package produces;
-- `tolerance`: `{ max_abs_diff, top_k }`.
+- `tolerance`: `{ max_abs_diff, top_k, f32_dtypes? }`.
+  - `f32_dtypes` (0.13.2) lists the guest output dtype codes that hold
+    little-endian `f32` values. It defaults to none, because frame dtype
+    codes are guest-defined.
   - `max_abs_diff` is a number in `[0, 5e-3]` (Decision 106), compared
-    element-wise on `f32` outputs.
+    element-wise on outputs whose dtype is in `f32_dtypes`.
   - `top_k` is an integer `≥ 0`. When it is above `0`, the indices of the
     `top_k` largest output values MUST be identical in the same order.
-  - Outputs whose dtype is not `f32` MUST match byte-for-byte.
+  - Outputs whose dtype is not in `f32_dtypes` MUST match byte-for-byte.
+    Both frames MUST also agree on dtype and dims.
 - `peak_memory_bytes`: the declared peak memory for one execution.
 
 The FR-018 manifest signature covers every variant through its digest.

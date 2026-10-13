@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use traverse_runtime::exact_model::{
     ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits, ModelEngine,
-    ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, TrustedModelKeys,
+    ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, PlacementEvidence, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -359,6 +359,19 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .ok_or(EnvelopeError::InvalidInput("allowed_classifications"))?;
+    // Optional execution-policy placement order and fuel requirement
+    // (Spec 138 FR-060, FR-064); absent keeps the `wasm-cpu` default.
+    let placements: Vec<String> = match request.header.get("placements") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| EnvelopeError::InvalidInput("placements"))?,
+    };
+    let require_fuel_metering = match request.header.get("require_fuel_metering") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or(EnvelopeError::InvalidInput("require_fuel_metering"))?,
+    };
     let max_output = payload
         .get("max_output_bytes")
         .and_then(Value::as_u64)
@@ -377,6 +390,8 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
             policy_ref,
             allowed_classifications: allowed,
             max_output_bytes: max_output,
+            placements,
+            require_fuel_metering,
         },
     );
     host.cancel.store(false, Ordering::SeqCst);
@@ -406,15 +421,21 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
         .unwrap_or(0);
     let model_ref = payload.get("model_ref").cloned().unwrap_or(Value::Null);
     let evidence = json!(result.model_evidence);
+    let placement_evidence = result
+        .placement_evidence
+        .unwrap_or_else(PlacementEvidence::wasm_cpu);
+    let placement = placement_evidence.placement.clone();
     Ok(ok(json!({
         "model_evidence": evidence,
         "output_ref": output_ref,
-        "placement": PLACEMENT_WASM_CPU,
+        "placement": placement,
+        "placement_evidence": placement_evidence,
         "target": PLACEMENT_WASM_CPU,
         "model_ref": model_ref,
         "trace": {
             "model_ref": model_ref,
-            "placement": PLACEMENT_WASM_CPU,
+            "placement": placement,
+            "placement_evidence": placement_evidence,
             "data_classification": payload.get("data_classification").cloned().unwrap_or(Value::Null),
             "model_evidence": evidence,
             "usage": {
@@ -897,6 +918,60 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Spec 138 FR-060/FR-061 (#1629): the execute header carries the policy's
+    /// placement order; results report the placement that ran.
+    #[test]
+    fn execute_reports_placement_evidence_and_honours_policy_placements() {
+        let pin = digits_pin();
+        let handle = create(json!([pin.clone()]));
+        register_digits(handle);
+        let vector: Value =
+            serde_json::from_slice(&read("conformance/signed-digits-mlp.json")).expect("vector");
+        let input =
+            hex_decode(vector["cases"][0]["input_frame_hex"].as_str().expect("in")).expect("hex");
+        let run = |extra: Value| {
+            let mut header = execute_header(&pin, &stage(handle, &input), "placement");
+            if let (Some(header), Some(extra)) = (header.as_object_mut(), extra.as_object()) {
+                header.extend(extra.clone());
+            }
+            call(handle, &header, &[])
+        };
+        for extra in [
+            json!({}),
+            json!({ "placements": ["wasm-cpu"], "require_fuel_metering": true }),
+        ] {
+            let executed = run(extra);
+            assert_eq!(executed["placement"], json!("wasm-cpu"), "{executed}");
+            assert_eq!(
+                executed["placement_evidence"],
+                json!({ "placement": "wasm-cpu", "compute_units": "cpu", "fuel_metering": "metered" })
+            );
+            assert_eq!(
+                executed["trace"]["placement_evidence"],
+                executed["placement_evidence"]
+            );
+        }
+        let unavailable = run(json!({ "placements": ["coreml"] }));
+        assert_eq!(
+            unavailable["error"]["reason"],
+            json!("placement_unavailable"),
+            "{unavailable}"
+        );
+        let denied = run(json!({ "placements": ["metal"] }));
+        assert_eq!(denied["error"]["code"], json!("policy_denied"), "{denied}");
+        for bad in [
+            json!({ "placements": "coreml" }),
+            json!({ "require_fuel_metering": "yes" }),
+        ] {
+            let mut header = execute_header(&pin, &stage(handle, &input), "bad");
+            if let (Some(header), Some(bad)) = (header.as_object_mut(), bad.as_object()) {
+                header.extend(bad.clone());
+            }
+            assert!(model_call(&TEST_PROFILE, handle, &frame(&header, &[])).is_err());
+        }
+        call(handle, &json!({ "op": "destroy" }), &[]);
     }
 
     /// Decision 108: both shims run the identical protocol; only the stamped

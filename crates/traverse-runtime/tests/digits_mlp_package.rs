@@ -57,6 +57,7 @@ fn registered_host() -> (ExactModelHostConnector, ExactModelPin) {
             policy_ref: "policy-1".to_string(),
             allowed_classifications: vec!["sensitive".to_string()],
             max_output_bytes: 64,
+            ..ExecutionPolicy::default()
         },
     );
     (host, pin)
