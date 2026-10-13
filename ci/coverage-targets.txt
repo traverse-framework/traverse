@@ -33,3 +33,7 @@ traverse-dotnet-host 98
 # safe internal logic (executor.rs, parse_init_payload, submit) is unit
 # tested directly; 70 is the measured floor for the crate as a whole.
 traverse-runtime-wasm 70
+# Core ML adapter (ADR-0082): the gate runs on Linux, where the crate is its
+# platform-neutral helpers (zip, manifest check, strided tensors); the
+# Apple-only objc2 module is exercised by the macOS coreml-adapter job.
+traverse-coreml-adapter 100

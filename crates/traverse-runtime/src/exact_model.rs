@@ -199,6 +199,28 @@ pub struct CachedAcceleratorVariant {
     pub conformance_vector: Vec<u8>,
 }
 
+/// The guest frame dtype codes a variant consumes and produces (Spec 138
+/// 0.13.4, FR-065). Dtype codes are guest-defined, so an adapter takes them
+/// from the variant's signed conformance vector rather than guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariantFrameContract {
+    /// Dtype code every input frame carries.
+    pub input_dtype: u8,
+    /// Dtype code the adapter writes on its output frame.
+    pub output_dtype: u8,
+}
+
+impl CachedAcceleratorVariant {
+    /// The frame contract of this variant's conformance vector: the input
+    /// and reference output dtype codes, which every case must share.
+    /// `None` when the vector is unreadable, empty, holds a malformed frame,
+    /// or its cases disagree; the device self-check then fails (FR-062).
+    #[must_use]
+    pub fn frame_contract(&self) -> Option<VariantFrameContract> {
+        adapter::frame_contract(&self.conformance_vector)
+    }
+}
+
 /// Host-owned lifecycle status of a package (Decision 107).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.13.3
+**Version**: 0.13.4
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -150,6 +150,13 @@ arm64 runner that installs the hash-locked environment. This replaces the
 pinned Linux container that Decision 112 proposed; it was the owner's choice
 for this slice. Breaking for `mlmodel` variants; no signed package carries
 one.
+**Amendment (2026-10-13, version 0.13.3 -> 0.13.4, approved under Decisions 112 and 114)**: `#1629`.
+- FR-065 now says where an adapter gets its frame dtype codes: from the
+  variant's conformance vector (Decision 114).
+- FR-069 is new. The reference Core ML adapter (`traverse-coreml-adapter`,
+  ADR-0082) and the frame-protocol fields that configure it are now
+  specified.
+Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -1006,6 +1013,12 @@ Traverse MUST:
   schema and opaque refs as the `wasm-cpu` guest. They MUST NOT
   re-implement verification, rights, status or policy rules: every
   placement shares the host's single registration and execute checks.
+  Because dtype codes are guest-defined, the variant's conformance vector
+  is its frame contract (0.13.4, Decision 114). Every case input carries
+  the input dtype code and every reference output the output dtype code,
+  and all cases MUST agree. An adapter MUST reject an input frame with any
+  other dtype and MUST write its output with the contract's output dtype.
+  A vector with no consistent contract fails the self-check (FR-062).
 - **FR-066**: The adapter id list in "Native accelerator adapters" is
   closed. Adding an adapter (for example for Android or the browser)
   requires a Spec 138 amendment that gives its variant format and ceiling
@@ -1032,6 +1045,22 @@ Traverse MUST:
   name the current lock digest. If byte reproducibility ever fails, the
   check falls back to the variant's conformance tolerance only through a
   further amendment (Decision 112 rule 3).
+- **FR-069**: Apple hosts MUST run `coreml` variants through the reference
+  adapter `traverse-coreml-adapter` (0.13.4, ADR-0082), behind the
+  connector's single implementation of FR-060 to FR-065:
+  - the adapter unpacks the `mlpackage-zip` into a host-private cache,
+    checks its `Manifest.json` (file-format version, every item's path,
+    name, author and description, and the root identifier), compiles it on
+    the device, and keeps the compiled model per variant digest;
+  - it runs with host-configured compute units (`all`, `cpu_only`,
+    `cpu_and_gpu` or `cpu_and_neural_engine`; default `all`, Decision 112),
+    which are recorded in `placement_evidence.compute_units`;
+  - a Core ML error or Objective-C exception fails the call with
+    `execution_failed`, and the message carries no host file paths;
+  - in the framed host protocol, `create` takes an optional `accelerators`
+    object (`{"coreml": {"compute_units"?, "cache_dir"?}}`; absent means no
+    adapter), and `register` takes `variant_paths`, naming one segment per
+    fetched variant file.
 
 ## Acceptance scenarios
 

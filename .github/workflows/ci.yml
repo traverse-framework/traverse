@@ -367,6 +367,26 @@ jobs:
           TRAVERSE_COREML_PYTHON: ${{ runner.temp }}/coreml-venv/bin/python
         run: bash scripts/ci/coreml_variant_reconvert_check.sh
 
+  # #1629 slice 3 (ADR-0082): the objc2 Core ML adapter runs the signed
+  # digits-onnx-coreml package through the connector on real Core ML, on
+  # every compute-unit setting, and fails closed on corrupt variants.
+  coreml-adapter:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Test the Core ML adapter and the framed host protocol
+        run: cargo test --locked -p traverse-coreml-adapter -p traverse-model-host-frame -p traverse-swift-host
+
   # #1611 (Decision 108 follow-up): boot an x86_64 Android emulator and run
   # the Kotlin model host's instrumented tests against the cargo-ndk library
   # the AAR ships (signed vectors, rights suite, fail-closed loading). See

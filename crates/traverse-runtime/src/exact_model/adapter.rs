@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::{
     ADAPTER_COREML, AcceleratorVariant, CachedAcceleratorVariant, PLACEMENT_WASM_CPU,
-    VariantTolerance, decode_guest_frame, hex_decode,
+    VariantFrameContract, VariantTolerance, decode_guest_frame, hex_decode,
 };
 use crate::host_connector_dispatch::HostConnectorError;
 
@@ -131,14 +131,15 @@ pub(super) fn self_check(
     if let Some(passed) = cache.get(&key) {
         return *passed;
     }
-    let passed = vector_cases(&cached.conformance_vector).is_some_and(|cases| {
-        !cases.is_empty()
-            && cases.iter().all(|(input, expected)| {
-                adapter
-                    .predict(cached, input)
-                    .is_ok_and(|actual| within_tolerance(expected, &actual, &variant.tolerance))
-            })
-    });
+    let passed = frame_contract(&cached.conformance_vector).is_some()
+        && vector_cases(&cached.conformance_vector).is_some_and(|cases| {
+            !cases.is_empty()
+                && cases.iter().all(|(input, expected)| {
+                    adapter
+                        .predict(cached, input)
+                        .is_ok_and(|actual| within_tolerance(expected, &actual, &variant.tolerance))
+                })
+        });
     cache.insert(key, passed);
     passed
 }
@@ -156,6 +157,22 @@ fn vector_cases(vector: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
             Some((input, output))
         })
         .collect()
+}
+
+/// The dtype codes shared by every case of a conformance vector (FR-065).
+pub(super) fn frame_contract(vector: &[u8]) -> Option<VariantFrameContract> {
+    let mut contract = None;
+    for (input, expected) in vector_cases(vector)? {
+        let case = VariantFrameContract {
+            input_dtype: decode_guest_frame(&input).ok()?.0,
+            output_dtype: decode_guest_frame(&expected).ok()?.0,
+        };
+        if contract.is_some_and(|seen| seen != case) {
+            return None;
+        }
+        contract = Some(case);
+    }
+    contract
 }
 
 /// Compare an accelerated output frame with the `wasm-cpu` reference
@@ -346,6 +363,54 @@ mod tests {
             conformance_vector: Vec::new(),
         };
         assert_eq!(Minimal.predict(&variant, b"x").expect("echo"), b"x");
+    }
+
+    fn vector(cases: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let cases: Vec<Value> = cases
+            .iter()
+            .map(|(input, output)| {
+                serde_json::json!({
+                    "input_frame_hex": crate::exact_model::hex_encode(input),
+                    "output_frame_hex": crate::exact_model::hex_encode(output),
+                })
+            })
+            .collect();
+        serde_json::to_vec(&serde_json::json!({ "cases": cases })).expect("vector")
+    }
+
+    #[test]
+    fn frame_contract_comes_from_vector_cases_that_agree() {
+        let input = encode_guest_frame(2, &[1], &1.0_f32.to_le_bytes());
+        let output = encode_guest_frame(3, &[1], &2.0_f32.to_le_bytes());
+        let other_output = encode_guest_frame(4, &[1], &2.0_f32.to_le_bytes());
+        assert_eq!(
+            frame_contract(&vector(&[(&input, &output), (&input, &output)])),
+            Some(VariantFrameContract {
+                input_dtype: 2,
+                output_dtype: 3,
+            })
+        );
+        assert_eq!(
+            frame_contract(&vector(&[(&input, &output), (&input, &other_output)])),
+            None
+        );
+        assert_eq!(frame_contract(&vector(&[])), None);
+        assert_eq!(frame_contract(&vector(&[(b"x", &output)])), None);
+        assert_eq!(frame_contract(&vector(&[(&input, b"x")])), None);
+        assert_eq!(frame_contract(b"not json"), None);
+        let cached = CachedAcceleratorVariant {
+            adapter: ADAPTER_COREML.to_string(),
+            path: "variants/coreml/model.mlpackage.zip".to_string(),
+            bytes: Vec::new(),
+            conformance_vector_path: "variants/coreml/conformance.json".to_string(),
+            conformance_vector: vector(&[(&input, &output)]),
+        };
+        assert_eq!(
+            cached
+                .frame_contract()
+                .map(|contract| contract.output_dtype),
+            Some(3)
+        );
     }
 
     #[test]
