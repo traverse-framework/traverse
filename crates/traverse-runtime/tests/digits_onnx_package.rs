@@ -70,6 +70,7 @@ fn registered_host(engine: ModelEngine) -> (ExactModelHostConnector, ExactModelP
             policy_ref: "policy-1".to_string(),
             allowed_classifications: vec!["sensitive".to_string()],
             max_output_bytes: MAX_OUTPUT,
+            ..ExecutionPolicy::default()
         },
     );
     (host, pin)

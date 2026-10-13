@@ -576,6 +576,7 @@ fn host_for(
             policy_ref: CONFORMANCE_POLICY.to_string(),
             allowed_classifications: vec![CONFORMANCE_CLASSIFICATION.to_string()],
             max_output_bytes: u64::MAX,
+            ..ExecutionPolicy::default()
         },
     );
     Ok(host)
@@ -1013,6 +1014,7 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
         tolerance: VariantTolerance {
             max_abs_diff,
             top_k,
+            f32_dtypes: Vec::new(),
         },
         peak_memory_bytes,
     });

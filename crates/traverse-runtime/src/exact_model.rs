@@ -14,7 +14,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod adapter;
 mod snapshot;
+pub use adapter::{AcceleratorAdapter, FuelMetering, PlacementEvidence};
+use adapter::{SelfCheckKey, effective_placements, self_check};
 pub use snapshot::MODEL_PREPARE_EXPORT;
 use snapshot::{GlobalValue, Snapshot, SnapshotCache, check_v3_module};
 
@@ -148,6 +151,12 @@ pub struct VariantTolerance {
     pub max_abs_diff: f64,
     /// When above 0, the top-k indices must match in order.
     pub top_k: u32,
+    /// Guest output dtype codes holding little-endian `f32` values, compared
+    /// under `max_abs_diff` / `top_k`. Any other dtype must match
+    /// byte-for-byte (Spec 138 0.13.2, Decision 112): frame dtype codes are
+    /// guest-defined, so the variant declares which are floats.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub f32_dtypes: Vec<u8>,
 }
 
 /// One signed accelerator variant inside a schema `2.2.0` package (FR-058).
@@ -1027,6 +1036,11 @@ pub struct ExecutionPolicy {
     pub allowed_classifications: Vec<String>,
     /// Max output bytes under this policy.
     pub max_output_bytes: u64,
+    /// Allowed placements in preference order (FR-060); empty means
+    /// `["wasm-cpu"]`. An unknown or repeated id denies every call.
+    pub placements: Vec<String>,
+    /// When true, only placements that meter fuel may run (FR-064).
+    pub require_fuel_metering: bool,
 }
 
 /// Engine that executes the `wasm-cpu` model guest.
@@ -1123,6 +1137,10 @@ pub struct ExactModelHostConnector {
     /// (FR-059). `model verify` sets this to the package's adapters so the
     /// complete package is checked.
     pub supported_adapters: Vec<String>,
+    /// Native accelerator adapters registered by the host (FR-063).
+    adapters: Vec<Box<dyn AcceleratorAdapter>>,
+    /// Device self-check results (FR-062).
+    self_checks: HashMap<SelfCheckKey, bool>,
 }
 
 impl ExactModelHostConnector {
@@ -1145,7 +1163,20 @@ impl ExactModelHostConnector {
             compiled: CompiledGuests::default(),
             snapshots: SnapshotCache::default(),
             supported_adapters: Vec::new(),
+            adapters: Vec::new(),
+            self_checks: HashMap::new(),
         }
+    }
+
+    /// Register a native accelerator adapter (FR-063). The host then fetches
+    /// that adapter's variants at registration, and a policy that lists the
+    /// adapter id may run it.
+    pub fn register_adapter(&mut self, adapter: Box<dyn AcceleratorAdapter>) {
+        let id = adapter.id().to_string();
+        if !self.supported_adapters.contains(&id) {
+            self.supported_adapters.push(id);
+        }
+        self.adapters.push(adapter);
     }
 
     /// Invalidate every staged ref and drop every snapshot (FR-055).
@@ -1663,6 +1694,14 @@ impl HostConnectorPort for ExactModelHostConnector {
                 message: "input schema does not match model manifest".to_string(),
             });
         }
+        // FR-060: pick the placement before the input is consumed.
+        let mut accelerator = select_placement(
+            policy,
+            package,
+            &mut self.adapters,
+            &mut self.self_checks,
+            self.host_limits.max_memory_bytes,
+        )?;
 
         let call_max_out = payload
             .max_output_bytes
@@ -1722,6 +1761,30 @@ impl HostConnectorPort for ExactModelHostConnector {
             budget: self.host_limits.max_snapshot_bytes,
         };
         let started = Instant::now();
+        if let Some((adapter, variant)) = accelerator.as_mut() {
+            let output = run_adapter(
+                adapter.as_mut(),
+                variant,
+                &input,
+                call_max_out,
+                &SliceControl {
+                    cancel: &self.cancel,
+                    deadline: started + timeout,
+                },
+            )?;
+            let placement_evidence = PlacementEvidence {
+                placement: adapter.id().to_string(),
+                compute_units: adapter.compute_units(),
+                fuel_metering: adapter.fuel_metering(),
+            };
+            let output_ref = self.io.put_output(output);
+            return Ok(HostConnectorHostResult {
+                artifact_ref: Some(output_ref),
+                permission_state: None,
+                model_evidence: Some(Box::new(evidence)),
+                placement_evidence: Some(placement_evidence),
+            });
+        }
         // `recheck` above proved the bytes still hash to `wasm_digest`.
         let key = normalize_digest(&package.manifest.wasm_digest);
         let output = match self.engine {
@@ -1760,8 +1823,124 @@ impl HostConnectorPort for ExactModelHostConnector {
             artifact_ref: Some(output_ref),
             permission_state: None,
             model_evidence: Some(Box::new(evidence)),
+            placement_evidence: Some(PlacementEvidence::wasm_cpu()),
         })
     }
+}
+
+fn placement_unavailable(message: &str) -> HostConnectorError {
+    model_error(
+        HostConnectorErrorCode::ModelUnavailable,
+        ModelFailureReason::PlacementUnavailable,
+        message,
+    )
+}
+
+/// The adapter and cached variant an execute runs on, or `None` for
+/// `wasm-cpu`.
+type SelectedAdapter<'a> = Option<(
+    &'a mut Box<dyn AcceleratorAdapter>,
+    &'a CachedAcceleratorVariant,
+)>;
+
+/// FR-060: the first placement the policy lists that the host supports, the
+/// package carries, that has passed its device self-check (FR-062), fits the
+/// host memory ceiling, and meets `require_fuel_metering` (FR-064). An
+/// unknown or repeated placement id denies the call; when nothing qualifies
+/// the call fails closed with `placement_unavailable`.
+fn select_placement<'a>(
+    policy: &ExecutionPolicy,
+    package: &'a VerifiedModelPackage,
+    adapters: &'a mut [Box<dyn AcceleratorAdapter>],
+    self_checks: &mut HashMap<SelfCheckKey, bool>,
+    host_memory: u64,
+) -> Result<SelectedAdapter<'a>, HostConnectorError> {
+    let placements = effective_placements(&policy.placements).ok_or_else(|| {
+        model_error_plain(
+            HostConnectorErrorCode::PolicyDenied,
+            "execution policy names an unknown or repeated placement",
+        )
+    })?;
+    for id in placements {
+        if id == PLACEMENT_WASM_CPU {
+            return Ok(None);
+        }
+        let declared = package
+            .manifest
+            .accelerator_variants
+            .iter()
+            .flatten()
+            .find(|variant| variant.adapter == id);
+        let cached = package
+            .variants
+            .iter()
+            .find(|variant| variant.adapter == id);
+        let position = adapters
+            .iter()
+            .position(|adapter| adapter.id() == id && adapter.available());
+        let (Some(declared), Some(cached), Some(position)) = (declared, cached, position) else {
+            continue;
+        };
+        let adapter = &mut adapters[position];
+        let metering_ok =
+            !policy.require_fuel_metering || adapter.fuel_metering() == FuelMetering::Metered;
+        if declared.peak_memory_bytes <= host_memory
+            && metering_ok
+            && self_check(self_checks, adapter.as_mut(), declared, cached)
+        {
+            return Ok(Some((&mut adapters[position], cached)));
+        }
+    }
+    Err(placement_unavailable(
+        "no placement the execution policy lists can run this package",
+    ))
+}
+
+/// FR-063: run one prediction on a native adapter. Cancellation and the
+/// deadline are checked before and after, and a result that lands after
+/// either is discarded; the output must fit `max_output_bytes` and be a
+/// well-formed guest frame.
+fn run_adapter(
+    adapter: &mut dyn AcceleratorAdapter,
+    variant: &CachedAcceleratorVariant,
+    input: &[u8],
+    max_output: u64,
+    control: &SliceControl<'_>,
+) -> Result<Vec<u8>, HostConnectorError> {
+    let interrupted = |phase: &str| -> Option<HostConnectorError> {
+        if control.cancel.load(Ordering::SeqCst) {
+            return Some(model_error_plain(
+                HostConnectorErrorCode::Cancelled,
+                &format!("model.execute cancelled {phase} the accelerator prediction"),
+            ));
+        }
+        (Instant::now() > control.deadline).then(|| {
+            model_error_plain(
+                HostConnectorErrorCode::Timeout,
+                &format!("model.execute exceeded timeout {phase} the accelerator prediction"),
+            )
+        })
+    };
+    if let Some(error) = interrupted("before") {
+        return Err(error);
+    }
+    let output = adapter.predict(variant, input)?;
+    if let Some(error) = interrupted("after") {
+        return Err(error);
+    }
+    if output.len() as u64 > max_output {
+        return Err(model_error_plain(
+            HostConnectorErrorCode::ResourceExhausted,
+            "accelerator output exceeds the output ceiling",
+        ));
+    }
+    decode_guest_frame(&output).map_err(|_| {
+        model_error_plain(
+            HostConnectorErrorCode::ExecutionFailed,
+            "accelerator output is not a well-formed guest frame",
+        )
+    })?;
+    Ok(output)
 }
 
 /// Encode a versioned little-endian feature/output frame.
@@ -2931,6 +3110,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
 
@@ -3003,6 +3183,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
@@ -3047,6 +3228,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
         (host, digest)
@@ -3777,6 +3959,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
         (host, digest)
@@ -3934,6 +4117,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
         host.register_package(
@@ -4162,6 +4346,7 @@ mod tests {
                 policy_ref: "policy-1".to_string(),
                 allowed_classifications: vec!["sensitive".to_string()],
                 max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
             },
         );
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
@@ -4193,6 +4378,7 @@ mod tests {
             (R::CryptoUnavailable, "crypto_unavailable"),
             (R::CandidateUnsupported, "candidate_unsupported"),
             (R::HostLimitExceeded, "host_limit_exceeded"),
+            (R::PlacementUnavailable, "placement_unavailable"),
         ];
         for (reason, name) in all {
             assert_eq!(reason.as_str(), name);
@@ -4782,6 +4968,7 @@ mod tests {
             policy_ref: "policy-1".to_string(),
             allowed_classifications: vec!["sensitive".to_string()],
             max_output_bytes: 4096,
+            ..ExecutionPolicy::default()
         }
     }
 
@@ -5341,6 +5528,7 @@ mod tests {
             tolerance: VariantTolerance {
                 max_abs_diff: MAX_VARIANT_ABS_DIFF,
                 top_k: 5,
+                f32_dtypes: Vec::new(),
             },
             peak_memory_bytes: 1024,
         }]);
@@ -5481,5 +5669,400 @@ mod tests {
             from_wasmi(&wasmi::Val::default_for_ty(wasmi::ValType::FuncRef)),
             None
         );
+    }
+
+    /// What the fake adapter does on its next prediction.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum FakeMode {
+        /// Echo the input frame (matches the echo guest exactly).
+        Echo,
+        /// Add a value to every f32 in the frame payload.
+        Perturb(f32),
+        /// Fail the prediction.
+        Fail,
+        /// Return bytes that are not a guest frame.
+        Garbage,
+        /// Return an oversized valid frame.
+        Huge,
+        /// Set the host cancel flag while predicting.
+        CancelDuring,
+        /// Sleep before returning the echo.
+        Slow(u64),
+    }
+
+    struct FakeState {
+        mode: FakeMode,
+        calls: usize,
+        available: bool,
+        metering: FuelMetering,
+        platform: String,
+    }
+
+    struct FakeAdapter {
+        state: Arc<std::sync::Mutex<FakeState>>,
+        cancel: Arc<AtomicBool>,
+    }
+
+    impl AcceleratorAdapter for FakeAdapter {
+        fn id(&self) -> &str {
+            ADAPTER_COREML
+        }
+
+        fn available(&self) -> bool {
+            self.state.lock().expect("state").available
+        }
+
+        fn compute_units(&self) -> String {
+            "fake-all".to_string()
+        }
+
+        fn platform_version(&self) -> String {
+            self.state.lock().expect("state").platform.clone()
+        }
+
+        fn fuel_metering(&self) -> FuelMetering {
+            self.state.lock().expect("state").metering
+        }
+
+        fn predict(
+            &mut self,
+            _variant: &CachedAcceleratorVariant,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            let mode = {
+                let mut state = self.state.lock().expect("state");
+                state.calls += 1;
+                state.mode
+            };
+            match mode {
+                FakeMode::Echo => Ok(input.to_vec()),
+                FakeMode::Perturb(delta) => {
+                    let (dtype, dims, payload) = decode_guest_frame(input)?;
+                    let shifted: Vec<u8> = payload
+                        .chunks_exact(4)
+                        .flat_map(|chunk| {
+                            let value =
+                                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            (value + delta).to_le_bytes()
+                        })
+                        .collect();
+                    Ok(encode_guest_frame(dtype, &dims, &shifted))
+                }
+                FakeMode::Fail => Err(model_error_plain(
+                    HostConnectorErrorCode::ExecutionFailed,
+                    "fake prediction failed",
+                )),
+                FakeMode::Garbage => Ok(b"not a frame".to_vec()),
+                FakeMode::Huge => Ok(encode_guest_frame(3, &[2048], &[0; 8192])),
+                FakeMode::CancelDuring => {
+                    self.cancel.store(true, Ordering::SeqCst);
+                    Ok(input.to_vec())
+                }
+                FakeMode::Slow(ms) => {
+                    std::thread::sleep(Duration::from_millis(ms));
+                    Ok(input.to_vec())
+                }
+            }
+        }
+    }
+
+    fn float_frame(values: &[f32]) -> Vec<u8> {
+        let payload: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        encode_guest_frame(3, &[u32::try_from(values.len()).expect("len")], &payload)
+    }
+
+    /// A host whose echo package carries a `coreml` variant with a one-case
+    /// vector (the echo guest's own output is the reference), plus a fake
+    /// adapter in `mode`.
+    fn accelerated_host(
+        mode: FakeMode,
+        tweak: impl FnOnce(&mut ModelPackageManifest),
+    ) -> (
+        ExactModelHostConnector,
+        String,
+        Arc<std::sync::Mutex<FakeState>>,
+    ) {
+        let input = float_frame(&[0.25, 0.75, 0.5]);
+        let vector = serde_json::to_vec(&json!({
+            "cases": [{
+                "input_frame_hex": hex_encode(&input),
+                "output_frame_hex": hex_encode(&input),
+            }]
+        }))
+        .expect("vector");
+        let model = b"fake-coreml-variant";
+        let mut manifest = variant_package_manifest(model, &vector);
+        if let Some(variants) = manifest.accelerator_variants.as_mut() {
+            variants[0].tolerance.f32_dtypes = vec![3];
+        }
+        tweak(&mut manifest);
+        let digest = digest_hex(&serde_json::to_vec(&manifest).expect("json"));
+        let mut host = register_variant_host(
+            &manifest,
+            &[ADAPTER_COREML],
+            &[
+                ("variants/coreml/model.mlmodel", model.as_slice()),
+                ("variants/coreml/conformance.json", vector.as_slice()),
+            ],
+        )
+        .expect("register");
+        let state = Arc::new(std::sync::Mutex::new(FakeState {
+            mode,
+            calls: 0,
+            available: true,
+            metering: FuelMetering::NotApplicable,
+            platform: "fake-os-1".to_string(),
+        }));
+        host.register_adapter(Box::new(FakeAdapter {
+            state: Arc::clone(&state),
+            cancel: Arc::clone(&host.cancel),
+        }));
+        host.register_adapter(Box::new(FakeAdapter {
+            state: Arc::clone(&state),
+            cancel: Arc::clone(&host.cancel),
+        }));
+        host.policies.insert(
+            "policy-1".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-1".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+                placements: vec![ADAPTER_COREML.to_string(), PLACEMENT_WASM_CPU.to_string()],
+                require_fuel_metering: false,
+            },
+        );
+        (host, digest, state)
+    }
+
+    fn accelerated_run(
+        host: &mut ExactModelHostConnector,
+        digest: &str,
+        extras: serde_json::Map<String, Value>,
+    ) -> Result<(Vec<u8>, PlacementEvidence), HostConnectorError> {
+        let input = float_frame(&[1.0, 2.0, 3.0]);
+        let input_ref = host.io.stage_model_input(&input, 4096).expect("stage");
+        let result = host.invoke(&execute_request(digest, &input_ref, extras))?;
+        let output = host
+            .io
+            .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
+            .expect("read");
+        Ok((
+            output,
+            result.placement_evidence.expect("placement evidence"),
+        ))
+    }
+
+    fn set_placements(host: &mut ExactModelHostConnector, placements: &[&str], require_fuel: bool) {
+        let policy = host.policies.get_mut("policy-1").expect("policy");
+        policy.placements = placements.iter().map(|id| (*id).to_string()).collect();
+        policy.require_fuel_metering = require_fuel;
+    }
+
+    #[test]
+    fn the_first_listed_qualifying_placement_runs_and_is_recorded() {
+        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
+        let (output, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("coreml");
+        assert_eq!(output, float_frame(&[1.0, 2.0, 3.0]));
+        assert_eq!(
+            evidence,
+            PlacementEvidence {
+                placement: ADAPTER_COREML.to_string(),
+                compute_units: "fake-all".to_string(),
+                fuel_metering: FuelMetering::NotApplicable,
+            }
+        );
+        // One self-check case plus the call; the self-check is cached.
+        assert_eq!(state.lock().expect("state").calls, 2);
+        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("again");
+        assert_eq!(state.lock().expect("state").calls, 3);
+        // A new platform version re-runs the self-check.
+        state.lock().expect("state").platform = "fake-os-2".to_string();
+        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("re-check");
+        assert_eq!(state.lock().expect("state").calls, 5);
+        // Within tolerance still passes once re-checked.
+        state.lock().expect("state").mode = FakeMode::Perturb(1e-3);
+        state.lock().expect("state").platform = "fake-os-3".to_string();
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("close");
+        assert_eq!(evidence.placement, ADAPTER_COREML);
+        // The wasm-cpu guest reports its own evidence.
+        set_placements(&mut host, &[PLACEMENT_WASM_CPU], false);
+        let (output, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
+        assert_eq!(output, float_frame(&[1.0, 2.0, 3.0]));
+        assert_eq!(evidence, PlacementEvidence::wasm_cpu());
+    }
+
+    #[test]
+    fn placements_fall_back_only_to_listed_ids_and_fail_closed() {
+        // A failed self-check makes the variant unavailable on this device.
+        let (mut host, digest, state) = accelerated_host(FakeMode::Perturb(1e-2), |_| {});
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("fallback");
+        assert_eq!(evidence, PlacementEvidence::wasm_cpu());
+        let calls = state.lock().expect("state").calls;
+        set_placements(&mut host, &[ADAPTER_COREML], false);
+        let input_ref = host
+            .io
+            .stage_model_input(&float_frame(&[1.0]), 4096)
+            .expect("stage");
+        let error = host
+            .invoke(&execute_request(
+                &digest,
+                &input_ref,
+                serde_json::Map::new(),
+            ))
+            .expect_err("only coreml");
+        assert_eq!(
+            (error.code, error.reason),
+            (
+                HostConnectorErrorCode::ModelUnavailable,
+                Some(ModelFailureReason::PlacementUnavailable)
+            )
+        );
+        // The cached failure is not re-run, and the input was not consumed.
+        assert_eq!(state.lock().expect("state").calls, calls);
+        set_placements(&mut host, &[PLACEMENT_WASM_CPU], false);
+        host.invoke(&execute_request(
+            &digest,
+            &input_ref,
+            serde_json::Map::new(),
+        ))
+        .expect("input still staged");
+
+        // Unavailable adapter, and a fuel-metering requirement, both skip it.
+        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
+        state.lock().expect("state").available = false;
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
+        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+        state.lock().expect("state").available = true;
+        set_placements(&mut host, &[ADAPTER_COREML, PLACEMENT_WASM_CPU], true);
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("metered only");
+        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+        state.lock().expect("state").metering = FuelMetering::Metered;
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("metered adapter");
+        assert_eq!(evidence.fuel_metering, FuelMetering::Metered);
+
+        // Unknown or repeated ids deny the call.
+        for placements in [
+            &["metal"][..],
+            &[PLACEMENT_WASM_CPU, PLACEMENT_WASM_CPU][..],
+        ] {
+            set_placements(&mut host, placements, false);
+            assert_eq!(
+                accelerated_run(&mut host, &digest, serde_json::Map::new())
+                    .expect_err("bad policy")
+                    .code,
+                HostConnectorErrorCode::PolicyDenied
+            );
+        }
+
+        // A variant over the host memory ceiling is skipped.
+        let (mut host, digest, _) = accelerated_host(FakeMode::Echo, |manifest| {
+            if let Some(variants) = manifest.accelerator_variants.as_mut() {
+                variants[0].peak_memory_bytes = u64::MAX;
+            }
+        });
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
+        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+
+        // An empty conformance vector never passes the self-check.
+        let (mut host, digest, _) = accelerated_host(FakeMode::Echo, |_| {});
+        if let Some(package) = host.packages.by_digest.get_mut(&digest) {
+            package.variants[0].conformance_vector = br#"{"cases":[]}"#.to_vec();
+        }
+        if let Some(package) = host.packages.by_digest.get_mut(&digest) {
+            let vector = package.variants[0].conformance_vector.clone();
+            if let Some(variants) = package.manifest.accelerator_variants.as_mut() {
+                variants[0].conformance_vector_digest = digest_hex(&vector);
+            }
+        }
+        let (_, evidence) =
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("empty vector");
+        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+        let (mut no_variant, digest2, _) = accelerated_host(FakeMode::Echo, |_| {});
+        if let Some(package) = no_variant.packages.by_digest.get_mut(&digest2) {
+            package.variants.clear();
+        }
+        let (_, evidence) =
+            accelerated_run(&mut no_variant, &digest2, serde_json::Map::new()).expect("no variant");
+        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+    }
+
+    #[test]
+    fn adapter_runs_enforce_cancellation_deadlines_and_output_ceilings() {
+        let cases: [(FakeMode, Option<u64>, HostConnectorErrorCode); 5] = [
+            (
+                FakeMode::CancelDuring,
+                None,
+                HostConnectorErrorCode::Cancelled,
+            ),
+            (
+                FakeMode::Slow(80),
+                Some(20),
+                HostConnectorErrorCode::Timeout,
+            ),
+            (
+                FakeMode::Fail,
+                None,
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                FakeMode::Garbage,
+                None,
+                HostConnectorErrorCode::ExecutionFailed,
+            ),
+            (
+                FakeMode::Huge,
+                None,
+                HostConnectorErrorCode::ResourceExhausted,
+            ),
+        ];
+        for (mode, timeout_ms, code) in cases {
+            let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
+            // Pass the self-check first, then switch the behaviour.
+            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("warm");
+            state.lock().expect("state").mode = mode;
+            let mut extras = serde_json::Map::new();
+            if let Some(ms) = timeout_ms {
+                extras.insert("timeout_ms".to_string(), json!(ms));
+            }
+            assert_eq!(
+                accelerated_run(&mut host, &digest, extras)
+                    .expect_err("fails")
+                    .code,
+                code,
+                "{mode:?}"
+            );
+        }
+        // Cancelled or past the deadline before the prediction starts.
+        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
+        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("warm");
+        let calls = state.lock().expect("state").calls;
+        host.cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            accelerated_run(&mut host, &digest, serde_json::Map::new())
+                .expect_err("cancelled")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        host.cancel.store(false, Ordering::SeqCst);
+        let mut zero = serde_json::Map::new();
+        zero.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            accelerated_run(&mut host, &digest, zero)
+                .expect_err("deadline")
+                .code,
+            HostConnectorErrorCode::Timeout
+        );
+        assert_eq!(state.lock().expect("state").calls, calls, "never predicted");
     }
 }

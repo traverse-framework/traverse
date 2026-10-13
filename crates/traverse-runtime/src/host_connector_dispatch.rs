@@ -4,7 +4,7 @@
 //! connector. This is not `traverse_host.connector_invoke` and not the Spec 135
 //! Component WIT fake.
 
-use crate::exact_model::{ModelRightsRecord, ModelUsage};
+use crate::exact_model::{ModelRightsRecord, ModelUsage, PlacementEvidence};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -210,6 +210,9 @@ pub enum ModelFailureReason {
     /// The package's rights are more permissive than its declared derivation
     /// source (Decision 107).
     RightsInconsistent,
+    /// No placement the execution policy lists can run the package (Spec 138
+    /// 0.12.0 FR-060).
+    PlacementUnavailable,
 }
 
 impl ModelFailureReason {
@@ -233,6 +236,7 @@ impl ModelFailureReason {
             Self::RightsPolicyDenied => "rights_policy_denied",
             Self::PackageRevoked => "package_revoked",
             Self::RightsInconsistent => "rights_inconsistent",
+            Self::PlacementUnavailable => "placement_unavailable",
         }
     }
 }
@@ -388,6 +392,9 @@ pub struct HostConnectorHostResult {
     /// Spec 138 0.8.0 FR-040).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_evidence: Option<Box<ModelRightsRecord>>,
+    /// Placement that ran a `model.execute` (Spec 138 0.12.0 FR-061).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_evidence: Option<PlacementEvidence>,
 }
 
 /// Host-owned adapter. Production native/browser drivers implement this.
@@ -511,6 +518,9 @@ pub struct HostConnectorDispatch {
     /// Spec 138 0.8.0 FR-040).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_evidence: Option<Box<ModelRightsRecord>>,
+    /// Placement that ran a `model.execute` (Spec 138 0.12.0 FR-061).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_evidence: Option<PlacementEvidence>,
     /// Bounded public events.
     pub events: Vec<HostConnectorEvent>,
     /// Redacted evidence.
@@ -725,6 +735,7 @@ fn complete_host_success(
         );
     }
     let model_evidence = host_result.model_evidence;
+    let placement_evidence = host_result.placement_evidence;
     let Some(artifact_ref) = host_result
         .artifact_ref
         .filter(|value| !value.trim().is_empty())
@@ -766,6 +777,7 @@ fn complete_host_success(
         events,
     );
     dispatch.model_evidence = model_evidence;
+    dispatch.placement_evidence = placement_evidence;
     ctx.idempotency.entries.insert(
         command.idempotency_key.clone(),
         IdempotencyEntry {
@@ -1262,6 +1274,7 @@ fn fail_with(
             permission_state: None,
             error: Some(error.clone()),
             model_evidence: None,
+            placement_evidence: None,
             events,
             evidence,
         },
@@ -1291,6 +1304,7 @@ fn success_dispatch(
         permission_state,
         error: None,
         model_evidence: None,
+        placement_evidence: None,
         events,
         evidence: HostConnectorEvidence {
             governing_spec: GOVERNING_SPEC.to_string(),

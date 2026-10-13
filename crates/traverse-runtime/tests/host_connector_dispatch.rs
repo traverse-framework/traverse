@@ -131,6 +131,7 @@ impl HostConnectorPort for FakeHostConnector {
                 artifact_ref: None,
                 permission_state: self.permission_state,
                 model_evidence: None,
+                placement_evidence: None,
             });
         }
         if self.leaky {
@@ -138,6 +139,7 @@ impl HostConnectorPort for FakeHostConnector {
                 artifact_ref: Some("microphone:/tmp/capture.wav".to_string()),
                 permission_state: None,
                 model_evidence: None,
+                placement_evidence: None,
             });
         }
         if self.empty_artifact {
@@ -145,6 +147,7 @@ impl HostConnectorPort for FakeHostConnector {
                 artifact_ref: Some(String::new()),
                 permission_state: None,
                 model_evidence: None,
+                placement_evidence: None,
             });
         }
         let artifact_ref = if request.operation == AUDIO_CAPTURE_OPERATION {
@@ -160,6 +163,7 @@ impl HostConnectorPort for FakeHostConnector {
             artifact_ref: Some(artifact_ref),
             permission_state: None,
             model_evidence: self.model_evidence.clone(),
+            placement_evidence: None,
         })
     }
 }

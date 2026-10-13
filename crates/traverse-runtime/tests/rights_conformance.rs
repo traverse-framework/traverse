@@ -99,6 +99,7 @@ fn host_for(suite: &Value, case: &Value) -> ExactModelHostConnector {
             )
             .expect("classifications"),
             max_output_bytes: execute["max_output_bytes"].as_u64().expect("max_output"),
+            ..ExecutionPolicy::default()
         },
     );
     host

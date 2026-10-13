@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Native accelerator adapter framework (Decision 112, #1629 slice 2)
+
+- New `AcceleratorAdapter` trait in `traverse-runtime`: availability,
+  compute units, platform version, fuel metering, and prediction on guest
+  frames. Hosts add adapters with `register_adapter`.
+- `ExecutionPolicy` gains `placements` (an ordered list; default
+  `["wasm-cpu"]`; an unknown or repeated id is denied) and
+  `require_fuel_metering`.
+- The connector picks the first qualifying placement *before* the input is
+  consumed. To qualify, the host must support it, the package must carry it,
+  it must have passed its device self-check, fit the host memory ceiling, and
+  meet the fuel requirement. Otherwise the call fails closed with the new
+  reason `placement_unavailable`.
+- Self-check results are cached per variant digest, adapter, platform
+  version and compute units.
+- Adapter runs check cancellation and the deadline before and after the
+  prediction, discard a late result, and enforce `max_output_bytes` and a
+  well-formed output frame.
+- Every `model.execute` result, and the frame host response, carries
+  `placement_evidence`.
+- Spec 138 0.13.2 adds `tolerance.f32_dtypes`, because frame dtype codes are
+  guest-defined. Only the listed dtypes are compared under tolerance;
+  everything else must match byte-for-byte.
+- The real Core ML adapter (`objc2`) follows the conversion spike (#1663).
+
 ### .NET native model host in the NuGet package (Decision 111, #1643)
 
 - `TraverseEmbedder` now ships `traverse_dotnet_host` for `win-x64`,

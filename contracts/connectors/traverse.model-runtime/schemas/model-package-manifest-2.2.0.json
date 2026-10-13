@@ -286,6 +286,16 @@
             "top_k": {
               "type": "integer",
               "minimum": 0
+            },
+            "f32_dtypes": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "uniqueItems": true,
+              "description": "Guest output dtype codes holding little-endian f32 values, compared under max_abs_diff/top_k; any other dtype must match byte-for-byte (Spec 138 0.13.2). Absent means none."
             }
           }
         },
