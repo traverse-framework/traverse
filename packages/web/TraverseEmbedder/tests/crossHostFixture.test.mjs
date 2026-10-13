@@ -29,6 +29,13 @@ async function writeBrowserBundle(digest) {
     join(componentDir, "say-hello-agent.wasm"),
   );
   await writeFile(
+    join(componentDir, "contract.json"),
+    JSON.stringify({
+      inputs: { schema: { type: "object", additionalProperties: true } },
+      outputs: { schema: { type: "object", additionalProperties: true } },
+    }),
+  );
+  await writeFile(
     join(componentDir, "component.manifest.json"),
     JSON.stringify({
       component_id: "cross-host.hello-world",
@@ -37,7 +44,7 @@ async function writeBrowserBundle(digest) {
       capability_id: "hello.world.say-hello",
       capability_version: "1.0.0",
       execution_mode: "wasm",
-      contract_path: "unused-contract.json",
+      contract_path: "contract.json",
       wasm_binary_path: "say-hello-agent.wasm",
       wasm_digest: digest,
       runtime_constraints: { network_access: "forbidden", filesystem_access: "none" },

@@ -31,6 +31,7 @@ import {
 } from "./runtimeWasmHost.js";
 import type { RuntimeWasmEmitRef, RuntimeWasmJson } from "./runtimeWasmHost.js";
 import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
+import { validatePayloadAgainstContract } from "./schemaValidate.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
@@ -77,6 +78,8 @@ interface WasmTarget {
   readonly serviceType: string | null;
   /** Declared contract `emits` entries forwarded to `runtime.wasm` init (spec 098). */
   readonly emits: readonly RuntimeWasmEmitRef[];
+  /** Optional `inputs.schema` from the component's `contract_path` (#1658). */
+  readonly inputSchema: JsonValue | null;
 }
 
 interface WorkflowNodeSpec {
@@ -441,6 +444,37 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
       await verifyArtifactDigest(wasmBytes, wasmDigest, `component '${capabilityId}' artifact`);
 
+      let inputSchema: JsonValue | null = null;
+      const contractPathRel = optionalString(record, "contract_path");
+      if (contractPathRel !== null) {
+        const contractPath = loader.resolve(componentManifestPath, contractPathRel);
+        let contractText: string;
+        try {
+          contractText = await loader.loadText(contractPath);
+        } catch (error) {
+          throw loadFailure(
+            `failed to load contract '${contractPath}' for component '${capabilityId}': ${String(error)}`,
+          );
+        }
+        let contractParsed: JsonValue;
+        try {
+          contractParsed = JSON.parse(contractText) as JsonValue;
+        } catch (error) {
+          throw loadFailure(
+            `contract '${contractPath}' is not valid JSON: ${String(error)}`,
+          );
+        }
+        const contractRecord = asRecord(contractParsed);
+        const inputs = contractRecord ? asRecord(contractRecord["inputs"]) : null;
+        const schema = inputs?.["schema"];
+        if (schema === undefined || schema === null || typeof schema !== "object") {
+          throw loadFailure(
+            `contract '${contractPath}' is missing inputs.schema for component '${capabilityId}'`,
+          );
+        }
+        inputSchema = schema;
+      }
+
       wasmTargets.set(capabilityId, {
         capabilityId,
         capabilityVersion,
@@ -448,6 +482,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         wasmBytes,
         serviceType: optionalString(record, "service_type"),
         emits: parseDeclaredEmits(record["emits"]),
+        inputSchema,
       });
       wasmComponentEvidence.push({
         component_id: component.componentId,
@@ -895,6 +930,40 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
     }
 
+    if (target.inputSchema !== null) {
+      const violations = validatePayloadAgainstContract(input, target.inputSchema);
+      if (violations.length > 0) {
+        this.core.recordTrace({
+          executionId,
+          targetId,
+          outcome: "error",
+          phases: [{ code: "error" }],
+          selectedTarget: { targetId, targetVersion: target.capabilityVersion },
+          placement: { target: "browser" },
+          failureCode: "invalid_input",
+          stateMachineValid: null,
+        });
+        this.core.emit("error", sessionId, {
+          execution_id: executionId,
+          capability_id: targetId,
+          capability_version: target.capabilityVersion,
+          status: "error",
+          error: {
+            code: "invalid_input",
+            message: "capability input does not satisfy the contract inputs.schema",
+            details: {
+              violations: violations.map((v) => ({
+                path: v.path,
+                message: v.message,
+                ...(v.keyword !== undefined ? { keyword: v.keyword } : {}),
+              })),
+            },
+          },
+        });
+        return { sessionId, status: "accepted", error: null };
+      }
+    }
+
     const result = executeWasmModule(this.runtimeModule, target, input, (event) => {
       this.core.emit("capability_event", sessionId, {
         execution_id: executionId,
@@ -988,6 +1057,23 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
             code: attestation.error.code,
             message:
               "Stateful Browser activation requires an open Spec 085 IndexedDB DataStore",
+          };
+          break;
+        }
+      }
+      if (target.inputSchema !== null) {
+        const violations = validatePayloadAgainstContract(nodeInput, target.inputSchema);
+        if (violations.length > 0) {
+          steps.push({
+            stepIndex,
+            nodeId: node.nodeId,
+            capabilityId: node.capabilityId,
+            capabilityVersion: node.capabilityVersion,
+            status: "failed",
+          });
+          failure = {
+            code: "invalid_input",
+            message: `capability '${node.capabilityId}' input does not satisfy inputs.schema (${violations.map((v) => v.path).join(", ")})`,
           };
           break;
         }

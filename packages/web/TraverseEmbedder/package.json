@@ -28,7 +28,7 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "verify:packed-version": "node scripts/verify-packed-version.mjs",
-    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/browserLocalPlan.test.mjs tests/composedWorkflow.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/statefulBrowserActivation.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs tests/hostConnectorCommand.test.mjs tests/exactModel.test.mjs tests/rightsConformance.test.mjs tests/browserAudioInput.test.mjs tests/audioAnalysisExample.test.mjs tests/appStateMachineConformance.test.mjs tests/packageVersion.test.mjs"
+    "test": "npm run build && node --test tests/embedder.test.mjs tests/bundleEmbedder.test.mjs tests/browserLocalPlan.test.mjs tests/composedWorkflow.test.mjs tests/crossHostFixture.test.mjs tests/registryCache.test.mjs tests/registryCacheCrossHostProjection.test.mjs tests/indexedDbDataStore.test.mjs tests/statefulBrowserActivation.test.mjs tests/verifiedEntrypoint.test.mjs tests/governedProposal.test.mjs tests/hostConnectorCommand.test.mjs tests/exactModel.test.mjs tests/rightsConformance.test.mjs tests/browserAudioInput.test.mjs tests/audioAnalysisExample.test.mjs tests/appStateMachineConformance.test.mjs tests/packageVersion.test.mjs tests/schemaValidate.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

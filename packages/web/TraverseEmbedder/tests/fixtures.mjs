@@ -144,6 +144,12 @@ export async function writeBundleFixture({ appId, components, workflow, compatib
     await mkdir(dir, { recursive: true });
     const digest = sha256Digest(component.wasmBytes);
     await writeFile(join(dir, "component.wasm"), component.wasmBytes);
+    // Permissive inputs.schema so fixture submits keep working; #1658 loads
+    // contract_path and enforces additionalProperties when false.
+    await writeJson(join(dir, "contract.json"), {
+      inputs: { schema: { type: "object", additionalProperties: true } },
+      outputs: { schema: { type: "object", additionalProperties: true } },
+    });
     await writeJson(join(dir, "component.manifest.json"), {
       component_id: `fixture.component-${index}`,
       version: "1.0.0",
@@ -151,7 +157,7 @@ export async function writeBundleFixture({ appId, components, workflow, compatib
       capability_id: component.capabilityId,
       capability_version: "1.0.0",
       execution_mode: "wasm",
-      contract_path: "unused-contract.json",
+      contract_path: "contract.json",
       wasm_binary_path: "component.wasm",
       wasm_digest: digest,
       runtime_constraints: {},

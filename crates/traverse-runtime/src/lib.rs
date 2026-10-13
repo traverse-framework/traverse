@@ -3027,7 +3027,8 @@ fn validate_payload_against_contract(
     message: &str,
 ) -> Result<(), RuntimeError> {
     let mut errors = Vec::new();
-    validate_value_against_schema(payload, schema, "$", &mut errors);
+    // Root JSON Pointer is empty; child paths are `/field` (#1658).
+    validate_value_against_schema(payload, schema, "", &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -3039,6 +3040,11 @@ fn validate_payload_against_contract(
     }
 }
 
+/// JSON Pointer join for schema violation paths (`""` + `text` → `/text`).
+fn schema_pointer(path: &str, segment: &str) -> String {
+    format!("{path}/{segment}")
+}
+
 pub(crate) fn validate_value_against_schema(
     value: &Value,
     schema: &Value,
@@ -3047,7 +3053,7 @@ pub(crate) fn validate_value_against_schema(
 ) {
     let Some(schema_object) = schema.as_object() else {
         errors.push(json!({
-            "path": path,
+            "path": if path.is_empty() { "/".to_string() } else { path.to_string() },
             "message": "schema must be an object"
         }));
         return;
@@ -3073,13 +3079,31 @@ pub(crate) fn validate_value_against_schema(
                         validate_value_against_schema(
                             item,
                             item_schema,
-                            &format!("{path}[{index}]"),
+                            &schema_pointer(path, &index.to_string()),
                             errors,
                         );
                     }
                 }
             }
-            "string" if !value.is_string() => errors.push(type_error(path, "string")),
+            "string" => {
+                let Some(text) = value.as_str() else {
+                    errors.push(type_error(path, "string"));
+                    return;
+                };
+                if let Some(max_length) = schema_object.get("maxLength").and_then(Value::as_u64) {
+                    let too_long = match u64::try_from(text.chars().count()) {
+                        Ok(len) => len > max_length,
+                        Err(_) => true,
+                    };
+                    if too_long {
+                        errors.push(json!({
+                            "path": display_pointer(path),
+                            "keyword": "maxLength",
+                            "message": format!("string longer than maxLength {max_length}")
+                        }));
+                    }
+                }
+            }
             "integer" if value.as_i64().is_none() && value.as_u64().is_none() => {
                 errors.push(type_error(path, "integer"));
             }
@@ -3104,7 +3128,8 @@ fn validate_required(
     for required_field in required.iter().filter_map(Value::as_str) {
         if !instance.contains_key(required_field) {
             errors.push(json!({
-                "path": format!("{path}.{required_field}"),
+                "path": schema_pointer(path, required_field),
+                "keyword": "required",
                 "message": "required property is missing"
             }));
         }
@@ -3117,20 +3142,47 @@ fn validate_properties(
     path: &str,
     errors: &mut Vec<Value>,
 ) {
-    let Some(properties) = schema_object.get("properties").and_then(Value::as_object) else {
-        return;
-    };
+    let properties = schema_object
+        .get("properties")
+        .and_then(Value::as_object);
+    let additional_allowed = schema_object
+        .get("additionalProperties")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
 
     for (key, value) in instance {
-        if let Some(property_schema) = properties.get(key) {
-            validate_value_against_schema(value, property_schema, &format!("{path}.{key}"), errors);
+        match properties.and_then(|props| props.get(key)) {
+            Some(property_schema) => {
+                validate_value_against_schema(
+                    value,
+                    property_schema,
+                    &schema_pointer(path, key),
+                    errors,
+                );
+            }
+            None if !additional_allowed => {
+                errors.push(json!({
+                    "path": schema_pointer(path, key),
+                    "keyword": "additionalProperties",
+                    "message": "additional property is not allowed"
+                }));
+            }
+            None => {}
         }
+    }
+}
+
+fn display_pointer(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
     }
 }
 
 fn type_error(path: &str, expected: &str) -> Value {
     json!({
-        "path": path,
+        "path": display_pointer(path),
         "message": format!("expected {expected}")
     })
 }
@@ -4973,6 +5025,54 @@ mod tests {
             "object without type",
         );
         assert!(object_without_type.is_ok());
+
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string", "maxLength": 20}
+            }
+        });
+        assert!(validate_payload_against_contract(
+            &json!({"text": "ok"}),
+            &schema,
+            super::RuntimeErrorCode::RequestInvalid,
+            "valid",
+        )
+        .is_ok());
+        let unknown = validate_payload_against_contract(
+            &json!({"text": "ok", "skip_redaction": true, "return_raw": true}),
+            &schema,
+            super::RuntimeErrorCode::RequestInvalid,
+            "unknown fields",
+        )
+        .expect_err("additionalProperties");
+        let violations = unknown.details["violations"].as_array().expect("violations");
+        let paths: Vec<&str> = violations
+            .iter()
+            .filter_map(|v| v["path"].as_str())
+            .collect();
+        assert!(paths.contains(&"/skip_redaction"), "{unknown:?}");
+        assert!(paths.contains(&"/return_raw"), "{unknown:?}");
+        assert_eq!(violations[0]["keyword"], json!("additionalProperties"));
+        let missing = validate_payload_against_contract(
+            &json!({}),
+            &schema,
+            super::RuntimeErrorCode::RequestInvalid,
+            "missing required",
+        )
+        .expect_err("required");
+        assert_eq!(missing.details["violations"][0]["path"], json!("/text"));
+        let too_long = validate_payload_against_contract(
+            &json!({"text": "x".repeat(21)}),
+            &schema,
+            super::RuntimeErrorCode::RequestInvalid,
+            "maxLength",
+        )
+        .expect_err("maxLength");
+        assert_eq!(too_long.details["violations"][0]["path"], json!("/text"));
+        assert_eq!(too_long.details["violations"][0]["keyword"], json!("maxLength"));
     }
 
     #[test]

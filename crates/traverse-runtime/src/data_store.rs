@@ -1231,7 +1231,7 @@ pub fn validate_state_write_for_schema(
             )
         })?;
     let mut violations = Vec::new();
-    crate::validate_value_against_schema(value, property_schema, "$", &mut violations);
+    crate::validate_value_against_schema(value, property_schema, "", &mut violations);
     if violations.is_empty() {
         Ok(())
     } else {

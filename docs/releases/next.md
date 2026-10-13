@@ -2,6 +2,18 @@
 
 Unreleased changes since `v0.14.0` will be recorded here.
 
+## Breaking: host-side contract input schema enforcement (`#1658`)
+
+- Capability inputs are validated against the contract `inputs.schema` before
+  the artifact runs (native runtime path and web `BundleEmbedder` when a
+  component declares `contract_path`).
+- `additionalProperties: false` is enforced; unknown fields fail with
+  `invalid_input` / `RequestInvalid` and JSON Pointer violation paths
+  (e.g. `/skip_redaction`).
+- `maxLength` on strings is enforced. Raw `WasmExecutor::run_bytes` still
+  does not validate — callers must validate or use the governed runtime /
+  embedder path.
+
 ## Fix: `model package-onnx` docs/CLI match ABI v3 / schema 2.2.0 (`#1660`)
 
 - Help and `docs/model-packaging-guide.md` now describe the ABI v3 /
