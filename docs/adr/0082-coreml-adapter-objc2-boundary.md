@@ -2,7 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-10-13
-- Governing specs: `138-governed-exact-model-execution` (0.13.4)
+- Governing specs: `138-governed-exact-model-execution` (0.13.4),
+  `076-production-swift-wasmi-cabi` (1.3.0: FR-007 and FR-009 amended)
 - Related issues: `#1629` (slice 3), `#1663`, `#1630`
 - Related: `docs/decision-log.md` Decisions 110, 112, 113 and 114
 - Owner: Traverse maintainers
@@ -90,6 +91,10 @@ this needs an audited exception like the Swift, Android and .NET shims.
 
 - The repository has a fifth audited unsafe boundary. It is scoped to one
   module, has no exported symbols, and is checked in CI.
+- Spec 076 1.3.0 amends two requirements of the Swift C-ABI host. FR-009: a
+  model host runs on `wasmi` unless it enabled Core ML and the call's policy
+  lists `coreml`. FR-007: unsafe code may also live in this adapter module.
+  The six exported symbols do not change.
 - The Core ML path is tested in `cargo test` on macOS:
   - the signed `digits-onnx-coreml-1.0.0` package runs through the connector
     on every compute-unit setting;

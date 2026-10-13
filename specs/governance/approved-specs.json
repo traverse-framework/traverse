@@ -919,7 +919,7 @@
     },
     {
       "id": "076-production-swift-wasmi-cabi",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/076-production-swift-wasmi-cabi/spec.md",
@@ -929,7 +929,8 @@
         "scripts/ci/scoped_unsafe_boundary_check.sh",
         "docs/adr/0015-production-swift-wasmi-c-abi.md",
         "specs/076-production-swift-wasmi-cabi/",
-        "docs/adr/0078-swift-host-model-call-abi.md"
+        "docs/adr/0078-swift-host-model-call-abi.md",
+        "docs/adr/0082-coreml-adapter-objc2-boundary.md"
       ]
     },
     {

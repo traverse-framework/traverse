@@ -3,7 +3,7 @@
 **Feature Branch**: `codex/issue-776-production-cabi`
 **Created**: 2026-07-20
 **Status**: Approved
-**Version**: 1.2.0
+**Version**: 1.3.0
 **Input**: ADR-0015, Traverse #776, and the approved production profile.
 
 **Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**: FR-005's
@@ -20,6 +20,15 @@ ADR-0078 / `#1579`. FR-001 grows from five to six symbols: the new
 through a framed envelope (`[u32 LE header_len][JSON header][payload]`), which
 is a second binary-framing exception to FR-005. Model hosts are a separate,
 registry-held resource; FR-009 is added. No other requirement changed.
+
+**Amendment (2026-10-13, version 1.2.0 -> 1.3.0, approved under Decisions 112 and 114)**: ADR-0082 /
+`#1629`. Decision 112 links the `objc2` Core ML adapter into this host, so
+two requirements change:
+- FR-009: a model host now runs on `wasmi` *unless* its `create` enabled the
+  Spec 138 `coreml` adapter and the call's policy lists that placement
+  (Spec 138 FR-060 to FR-069).
+- FR-007: unsafe code may also live in the adapter's one audited Apple-only
+  module, which exports no symbols. The six C-ABI symbols are unchanged.
 
 ## Purpose
 
@@ -84,12 +93,16 @@ codes and bounded JSON details without a sidecar or ambient authority.
 - **FR-006**: The boundary MUST return stable numeric statuses and bounded
   structured UTF-8 JSON errors for all expected failures.
 - **FR-007**: Unsafe code MUST be restricted to the audited host file and
-  validated pointer conversions; CI MUST reject unreviewed exports or unsafe
-  opt-outs.
+  validated pointer conversions, plus the audited `coreml` module of the
+  linked Core ML adapter (1.3.0, ADR-0082), which exports no symbols. CI MUST
+  reject unreviewed exports or unsafe opt-outs.
 - **FR-008**: The initial certified-profile target matrix MUST be arm64 iOS,
   arm64 iOS simulator, and arm64 macOS only.
 - **FR-009**: Model hosts created through `traverse_swift_host_model_call`
-  MUST execute only on `wasmi` under host-supplied positive ceilings, MUST
+  MUST execute on `wasmi` under host-supplied positive ceilings, except that
+  a host whose `create` enabled the Spec 138 `coreml` adapter MAY run a call
+  on Core ML when the call's policy lists `coreml` and the variant passed
+  its device self-check (1.3.0, Spec 138 FR-060 to FR-069). It MUST
   support mid-run cancellation of the named execution only, and MUST never
   let an inference re-run because of an output-buffer retry.
 
