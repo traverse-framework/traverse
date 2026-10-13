@@ -4944,6 +4944,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn payload_validation_covers_schema_branches() {
         let invalid_schema = validate_payload_against_contract(
             &json!({"field": "value"}),
