@@ -14,6 +14,7 @@ import os
 import sys
 import uuid
 import zipfile
+from pathlib import Path
 
 from coremltools.proto import Model_pb2
 
@@ -22,7 +23,7 @@ NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://traverse-framework.github.io
 
 
 def canonical_bytes(rel):
-    data = open(os.path.join(root, rel), "rb").read()
+    data = Path(root, rel).read_bytes()
     if rel.endswith("com.apple.CoreML/model.mlmodel"):
         spec = Model_pb2.Model()
         spec.ParseFromString(data)

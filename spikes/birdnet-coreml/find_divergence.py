@@ -2,6 +2,7 @@
 import os
 import sys
 import warnings
+from pathlib import Path
 
 import coremltools as ct
 import numpy as np
@@ -12,12 +13,12 @@ from onnx2torch import convert
 
 warnings.filterwarnings("ignore")
 sys.argv = ["convert.py"]
-exec(open("convert.py").read().split("def main")[0])  # registers broadcast_to
+exec(Path("convert.py").read_text().split("def main")[0])  # registers broadcast_to
 
 model = onnx.load("birdnet.prepass.onnx")
 nodes = [n for n in model.graph.node if n.output and n.op_type not in ("Constant",)]
 clip = sorted(f for f in os.listdir("clips") if f.endswith(".f32le"))[0]
-x = np.array(np.frombuffer(open(f"clips/{clip}", "rb").read(), np.float32)).reshape(1, 144000)
+x = np.array(np.frombuffer(Path("clips", clip).read_bytes(), np.float32)).reshape(1, 144000)
 
 
 def diverges(index):

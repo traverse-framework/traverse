@@ -1,12 +1,13 @@
 """Decision 112 spike: Core ML (Mac) vs the tract int8 reference, Decision 106 bar."""
-import os, sys, time
+import os, time
+from pathlib import Path
 import numpy as np
 import coremltools as ct
 
 clips = sorted(f for f in os.listdir("clips") if f.endswith(".f32le"))
 def sig(v): return 1 / (1 + np.exp(-v.astype(np.float64)))
 def load(path, shape=None):
-    a = np.array(np.frombuffer(open(path, "rb").read(), np.float32))
+    a = np.array(np.frombuffer(Path(path).read_bytes(), np.float32))
     return a.reshape(shape) if shape else a
 refs = {c: load(f"ref/{c[:-6]}.tract.f32le") for c in clips}
 for prec in ("fp16", "fp32"):
