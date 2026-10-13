@@ -55,11 +55,10 @@ impl NestedExecutionLimits {
     #[must_use]
     pub fn clamped(self) -> Self {
         Self {
-            fuel: self.fuel.min(MAX_HOST_NESTED_FUEL).max(1),
+            fuel: self.fuel.clamp(1, MAX_HOST_NESTED_FUEL),
             max_memory_bytes: self
                 .max_memory_bytes
-                .min(MAX_HOST_NESTED_MEMORY_BYTES)
-                .max(64 * 1024),
+                .clamp(64 * 1024, MAX_HOST_NESTED_MEMORY_BYTES),
         }
     }
 }

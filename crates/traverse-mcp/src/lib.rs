@@ -1220,7 +1220,7 @@ mod tests {
                     network_access: NetworkAccess::Forbidden,
                     filesystem_access: FilesystemAccess::None,
                 },
-            resources: None,
+                resources: None,
             },
             policies: vec![IdReference {
                 id: "policy.comments.default".to_string(),

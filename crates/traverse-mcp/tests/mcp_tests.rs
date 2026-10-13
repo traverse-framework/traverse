@@ -102,7 +102,7 @@ fn capability_contract() -> traverse_contracts::CapabilityContract {
                 filesystem_access: FilesystemAccess::None,
             },
             resources: None,
-            },
+        },
         policies: vec![IdReference {
             id: "policy.comments.default".to_string(),
         }],

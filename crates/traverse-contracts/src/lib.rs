@@ -822,19 +822,19 @@ pub fn host_meets_execution_resources(
     host_memory_bytes: u64,
     host_fuel: u64,
 ) -> Result<(), String> {
-    if let Some(required) = resources.min_memory_bytes {
-        if required > host_memory_bytes {
-            return Err(format!(
-                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} memory bytes; host ceiling is {host_memory_bytes}"
-            ));
-        }
+    if let Some(required) = resources.min_memory_bytes
+        && required > host_memory_bytes
+    {
+        return Err(format!(
+            "resource_requirements_exceed_host: capability '{capability_id}' requires {required} memory bytes; host ceiling is {host_memory_bytes}"
+        ));
     }
-    if let Some(required) = resources.max_fuel {
-        if required > host_fuel {
-            return Err(format!(
-                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} fuel; host ceiling is {host_fuel}"
-            ));
-        }
+    if let Some(required) = resources.max_fuel
+        && required > host_fuel
+    {
+        return Err(format!(
+            "resource_requirements_exceed_host: capability '{capability_id}' requires {required} fuel; host ceiling is {host_fuel}"
+        ));
     }
     Ok(())
 }

@@ -92,7 +92,7 @@ fn contract_with_schema(
                 filesystem_access: FilesystemAccess::None,
             },
             resources: None,
-            },
+        },
         policies: Vec::new(),
         dependencies: Vec::new(),
         provenance: traverse_contracts::Provenance {

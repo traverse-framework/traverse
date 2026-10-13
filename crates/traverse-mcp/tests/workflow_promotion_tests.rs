@@ -94,7 +94,7 @@ fn contract(id: &str) -> CapabilityContract {
                 filesystem_access: FilesystemAccess::None,
             },
             resources: None,
-            },
+        },
         policies: Vec::new(),
         dependencies: Vec::new(),
         provenance: traverse_contracts::Provenance {
