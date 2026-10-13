@@ -6667,8 +6667,11 @@ Decision 112 gated the real Core ML route on a spike. The spike had to:
    re-serializes `model.mlmodel` with protobuf `deterministic=True`, uses
    UUIDv5 manifest ids, and writes a sorted, stored, fixed-timestamp zip.
    That gave the same digest across runs and fresh environments on macOS
-   arm64. CI must confirm it on the pinned Linux image, or fall back to
-   tolerance (Decision 112 rule 3).
+   arm64. CI confirms it on a macOS arm64 runner that installs the
+   hash-locked environment (`pip --require-hashes`), not on a pinned Linux
+   container. This was the owner's choice for slice 1: the conversion runs
+   where it was proven, and Linux parity isn't needed. If it ever stops
+   reproducing, fall back to tolerance (Decision 112 rule 3).
 4. **Speed meets the bar with large headroom.** On the iPhone 14 Pro Max
    (iOS 26.6), p95 is 10.7 ms with `cpuAndGPU` and 37 ms with `all` (one
    1.25 s outlier), against 1,500 ms. Compiling on the device takes 0.22 s.

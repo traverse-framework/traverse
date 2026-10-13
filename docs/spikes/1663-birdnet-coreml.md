@@ -72,8 +72,8 @@ The zip is **byte-identical** across two conversions in one environment and
 a third in a freshly installed one. Its digest is always
 `9b4f1615fe4807fc2cfbea7c1023bc8841793a313e67e46ab4f1b25af8f38aef`, and the
 canonical package predicts identically to the raw one. So the Decision 112
-byte-identical bar holds on macOS arm64. Linux CI parity is for slice 1 to
-confirm.
+byte-identical bar holds on macOS arm64. CI re-converts on a macOS arm64
+runner with the hash-locked environment, so Linux parity isn't needed.
 
 ## Results
 
@@ -111,9 +111,9 @@ after warm-up. Its p95 is still 37 ms. Slice 3 should measure whether
 
 - **Converter:** pin the pre-pass rewrites and the `broadcast_to` converter;
   convert in fp32. Make canonicalisation part of the `mlpackage-zip` writer.
-- **CI:** the re-convert check must show the same digest on the pinned Linux
-  image. If it can't, it falls back to the tolerance bar (Decision 112
-  rule 3).
+- **CI:** the re-convert check must show the same digest on a macOS arm64
+  runner with the hash-locked environment. If it can't, it falls back to the
+  tolerance bar (Decision 112 rule 3).
 - **Adapter:** compile on the device (fast) and cache by variant digest. The
   real-time requirement is met with large headroom, so the compute-unit
   default (Decision 112 rule 6) can favour predictability over peak speed.
