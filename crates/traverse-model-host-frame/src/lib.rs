@@ -1146,6 +1146,15 @@ mod tests {
                 Err(EnvelopeError::InvalidInput(field))
             );
         }
+        // Without `accelerators` the factory adds no adapter.
+        let mut plain = create_header(json!({}));
+        plain
+            .as_object_mut()
+            .expect("header")
+            .remove("accelerators");
+        let plain = replay_call(0, &plain, &[]);
+        let plain_handle = plain["handle"].as_u64().expect("handle");
+        replay_call(plain_handle, &json!({ "op": "destroy" }), &[]);
         let created = replay_call(0, &create_header(json!({ "replay": true })), &[]);
         let handle = created["handle"].as_u64().expect("handle");
 
