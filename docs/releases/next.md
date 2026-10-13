@@ -12,3 +12,15 @@ Unreleased changes since `v0.15.0` will be recorded here.
   `execution.resources` or WASM initial memory exceeds the host ceiling.
 - Spec 1402 FR-012 amended to 1.5.0; contract `execution.resources` is
   optional and backwards-compatible.
+
+## Breaking: host-side contract input schema enforcement (`#1658`)
+
+- Capability inputs are validated against the contract `inputs.schema` before
+  the artifact runs (native runtime path and web `BundleEmbedder` when a
+  component declares `contract_path`).
+- `additionalProperties: false` is enforced; unknown fields fail with
+  `invalid_input` / `RequestInvalid` and JSON Pointer violation paths
+  (e.g. `/skip_redaction`).
+- `maxLength` on strings is enforced. Raw `WasmExecutor::run_bytes` still
+  does not validate — callers must validate or use the governed runtime /
+  embedder path.
