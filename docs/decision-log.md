@@ -6624,3 +6624,65 @@ Three facts shape the fix:
 
 Approved by Enrico in `/brainstorm` (2026-10-13). Every recommended option
 was accepted.
+
+## Decision 113: Core ML Conversion Spike Verdict — GO (fp32 ML Program, Canonical Zip, ~10 ms per Clip on iPhone)
+
+- **Date**: 2026-10-13
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1663` (spike, slice 0), `#1629`, `#1630`, umbrella
+  `#1623`
+- **Origin**: the Decision 112 rule 1 spike; full data in
+  `docs/spikes/1663-birdnet-coreml.md`
+
+### Context
+
+Decision 112 gated the real Core ML route on a spike. The spike had to:
+- convert BirdNET v2.4 int8 through onnx2torch → coremltools in a pinned
+  environment;
+- check byte stability;
+- time it on the iPhone 14 Pro Max against the ≤ 1.5 s bar;
+- meet Decision 106's tolerance against the int8 reference.
+
+### Decision
+
+**GO**, with these conditions for slice 1 (`#1663`) and slice 3 (`#1629`):
+
+1. **Precision: fp32 ML Program.**
+   - fp32 passes on 21 of 21 clips: top-5 identical, with a worst
+     |Δ sigmoid| of 8.3×10⁻⁴.
+   - fp16 fails (top-5 0/21), because the mel front end loses too much in
+     float16.
+   - fp32 runs on the CPU and GPU (not the Neural Engine) at 9.9–12.8 ms per
+     clip, so no fp16 or mixed precision is needed.
+2. **The converter is the spike's pipeline:** the deterministic pre-pass
+   (explicit `SAME_UPPER` pads; reverse slices → `Gather`; the dynamic int8
+   matmul as exact float ops without `Min`/`Max`/`Clip`), plus a generic
+   `aten::broadcast_to` converter.
+   - The reverse-slice rewrite fixes a coremltools bug that drops one
+     element.
+   - Any future model must pass the same conformance comparison. Rewrites
+     that are model-specific stay out.
+3. **Reproducibility: byte-identical holds.** The `mlpackage-zip` writer
+   re-serializes `model.mlmodel` with protobuf `deterministic=True`, uses
+   UUIDv5 manifest ids, and writes a sorted, stored, fixed-timestamp zip.
+   That gave the same digest across runs and fresh environments on macOS
+   arm64. CI must confirm it on the pinned Linux image, or fall back to
+   tolerance (Decision 112 rule 3).
+4. **Speed meets the bar with large headroom.** On the iPhone 14 Pro Max
+   (iOS 26.6), p95 is 10.7 ms with `cpuAndGPU` and 37 ms with `all` (one
+   1.25 s outlier), against 1,500 ms. Compiling on the device takes 0.22 s.
+5. **Correction to the #1591 record.** The Personal Team ID is
+   `5NBVKQJK8H`. `54SV734CXT` is the development certificate's identifier,
+   not a team, which explains #1591's "No Account for Team 54SV734CXT".
+
+### Alternatives Considered
+
+- fp16 or a mixed-precision split. Rejected: fp16 fails tolerance, and fp32
+  is already about 300× faster than `wasmi` on the phone.
+- A NO-GO and re-planning. Rejected: every measurement passed.
+
+### Approval
+
+Recorded per Decision 112 rule 1 (the spike records GO or NO-GO). The
+measured results meet every condition the owner set in Decision 112.
