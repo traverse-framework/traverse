@@ -1747,18 +1747,18 @@ mod binary_cache_tests {
         let with_memory = [
             0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
         ];
-        let err = executor
-            .ensure_meets_wasm_initial_memory("example.cap", &with_memory)
-            .expect_err("2-page initial memory must exceed a 1-page host ceiling");
-        assert!(matches!(
-            err,
-            ExecutorError::ResourceRequirementsExceedHost(_)
-        ));
-        let detail = err.to_string();
+        let err = executor.ensure_meets_wasm_initial_memory("example.cap", &with_memory);
         assert!(
-            detail.contains("resource_requirements_exceed_host") && detail.contains("131072"),
-            "expected fail-fast memory detail, got {detail}"
+            matches!(&err, Err(ExecutorError::ResourceRequirementsExceedHost(_))),
+            "2-page initial memory must exceed a 1-page host ceiling, got {err:?}"
         );
+        if let Err(error) = err {
+            let detail = error.to_string();
+            assert!(
+                detail.contains("resource_requirements_exceed_host") && detail.contains("131072"),
+                "expected fail-fast memory detail, got {detail}"
+            );
+        }
     }
 
     #[test]
