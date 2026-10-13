@@ -101,6 +101,26 @@ if git diff --quiet -- Cargo.toml; then
   exit 1
 fi
 
+# Member crates that pin a sibling path crate inline (for example
+# `traverse-model-host-frame = { path = "../traverse-model-host-frame",
+# version = "0.14.0" }`) need the same lockstep version, or the workspace no
+# longer resolves. Rewrite only dependency lines that name both a
+# `../traverse-*` path and a version; registry pins such as
+# `traverse-registry = "=0.25.0"` have no path and are left untouched.
+member_manifests=()
+for manifest in crates/*/Cargo.toml; do
+  [[ -f "${manifest}" ]] || continue
+  member_tmp_file="$(mktemp)"
+  sed -E '/^traverse-[A-Za-z0-9_-]+ = \{.*path = "\.\.\/traverse-[^"]+".*version = "[0-9]+\.[0-9]+\.[0-9]+"/ s/version = "[0-9]+\.[0-9]+\.[0-9]+"/version = "'"${new_version}"'"/' \
+    "${manifest}" > "${member_tmp_file}"
+  if cmp -s "${manifest}" "${member_tmp_file}"; then
+    rm -f "${member_tmp_file}"
+  else
+    mv "${member_tmp_file}" "${manifest}"
+    member_manifests+=("${manifest}")
+  fi
+done
+
 # Keep Cargo.lock in step with Cargo.toml. The lockfile records a
 # `version = "…"` line for every workspace path crate (the members under
 # `crates/`), and a stale value breaks `--locked` builds and `cargo metadata
@@ -196,14 +216,14 @@ fs.writeFileSync(lockPath, `${JSON.stringify(packageLock, null, 2)}\n`);
 NODE
 
 changed_files="$(git diff --name-only)"
-unexpected_files="$(printf '%s\n' "${changed_files}" | grep -vxE 'Cargo\.toml|Cargo\.lock|packages/web/TraverseEmbedder/package\.json|packages/web/TraverseEmbedder/package-lock\.json' || true)"
+unexpected_files="$(printf '%s\n' "${changed_files}" | grep -vxE 'Cargo\.toml|Cargo\.lock|crates/[^/]+/Cargo\.toml|packages/web/TraverseEmbedder/package\.json|packages/web/TraverseEmbedder/package-lock\.json' || true)"
 if [[ -n "${unexpected_files}" ]]; then
   echo "Version bump changed unexpected files:" >&2
   echo "${unexpected_files}" >&2
   exit 1
 fi
 
-git add Cargo.toml Cargo.lock "${web_package_json}" "${web_package_lock}"
+git add Cargo.toml Cargo.lock "${web_package_json}" "${web_package_lock}" ${member_manifests[@]+"${member_manifests[@]}"}
 git commit -m "chore: bump version to ${tag_name}"
 git tag "${tag_name}"
 git tag "${web_tag_name}"
