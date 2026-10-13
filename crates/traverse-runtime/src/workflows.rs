@@ -3087,6 +3087,7 @@ mod tests {
                         "type": "object",
                         "required": ["validate", "process", "summarize"],
                         "properties": {
+                            "note": {"type": "string"},
                             "validate": {"type": "object"},
                             "process": {"type": "object"},
                             "summarize": {"type": "object"}
