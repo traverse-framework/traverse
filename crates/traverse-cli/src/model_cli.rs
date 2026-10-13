@@ -362,8 +362,9 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
     convert-coreml <model.onnx> <out.mlmodel>       Deterministic ONNX → Core ML variant file.
     add-variant <package-dir> --file <model.mlmodel> ...
                                                     Add a signed-ready coreml variant. Re-sign after.
-    package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir>
-                                                    Package an ONNX model on the audited runner guest.
+    package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir> [--json]
+                                                    Package an ONNX model on the audited runner guest
+                                                    (ABI v3 / schema 2.2.0).
 
   All subcommands accept --json. Run `traverse-cli model <subcommand> --help` for details."
             .to_string(),
@@ -665,6 +666,11 @@ fn verify(
         "digest": pin.digest,
         "key_id": pin.key_id,
         "imports": imports,
+        // CLI verify always judges the package under non_commercial usage so
+        // `prohibited` packages still verify; apps must still declare their
+        // own `model_usage`. `rights_record.effective_usage` reflects this
+        // judgment, not an undeclared app usage (#1660).
+        "verification_usage": "non_commercial",
     });
     match &registered {
         Ok(_) => {

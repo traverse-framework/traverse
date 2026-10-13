@@ -369,6 +369,18 @@ test("registration rejects missing, ambiguous, digest, rights, and target mismat
     const editedPin = await pinFor("fixture.echo", bytes);
     await assert.rejects(() => register([editedPin], bytes, pkg.wasm, sig), reason(expected), expected);
   }
+
+  const { bytes: badSchemaBytes, sig: badSchemaSig } = resigned(pkg.manifest, (m) => {
+    m.schema_version = "9.9.9";
+  });
+  const badSchemaPin = await pinFor("fixture.echo", badSchemaBytes);
+  await assert.rejects(
+    () => register([badSchemaPin], badSchemaBytes, pkg.wasm, badSchemaSig),
+    (error) =>
+      error.reason === "manifest_invalid"
+      && String(error.message).includes("unsupported schema_version 9.9.9")
+      && error.detail?.field === "schema_version",
+  );
 });
 
 test("missing WebCrypto Ed25519 fails closed with crypto_unavailable", async () => {

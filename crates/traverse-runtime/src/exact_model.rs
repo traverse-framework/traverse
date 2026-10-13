@@ -442,14 +442,52 @@ impl ModelPackageManifest {
                 ));
             }
         }
+        let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+        if !schema_supported {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    &format!(
+                        "unsupported schema_version {} (supported: {}, {}, {})",
+                        self.schema_version,
+                        MODEL_PACKAGE_SCHEMA_VERSION,
+                        MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION,
+                        MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+                    ),
+                ),
+                denial(
+                    "schema_version",
+                    &format!(
+                        "{MODEL_PACKAGE_SCHEMA_VERSION}|{MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|{MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}"
+                    ),
+                    &self.schema_version,
+                ),
+            ));
+        }
+        if self.abi_version == 0 || self.abi_version > MAX_MODEL_ABI_VERSION {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    &format!(
+                        "unsupported abi_version {} (supported: 1..={MAX_MODEL_ABI_VERSION})",
+                        self.abi_version
+                    ),
+                ),
+                denial(
+                    "abi_version",
+                    &format!("1..={MAX_MODEL_ABI_VERSION}"),
+                    &self.abi_version.to_string(),
+                ),
+            ));
+        }
         if !self.schema_fields_valid()
             || self
                 .rights
                 .derivation
                 .as_ref()
                 .is_some_and(|derivation| !is_sha256_hex(&derivation.source_digest))
-            || self.abi_version == 0
-            || self.abi_version > MAX_MODEL_ABI_VERSION
             || self.max_memory_bytes == 0
             || self.max_fuel == 0
             || self.max_input_bytes == 0
@@ -2813,9 +2851,18 @@ mod tests {
         );
         let mut unknown_schema = fixture_package().manifest;
         unknown_schema.schema_version = "9.9.9".to_string();
+        let unknown_err = unknown_schema.validate().expect_err("schema");
+        assert_eq!(unknown_err.reason, Some(ModelFailureReason::ManifestInvalid));
+        assert!(
+            unknown_err
+                .message
+                .contains("unsupported schema_version 9.9.9"),
+            "{}",
+            unknown_err.message
+        );
         assert_eq!(
-            reason(&unknown_schema),
-            Some(ModelFailureReason::ManifestInvalid)
+            unknown_err.detail.as_ref().map(|d| d.field.as_str()),
+            Some("schema_version")
         );
         let kinds: Vec<Value> = [
             DerivationKind::Converted,

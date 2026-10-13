@@ -12,8 +12,8 @@ A package is a directory with three files:
 
 | File | Contents |
 |---|---|
-| `model.wasm` | An import-free `wasm32` guest exporting `memory` and `model_execute` (and `model_alloc` for ABI v2). |
-| `model.manifest.json` | Identity, `wasm_digest`, ABI, schemas, `rights`, target, and limits (schema `2.0.0`, or `2.1.0` with `rights.derivation`). |
+| `model.wasm` | An import-free `wasm32` guest exporting `memory` and `model_execute` (plus `model_alloc` for ABI v2+, and `model_prepare` for ABI v3). |
+| `model.manifest.json` | Identity, `wasm_digest`, ABI, schemas, `rights`, target, and limits (schema `2.0.0`; `2.1.0` with `rights.derivation`; `2.2.0` with `max_prepare_fuel` / accelerator variants). |
 | `model.sig.json` | `{alg: "ed25519", key_id, signature}`: a detached signature over the exact manifest bytes. |
 
 The **pin digest** is the SHA-256 of the exact `model.manifest.json` bytes.
@@ -32,10 +32,14 @@ locally, with no network access.
   without a heap.
 - **ABI v2** (`abi_version: 2`). The guest exports
   `model_alloc(len) -> ptr`, and the host asks it for the input and output
-  buffers. Use this for any guest with a real allocator, such as the ONNX
-  runner.
+  buffers. Use this for any guest with a real allocator.
+- **ABI v3** (`abi_version: 3`, schema `2.2.0`). ABI v2 plus
+  `model_prepare` / snapshot reuse and a required `max_prepare_fuel`. The
+  ONNX packager emits this ABI.
 - **No imports.** A guest that imports anything is rejected
   (`model verify` reports `imports`).
+- Unsupported `schema_version` / `abi_version` values fail registration with
+  `manifest_invalid` and a message that names the unsupported version.
 
 ## Limits and fuel
 
@@ -154,12 +158,20 @@ traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
-The packager writes `model.wasm` and an unsigned schema `2.1.0` manifest
-whose `rights.derivation` records `kind: converted`, the ONNX file's
-SHA-256, and the `source` rights. The runner returns raw output values;
-post-processing such as sigmoid, labels, and thresholds belongs in app
-capabilities. Then continue with `model sign`, `verify`, `conformance`, and
-`pin` as above.
+The packager writes `model.wasm` and an unsigned schema `2.2.0` manifest
+(`abi_version: 3`, with `max_prepare_fuel`) whose `rights.derivation`
+records `kind: converted`, the ONNX file's SHA-256, and the `source`
+rights. The runner returns raw output values; post-processing such as
+sigmoid, labels, and thresholds belongs in app capabilities. Then continue
+with `model sign`, `verify`, `conformance`, and `pin` as above.
+
+`--json` is accepted on `package-onnx` (and every other `model` subcommand);
+the packaging report is always JSON either way.
+
+**Embedder compatibility.** Schema `2.2.0` / ABI v3 packages need an
+embedder newer than `traverse-embedder-web@0.14.0` (tracked by `#1652`).
+Published `0.14.0` rejects them with `manifest_invalid`. Use a build from
+`main` (or the next release) to register and run them.
 
 For int8 models, cross-engine results inside Traverse stay byte-identical.
 Against an external reference runtime, Decision 106 allows top-5 identical
@@ -190,5 +202,5 @@ and |Δ sigmoid| ≤ 5×10⁻³.
 | `digest_mismatch` | `model.wasm` doesn't match `wasm_digest`. Update the manifest, then re-sign. |
 | `rights_incomplete` | A rights (or derivation) field is empty; `detail.field` names it. |
 | `rights_inconsistent` | `commercial_use` is more permissive than `derivation.source_commercial_use`. |
-| `manifest_invalid` | Unknown fields, a bad schema version, bad limits, `derivation` in a `2.0.0` manifest, or WASM imports. |
+| `manifest_invalid` | Unknown fields, unsupported `schema_version` / `abi_version` (message names the value), bad limits, `derivation` in a `2.0.0` manifest, or WASM imports. |
 | `host_limit_exceeded` | The declared limits exceed the host's ceilings. Lower them, or target a larger host. |

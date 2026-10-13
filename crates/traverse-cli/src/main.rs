@@ -349,7 +349,14 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
             Err(CliError::ValidationFailed(msg)) => {
-                eprintln!("{msg}");
+                // Structured JSON failure reports (e.g. `model verify --json`)
+                // go to stdout so success and failure share one stream; the
+                // exit code remains the failure signal (#1660).
+                if validation_failure_goes_to_stdout(&msg) {
+                    println!("{msg}");
+                } else {
+                    eprintln!("{msg}");
+                }
                 ExitCode::from(2)
             }
             Err(CliError::RegistrationConflict(msg)) => {
@@ -1778,16 +1785,20 @@ fn help_artifact() -> String {
 }
 
 fn help_model_package_onnx() -> String {
-    "traverse-cli model package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir>
+    format!(
+        "traverse-cli model package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir> [--json]
 
   Purpose:
-    Package one ONNX model as a Spec 138 guest ABI v2 model by patching a
+    Package one ONNX model as a Spec 138 guest ABI v{abi} model by patching a
     copy of the audited ONNX runner guest: the model blob is appended as one
     data segment and the runner's code is copied byte for byte. Writes
     <out-dir>/model.wasm and an unsigned <out-dir>/model.manifest.json
-    (schema 2.1.0; the source ONNX SHA-256 and the package.json `source`
-    rights are recorded in rights.derivation), then prints a JSON report.
-    Sign the manifest separately (traverse-cli model sign).
+    (schema {schema}; includes max_prepare_fuel; the source ONNX SHA-256 and
+    the package.json `source` rights are recorded in rights.derivation), then
+    prints a JSON report. Sign the manifest separately (traverse-cli model sign).
+
+    Packages from this packager need an embedder newer than 0.14.0 (see #1652);
+    npm 0.14.0 rejects schema {schema} / ABI v{abi} with manifest_invalid.
 
   Required arguments:
     <runner.wasm>    The pristine runner (fixtures/onnx/runner.wasm).
@@ -1797,11 +1808,15 @@ fn help_model_package_onnx() -> String {
     <out-dir>        Directory that receives the package files.
 
   Optional flags:
+    --json           Accepted for consistency with other model subcommands;
+                     the report is always JSON.
     --help           Print this help text.
 
   Example:
-    traverse-cli model package-onnx fixtures/onnx/runner.wasm fixtures/onnx/digits-mlp-1.0.0.onnx fixtures/onnx/digits-onnx.package.json out/digits-onnx"
-        .to_string()
+    traverse-cli model package-onnx fixtures/onnx/runner.wasm fixtures/onnx/digits-mlp-1.0.0.onnx fixtures/onnx/digits-onnx.package.json out/digits-onnx --json",
+        abi = model_packaging::RUNNER_ABI_VERSION,
+        schema = traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
+    )
 }
 
 fn help_wasm_abi() -> String {
@@ -2603,13 +2618,25 @@ fn parse_artifact_sign_command(args: &[String]) -> Result<Command, String> {
     }
 }
 
+/// JSON validation failure payloads (pretty or compact objects) print on
+/// stdout; free-text validation failures stay on stderr.
+fn validation_failure_goes_to_stdout(msg: &str) -> bool {
+    msg.trim_start().starts_with('{')
+}
+
 fn parse_model_package_onnx_command(args: &[String]) -> Result<Command, String> {
-    match args {
+    // `--json` is accepted for consistency with other `model` subcommands; the
+    // packaging report is always JSON either way (#1660).
+    let positional: Vec<&String> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .collect();
+    match positional.as_slice() {
         [_, _, _, runner_path, onnx_path, spec_path, out_dir] => Ok(Command::ModelPackageOnnx {
-            runner_path: PathBuf::from(runner_path),
-            onnx_path: PathBuf::from(onnx_path),
-            spec_path: PathBuf::from(spec_path),
-            out_dir: PathBuf::from(out_dir),
+            runner_path: PathBuf::from(*runner_path),
+            onnx_path: PathBuf::from(*onnx_path),
+            spec_path: PathBuf::from(*spec_path),
+            out_dir: PathBuf::from(*out_dir),
         }),
         _ => Err(usage()),
     }
@@ -12184,6 +12211,17 @@ mod tests {
     }
 
     #[test]
+    fn validation_failure_json_reports_route_to_stdout() {
+        assert!(super::validation_failure_goes_to_stdout(
+            "{\n  \"ok\": false,\n  \"error\": {\"reason\": \"key_untrusted\"}\n}"
+        ));
+        assert!(super::validation_failure_goes_to_stdout("{\"ok\":false}"));
+        assert!(!super::validation_failure_goes_to_stdout(
+            "verification failed for out/pkg: model_incompatible / key_untrusted"
+        ));
+    }
+
+    #[test]
     fn parse_command_routes_model_package_onnx_and_its_help() {
         let args = |rest: &[&str]| -> Vec<String> {
             ["traverse-cli", "model"]
@@ -12200,12 +12238,30 @@ mod tests {
                     && spec_path == Path::new("p.json")
                     && out_dir == Path::new("out")
         ));
+        assert!(matches!(
+            parse_command(&args(&[
+                "package-onnx",
+                "r.wasm",
+                "m.onnx",
+                "p.json",
+                "out",
+                "--json",
+            ])),
+            Ok(Command::ModelPackageOnnx { .. })
+        ));
         assert_eq!(
             parse_command(&args(&["package-onnx", "r.wasm"])).err(),
             Some(super::usage())
         );
         let help = parse_command(&args(&["package-onnx", "--help"])).expect_err("help");
         assert!(help.contains("<package.json>") && help.contains("Example:"));
+        assert!(
+            help.contains(&format!("ABI v{}", crate::model_packaging::RUNNER_ABI_VERSION))
+                && help.contains(
+                    traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+                ),
+            "package-onnx help must match RUNNER_ABI_VERSION / schema constants: {help}"
+        );
         let group = parse_command(&args(&["--help"])).expect_err("help");
         assert!(group.contains("package-onnx"));
     }
@@ -12225,6 +12281,38 @@ mod tests {
         )
         .expect("report json");
         assert_eq!(report["model_id"], "traverse.digits-onnx");
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(out.join("model.manifest.json")).expect("manifest"),
+        )
+        .expect("manifest json");
+        assert_eq!(
+            manifest["abi_version"],
+            Value::from(crate::model_packaging::RUNNER_ABI_VERSION)
+        );
+        assert_eq!(
+            manifest["schema_version"],
+            Value::from(traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED)
+        );
+        let with_json_out = out.join("with-json");
+        let with_json = parse_command(&[
+            "traverse-cli".into(),
+            "model".into(),
+            "package-onnx".into(),
+            root.join("fixtures/onnx/runner.wasm").display().to_string(),
+            root.join("fixtures/onnx/digits-mlp-1.0.0.onnx")
+                .display()
+                .to_string(),
+            root.join("fixtures/onnx/digits-onnx.package.json")
+                .display()
+                .to_string(),
+            with_json_out.display().to_string(),
+            "--json".into(),
+        ])
+        .expect("parse --json");
+        let json_report: Value =
+            serde_json::from_str(&run_command(with_json).expect("package --json"))
+                .expect("report json");
+        assert_eq!(json_report["model_id"], "traverse.digits-onnx");
         assert!(matches!(
             run_command(command("fixtures/onnx/missing.wasm")),
             Err(CliError::IoError(message)) if message.contains("failed to read")
