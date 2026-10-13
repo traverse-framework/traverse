@@ -2627,10 +2627,7 @@ fn validation_failure_goes_to_stdout(msg: &str) -> bool {
 fn parse_model_package_onnx_command(args: &[String]) -> Result<Command, String> {
     // `--json` is accepted for consistency with other `model` subcommands; the
     // packaging report is always JSON either way (#1660).
-    let positional: Vec<&String> = args
-        .iter()
-        .filter(|arg| arg.as_str() != "--json")
-        .collect();
+    let positional: Vec<&String> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
     match positional.as_slice() {
         [_, _, _, runner_path, onnx_path, spec_path, out_dir] => Ok(Command::ModelPackageOnnx {
             runner_path: PathBuf::from(*runner_path),
@@ -12256,10 +12253,11 @@ mod tests {
         let help = parse_command(&args(&["package-onnx", "--help"])).expect_err("help");
         assert!(help.contains("<package.json>") && help.contains("Example:"));
         assert!(
-            help.contains(&format!("ABI v{}", crate::model_packaging::RUNNER_ABI_VERSION))
-                && help.contains(
-                    traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
-                ),
+            help.contains(&format!(
+                "ABI v{}",
+                crate::model_packaging::RUNNER_ABI_VERSION
+            )) && help
+                .contains(traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED),
             "package-onnx help must match RUNNER_ABI_VERSION / schema constants: {help}"
         );
         let group = parse_command(&args(&["--help"])).expect_err("help");
@@ -12281,10 +12279,9 @@ mod tests {
         )
         .expect("report json");
         assert_eq!(report["model_id"], "traverse.digits-onnx");
-        let manifest: Value = serde_json::from_slice(
-            &fs::read(out.join("model.manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(out.join("model.manifest.json")).expect("manifest"))
+                .expect("manifest json");
         assert_eq!(
             manifest["abi_version"],
             Value::from(crate::model_packaging::RUNNER_ABI_VERSION)

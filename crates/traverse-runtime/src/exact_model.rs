@@ -2852,7 +2852,10 @@ mod tests {
         let mut unknown_schema = fixture_package().manifest;
         unknown_schema.schema_version = "9.9.9".to_string();
         let unknown_err = unknown_schema.validate().expect_err("schema");
-        assert_eq!(unknown_err.reason, Some(ModelFailureReason::ManifestInvalid));
+        assert_eq!(
+            unknown_err.reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
         assert!(
             unknown_err
                 .message
