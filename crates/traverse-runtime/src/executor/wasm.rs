@@ -1676,4 +1676,69 @@ mod binary_cache_tests {
 
         assert!(matches!(result, Err(ExecutorError::BinaryLoadFailed(_))));
     }
+
+    #[test]
+    fn ensure_meets_resources_rejects_under_ceiling_fuel_and_memory() {
+        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+            fuel_budget: 1_000,
+            memory_bytes: 1024 * 1024,
+            ..WasmExecutionLimits::default()
+        }) else {
+            return;
+        };
+        let memory_err = executor.ensure_meets_resources(
+            "example.cap",
+            &ExecutionResources {
+                min_memory_bytes: Some(8 * 1024 * 1024),
+                max_fuel: None,
+            },
+        );
+        assert!(matches!(
+            memory_err,
+            Err(ExecutorError::ResourceRequirementsExceedHost(_))
+        ));
+        let fuel_err = executor.ensure_meets_resources(
+            "example.cap",
+            &ExecutionResources {
+                min_memory_bytes: None,
+                max_fuel: Some(50_000),
+            },
+        );
+        assert!(matches!(
+            fuel_err,
+            Err(ExecutorError::ResourceRequirementsExceedHost(_))
+        ));
+        assert!(executor
+            .ensure_meets_resources(
+                "example.cap",
+                &ExecutionResources {
+                    min_memory_bytes: Some(512 * 1024),
+                    max_fuel: Some(500),
+                },
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn ensure_meets_wasm_initial_memory_accepts_modules_without_memory() {
+        let Ok(executor) = WasmExecutor::new() else {
+            return;
+        };
+        // Minimal empty WASM module (no memory section).
+        let no_memory = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        assert!(executor
+            .ensure_meets_wasm_initial_memory("example.cap", &no_memory)
+            .is_ok());
+    }
+
+    #[test]
+    fn resource_requirements_exceed_host_display_is_secret_free() {
+        let error = ExecutorError::ResourceRequirementsExceedHost(
+            "resource_requirements_exceed_host: capability 'x' requires 1 memory bytes; host ceiling is 0"
+                .to_string(),
+        );
+        assert!(error
+            .to_string()
+            .contains("resource_requirements_exceed_host"));
+    }
 }

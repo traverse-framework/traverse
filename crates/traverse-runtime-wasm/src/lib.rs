@@ -31,7 +31,6 @@ use app_sm::{
     SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
     resolve_lifecycle_transition,
 };
-use executor::execute_nested_capability_with_limits;
 use traverse_contracts::{
     EventReference, ExecutionTarget, PlacementConstraintEvaluator, PlacementError,
     PlacementRequest, RuntimeSnapshot, ServiceType,
@@ -39,7 +38,8 @@ use traverse_contracts::{
 
 pub use executor::{
     DEFAULT_NESTED_FUEL, DEFAULT_NESTED_MEMORY_BYTES, MAX_HOST_NESTED_FUEL,
-    MAX_HOST_NESTED_MEMORY_BYTES, NestedExecutionLimits,
+    MAX_HOST_NESTED_MEMORY_BYTES, NestedExecutionLimits, execute_nested_capability,
+    execute_nested_capability_with_limits,
 };
 
 /// Traverse Host ABI v1 is independently versioned from this crate (spec

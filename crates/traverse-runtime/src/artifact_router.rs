@@ -339,6 +339,12 @@ mod tests {
                 LocalExecutionFailureCode::ResourceExhausted,
             ),
             (
+                ExecutorError::ResourceRequirementsExceedHost(
+                    "resource_requirements_exceed_host: x".to_string(),
+                ),
+                LocalExecutionFailureCode::ResourceExhausted,
+            ),
+            (
                 ExecutorError::ChecksumMismatch {
                     expected: "a".to_string(),
                     actual: "b".to_string(),

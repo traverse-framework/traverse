@@ -259,6 +259,11 @@ pub fn execute_nested_capability(
 }
 
 /// Like [`execute_nested_capability`], with host-supplied fuel / memory (#1656).
+///
+/// # Errors
+///
+/// Returns a stable, secret-free error string when module validation,
+/// linking, fuel setup, or execution fails.
 pub fn execute_nested_capability_with_limits(
     artifact: &[u8],
     input: &[u8],
