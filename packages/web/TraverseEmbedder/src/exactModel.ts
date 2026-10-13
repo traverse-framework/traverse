@@ -431,19 +431,35 @@ function validateManifest(manifest: ModelPackageManifest): void {
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION ||
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION ||
     preparedSchema;
+  if (!schemaSupported) {
+    throw incompatible(
+      "manifest_invalid",
+      `unsupported schema_version ${manifest.schema_version} (supported: ${MODEL_PACKAGE_SCHEMA_VERSION}, ${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}, ${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED})`,
+      denial(
+        "schema_version",
+        `${MODEL_PACKAGE_SCHEMA_VERSION}|${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}`,
+        manifest.schema_version,
+      ),
+    );
+  }
+  if (manifest.abi_version === 0 || manifest.abi_version > MAX_MODEL_ABI_VERSION) {
+    throw incompatible(
+      "manifest_invalid",
+      `unsupported abi_version ${manifest.abi_version} (supported: 1..=${MAX_MODEL_ABI_VERSION})`,
+      denial("abi_version", `1..=${MAX_MODEL_ABI_VERSION}`, String(manifest.abi_version)),
+    );
+  }
   // abi_version 3 needs schema 2.2.0 and a positive prepare budget; no other ABI may carry one.
   const prepareValid =
     manifest.abi_version === MODEL_GUEST_ABI_PREPARED
       ? preparedSchema && (manifest.max_prepare_fuel ?? 0) > 0
       : manifest.max_prepare_fuel === undefined;
   if (
-    !schemaSupported ||
     !prepareValid ||
     (rights.derivation !== undefined && manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION) ||
     (rights.derivation !== undefined && !isSha256Hex(rights.derivation.source_digest)) ||
-    manifest.abi_version > MAX_MODEL_ABI_VERSION ||
     [
-      manifest.abi_version, manifest.max_memory_bytes, manifest.max_fuel, manifest.max_input_bytes,
+      manifest.max_memory_bytes, manifest.max_fuel, manifest.max_input_bytes,
       manifest.max_output_bytes, manifest.max_execution_ms,
     ].some((limit) => limit === 0)
   ) {

@@ -2,6 +2,17 @@
 
 Unreleased changes since `v0.14.0` will be recorded here.
 
+## Fix: `model package-onnx` docs/CLI match ABI v3 / schema 2.2.0 (`#1660`)
+
+- Help and `docs/model-packaging-guide.md` now describe the ABI v3 /
+  schema `2.2.0` packages the ONNX packager actually emits (including
+  `max_prepare_fuel`).
+- `package-onnx` accepts `--json` like the other `model` subcommands.
+- `model verify --json` prints failure JSON on stdout (exit code still
+  signals failure).
+- Unsupported `schema_version` / `abi_version` registration errors name the
+  unsupported value in the message and `detail`.
+
 ## Fix: web embedder release evidence reports the real package version (`#1654`)
 
 - `traverse-embedder-web` no longer hard-codes `PACKAGE_VERSION` as `0.9.0`.

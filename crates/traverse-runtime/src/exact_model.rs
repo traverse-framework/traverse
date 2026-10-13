@@ -451,25 +451,7 @@ impl ModelPackageManifest {
                 ));
             }
         }
-        if !self.schema_fields_valid()
-            || self
-                .rights
-                .derivation
-                .as_ref()
-                .is_some_and(|derivation| !is_sha256_hex(&derivation.source_digest))
-            || self.abi_version == 0
-            || self.abi_version > MAX_MODEL_ABI_VERSION
-            || self.max_memory_bytes == 0
-            || self.max_fuel == 0
-            || self.max_input_bytes == 0
-            || self.max_output_bytes == 0
-            || self.max_execution_ms == 0
-        {
-            return Err(incompatible(
-                ModelFailureReason::ManifestInvalid,
-                "model manifest schema version, resource limits, or ABI are invalid",
-            ));
-        }
+        self.validate_schema_abi_and_limits()?;
         if !self
             .supported_profiles
             .iter()
@@ -503,6 +485,69 @@ impl ModelPackageManifest {
 }
 
 impl ModelPackageManifest {
+    /// Fail closed when `schema_version` / `abi_version` / limits are invalid.
+    /// Unsupported versions are named in the message and `detail` (#1660).
+    fn validate_schema_abi_and_limits(&self) -> Result<(), HostConnectorError> {
+        let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+        if !schema_supported {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    &format!(
+                        "unsupported schema_version {} (supported: {}, {}, {})",
+                        self.schema_version,
+                        MODEL_PACKAGE_SCHEMA_VERSION,
+                        MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION,
+                        MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+                    ),
+                ),
+                denial(
+                    "schema_version",
+                    &format!(
+                        "{MODEL_PACKAGE_SCHEMA_VERSION}|{MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|{MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}"
+                    ),
+                    &self.schema_version,
+                ),
+            ));
+        }
+        if self.abi_version == 0 || self.abi_version > MAX_MODEL_ABI_VERSION {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::ManifestInvalid,
+                    &format!(
+                        "unsupported abi_version {} (supported: 1..={MAX_MODEL_ABI_VERSION})",
+                        self.abi_version
+                    ),
+                ),
+                denial(
+                    "abi_version",
+                    &format!("1..={MAX_MODEL_ABI_VERSION}"),
+                    &self.abi_version.to_string(),
+                ),
+            ));
+        }
+        if !self.schema_fields_valid()
+            || self
+                .rights
+                .derivation
+                .as_ref()
+                .is_some_and(|derivation| !is_sha256_hex(&derivation.source_digest))
+            || self.max_memory_bytes == 0
+            || self.max_fuel == 0
+            || self.max_input_bytes == 0
+            || self.max_output_bytes == 0
+            || self.max_execution_ms == 0
+        {
+            return Err(incompatible(
+                ModelFailureReason::ManifestInvalid,
+                "model manifest schema version, resource limits, or ABI are invalid",
+            ));
+        }
+        Ok(())
+    }
+
     /// The schema version is supported and allows the fields present:
     /// `rights.derivation` needs `2.1.0`+, `abi_version` 3 needs `2.2.0`
     /// with a positive prepare budget, which no other ABI may carry, and
@@ -2992,9 +3037,21 @@ mod tests {
         );
         let mut unknown_schema = fixture_package().manifest;
         unknown_schema.schema_version = "9.9.9".to_string();
+        let unknown_err = unknown_schema.validate().expect_err("schema");
         assert_eq!(
-            reason(&unknown_schema),
+            unknown_err.reason,
             Some(ModelFailureReason::ManifestInvalid)
+        );
+        assert!(
+            unknown_err
+                .message
+                .contains("unsupported schema_version 9.9.9"),
+            "{}",
+            unknown_err.message
+        );
+        assert_eq!(
+            unknown_err.detail.as_ref().map(|d| d.field.as_str()),
+            Some("schema_version")
         );
         let kinds: Vec<Value> = [
             DerivationKind::Converted,
