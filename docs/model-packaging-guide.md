@@ -177,6 +177,48 @@ For int8 models, cross-engine results inside Traverse stay byte-identical.
 Against an external reference runtime, Decision 106 allows top-5 identical
 and |Δ sigmoid| ≤ 5×10⁻³.
 
+## Core ML variants: `model convert-coreml` (Spec 138 0.13.3)
+
+An ONNX package (one with `rights.derivation`) can also carry a `coreml`
+accelerator variant for Apple hosts. The variant is an `mlpackage-zip`: the
+canonical zip of an fp32 Core ML ML Program. The same ONNX and converter give
+the same bytes.
+
+The converter is `tools/coreml/convert_variant.py`. Run it in the
+environment pinned by `tools/coreml/requirements.lock` (Python 3.9 on macOS
+arm64):
+
+```bash
+python3.9 -m venv .coreml-venv
+.coreml-venv/bin/python -m pip install --require-hashes --no-deps -r tools/coreml/requirements.lock
+export TRAVERSE_COREML_PYTHON="$PWD/.coreml-venv/bin/python"
+
+# 1. Convert. Prints source_digest, digest, tool_version (lock-sha256:...) and
+#    the pre-pass rewrites it applied.
+traverse-cli model convert-coreml model.onnx out/model.mlpackage.zip --json
+
+# 2. Add it to the package, with a conformance vector of wasm-cpu reference
+#    outputs. --f32-dtype names each output dtype code holding f32 values.
+traverse-cli model add-variant out/pkg --file out/model.mlpackage.zip \
+  --conformance vector.json --peak-memory-bytes 33554432 \
+  --max-abs-diff 0.005 --top-k 5 \
+  --tool traverse-coreml --tool-version lock-sha256:<lock digest> --f32-dtype 3
+
+# 3. Re-sign (add-variant changes the manifest), then verify.
+traverse-cli model sign out/pkg/model.manifest.json --key ~/keys/model-signing.hex
+```
+
+Run the commands from the repository root, or pass `--converter` with the
+script's path (`--python` overrides `TRAVERSE_COREML_PYTHON`). The
+converter makes dynamic dimensions static (size 1). Before conversion it
+rewrites `SAME_UPPER` padding, reverse slices and dynamic int8 matmuls into
+exact equivalents.
+
+`fixtures/models/digits-onnx-coreml-1.0.0` is the worked example. CI re-runs
+the conversion on a macOS arm64 runner and requires the committed digest
+(`scripts/ci/coreml_variant_reconvert_check.sh`). When you change
+`requirements.lock`, re-convert and re-add every committed variant.
+
 ## Provenance: two tiers (Spec 138 0.9.0)
 
 - **Traverse-published trained packages** (for example

@@ -1920,7 +1920,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.13.2",
+      "version": "0.13.3",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1966,7 +1966,9 @@
         "docs/model-signing-key-runbook.md",
         "docs/adr/0080-model-signing-key-management.md",
         "scripts/build_android_host_ndk.sh",
-        "scripts/ci/android_aar_check.sh"
+        "scripts/ci/android_aar_check.sh",
+        "tools/coreml/",
+        "scripts/ci/coreml_variant_reconvert_check.sh"
       ]
     },
     {
