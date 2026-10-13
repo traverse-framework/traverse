@@ -2,6 +2,16 @@
 
 Unreleased changes since `v0.14.0` will be recorded here.
 
+## Fix: web embedder release evidence reports the real package version (`#1654`)
+
+- `traverse-embedder-web` no longer hard-codes `PACKAGE_VERSION` as `0.9.0`.
+  The value is generated from `package.json` at build time, so
+  `releaseEvidence().package.version` matches the published package.
+- The web embedder publish workflow unpacks `npm pack` output and fails if
+  the packed dist version differs from `package.json` / the `web-v*` tag.
+- Native Swift / Kotlin / .NET embedders take `packageVersion` as an input to
+  `TraverseReleaseEvidence` (no hard-coded package constant to drift).
+
 ## Breaking: model rights enforcement (Spec 138 0.8.0, Decision 107, `#1599`)
 
 - **`model_usage` is required.** Apps with `exact_model_dependencies` must
