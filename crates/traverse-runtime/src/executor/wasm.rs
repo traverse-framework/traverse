@@ -1708,15 +1708,17 @@ mod binary_cache_tests {
             fuel_err,
             Err(ExecutorError::ResourceRequirementsExceedHost(_))
         ));
-        assert!(executor
-            .ensure_meets_resources(
-                "example.cap",
-                &ExecutionResources {
-                    min_memory_bytes: Some(512 * 1024),
-                    max_fuel: Some(500),
-                },
-            )
-            .is_ok());
+        assert!(
+            executor
+                .ensure_meets_resources(
+                    "example.cap",
+                    &ExecutionResources {
+                        min_memory_bytes: Some(512 * 1024),
+                        max_fuel: Some(500),
+                    },
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1726,9 +1728,11 @@ mod binary_cache_tests {
         };
         // Minimal empty WASM module (no memory section).
         let no_memory = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-        assert!(executor
-            .ensure_meets_wasm_initial_memory("example.cap", &no_memory)
-            .is_ok());
+        assert!(
+            executor
+                .ensure_meets_wasm_initial_memory("example.cap", &no_memory)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1737,8 +1741,10 @@ mod binary_cache_tests {
             "resource_requirements_exceed_host: capability 'x' requires 1 memory bytes; host ceiling is 0"
                 .to_string(),
         );
-        assert!(error
-            .to_string()
-            .contains("resource_requirements_exceed_host"));
+        assert!(
+            error
+                .to_string()
+                .contains("resource_requirements_exceed_host")
+        );
     }
 }
