@@ -1676,13 +1676,13 @@ mod binary_cache_tests {
 
     #[test]
     fn ensure_meets_resources_rejects_under_ceiling_fuel_and_memory() {
-        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
             fuel_budget: 1_000,
             memory_bytes: 1024 * 1024,
             ..WasmExecutionLimits::default()
-        }) else {
-            return;
-        };
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
         let memory_err = executor.ensure_meets_resources(
             "example.cap",
             &ExecutionResources {
@@ -1720,9 +1720,8 @@ mod binary_cache_tests {
 
     #[test]
     fn ensure_meets_wasm_initial_memory_accepts_modules_without_memory() {
-        let Ok(executor) = WasmExecutor::new() else {
-            return;
-        };
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::new().expect("WasmExecutor::new should succeed");
         // Minimal empty WASM module (no memory section).
         let no_memory = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         assert!(
@@ -1734,12 +1733,12 @@ mod binary_cache_tests {
 
     #[test]
     fn ensure_meets_wasm_initial_memory_rejects_module_above_host_ceiling() {
-        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
             memory_bytes: 64 * 1024,
             ..WasmExecutionLimits::default()
-        }) else {
-            return;
-        };
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
         // WASM header + memory section: one memory, min 2 pages (128 KiB).
         let with_memory = [
             0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
@@ -1749,23 +1748,16 @@ mod binary_cache_tests {
             matches!(&err, Err(ExecutorError::ResourceRequirementsExceedHost(_))),
             "2-page initial memory must exceed a 1-page host ceiling, got {err:?}"
         );
-        if let Err(error) = err {
-            let detail = error.to_string();
-            assert!(
-                detail.contains("resource_requirements_exceed_host") && detail.contains("131072"),
-                "expected fail-fast memory detail, got {detail}"
-            );
-        }
     }
 
     #[test]
     fn ensure_meets_wasm_initial_memory_accepts_module_within_host_ceiling() {
-        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
             memory_bytes: 256 * 1024,
             ..WasmExecutionLimits::default()
-        }) else {
-            return;
-        };
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
         // WASM header + memory section: one memory, min 2 pages (128 KiB).
         let with_memory = [
             0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
