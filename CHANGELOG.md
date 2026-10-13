@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.15.0 — 2026-10-13
+
+Minor lockstep release with **breaking** Spec 138 exact-ref model changes. See
+[docs/releases/v0.15.0.md](docs/releases/v0.15.0.md) and
+[docs/upgrade-to-v0.15.0.md](docs/upgrade-to-v0.15.0.md).
+
 ### Core ML accelerator adapter (Decisions 112 and 114, #1629 slice 3)
 
 - New crate `traverse-coreml-adapter` (ADR-0082). On Apple platforms it runs
