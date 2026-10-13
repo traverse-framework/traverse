@@ -442,6 +442,43 @@ impl ModelPackageManifest {
                 ));
             }
         }
+        self.validate_schema_abi_and_limits()?;
+        if !self
+            .supported_profiles
+            .iter()
+            .any(|profile| profile == PLACEMENT_WASM_CPU)
+        {
+            return Err(incompatible(
+                ModelFailureReason::TargetUnsupported,
+                "model manifest does not support wasm-cpu",
+            ));
+        }
+        if let Some(derivation) = &self.rights.derivation
+            && self.rights.commercial_use.rank() > derivation.source_commercial_use.rank()
+        {
+            return Err(with_detail(
+                incompatible(
+                    ModelFailureReason::RightsInconsistent,
+                    "package commercial_use is more permissive than its derivation source",
+                ),
+                denial(
+                    "rights.commercial_use",
+                    &format!(
+                        "no more permissive than {}",
+                        derivation.source_commercial_use.as_str()
+                    ),
+                    self.rights.commercial_use.as_str(),
+                ),
+            ));
+        }
+        self.validate_accelerator_variants()
+    }
+}
+
+impl ModelPackageManifest {
+    /// Fail closed when `schema_version` / `abi_version` / limits are invalid.
+    /// Unsupported versions are named in the message and `detail` (#1660).
+    fn validate_schema_abi_and_limits(&self) -> Result<(), HostConnectorError> {
         let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
             || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
             || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
@@ -499,39 +536,9 @@ impl ModelPackageManifest {
                 "model manifest schema version, resource limits, or ABI are invalid",
             ));
         }
-        if !self
-            .supported_profiles
-            .iter()
-            .any(|profile| profile == PLACEMENT_WASM_CPU)
-        {
-            return Err(incompatible(
-                ModelFailureReason::TargetUnsupported,
-                "model manifest does not support wasm-cpu",
-            ));
-        }
-        if let Some(derivation) = &self.rights.derivation
-            && self.rights.commercial_use.rank() > derivation.source_commercial_use.rank()
-        {
-            return Err(with_detail(
-                incompatible(
-                    ModelFailureReason::RightsInconsistent,
-                    "package commercial_use is more permissive than its derivation source",
-                ),
-                denial(
-                    "rights.commercial_use",
-                    &format!(
-                        "no more permissive than {}",
-                        derivation.source_commercial_use.as_str()
-                    ),
-                    self.rights.commercial_use.as_str(),
-                ),
-            ));
-        }
-        self.validate_accelerator_variants()
+        Ok(())
     }
-}
 
-impl ModelPackageManifest {
     /// The schema version is supported and allows the fields present:
     /// `rights.derivation` needs `2.1.0`+, `abi_version` 3 needs `2.2.0`
     /// with a positive prepare budget, which no other ABI may carry, and
