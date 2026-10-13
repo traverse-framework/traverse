@@ -66,6 +66,11 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+      - name: Verify packed releaseEvidence version matches tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-packed-version.mjs --expect-tag "${GITHUB_REF_NAME}"
       - name: Publish with provenance
         shell: bash
         run: |
