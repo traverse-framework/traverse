@@ -6689,3 +6689,51 @@ Decision 112 gated the real Core ML route on a spike. The spike had to:
 
 Recorded per Decision 112 rule 1 (the spike records GO or NO-GO). The
 measured results meet every condition the owner set in Decision 112.
+
+## Decision 114: Accelerator Frame Contract Comes From the Conformance Vector
+
+- **Date**: 2026-10-13
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended to
+  0.13.4)
+- **Related issues**: `#1629` (slice 3); ADR-0082
+- **Origin**: a gap found while building the Core ML adapter
+
+### Context
+
+FR-065 says an adapter consumes and produces the same guest frames as
+`wasm-cpu`. Frame dtype codes are guest-defined: the ONNX runner's digits
+package reads `f32` input as dtype `2` and writes `f32` output as dtype `3`.
+That tensor configuration lives inside the WASM blob, which an adapter never
+sees. So nothing in a signed variant told the adapter which dtype code to
+accept or to write.
+
+### Decision
+
+1. **The variant's conformance vector is its frame contract.** Every case
+   input carries the input dtype, and every reference output carries the
+   output dtype. All cases must agree.
+2. **The runtime derives the contract**
+   (`CachedAcceleratorVariant::frame_contract()`) and gives it to adapters.
+   - An adapter rejects an input frame with any other dtype.
+   - It writes its output with the contract's output dtype.
+   - Output dims come from the native output shape.
+3. **No contract, no placement.** The device self-check fails when the
+   vector is unreadable or empty, holds a malformed frame, or its cases
+   disagree. The variant is then unavailable on that device (FR-062).
+4. No schema change. The vector is already mandatory, signed through its
+   digest, and holds the exact `wasm-cpu` frames the variant must match.
+
+### Alternatives Considered
+
+- **Declaring `frame: {input_dtype, output_dtype}` in the manifest.**
+  Rejected: it needs a new schema version, new `add-variant` flags and
+  re-signing, to restate what the vector already pins.
+- **The connector rewriting the adapter's dtype after prediction.**
+  Rejected: the connector would edit adapter output, which weakens the
+  FR-065 "same frames" check.
+
+### Approval
+
+Approved by Enrico on 2026-10-13, choosing "From the conformance vector
+(Recommended)" when starting `#1629` slice 3.

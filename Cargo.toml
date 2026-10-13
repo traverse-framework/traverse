@@ -13,6 +13,7 @@ members = [
   "crates/traverse-model-host-frame",
   "crates/traverse-android-host",
   "crates/traverse-dotnet-host",
+  "crates/traverse-coreml-adapter",
   "crates/traverse-nested-wasm-spike",
 ]
 resolver = "3"

@@ -29,8 +29,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use traverse_runtime::exact_model::{
-    ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits, ModelEngine,
-    ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, PlacementEvidence, TrustedModelKeys,
+    AcceleratorAdapter, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits,
+    ModelEngine, ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, PlacementEvidence,
+    TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -46,31 +47,53 @@ pub enum EnvelopeError {
     InvalidHandle,
 }
 
-/// Identity a native shim stamps on its `model.execute` requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Builds a host's native accelerator adapters (Spec 138 FR-063) from the
+/// `create` header's optional `accelerators` object (`null` when absent).
+/// Returns the offending field name when the configuration is invalid.
+pub type AdapterFactory = fn(&Value) -> Result<Vec<Box<dyn AcceleratorAdapter>>, &'static str>;
+
+/// The [`AdapterFactory`] of a shim with no native accelerator: every
+/// package runs on `wasm-cpu`.
+///
+/// # Errors
+///
+/// Never; the signature matches [`AdapterFactory`].
+pub fn no_adapters(_: &Value) -> Result<Vec<Box<dyn AcceleratorAdapter>>, &'static str> {
+    Ok(Vec::new())
+}
+
+/// Identity a native shim stamps on its `model.execute` requests, and the
+/// accelerators it can offer.
+#[derive(Debug, Clone, Copy)]
 pub struct HostProfile {
     /// Host-connector binding id.
     pub binding_id: &'static str,
     /// Target family (`apple`, `android`, `dotnet`).
     pub target_family: &'static str,
+    /// The shim's native accelerator adapters.
+    pub adapters: AdapterFactory,
 }
 
-/// The iOS/macOS shim (`traverse-swift-host`).
+/// The iOS/macOS shim (`traverse-swift-host`). The shim itself adds the
+/// Core ML adapter (Decision 112), since this crate stays platform-neutral.
 pub const APPLE: HostProfile = HostProfile {
     binding_id: "swift-exact-model-host",
     target_family: "apple",
+    adapters: no_adapters,
 };
 
 /// The Android shim (`traverse-android-host`, Decision 108).
 pub const ANDROID: HostProfile = HostProfile {
     binding_id: "android-exact-model-host",
     target_family: "android",
+    adapters: no_adapters,
 };
 
 /// The .NET P/Invoke shim (`traverse-dotnet-host`, Decision 111).
 pub const DOTNET: HostProfile = HostProfile {
     binding_id: "dotnet-exact-model-host",
     target_family: "dotnet",
+    adapters: no_adapters,
 };
 
 struct ModelHost {
@@ -155,6 +178,13 @@ impl<'a> Request<'a> {
     }
 
     fn segment(&self, name: &'static str) -> Result<&'a [u8], EnvelopeError> {
+        self.named_segment(name, name)
+    }
+
+    /// The segment called `name`; a missing or out-of-range one is
+    /// `InvalidInput(error)`.
+    fn named_segment(&self, name: &str, error: &'static str) -> Result<&'a [u8], EnvelopeError> {
+        let invalid = EnvelopeError::InvalidInput(error);
         let range = self
             .header
             .get("segments")
@@ -162,12 +192,12 @@ impl<'a> Request<'a> {
             .and_then(Value::as_array)
             .filter(|pair| pair.len() == 2)
             .and_then(|pair| Some((pair[0].as_u64()?, pair[1].as_u64()?)))
-            .ok_or(EnvelopeError::InvalidInput(name))?;
-        let start = usize::try_from(range.0).map_err(|_| EnvelopeError::InvalidInput(name))?;
-        let length = usize::try_from(range.1).map_err(|_| EnvelopeError::InvalidInput(name))?;
+            .ok_or(invalid.clone())?;
+        let start = usize::try_from(range.0).map_err(|_| invalid.clone())?;
+        let length = usize::try_from(range.1).map_err(|_| invalid.clone())?;
         self.payload
             .get(start..start.saturating_add(length))
-            .ok_or(EnvelopeError::InvalidInput(name))
+            .ok_or(invalid)
     }
 }
 
@@ -294,11 +324,23 @@ fn create(profile: HostProfile, request: &Request<'_>) -> Result<Vec<u8>, Envelo
             .as_bool()
             .ok_or(EnvelopeError::InvalidInput("host_requires_commercial"))?,
     };
+    // Optional native accelerators (Spec 138 FR-063, Decision 112): the
+    // shim's factory reads its own entry, for example
+    // `{"coreml": {"compute_units": "all"}}`.
+    let accelerators = match request.header.get("accelerators") {
+        None => Value::Null,
+        Some(value @ Value::Object(_)) => value.clone(),
+        Some(_) => return Err(EnvelopeError::InvalidInput("accelerators")),
+    };
+    let adapters = (profile.adapters)(&accelerators).map_err(EnvelopeError::InvalidInput)?;
     let mut connector = ExactModelHostConnector::new(pins, trusted);
     connector.model_usage = model_usage;
     connector.host_requires_commercial = host_requires_commercial;
     connector.engine = ModelEngine::Wasmi;
     connector.host_limits = host_limits;
+    for adapter in adapters {
+        connector.register_adapter(adapter);
+    }
     let cancel = Arc::clone(&connector.cancel);
     let id = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     lock(registry()).insert(
@@ -318,8 +360,25 @@ fn register(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, Envelope
     let manifest = request.segment("manifest")?;
     let wasm = request.segment("wasm")?;
     let signature = request.segment("signature")?;
+    // Variant files the host fetched (FR-059): each listed package path is
+    // a segment of the same name. Only adapters this host registered use
+    // them; the connector checks every digest.
+    let variant_paths: Vec<String> = match request.header.get("variant_paths") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| EnvelopeError::InvalidInput("variant_paths"))?,
+    };
+    let variant_files = variant_paths
+        .iter()
+        .map(|path| Ok((path.as_str(), request.named_segment(path, "variant_paths")?)))
+        .collect::<Result<Vec<_>, EnvelopeError>>()?;
     Ok(
-        match lock(&host.connector).register_package(manifest, wasm.to_vec(), signature) {
+        match lock(&host.connector).register_package_with_variants(
+            manifest,
+            wasm.to_vec(),
+            signature,
+            &variant_files,
+        ) {
             Ok(digest) => ok(json!({ "digest": digest })),
             Err(error) => error_response(&error),
         },
@@ -972,6 +1031,207 @@ mod tests {
             assert!(model_call(&TEST_PROFILE, handle, &frame(&header, &[])).is_err());
         }
         call(handle, &json!({ "op": "destroy" }), &[]);
+    }
+
+    const COREML_PACKAGE: &str = "digits-onnx-coreml-1.0.0";
+
+    /// A stand-in `coreml` adapter that answers every conformance input with
+    /// its signed reference output, so the frame protocol can be tested on
+    /// every OS (the real adapter is `traverse-coreml-adapter`).
+    struct ReplayAdapter {
+        cases: Vec<(Vec<u8>, Vec<u8>)>,
+    }
+
+    impl AcceleratorAdapter for ReplayAdapter {
+        fn id(&self) -> &'static str {
+            "coreml"
+        }
+
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn compute_units(&self) -> String {
+            "replay".to_string()
+        }
+
+        fn platform_version(&self) -> String {
+            "test".to_string()
+        }
+
+        fn predict(
+            &mut self,
+            _variant: &traverse_runtime::exact_model::CachedAcceleratorVariant,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            Ok(self
+                .cases
+                .iter()
+                .find(|(case, _)| case == input)
+                .map(|(_, output)| output.clone())
+                .unwrap_or_default())
+        }
+    }
+
+    fn coreml_cases() -> Vec<(Vec<u8>, Vec<u8>)> {
+        let vector: Value = serde_json::from_slice(&read(&format!(
+            "{COREML_PACKAGE}/variants/coreml/conformance.json"
+        )))
+        .expect("vector");
+        vector["cases"]
+            .as_array()
+            .expect("cases")
+            .iter()
+            .map(|case| {
+                let field = |name: &str| hex_decode(case[name].as_str().expect(name)).expect(name);
+                (field("input_frame_hex"), field("output_frame_hex"))
+            })
+            .collect()
+    }
+
+    fn replay_adapters(config: &Value) -> Result<Vec<Box<dyn AcceleratorAdapter>>, &'static str> {
+        match config.get("replay") {
+            None => Ok(Vec::new()),
+            Some(Value::Bool(true)) => Ok(vec![Box::new(ReplayAdapter {
+                cases: coreml_cases(),
+            })]),
+            Some(_) => Err("accelerators.replay"),
+        }
+    }
+
+    const REPLAY: HostProfile = HostProfile {
+        adapters: replay_adapters,
+        ..APPLE
+    };
+
+    fn coreml_pin() -> Value {
+        let manifest_bytes = read(&format!("{COREML_PACKAGE}/model.manifest.json"));
+        let manifest: Value = serde_json::from_slice(&manifest_bytes).expect("manifest");
+        json!({
+            "model_id": manifest["model_id"],
+            "version": manifest["version"],
+            "digest": digest_hex(&manifest_bytes),
+            "offline_allowed": true,
+            "target": "wasm-cpu",
+            "rights": {
+                "license_id": manifest["rights"]["license_id"],
+                "commercial_use": manifest["rights"]["commercial_use"],
+            },
+        })
+    }
+
+    fn replay_call(handle: u64, header: &Value, segments: &[(&str, &[u8])]) -> Value {
+        decode(&model_call(&REPLAY, handle, &frame(header, segments)).expect("envelope ok")).0
+    }
+
+    #[test]
+    fn create_registers_profile_adapters_and_register_passes_variant_files() {
+        let pin = coreml_pin();
+        let create_header = |accelerators: Value| {
+            json!({
+                "op": "create",
+                "pins": [pin.clone()],
+                "trusted_public_keys_hex": [key("public_key_hex")],
+                "limits": { "max_package_bytes": 64_000_000, "max_memory_bytes": 67_108_864, "max_fuel": 10_000_000_000_u64 },
+                "model_usage": "commercial",
+                "accelerators": accelerators,
+            })
+        };
+        for (accelerators, field) in [
+            (json!("replay"), "accelerators"),
+            (json!({ "replay": "yes" }), "accelerators.replay"),
+        ] {
+            assert_eq!(
+                model_call(&REPLAY, 0, &frame(&create_header(accelerators), &[])),
+                Err(EnvelopeError::InvalidInput(field))
+            );
+        }
+        let created = replay_call(0, &create_header(json!({ "replay": true })), &[]);
+        let handle = created["handle"].as_u64().expect("handle");
+
+        let file = |path: &str| read(&format!("{COREML_PACKAGE}/{path}"));
+        let (zip_path, vector_path) = (
+            "variants/coreml/model.mlpackage.zip",
+            "variants/coreml/conformance.json",
+        );
+        let (manifest, wasm, signature, zip, vector) = (
+            file("model.manifest.json"),
+            file("model.wasm"),
+            file("model.sig.json"),
+            file(zip_path),
+            file(vector_path),
+        );
+        let package: [(&str, &[u8]); 3] = [
+            ("manifest", &manifest),
+            ("wasm", &wasm),
+            ("signature", &signature),
+        ];
+        for (paths, field) in [
+            (json!("one"), "variant_paths"),
+            (json!([zip_path]), "variant_paths"),
+        ] {
+            assert_eq!(
+                model_call(
+                    &REPLAY,
+                    handle,
+                    &frame(
+                        &json!({ "op": "register", "variant_paths": paths }),
+                        &package
+                    )
+                ),
+                Err(EnvelopeError::InvalidInput(field))
+            );
+        }
+        // Without the variant files the selected coreml variant is missing.
+        let missing = replay_call(handle, &json!({ "op": "register" }), &package);
+        assert_eq!(
+            missing["error"]["reason"],
+            json!("digest_mismatch"),
+            "{missing}"
+        );
+        let mut segments = package.to_vec();
+        segments.extend([(zip_path, zip.as_slice()), (vector_path, vector.as_slice())]);
+        let registered = replay_call(
+            handle,
+            &json!({ "op": "register", "variant_paths": [zip_path, vector_path] }),
+            &segments,
+        );
+        assert_eq!(registered["ok"], json!(true), "{registered}");
+
+        let (input, expected) = coreml_cases().swap_remove(0);
+        let staged = replay_call(
+            handle,
+            &json!({ "op": "stage_input", "max_bytes": 4096 }),
+            &[("input", &input)],
+        );
+        let mut header = execute_header(
+            &pin,
+            staged["input_ref"].as_str().expect("input_ref"),
+            "replay",
+        );
+        header["payload"]["input_schema_ref"] = json!("schema:traverse-digits-onnx-in");
+        header["placements"] = json!(["coreml"]);
+        let executed = replay_call(handle, &header, &[]);
+        assert_eq!(
+            executed["placement_evidence"],
+            json!({ "placement": "coreml", "compute_units": "replay", "fuel_metering": "not_applicable" }),
+            "{executed}"
+        );
+        let output = decode(
+            &model_call(
+                &REPLAY,
+                handle,
+                &frame(
+                    &json!({ "op": "read_output", "output_ref": executed["output_ref"], "max_bytes": 4096 }),
+                    &[],
+                ),
+            )
+            .expect("read"),
+        )
+        .1;
+        assert_eq!(output, expected);
+        replay_call(handle, &json!({ "op": "destroy" }), &[]);
+        assert!(no_adapters(&Value::Null).expect("none").is_empty());
     }
 
     /// Decision 108: both shims run the identical protocol; only the stamped

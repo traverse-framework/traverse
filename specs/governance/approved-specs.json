@@ -1920,7 +1920,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.13.3",
+      "version": "0.13.4",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1968,7 +1968,9 @@
         "scripts/build_android_host_ndk.sh",
         "scripts/ci/android_aar_check.sh",
         "tools/coreml/",
-        "scripts/ci/coreml_variant_reconvert_check.sh"
+        "scripts/ci/coreml_variant_reconvert_check.sh",
+        "crates/traverse-coreml-adapter/",
+        "docs/adr/0082-coreml-adapter-objc2-boundary.md"
       ]
     },
     {

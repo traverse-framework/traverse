@@ -103,6 +103,75 @@ final class ExactModelHostTests: XCTestCase {
         XCTAssertEqual(correct, 1727, "same count as the trainer, native wasmtime, and the browser")
     }
 
+    /// Decision 112 (#1629 slice 3): the Core ML accelerator is opt-in at
+    /// `init`, variant files go in at registration, and the policy's
+    /// placements choose it per call. Skipped only while the pinned
+    /// `TraverseSwiftHost` xcframework predates manifest schema 2.2.0
+    /// variants; it runs in full after the next swift-host release.
+    func testCoreMLPlacementIsOptInAndReportsItsEvidence() async throws {
+        let package = "digits-onnx-coreml-1.0.0"
+        let manifestData = try fixture("\(package)/model.manifest.json")
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let rights = try XCTUnwrap(manifest["rights"] as? [String: Any])
+        let digest = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
+        let pin = ExactModelPin(
+            modelId: try XCTUnwrap(manifest["model_id"] as? String), version: "1.0.0", digest: digest,
+            rights: .init(licenseId: try XCTUnwrap(rights["license_id"] as? String),
+                          commercialUse: try XCTUnwrap(rights["commercial_use"] as? String)))
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("traverse-coreml-swift-test")
+        let host = try ExactModelHost(
+            pins: [pin], trustedPublicKeysHex: [try testKey().publicHex], modelUsage: "commercial",
+            coreML: CoreMLAcceleratorConfig(computeUnits: "cpu_only", cacheDirectory: cache))
+        let zipPath = "variants/coreml/model.mlpackage.zip"
+        let vectorPath = "variants/coreml/conformance.json"
+        let registered: String
+        do {
+            registered = try await host.registerPackage(
+                manifest: manifestData,
+                wasm: try fixture("\(package)/model.wasm"),
+                signature: try fixture("\(package)/model.sig.json"),
+                variantFiles: [zipPath: try fixture("\(package)/\(zipPath)"),
+                               vectorPath: try fixture("\(package)/\(vectorPath)")])
+        } catch let error as ExactModelError where error.reason == "manifest_invalid" {
+            throw XCTSkip("the pinned TraverseSwiftHost xcframework predates accelerator variants: \(error.message)")
+        }
+        XCTAssertEqual(registered, digest)
+        let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture("\(package)/\(vectorPath)")) as? [String: Any])
+        let testCase = try XCTUnwrap((vector["cases"] as? [[String: Any]])?.first)
+        let input = Data(hex: try XCTUnwrap(testCase["input_frame_hex"] as? String))
+        let expected = Data(hex: try XCTUnwrap(testCase["output_frame_hex"] as? String))
+        let inputRef = try host.stageModelInput(input, maxBytes: 4096)
+        let result = try await host.execute(
+            modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "policy-1",
+            dataClassification: "sensitive", inputSchemaRef: "schema:traverse-digits-onnx-in",
+            inputSchemaVersion: "1.0.0", maxOutputBytes: 64, allowedClassifications: ["sensitive"],
+            placements: ["coreml", "wasm-cpu"])
+        let output = try host.readModelOutput(result.outputRef, maxBytes: 64)
+        func logits(_ frame: Data) -> [Float] {
+            stride(from: 16, to: frame.count, by: 4).map { offset in
+                frame.subdata(in: offset..<(offset + 4)).withUnsafeBytes {
+                    Float(bitPattern: UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)))
+                }
+            }
+        }
+        XCTAssertEqual(output.prefix(16), expected.prefix(16), "same dtype and dims as wasm-cpu")
+        for (actual, reference) in zip(logits(output), logits(expected)) {
+            XCTAssertEqual(actual, reference, accuracy: 0.005)
+        }
+        XCTAssertEqual(result.placement, "coreml")
+        XCTAssertEqual(result.placementEvidence,
+                       PlacementEvidence(placement: "coreml", computeUnits: "cpu_only", fuelMetering: "not_applicable"))
+        // Requiring fuel metering excludes Core ML, which cannot meter fuel.
+        let meteredRef = try host.stageModelInput(input, maxBytes: 4096)
+        let metered = try await host.execute(
+            modelRef: (pin.modelId, pin.version, pin.digest), inputRef: meteredRef, policyRef: "policy-1",
+            dataClassification: "sensitive", inputSchemaRef: "schema:traverse-digits-onnx-in",
+            inputSchemaVersion: "1.0.0", maxOutputBytes: 64, allowedClassifications: ["sensitive"],
+            placements: ["coreml", "wasm-cpu"], requireFuelMetering: true)
+        XCTAssertEqual(metered.placement, "wasm-cpu")
+        XCTAssertEqual(metered.placementEvidence?.fuelMetering, "metered")
+    }
+
     func testFailuresCarryStableReasons() async throws {
         let (host, _, _) = try await digitsHost()
         do {

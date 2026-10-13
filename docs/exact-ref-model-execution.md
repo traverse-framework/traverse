@@ -37,6 +37,42 @@ Native (`ExactModelHostConnector`) and browser (`ExactModelBrowserHost`)
 run the same signed package and produce byte-identical output for the
 checked-in conformance vector.
 
+### Core ML on Apple hosts (Spec 138 0.13.4, ADR-0082)
+
+A package can also carry a signed `coreml` variant (see
+`docs/model-packaging-guide.md`). On iOS and macOS, the Swift host runs it
+through the Rust `traverse-coreml-adapter` when the host enables Core ML and
+the call's policy lists `coreml`:
+
+```swift
+let host = try ExactModelHost(
+    pins: pins, trustedPublicKeysHex: keys, modelUsage: "commercial",
+    coreML: CoreMLAcceleratorConfig(computeUnits: "all", cacheDirectory: cachesURL))
+_ = try await host.registerPackage(
+    manifest: manifest, wasm: wasm, signature: signature,
+    variantFiles: ["variants/coreml/model.mlpackage.zip": zip,
+                   "variants/coreml/conformance.json": vector])
+let result = try await host.execute(
+    modelRef: ref, inputRef: inputRef, policyRef: "policy-1",
+    dataClassification: "sensitive", inputSchemaRef: schema, inputSchemaVersion: "1.0.0",
+    maxOutputBytes: 4096, allowedClassifications: ["sensitive"],
+    placements: ["coreml", "wasm-cpu"])
+// result.placementEvidence: placement "coreml", computeUnits "all", fuelMetering "not_applicable"
+```
+
+- **Self-check.** Before Core ML's first call on a device, the host runs
+  the variant's whole conformance vector under the variant's tolerance. The
+  result is cached per variant digest, OS version and compute units. If the
+  check fails, the variant is unavailable and the next listed placement
+  runs.
+- **Frames.** The conformance vector also fixes the frame dtype codes
+  (Decision 114). The adapter accepts only the vector's input dtype and
+  writes the vector's output dtype.
+- **Fuel.** Core ML cannot meter fuel. `requireFuelMetering: true` keeps a
+  call on `wasm-cpu`.
+- **Compute units.** `all`, `cpu_only`, `cpu_and_gpu` or
+  `cpu_and_neural_engine`; the default is `all`.
+
 ## Signed packages and exact-ref resolution (Spec 138 0.4.0, Decision 101)
 
 A package is three files:

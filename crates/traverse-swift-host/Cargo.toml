@@ -19,5 +19,9 @@ serde_json = "1.0.145"
 # the shared safe crate (Decision 108); this crate keeps only the C-ABI shim.
 traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.14.0" }
 
+# Spec 138 Core ML accelerator (Decision 112, ADR-0082): Apple targets only.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+traverse-coreml-adapter = { path = "../traverse-coreml-adapter", version = "0.14.0" }
+
 [lints]
 workspace = true

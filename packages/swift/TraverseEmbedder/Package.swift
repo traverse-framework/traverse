@@ -16,6 +16,10 @@ let package = Package(
             name: "TraverseEmbedder",
             dependencies: [
                 "TraverseSwiftHost",
+            ],
+            // The Rust host's Core ML adapter (Decision 112, ADR-0082).
+            linkerSettings: [
+                .linkedFramework("CoreML"),
             ]
         ),
         // Manual macOS run for the Apple audio adapter (Spec 140, #1499). Not a product.
