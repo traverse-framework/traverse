@@ -305,6 +305,49 @@ mod tests {
         );
     }
 
+    /// An adapter that relies on every default.
+    struct Minimal;
+
+    impl AcceleratorAdapter for Minimal {
+        fn id(&self) -> &str {
+            "coreml"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn compute_units(&self) -> String {
+            "all".to_string()
+        }
+        fn platform_version(&self) -> String {
+            "1".to_string()
+        }
+        fn predict(
+            &mut self,
+            _variant: &CachedAcceleratorVariant,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            Ok(input.to_vec())
+        }
+    }
+
+    #[test]
+    fn native_adapters_do_not_meter_fuel_by_default() {
+        assert_eq!(Minimal.fuel_metering(), FuelMetering::NotApplicable);
+        assert_eq!((Minimal.id(), Minimal.available()), ("coreml", true));
+        assert_eq!(
+            (Minimal.compute_units(), Minimal.platform_version()),
+            ("all".to_string(), "1".to_string())
+        );
+        let variant = CachedAcceleratorVariant {
+            adapter: "coreml".to_string(),
+            path: "p".to_string(),
+            bytes: Vec::new(),
+            conformance_vector_path: "v".to_string(),
+            conformance_vector: Vec::new(),
+        };
+        assert_eq!(Minimal.predict(&variant, b"x").expect("echo"), b"x");
+    }
+
     #[test]
     fn vector_cases_reject_malformed_vectors() {
         assert!(vector_cases(b"not json").is_none());

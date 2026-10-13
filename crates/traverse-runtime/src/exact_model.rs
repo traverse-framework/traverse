@@ -5862,6 +5862,26 @@ mod tests {
     }
 
     #[test]
+    fn register_adapter_opts_the_host_into_fetching_its_variants_once() {
+        let mut host = ExactModelHostConnector::new(Vec::new(), TrustedModelKeys::new());
+        let state = Arc::new(std::sync::Mutex::new(FakeState {
+            mode: FakeMode::Echo,
+            calls: 0,
+            available: true,
+            metering: FuelMetering::NotApplicable,
+            platform: "fake-os-1".to_string(),
+        }));
+        for _ in 0..2 {
+            host.register_adapter(Box::new(FakeAdapter {
+                state: Arc::clone(&state),
+                cancel: Arc::clone(&host.cancel),
+            }));
+        }
+        assert_eq!(host.supported_adapters, vec![ADAPTER_COREML.to_string()]);
+        assert_eq!(host.adapters.len(), 2);
+    }
+
+    #[test]
     fn the_first_listed_qualifying_placement_runs_and_is_recorded() {
         let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
         let (output, evidence) =
@@ -5976,15 +5996,15 @@ mod tests {
 
         // An empty conformance vector never passes the self-check.
         let (mut host, digest, _) = accelerated_host(FakeMode::Echo, |_| {});
-        if let Some(package) = host.packages.by_digest.get_mut(&digest) {
-            package.variants[0].conformance_vector = br#"{"cases":[]}"#.to_vec();
-        }
-        if let Some(package) = host.packages.by_digest.get_mut(&digest) {
-            let vector = package.variants[0].conformance_vector.clone();
-            if let Some(variants) = package.manifest.accelerator_variants.as_mut() {
-                variants[0].conformance_vector_digest = digest_hex(&vector);
-            }
-        }
+        let package = host.packages.by_digest.get_mut(&digest).expect("cached");
+        let empty = br#"{"cases":[]}"#.to_vec();
+        package
+            .manifest
+            .accelerator_variants
+            .as_mut()
+            .expect("variants")[0]
+            .conformance_vector_digest = digest_hex(&empty);
+        package.variants[0].conformance_vector = empty;
         let (_, evidence) =
             accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("empty vector");
         assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
