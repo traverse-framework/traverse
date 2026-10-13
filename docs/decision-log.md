@@ -6493,3 +6493,134 @@ Two facts frame the choice:
 
 Approved by Enrico in `/brainstorm` (2026-10-09). Every recommended option
 was accepted.
+
+## Decision 112: Real Core ML Conversion — Spike-Gated ONNX→PyTorch→coremltools, Deterministic `mlpackage-zip`, Rust objc2 Adapter
+
+- **Date**: 2026-10-13
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended in
+  slice 1 below)
+- **Related issues**: `#1629` (rescoped), `#1628` / PR `#1646`, `#1630`,
+  umbrella `#1623`; refines Decision 110 rules 7, 9 and 10
+- **Origin**: `/brainstorm` after finding the `#1628` conversion gap while
+  starting `#1629`
+
+### Context
+
+`traverse-cli model convert-coreml` (`#1628`, PR `#1646`) does not produce an
+executable Core ML model. It wraps the raw ONNX bytes in a Core ML
+`CustomModel` (`className: dev.traverse.model.OnnxBlob`). Core ML can only run
+that through a host-provided `MLCustomModel` class, which would execute ONNX on
+the CPU. It can never reach the Neural Engine or GPU, and that speed is why
+Decision 110 chose Core ML for the ≤ 1.5 s BirdNET bar.
+
+The rest of `#1628` stays valid: the signed variant manifest, the digest
+checks, and selective fetch.
+
+Three facts shape the fix:
+- `coremltools` no longer converts ONNX directly.
+- `coremltools` emits ML Program models as a `.mlpackage` *directory*,
+  whereas Spec 138 allows only a single-file `mlmodel` variant.
+- FR-058 requires a variant's `conversion.source_digest` to equal
+  `rights.derivation.source_digest`, so the variant must come from the
+  package's own ONNX.
+
+### Decision
+
+1. **The route is ONNX → PyTorch (`onnx2torch`) → `coremltools` ML Program,
+   gated by a spike.**
+   - The conversion uses pinned Python tooling and keeps FR-058's
+     provenance rule.
+   - A spike, like Decision 106's, must come first. It converts BirdNET in
+     the pinned environment, checks byte stability, times BirdNET on the
+     iPhone 14 Pro Max (≤ 1.5 s per 3 s clip), and checks Decision 106's
+     tolerance against wasm-cpu.
+   - The spike's GO or NO-GO verdict is recorded before any tooling is
+     built.
+2. **Variant format: `mlpackage-zip`.**
+   - The `.mlpackage` is zipped deterministically: entries sorted and stored
+     uncompressed, with fixed timestamps and permissions.
+   - The host unpacks it to a private cache directory, compiles it on the
+     device with `MLModel.compileModel`, and caches the compiled model by
+     variant digest.
+   - A Spec 138 amendment adds the format.
+3. **Reproducibility: byte-identical output in a pinned environment.**
+   - The environment is a Python lockfile with hashes plus a pinned
+     container image digest. The zip step canonicalises the output.
+   - CI re-converts the variant and requires the same digest, the FR-026
+     bar.
+   - If the spike shows `coremltools` output isn't byte-stable, the bar
+     falls back to tolerance-reproducible: re-convert and pass the
+     conformance vectors. The spike records which bar applies.
+4. **The adapter runs in Rust, through `objc2` Core ML bindings.**
+   - A generic `AcceleratorAdapter` trait in `traverse-runtime` covers
+     availability, the ceiling profile, the self-check, and prediction.
+   - Placement order, fallback, `placement_unavailable` and
+     `placement_evidence` stay in the connector, so every Spec 138 rule
+     remains a single Rust implementation.
+   - A new Apple-only crate implements Core ML with `objc2-core-ml`. It is
+     linked into `traverse-swift-host`, and its unsafe calls are audited and
+     registered in `scoped_unsafe_boundary_check.sh`.
+   - It is tested with a fake adapter on every OS, and with real Core ML in
+     `cargo test` on macOS.
+   - Swift's API only gains policy and limit fields.
+5. **The `#1628` stub is replaced in the tooling slice.** `convert-coreml`
+   will drive the pinned converter and write `mlpackage-zip`; `mlmodel`
+   leaves the closed format list in the same amendment; and the docs will say
+   the old output was never executable. Until then the stub stays, so there
+   is no window without a CLI.
+6. **Compute units: host-configurable, default `MLComputeUnits.all`.** A host
+   limit can narrow it, for example to `cpuAndNeuralEngine`. The value is
+   part of the self-check key and is recorded in
+   `placement_evidence.compute_units`.
+7. **Sequence:**
+   - (0) the spike;
+   - (1) the Spec 138 amendment, the pinned converter, `mlpackage-zip`, the
+     CI re-convert check, and removal of the stub;
+   - (2) the generic adapter framework in the runtime: the trait, policy
+     placements, fallback, self-check, ceiling profiles, and a fake-adapter
+     test suite;
+   - (3) the `objc2` Core ML crate in the Swift host.
+
+   `#1629` is rescoped to slices 2 and 3; a new ticket covers slices 0 and
+   1. Slice 2 can run alongside the spike, and `#1630` still closes umbrella
+   `#1623`.
+
+### Alternatives Considered
+
+- Route:
+  - Converting from the upstream framework (BirdNET's TF/Keras). Rejected:
+    a per-model pipeline that breaks FR-058's provenance rule.
+  - ONNX Runtime with its Core ML execution provider. Rejected: unsigned
+    on-device conversion (which Decision 110 rejected), a large native
+    dependency, and partial Neural Engine coverage.
+- Format:
+  - The legacy NeuralNetwork single `.mlmodel`. Rejected: a deprecated
+    backend with fewer Neural Engine optimisations.
+  - A precompiled `.mlmodelc`. Rejected: Apple recommends compiling on the
+    device, since compiled output can depend on the OS.
+- Reproducibility:
+  - Tolerance-only. Rejected as the default; it is kept as the fallback.
+  - A provenance record only. Rejected: it proves nothing beyond the
+    signature.
+- Boundary:
+  - A Swift callback adapter. Rejected: a reentrant FFI callback with unsafe
+    code on both sides, and harder to test.
+  - Swift decides placement. Rejected: it would duplicate policy outside the
+    single Rust implementation.
+- Stub:
+  - Removing it now. Rejected: it leaves the format list empty in between.
+  - Keeping both formats. Rejected: `mlmodel` never produced a runnable
+    model.
+- Compute units: fixed `cpuAndNeuralEngine` or fixed `.all`. Rejected: no
+  host control.
+- Sequence:
+  - Spike, then one PR. Rejected: it mixes Python tooling, a spec change,
+    unsafe bindings and CI.
+  - Skipping the spike. Rejected: everything might be built before we learn
+    BirdNET can't convert or can't reach 1.5 s.
+
+### Approval
+
+Approved by Enrico in `/brainstorm` (2026-10-13). Every recommended option
+was accepted.
