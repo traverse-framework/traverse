@@ -309,7 +309,7 @@ mod tests {
     struct Minimal;
 
     impl AcceleratorAdapter for Minimal {
-        fn id(&self) -> &str {
+        fn id(&self) -> &'static str {
             "coreml"
         }
         fn available(&self) -> bool {
