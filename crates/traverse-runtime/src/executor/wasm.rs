@@ -1736,6 +1736,32 @@ mod binary_cache_tests {
     }
 
     #[test]
+    fn ensure_meets_wasm_initial_memory_rejects_module_above_host_ceiling() {
+        let Ok(executor) = WasmExecutor::with_limits(WasmExecutionLimits {
+            memory_bytes: 64 * 1024,
+            ..WasmExecutionLimits::default()
+        }) else {
+            return;
+        };
+        // WASM header + memory section: one memory, min 2 pages (128 KiB).
+        let with_memory = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
+        ];
+        let err = executor
+            .ensure_meets_wasm_initial_memory("example.cap", &with_memory)
+            .expect_err("2-page initial memory must exceed a 1-page host ceiling");
+        assert!(matches!(
+            err,
+            ExecutorError::ResourceRequirementsExceedHost(_)
+        ));
+        let detail = err.to_string();
+        assert!(
+            detail.contains("resource_requirements_exceed_host") && detail.contains("131072"),
+            "expected fail-fast memory detail, got {detail}"
+        );
+    }
+
+    #[test]
     fn resource_requirements_exceed_host_display_is_secret_free() {
         let error = ExecutorError::ResourceRequirementsExceedHost(
             "resource_requirements_exceed_host: capability 'x' requires 1 memory bytes; host ceiling is 0"
