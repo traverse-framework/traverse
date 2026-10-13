@@ -33,8 +33,7 @@ fn host_meets_execution_resources_rejects_low_fuel() {
         min_memory_bytes: None,
         max_fuel: Some(10_000_000),
     };
-    let result =
-        host_meets_execution_resources("example.cap", &resources, 32 * 1024 * 1024, 1_000);
+    let result = host_meets_execution_resources("example.cap", &resources, 32 * 1024 * 1024, 1_000);
     assert!(result.is_err());
     let err = result.err().map_or(String::new(), |message| message);
     assert!(err.contains("resource_requirements_exceed_host"));
