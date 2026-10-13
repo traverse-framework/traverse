@@ -178,17 +178,16 @@ fn wasm_executor_still_traps_released_capture_plan_under_eight_mib_cap() {
                 "idempotency_key": "capture-e2e-001"
             }),
         )
-        .expect_err("8 MiB must still trap this module");
+        .expect_err("8 MiB must still reject this module");
     assert!(
-        matches!(&err, ExecutorError::ResourceExhausted(_)),
-        "expected ResourceExhausted, got {err:?}"
+        matches!(&err, ExecutorError::ResourceRequirementsExceedHost(_)),
+        "expected ResourceRequirementsExceedHost, got {err:?}"
     );
-    let ExecutorError::ResourceExhausted(detail) = err else {
-        return;
-    };
+    let detail = err.to_string();
     assert!(
-        detail.contains("17891328") || detail.contains("forcing trap"),
-        "expected concrete memory trap detail, got {detail}"
+        detail.contains("resource_requirements_exceed_host")
+            && (detail.contains("17891328") || detail.contains("memory bytes")),
+        "expected fail-fast memory detail, got {detail}"
     );
 }
 

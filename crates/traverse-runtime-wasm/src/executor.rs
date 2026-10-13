@@ -19,14 +19,50 @@ use wasmi::{
 const WASI_ERRNO_SUCCESS: i32 = 0;
 const WASI_ERRNO_BADF: i32 = 8;
 const WASI_ERRNO_INVAL: i32 = 28;
-const FUEL: u64 = 10_000_000;
+/// Default nested fuel budget when the host does not pass limits (#1656).
+pub const DEFAULT_NESTED_FUEL: u64 = 10_000_000;
 /// Default nested linear-memory ceiling (Spec 1402 FR-012 / Spec 139 FR-018).
 ///
 /// Matches native `WasmExecutor` / issue `#1336` so certified registry
 /// planners that reserve ~273 pages (~17 MiB) initial memory can instantiate
 /// inside `runtime.wasm` (for example
-/// `core.create-audio-capture-request-plan@1.0.0`).
-const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+/// `core.create-audio-capture-request-plan@1.0.0`). Hosts may raise this via
+/// init `limits` (#1656); they may not remove the ceiling.
+pub const DEFAULT_NESTED_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+/// Absolute upper bound a host may request for nested memory (1 GiB).
+pub const MAX_HOST_NESTED_MEMORY_BYTES: usize = 1024 * 1024 * 1024;
+/// Absolute upper bound a host may request for nested fuel.
+pub const MAX_HOST_NESTED_FUEL: u64 = 2_000_000_000_000;
+
+/// Host-supplied nested execution limits for one `runtime.wasm` session (#1656).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NestedExecutionLimits {
+    pub fuel: u64,
+    pub max_memory_bytes: usize,
+}
+
+impl Default for NestedExecutionLimits {
+    fn default() -> Self {
+        Self {
+            fuel: DEFAULT_NESTED_FUEL,
+            max_memory_bytes: DEFAULT_NESTED_MEMORY_BYTES,
+        }
+    }
+}
+
+impl NestedExecutionLimits {
+    /// Clamp host-requested limits into the absolute safety ceiling.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Self {
+            fuel: self.fuel.min(MAX_HOST_NESTED_FUEL).max(1),
+            max_memory_bytes: self
+                .max_memory_bytes
+                .min(MAX_HOST_NESTED_MEMORY_BYTES)
+                .max(64 * 1024),
+        }
+    }
+}
 
 /// One capability-declared event, accepted by the shared validation core
 /// during a nested execution. The caller (`lib.rs`) turns these into
@@ -214,12 +250,30 @@ pub fn execute_nested_capability(
     service_type: &ServiceType,
     declared_emits: &[EventReference],
 ) -> Result<NestedExecutionOutcome, String> {
+    execute_nested_capability_with_limits(
+        artifact,
+        input,
+        service_type,
+        declared_emits,
+        NestedExecutionLimits::default(),
+    )
+}
+
+/// Like [`execute_nested_capability`], with host-supplied fuel / memory (#1656).
+pub fn execute_nested_capability_with_limits(
+    artifact: &[u8],
+    input: &[u8],
+    service_type: &ServiceType,
+    declared_emits: &[EventReference],
+    host_limits: NestedExecutionLimits,
+) -> Result<NestedExecutionOutcome, String> {
+    let host_limits = host_limits.clamped();
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
     let module = Module::new(&engine, artifact).map_err(|error| format!("module: {error}"))?;
     let limits = StoreLimitsBuilder::new()
-        .memory_size(MAX_MEMORY_BYTES)
+        .memory_size(host_limits.max_memory_bytes)
         .trap_on_grow_failure(true)
         .build();
     let state = NestedStoreState {
@@ -234,7 +288,7 @@ pub fn execute_nested_capability(
     let mut store = Store::new(&engine, state);
     store.limiter(|state| &mut state.limits);
     store
-        .set_fuel(FUEL)
+        .set_fuel(host_limits.fuel)
         .map_err(|error| format!("fuel: {error}"))?;
 
     let mut linker = Linker::new(&engine);
@@ -274,7 +328,10 @@ pub fn execute_nested_capability(
 
 #[cfg(test)]
 mod tests {
-    use super::{EmittedEvent, execute_nested_capability};
+    use super::{
+        EmittedEvent, NestedExecutionLimits, execute_nested_capability,
+        execute_nested_capability_with_limits,
+    };
     use traverse_contracts::{EventReference, ServiceType};
 
     /// A WASI-command module that echoes stdin to stdout, then calls
@@ -501,5 +558,54 @@ mod tests {
             ));
         }
         Ok(())
+    }
+
+    #[test]
+    fn host_limits_below_initial_memory_fail_at_instantiate() -> Result<(), String> {
+        const LARGE_MEMORY_WAT: &str = r#"
+          (module
+            (memory (export "memory") 64)
+            (func (export "_start"))
+          )
+        "#;
+        let artifact = wat::parse_str(LARGE_MEMORY_WAT).map_err(|error| format!("wat: {error}"))?;
+        // 64 pages = 4 MiB; host ceiling of 1 MiB must deny instantiate.
+        let result = execute_nested_capability_with_limits(
+            &artifact,
+            b"{}",
+            &ServiceType::Stateless,
+            &[],
+            NestedExecutionLimits {
+                fuel: 1_000_000,
+                max_memory_bytes: 1024 * 1024,
+            },
+        );
+        let Err(error) = result else {
+            return Err("undersized host memory must fail instantiate".to_string());
+        };
+        if !(error.contains("memory") || error.contains("instantiate") || error.contains("limiter"))
+        {
+            return Err(format!("expected memory/instantiate failure, got: {error}"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_limits_clamp_rejects_zero_and_caps_ceiling() {
+        let zero = NestedExecutionLimits {
+            fuel: 0,
+            max_memory_bytes: 0,
+        }
+        .clamped();
+        assert_eq!(zero.fuel, 1);
+        assert_eq!(zero.max_memory_bytes, 64 * 1024);
+
+        let huge = NestedExecutionLimits {
+            fuel: u64::MAX,
+            max_memory_bytes: usize::MAX,
+        }
+        .clamped();
+        assert_eq!(huge.fuel, super::MAX_HOST_NESTED_FUEL);
+        assert_eq!(huge.max_memory_bytes, super::MAX_HOST_NESTED_MEMORY_BYTES);
     }
 }

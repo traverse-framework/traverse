@@ -8028,6 +8028,7 @@ mod tests {
                     network_access: NetworkAccess::Forbidden,
                     filesystem_access: FilesystemAccess::None,
                 },
+            resources: None,
             },
             policies: vec![],
             dependencies: vec![],

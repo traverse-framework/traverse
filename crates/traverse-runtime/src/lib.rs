@@ -6172,6 +6172,7 @@ mod tests {
                     network_access: NetworkAccess::Forbidden,
                     filesystem_access: FilesystemAccess::None,
                 },
+                resources: None,
             },
             policies: Vec::new(),
             dependencies: Vec::new(),

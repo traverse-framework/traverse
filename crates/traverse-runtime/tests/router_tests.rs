@@ -90,6 +90,7 @@ fn base_contract(service_type: ServiceType) -> CapabilityContract {
                 network_access: NetworkAccess::Forbidden,
                 filesystem_access: FilesystemAccess::None,
             },
+            resources: None,
         },
         policies: Vec::new(),
         dependencies: Vec::new(),

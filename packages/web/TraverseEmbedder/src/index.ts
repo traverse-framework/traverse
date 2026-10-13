@@ -63,9 +63,14 @@ export {
 } from "./bundleValidation.js";
 export type { BundleCompatibility, BundleComponentSummary, BundleWorkflowSummary } from "./bundleValidation.js";
 
-export { BundleEmbedder } from "./bundleEmbedder.js";
+export {
+  BundleEmbedder,
+  DEFAULT_NESTED_FUEL,
+  DEFAULT_NESTED_MEMORY_BYTES,
+} from "./bundleEmbedder.js";
 export type {
   BundleEmbedderConfig,
+  BundleNestedLimits,
   HostConnectorAdapter,
   HostConnectorAdapterResult,
 } from "./bundleEmbedder.js";
@@ -106,6 +111,7 @@ export type {
   RuntimeWasmCapabilityInit,
   RuntimeWasmEmitRef,
   RuntimeWasmJson,
+  RuntimeWasmNestedLimits,
 } from "./runtimeWasmHost.js";
 
 export type {

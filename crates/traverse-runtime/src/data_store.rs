@@ -2587,6 +2587,7 @@ mod tests {
                     command: "run".to_string(),
                 },
                 preferred_targets: vec![ExecutionTarget::Local],
+                resources: None,
             },
             policies: Vec::<IdReference>::new(),
             dependencies: Vec::<DependencyReference>::new(),

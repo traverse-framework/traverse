@@ -792,6 +792,51 @@ pub struct Execution {
     pub entrypoint: Entrypoint,
     pub preferred_targets: Vec<ExecutionTarget>,
     pub constraints: ExecutionConstraints,
+    /// Declared nested-execution resource floor (#1656). Hosts MUST grant at
+    /// least these limits (intersected with the host ceiling) or fail closed
+    /// before first execution with `resource_requirements_exceed_host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ExecutionResources>,
+}
+
+/// Contract-declared nested resource requirements (#1656).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ExecutionResources {
+    /// Minimum linear-memory bytes the host must grant for nested execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_memory_bytes: Option<u64>,
+    /// Maximum fuel the capability may consume; host fuel budget MUST be ≥ this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fuel: Option<u64>,
+}
+
+/// Fail-closed check that a host ceiling covers contract-declared resources (#1656).
+///
+/// # Errors
+///
+/// Returns a secret-free message naming the capability and the unmet
+/// requirement when the host ceiling is too low.
+pub fn host_meets_execution_resources(
+    capability_id: &str,
+    resources: &ExecutionResources,
+    host_memory_bytes: u64,
+    host_fuel: u64,
+) -> Result<(), String> {
+    if let Some(required) = resources.min_memory_bytes {
+        if required > host_memory_bytes {
+            return Err(format!(
+                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} memory bytes; host ceiling is {host_memory_bytes}"
+            ));
+        }
+    }
+    if let Some(required) = resources.max_fuel {
+        if required > host_fuel {
+            return Err(format!(
+                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} fuel; host ceiling is {host_fuel}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

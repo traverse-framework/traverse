@@ -20,6 +20,12 @@ export interface RuntimeWasmEmitRef {
   readonly version: string;
 }
 
+/** Nested capability fuel / memory granted through `traverse_init` (#1656). */
+export interface RuntimeWasmNestedLimits {
+  readonly fuel?: number;
+  readonly maxMemoryBytes?: number;
+}
+
 export interface RuntimeWasmCapabilityInit {
   readonly capabilityId: string;
   readonly capabilityVersion: string;
@@ -40,6 +46,8 @@ export interface RuntimeWasmCapabilityInit {
    * accepts `kind: "app_command"` envelopes against this machine.
    */
   readonly stateMachine?: RuntimeWasmJson;
+  /** Host-configurable nested execution limits (#1656). */
+  readonly limits?: RuntimeWasmNestedLimits;
 }
 
 export class RuntimeWasmHostError extends Error {
@@ -233,6 +241,18 @@ export class RuntimeWasmHost {
     if (capability.stateMachine !== undefined) {
       headerObject.state_machine = capability.stateMachine;
       headerObject.app_id = capability.capabilityId;
+    }
+    if (capability.limits !== undefined) {
+      const limitsHeader: Record<string, number> = {};
+      if (capability.limits.fuel !== undefined) {
+        limitsHeader.fuel = capability.limits.fuel;
+      }
+      if (capability.limits.maxMemoryBytes !== undefined) {
+        limitsHeader.max_memory_bytes = capability.limits.maxMemoryBytes;
+      }
+      if (Object.keys(limitsHeader).length > 0) {
+        headerObject.limits = limitsHeader;
+      }
     }
     const headerBytes = encodeUtf8(JSON.stringify(headerObject));
     const headerLen = headerBytes.byteLength;

@@ -33,7 +33,7 @@ use crate::events::types::{LifecycleStatus, TraverseEvent};
 // drift on their values.
 use traverse_contracts::{
     ConnectorRequirement, EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_OK, EventReference,
-    ServiceType,
+    ExecutionResources, ServiceType, host_meets_execution_resources,
 };
 
 /// Traverse Host ABI v1 is independently versioned from the runtime crate.
@@ -277,6 +277,56 @@ impl WasmExecutor {
     /// Replaces or clears the injected `DataStore` for subsequent executions.
     pub fn set_data_store(&mut self, store: Option<RuntimeDataStore<InMemoryDataStore>>) {
         self.data_store = store.map(|store| Arc::new(Mutex::new(store)));
+    }
+
+    /// Fail closed when contract-declared resources exceed this executor's
+    /// host ceiling (#1656).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::ResourceRequirementsExceedHost`] when the
+    /// declared floor is above `limits`.
+    pub fn ensure_meets_resources(
+        &self,
+        capability_id: &str,
+        resources: &ExecutionResources,
+    ) -> Result<(), ExecutorError> {
+        let Ok(host_memory) = u64::try_from(self.limits.memory_bytes) else {
+            return Err(ExecutorError::RuntimeSetupFailed(
+                "host memory ceiling exceeds u64".to_string(),
+            ));
+        };
+        host_meets_execution_resources(
+            capability_id,
+            resources,
+            host_memory,
+            self.limits.fuel_budget,
+        )
+        .map_err(ExecutorError::ResourceRequirementsExceedHost)
+    }
+
+    /// Fail closed when a WASM module's initial memory exceeds this
+    /// executor's host ceiling (#1656).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::ResourceRequirementsExceedHost`] when the
+    /// module's first memory min size is above `limits.memory_bytes`.
+    pub fn ensure_meets_wasm_initial_memory(
+        &self,
+        capability_id: &str,
+        wasm_bytes: &[u8],
+    ) -> Result<(), ExecutorError> {
+        let Some(required) = wasm_initial_memory_bytes(wasm_bytes) else {
+            return Ok(());
+        };
+        if required > self.limits.memory_bytes {
+            return Err(ExecutorError::ResourceRequirementsExceedHost(format!(
+                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} memory bytes; host ceiling is {}",
+                self.limits.memory_bytes
+            )));
+        }
+        Ok(())
     }
 
     /// Return current compiled-module cache counters.
@@ -796,6 +846,8 @@ impl WasmExecutor {
         connector_context: Option<MediatedConnectorContext>,
         checksum: Option<&str>,
     ) -> Result<ExecutorOutput, ExecutorError> {
+        self.ensure_meets_wasm_initial_memory(capability_id, wasm_bytes)?;
+
         let input_json = serde_json::to_string(input)
             .map_err(|e| ExecutorError::ExecutionFailed(format!("input serialization: {e}")))?;
 
@@ -1534,6 +1586,18 @@ fn classify_wasm_execution_error(error: &wasmtime::Error) -> ExecutorError {
         return ExecutorError::ResourceExhausted(debug);
     }
     ExecutorError::ExecutionFailed(display)
+}
+
+/// Initial linear-memory bytes declared by the first memory in `wasm_bytes`.
+fn wasm_initial_memory_bytes(wasm_bytes: &[u8]) -> Option<usize> {
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes).flatten() {
+        if let wasmparser::Payload::MemorySection(reader) = payload {
+            let memory = reader.into_iter().next()?.ok()?;
+            let pages = usize::try_from(memory.initial).ok()?;
+            return pages.checked_mul(64 * 1024);
+        }
+    }
+    None
 }
 
 fn sha256_hex(data: &[u8]) -> String {
