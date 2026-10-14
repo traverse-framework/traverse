@@ -52,6 +52,20 @@ with literals or matches enums exhaustively:
   handle each one. (The Kotlin and .NET hosts also report
   `engine_unavailable` when their native library cannot load.)
 
+## `traverse-registry` 0.25.0 → 0.28.0
+
+Only code that uses the registry crate directly is affected.
+
+- `PublicRegistryCapabilityRecord` gains `ai`, `status`, `model_usage` and
+  `revocation`. All four default when read from JSON. Struct literals must
+  add them (`None`, `None`, `Vec::new()`, `None`).
+- `resolve_synced_public_registry_record` (an exact pin) now returns
+  deprecated and revoked records instead of `None`. Check
+  `lifecycle_status()` and `revocation`, and fail closed on a revoked record
+  (registry spec 005 FR-004). Range resolution still skips deprecated and
+  revoked versions. Traverse itself resolves ranges only, so its behaviour
+  is unchanged.
+
 ## Unchanged and additive
 
 - Manifest schemas `2.0.0`, `2.1.0` (`rights.derivation`) and `2.2.0`
