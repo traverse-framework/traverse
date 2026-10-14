@@ -165,6 +165,30 @@ traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
+**Preflight.** Before it writes anything, the packager runs the package it
+just built (Spec 138 FR-072):
+- `model_prepare` plus one zero-valued input frame built from your `tensor`
+  config;
+- on `wasmtime` and `wasmi`, through the same governed path and audited
+  runner every host uses, under your manifest's limits and deadline;
+- the outputs must match byte for byte and carry the declared output dtype
+  and shape.
+
+If it fails, nothing is written. The command exits non-zero and prints
+`{"stage":"preflight","engine":...,"error":{"code","reason","message"}}`.
+The common causes:
+
+| `code` / `reason` | Likely cause |
+| --- | --- |
+| `execution_failed` / `inference_failed` | The graph can't run with your `input_shape` (or tract rejects an operator). |
+| `model_incompatible` / `output_mismatch` | `output_shape` isn't what the graph produces. |
+| `execution_failed`, no reason, "model_prepare ..." | The graph doesn't load: wrong tensor names, or `max_prepare_fuel` / memory too low. |
+| `execution_failed`, no reason, "model_execute ..." | `max_fuel` is below what one inference needs. |
+| `timeout` | `max_execution_ms` is too short. Run release builds: a debug CLI interprets far more slowly. |
+
+On success the JSON report gains a `preflight` object: the engines, the
+input frame size, and the output frame's SHA-256.
+
 The packager writes `model.wasm` and an unsigned schema `2.2.0` manifest
 (`abi_version: 3`, with `max_prepare_fuel`) whose `rights.derivation`
 records `kind: converted`, the ONNX file's SHA-256, and the `source`
