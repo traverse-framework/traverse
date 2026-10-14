@@ -66,7 +66,10 @@ fn build_runtime_wasm_bytes() -> Result<Vec<u8>, String> {
         ])
         .env("CARGO_TARGET_DIR", &target_dir)
         .env("CARGO_INCREMENTAL", "0")
-        .env("SOURCE_DATE_EPOCH", env::var_os("SOURCE_DATE_EPOCH").unwrap_or_else(|| "0".into()))
+        .env(
+            "SOURCE_DATE_EPOCH",
+            env::var_os("SOURCE_DATE_EPOCH").unwrap_or_else(|| "0".into()),
+        )
         .env("RUSTFLAGS", &remap)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTC_WRAPPER")
