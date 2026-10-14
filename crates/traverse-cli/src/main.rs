@@ -1799,8 +1799,9 @@ fn help_model_package_onnx() -> String {
 
     Before writing, it preflights the package (Spec 138 FR-072): model_prepare
     and one zero-valued input frame on wasmtime and wasmi under the manifest
-    limits. On failure nothing is written and it prints
-    {{"stage":"preflight","engine":...,"error":{{"code","reason","message"}}}}.
+    limits. On failure nothing is written, the command exits non-zero, and it
+    prints a JSON object with stage preflight, the failing engine, and the
+    error's code, reason, and message.
 
     Packages from this packager need an embedder newer than 0.14.0 (see #1652);
     npm 0.14.0 rejects schema {schema} / ABI v{abi} with manifest_invalid.
