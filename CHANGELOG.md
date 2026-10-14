@@ -12,6 +12,20 @@
 - Committed `runtime/runtime-release.json` now matches workspace `0.15.0`
   (was stale `0.12.0`).
 
+### `model package-onnx` preflight (Spec 138 0.14.1 FR-072, Decision 115, #1679)
+
+- **Preflight before writing.** `traverse-cli model package-onnx` runs the
+  package it built before writing anything. It runs `model_prepare` and one
+  zero-valued input frame on `wasmtime` and `wasmi`, through the governed
+  path and audited runner, under the manifest limits.
+- **Checks.** Outputs must match byte for byte and carry the declared
+  output dtype and shape.
+- **On failure.** Nothing is written, the command exits non-zero, and it
+  prints `{stage: "preflight", engine, error: {code, reason, message}}`.
+- **On success.** The JSON report gains a `preflight` object.
+- **No opt-out, no new command.** The in-memory copy is signed with a fixed,
+  public, preflight-only key that only the preflight's host trusts.
+
 ### Specific guest reject codes (Spec 138 0.14.0, Decision 115, #1678)
 
 - **Guest reject codes.** Negative `model_execute` returns now carry

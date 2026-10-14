@@ -102,26 +102,42 @@ pub struct PackageOnnxReport {
     pub memory_pages: u64,
     pub wasm_path: PathBuf,
     pub manifest_path: PathBuf,
+    /// What the package-time preflight ran (Spec 138 0.14.0, Decision 115).
+    pub preflight: PreflightReport,
+}
+
+/// A passed package-time preflight: `model_prepare` and one zero-valued
+/// input frame on every engine, byte-identical, with the declared output
+/// shape (Spec 138 0.14.0, Decision 115).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreflightReport {
+    pub engines: Vec<String>,
+    pub input_frame_bytes: u64,
+    pub output_frame_sha256: String,
 }
 
 /// Package `onnx` into `out_dir/model.wasm` + `out_dir/model.manifest.json`.
+/// `preflight` runs on the built package before anything is written, so a
+/// package that cannot run never reaches disk (Decision 115).
 ///
 /// # Errors
 ///
 /// Fails closed on unreadable inputs, an invalid spec or tensor config,
-/// limits the package could never meet, or a runner that is not an
-/// unpatched, import-free, ABI-v2 runner guest.
+/// limits the package could never meet, a runner that is not an unpatched,
+/// import-free runner guest, or a failed preflight.
 pub fn package_onnx(
     runner_path: &Path,
     onnx_path: &Path,
     spec_path: &Path,
     out_dir: &Path,
+    preflight: impl FnOnce(&Package, &TensorConfig) -> Result<PreflightReport, String>,
 ) -> Result<PackageOnnxReport, String> {
     let runner = read(runner_path)?;
     let onnx = read(onnx_path)?;
     let spec: OnnxPackageSpec = serde_json::from_slice(&read(spec_path)?)
         .map_err(|e| format!("invalid package spec {}: {e}", spec_path.display()))?;
     let package = build_package(&runner, &onnx, &spec)?;
+    let preflight = preflight(&package, &spec.tensor)?;
     fs::create_dir_all(out_dir)
         .map_err(|e| format!("failed to create {}: {e}", out_dir.display()))?;
     let wasm_path = out_dir.join("model.wasm");
@@ -140,6 +156,7 @@ pub fn package_onnx(
         memory_pages: package.layout.memory_pages,
         wasm_path,
         manifest_path,
+        preflight,
     })
 }
 
@@ -800,7 +817,7 @@ mod tests {
         let spec_path = root("fixtures/onnx/digits-onnx.package.json");
         let onnx = root("fixtures/onnx/digits-mlp-1.0.0.onnx");
         fs::write(&runner, pristine()).expect("runner");
-        let report = package_onnx(&runner, &onnx, &spec_path, &out).expect("package");
+        let report = package_onnx(&runner, &onnx, &spec_path, &out, passed).expect("package");
         let wasm = fs::read(out.join("model.wasm")).expect("wasm");
         let manifest = fs::read(out.join("model.manifest.json")).expect("manifest");
         assert_eq!(report.wasm_digest, sha256_hex(&wasm));
@@ -817,36 +834,55 @@ mod tests {
 
         let missing = out.join("missing");
         assert!(
-            package_onnx(&missing, &onnx, &spec_path, &out)
+            package_onnx(&missing, &onnx, &spec_path, &out, passed)
                 .unwrap_err()
                 .contains("failed to read")
         );
         assert!(
-            package_onnx(&runner, &onnx, &runner, &out)
+            package_onnx(&runner, &onnx, &runner, &out, passed)
                 .unwrap_err()
                 .contains("invalid package spec")
         );
         let bad = build_package(b"x", b"x", &spec()).unwrap_err();
         assert!(
-            package_onnx(&onnx, &onnx, &spec_path, &out)
+            package_onnx(&onnx, &onnx, &spec_path, &out, passed)
                 .unwrap_err()
                 .contains(&bad[..10])
         );
         // out-dir below a file cannot be created; an out-dir holding a
         // directory named model.wasm cannot be written.
         assert!(
-            package_onnx(&runner, &onnx, &spec_path, &runner.join("x"))
+            package_onnx(&runner, &onnx, &spec_path, &runner.join("x"), passed)
                 .unwrap_err()
                 .contains("failed to create")
         );
         let blocked = out.join("blocked");
         fs::create_dir_all(blocked.join("model.wasm")).expect("dir");
         assert!(
-            package_onnx(&runner, &onnx, &spec_path, &blocked)
+            package_onnx(&runner, &onnx, &spec_path, &blocked, passed)
                 .unwrap_err()
                 .contains("failed to write")
         );
+        // A failed preflight writes nothing (Decision 115).
+        let refused = out.join("refused");
+        assert_eq!(
+            package_onnx(&runner, &onnx, &spec_path, &refused, |_, _| Err(
+                "preflight failed".to_string()
+            ))
+            .unwrap_err(),
+            "preflight failed"
+        );
+        assert!(!refused.exists());
         let _ = fs::remove_dir_all(&out);
         let _ = fs::remove_file(&runner);
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // matches package_onnx's preflight signature
+    fn passed(_: &Package, tensor: &TensorConfig) -> Result<PreflightReport, String> {
+        Ok(PreflightReport {
+            engines: vec!["stub".to_string()],
+            input_frame_bytes: u64::try_from(tensor.input_shape.len()).unwrap_or(0),
+            output_frame_sha256: String::new(),
+        })
     }
 }
