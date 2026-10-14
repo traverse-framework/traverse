@@ -60,6 +60,35 @@ with `host_limit_exceeded`. Pass the target host's ceilings to `model verify`
 Size `max_fuel` so your conformance vector passes on both engines
 (`model conformance` checks this). `max_execution_ms` is the portable bound.
 
+**Measure and run with an optimized interpreter.** `wasmi`'s speed depends on
+how it was compiled. YAMNet (about 11.4 billion fuel) runs in about 3.5 s
+with an optimized `wasmi`, and takes over 10 minutes with an unoptimized one.
+So a debug host misses a `max_execution_ms` that a release host meets.
+- This repository's dev and test builds already optimize `wasmi` (#1681), so
+  `cargo run -p traverse-cli-rs` and the tests run at near-release speed.
+- An app that depends on `traverse-runtime` and builds it in its own debug
+  profile should add the same override to its workspace `Cargo.toml`:
+
+  ```toml
+  [profile.dev.package.wasmi]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_core]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_ir]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_collections]
+  opt-level = 3
+  debug-assertions = false
+  ```
+
+  Keep `debug-assertions = false`. With `wasmi` optimized but debug
+  assertions on, a long-running guest overflows the native stack and aborts
+  the process instead of failing closed.
+- Never set `max_execution_ms` from a debug measurement.
+
 ## Rights
 
 `rights` is required, and every field must be non-empty:
@@ -277,3 +306,4 @@ the conversion on a macOS arm64 runner and requires the committed digest
 | `rights_inconsistent` | `commercial_use` is more permissive than `derivation.source_commercial_use`. |
 | `manifest_invalid` | Unknown fields, unsupported `schema_version` / `abi_version` (message names the value), bad limits, `derivation` in a `2.0.0` manifest, or WASM imports. |
 | `host_limit_exceeded` | The declared limits exceed the host's ceilings. Lower them, or target a larger host. |
+| `timeout` only in a debug build | The host's `wasmi` is unoptimized. Use a release build, or add the `wasmi` profile override under "Limits and fuel". |
