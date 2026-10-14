@@ -18,7 +18,7 @@ traverse-runtime = { path = "../traverse-runtime", version = "0.15.0", default-f
 block2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2 = { version = "0.6", default-features = false, features = ["std", "exception"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSProcessInfo", "NSString", "NSURL", "NSValue"] }
-objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std", "block2", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLModel_MLModelCompilation", "MLMultiArray"] }
+objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std", "block2", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLModel_MLModelCompilation", "MLMultiArray", "MLMultiArrayConstraint"] }
 
 [lints]
 workspace = true

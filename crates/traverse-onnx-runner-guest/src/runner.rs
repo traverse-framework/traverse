@@ -10,6 +10,26 @@ pub const BLOB_MAGIC: &[u8; 8] = b"TVONNX01";
 /// Spec 138 guest frame version (unchanged by guest ABI v2).
 pub const FRAME_VERSION: u16 = 1;
 
+/// Spec 138 guest reject codes `model_execute` returns (0.14.0, Decision
+/// 115). Hosts map each one to its own stable code and reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reject {
+    /// The input frame does not match the tensor config (`-2`).
+    Frame = -2,
+    /// tract failed to run the plan (`-3`).
+    Inference = -3,
+    /// The output is not the declared `f32` shape (`-4`).
+    Output = -4,
+}
+
+impl Reject {
+    /// The negative `model_execute` return for this rejection.
+    #[must_use]
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+}
+
 /// Tensor config fixed at package time (one input, one output, `f32`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,20 +127,29 @@ impl Model {
         })
     }
 
-    /// Run one input frame → output frame bytes, or `None` if the frame's
-    /// version, dtype, dims, or length don't match the tensor config.
-    #[must_use]
-    pub fn run_frame(&self, frame: &[u8]) -> Option<Vec<u8>> {
-        let values = decode_frame(frame, self.config.input_dtype, &self.config.input_shape)?;
-        let input =
-            tract_ndarray::ArrayD::from_shape_vec(self.config.input_shape.clone(), values).ok()?;
-        let result = self.plan.run(tvec!(Tensor::from(input).into())).ok()?;
-        let output = result.first()?;
+    /// Run one input frame → output frame bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Reject::Frame`] when the frame's version, dtype, dims, length, or
+    /// values don't match the tensor config; [`Reject::Inference`] when
+    /// tract fails; [`Reject::Output`] when the output is not the declared
+    /// `f32` shape.
+    pub fn run_frame(&self, frame: &[u8]) -> Result<Vec<u8>, Reject> {
+        let values = decode_frame(frame, self.config.input_dtype, &self.config.input_shape)
+            .ok_or(Reject::Frame)?;
+        let input = tract_ndarray::ArrayD::from_shape_vec(self.config.input_shape.clone(), values)
+            .map_err(|_| Reject::Frame)?;
+        let result = self
+            .plan
+            .run(tvec!(Tensor::from(input).into()))
+            .map_err(|_| Reject::Inference)?;
+        let output = result.first().ok_or(Reject::Output)?;
         if output.shape() != self.config.output_shape.as_slice() {
-            return None;
+            return Err(Reject::Output);
         }
-        let scores = output.as_slice::<f32>().ok()?;
-        Some(encode_frame(
+        let scores = output.as_slice::<f32>().map_err(|_| Reject::Output)?;
+        Ok(encode_frame(
             self.config.output_dtype,
             &self.config.output_shape,
             scores,
@@ -270,53 +299,48 @@ mod tests {
         assert!(model.is_none_or(|model| {
             model
                 .run_frame(&encode_frame(2, &[1, 32], &[0.0; 32]))
-                .is_none()
+                .is_err()
         }));
         let wrong_output = config_json("x", "y", "[1,64]").replace("[1,10]", "[1,11]");
         let bytes = blob(&wrong_output, DIGITS_ONNX);
         let model = Model::load(&parse_blob(&bytes).unwrap()).unwrap();
-        assert!(model.run_frame(&input_frame(&[0.0; 64])).is_none());
+        assert_eq!(
+            model.run_frame(&input_frame(&[0.0; 64])),
+            Err(Reject::Output)
+        );
     }
 
     #[test]
-    fn fails_closed_on_bad_input_frames() {
+    fn rejects_bad_input_frames_as_frame_mismatch() {
         let model = digits();
         let good = input_frame(&[1.0; 64]);
-        assert!(model.run_frame(&good).is_some());
-        // dtype mismatch
-        assert!(
-            model
-                .run_frame(&encode_frame(3, &[1, 64], &[1.0; 64]))
-                .is_none()
-        );
-        // shape mismatch: wrong dims, wrong rank
-        assert!(
-            model
-                .run_frame(&encode_frame(2, &[64, 1], &[1.0; 64]))
-                .is_none()
-        );
-        assert!(
-            model
-                .run_frame(&encode_frame(2, &[64], &[1.0; 64]))
-                .is_none()
-        );
-        // oversize and undersize payloads
+        assert!(model.run_frame(&good).is_ok());
         let mut oversize = good.clone();
         oversize.extend_from_slice(&[0; 4]);
-        assert!(model.run_frame(&oversize).is_none());
-        assert!(model.run_frame(&good[..good.len() - 4]).is_none());
-        assert!(
-            model
-                .run_frame(&encode_frame(2, &[1, 64], &[1.0; 65]))
-                .is_none()
-        );
-        // version, truncated header, non-finite values
         let mut version = good.clone();
         version[0] = 9;
-        assert!(model.run_frame(&version).is_none());
-        assert!(model.run_frame(&good[..3]).is_none());
         let mut values = [1.0_f32; 64];
         values[7] = f32::NAN;
-        assert!(model.run_frame(&input_frame(&values)).is_none());
+        let bad = [
+            ("dtype", encode_frame(3, &[1, 64], &[1.0; 64])),
+            ("dims", encode_frame(2, &[64, 1], &[1.0; 64])),
+            ("rank", encode_frame(2, &[64], &[1.0; 64])),
+            ("oversize payload", oversize),
+            ("undersize payload", good[..good.len() - 4].to_vec()),
+            ("payload length", encode_frame(2, &[1, 64], &[1.0; 65])),
+            ("frame version", version),
+            ("truncated header", good[..3].to_vec()),
+            ("non-finite value", input_frame(&values)),
+        ];
+        for (case, frame) in bad {
+            assert_eq!(model.run_frame(&frame), Err(Reject::Frame), "{case}");
+        }
+    }
+
+    #[test]
+    fn reject_codes_are_the_spec_138_values() {
+        assert_eq!(Reject::Frame.code(), -2);
+        assert_eq!(Reject::Inference.code(), -3);
+        assert_eq!(Reject::Output.code(), -4);
     }
 }

@@ -176,7 +176,11 @@ export type ModelPackageSignature = {
   readonly signature: string;
 };
 
-/** Stable `reason` refining `model_unavailable` / `model_incompatible` (Decision 101). */
+/**
+ * Stable `reason` refining `model_unavailable` / `model_incompatible`
+ * (Decision 101) and, since Spec 138 0.14.0, guest execute rejections
+ * (Decision 115).
+ */
 export type ModelFailureReason =
   | "pin_mismatch"
   | "pin_ambiguous"
@@ -192,7 +196,13 @@ export type ModelFailureReason =
   | "usage_undeclared"
   | "rights_policy_denied"
   | "package_revoked"
-  | "rights_inconsistent";
+  | "rights_inconsistent"
+  // Guest execute rejections (Spec 138 0.14.0, Decision 115).
+  | "frame_mismatch"
+  | "inference_failed"
+  | "output_mismatch"
+  | "guest_rejected"
+  | "output_limit_exceeded";
 
 /** Typed `model.execute` result with identity, placement, and redacted trace. */
 export type ExactModelExecution = {
@@ -1138,13 +1148,57 @@ async function runWasmCpu(
       maxOutputBytes,
     ),
   );
-  if (!Number.isFinite(outLen) || outLen < 0 || outLen > maxOutputBytes) {
-    throw new ExactModelError("resource_exhausted", "model returned invalid output length");
-  }
   if (memory.buffer.byteLength > maxMemoryBytes) {
     throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
   }
-  return new Uint8Array(memory.buffer.slice(outPtr, outPtr + outLen));
+  const length = guestExecuteOutcome(outLen, maxOutputBytes);
+  return new Uint8Array(memory.buffer.slice(outPtr, outPtr + length));
+}
+
+/** Guest reject codes `model_execute` may return (Spec 138 0.14.0, Decision 115). */
+export const GUEST_REJECT_GENERIC = -1;
+export const GUEST_REJECT_FRAME_MISMATCH = -2;
+export const GUEST_REJECT_INFERENCE_FAILED = -3;
+export const GUEST_REJECT_OUTPUT_MISMATCH = -4;
+
+/**
+ * Maps a `model_execute` return to the output length, or throws the stable
+ * failure for a guest reject code or an over-ceiling length. The public code
+ * follows who is at fault, identically to every other host (Decision 115).
+ */
+export function guestExecuteOutcome(outLen: number, maxOutputBytes: number): number {
+  if (!Number.isInteger(outLen) || outLen < 0) {
+    throw guestReject(outLen);
+  }
+  if (outLen > maxOutputBytes) {
+    throw new ExactModelError(
+      "resource_exhausted",
+      "model output exceeds the output ceiling",
+      "output_limit_exceeded",
+    );
+  }
+  return outLen;
+}
+
+function guestReject(code: number): ExactModelError {
+  switch (code) {
+    case GUEST_REJECT_FRAME_MISMATCH:
+      return new ExactModelError(
+        "invalid_input",
+        "model rejected the input frame: it does not match the package's tensor contract",
+        "frame_mismatch",
+      );
+    case GUEST_REJECT_INFERENCE_FAILED:
+      return new ExactModelError("execution_failed", "model inference failed inside the guest", "inference_failed");
+    case GUEST_REJECT_OUTPUT_MISMATCH:
+      return new ExactModelError(
+        "model_incompatible",
+        "model output does not match the package's declared output shape",
+        "output_mismatch",
+      );
+    default:
+      return new ExactModelError("execution_failed", "model rejected the call", "guest_rejected");
+  }
 }
 
 /**

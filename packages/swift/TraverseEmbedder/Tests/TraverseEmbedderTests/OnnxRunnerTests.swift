@@ -69,4 +69,44 @@ final class OnnxRunnerTests: XCTestCase {
         XCTAssertEqual(derivation.sourceCommercialUse, "allowed")
         XCTAssertEqual(derivation.sourceDigest.count, 64)
     }
+
+    /// Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with
+    /// exactly its code and reason, as on every other host.
+    func testOnnxRejectCorpusFailsWithItsCodeAndReason() async throws {
+        let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: models("conformance/signed-digits-onnx.json")) as? [String: Any])
+        let pin = try JSONDecoder().decode(ExactModelPin.self,
+                                           from: JSONSerialization.data(withJSONObject: try XCTUnwrap(vector["pin"])))
+        let host = try ExactModelHost(pins: [pin],
+                                      trustedPublicKeysHex: [try XCTUnwrap(vector["trusted_public_key_hex"] as? String)],
+                                      modelUsage: "commercial")
+        do {
+            _ = try await host.registerPackage(
+                manifest: try models("digits-onnx-1.0.0/model.manifest.json"),
+                wasm: try models("digits-onnx-1.0.0/model.wasm"),
+                signature: try models("digits-onnx-1.0.0/model.sig.json"))
+        } catch let error as ExactModelError where error.reason == "manifest_invalid" {
+            throw XCTSkip("linked TraverseSwiftHost predates ABI v3 max_prepare_fuel (needs a swift-host rebuild after #1627)")
+        }
+        let request = try XCTUnwrap(vector["request"] as? [String: Any])
+        let rejected = try XCTUnwrap(vector["rejected_cases"] as? [[String: Any]])
+        XCTAssertEqual(rejected.count, 7)
+        for testCase in rejected {
+            let name = try XCTUnwrap(testCase["name"] as? String)
+            let inputRef = try host.stageModelInput(hexData(try XCTUnwrap(testCase["input_frame_hex"] as? String)), maxBytes: 4096)
+            do {
+                _ = try await host.execute(
+                    modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "policy-1",
+                    dataClassification: "sensitive",
+                    inputSchemaRef: try XCTUnwrap(request["input_schema_ref"] as? String),
+                    inputSchemaVersion: "1.0.0", maxOutputBytes: 56, allowedClassifications: ["sensitive"])
+                XCTFail("\(name) must be rejected")
+            } catch let error as ExactModelError {
+                if error.code == "resource_exhausted" && error.reason == nil {
+                    throw XCTSkip("linked TraverseSwiftHost predates Spec 138 0.14.0 guest reject codes (needs a swift-host rebuild after #1678)")
+                }
+                XCTAssertEqual(error.code, testCase["code"] as? String, name)
+                XCTAssertEqual(error.reason, testCase["reason"] as? String, name)
+            }
+        }
+    }
 }

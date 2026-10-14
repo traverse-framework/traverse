@@ -105,6 +105,17 @@ Failures keep `model_unavailable` / `model_incompatible` and add a stable
 `rights_mismatch`, `target_unsupported`, `crypto_unavailable`,
 `candidate_unsupported`, `host_limit_exceeded`.
 
+A guest that rejects an execute returns a negative reject code (Spec 138
+0.14.0, Decision 115). Every host reports it the same way:
+
+| Guest return | `code` / `reason` |
+| --- | --- |
+| `-2`: the input frame doesn't match the package | `invalid_input` / `frame_mismatch` |
+| `-3`: inference failed | `execution_failed` / `inference_failed` |
+| `-4`: the output isn't the declared shape | `model_incompatible` / `output_mismatch` |
+| `-1`, or any other negative value | `execution_failed` / `guest_rejected` |
+| A length above `max_output_bytes` | `resource_exhausted` / `output_limit_exceeded` |
+
 ## Guest ABI v1, v2 and v3 (Spec 138 0.7.0 and 0.12, Decisions 105 and 110)
 
 | `abi_version` | Buffers | For |
@@ -370,7 +381,7 @@ trainer, the native wasmtime host, and the browser host.
 counts `0..=16`, row-major. The output is dtype `3` (`f32`), dims `[11]`: 10
 logits followed by the predicted class. There's no softmax, so results are
 bit-identical across hosts. Malformed frames or out-of-range pixels return
-`-1`, and the host fails closed.
+`-1`, and the host fails closed with `execution_failed` / `guest_rejected`.
 
 **Limits** (from measured usage): about 56k fuel per inference (ceiling
 200,000), one 64 KiB memory page (ceiling 128 KiB), a 268-byte input, and a

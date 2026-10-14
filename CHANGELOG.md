@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Specific guest reject codes (Spec 138 0.14.0, Decision 115, #1678)
+
+- **Guest reject codes.** Negative `model_execute` returns now carry
+  meaning:
+  - `-2` frame mismatch;
+  - `-3` inference failed;
+  - `-4` output mismatch;
+  - `-1` generic.
+- **Host mapping.** Every host maps them to fault-based codes and reasons:
+  - `invalid_input` / `frame_mismatch`;
+  - `execution_failed` / `inference_failed`;
+  - `model_incompatible` / `output_mismatch`;
+  - `execution_failed` / `guest_rejected`.
+
+  An over-ceiling output is `resource_exhausted` / `output_limit_exceeded`.
+  This replaces the old `resource_exhausted` / "model returned invalid
+  output length" for every negative return. **Behavior change** for callers
+  that matched `resource_exhausted` on a guest reject.
+- **ONNX runner.** The generic ONNX runner returns the specific codes. When
+  its output would exceed `out_cap` it returns the needed length.
+  `runner.wasm` is rebuilt, and `digits-onnx-1.0.0` and
+  `digits-onnx-coreml-1.0.0` are repackaged and re-signed (new pins).
+- **Core ML adapter.** The adapter reports a frame that is malformed or
+  non-finite, or has the wrong dtype, dims or payload, as `invalid_input` /
+  `frame_mismatch`. It checks dims against the variant's input shape.
+- **Reject corpus.** `signed-digits-onnx.json` gains `rejected_cases`, a
+  reject corpus that runs on:
+  - Rust (both engines);
+  - web;
+  - the framed protocol;
+  - Swift, Kotlin and .NET;
+  - the `coreml` placement.
+- **Connector contract.** `traverse.model-runtime` is now 2.3.0.
+
 ## v0.15.0 — 2026-10-13
 
 Minor lockstep release with **breaking** Spec 138 exact-ref model changes. See

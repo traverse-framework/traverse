@@ -207,10 +207,15 @@ test("ONNX runner package (#1591) matches the native vector byte-for-byte and fa
     const output = await run(Buffer.from(testCase.input_frame_hex, "hex"));
     assert.equal(Buffer.from(output).toString("hex"), testCase.output_frame_hex);
   }
-  // Shape and dtype are fixed at package time: the runner returns -1.
-  const pixels = new Uint8Array(new Float32Array(64).fill(1).buffer);
-  for (const frame of [encodeGuestFrame(2, [64], pixels), encodeGuestFrame(3, [1, 64], pixels)]) {
-    await assert.rejects(run(frame), ExactModelError);
+  // Shared reject corpus (Spec 138 0.14.0, Decision 115): the same code and
+  // reason as every other host.
+  assert.equal(vector.rejected_cases.length, 7);
+  for (const testCase of vector.rejected_cases) {
+    await assert.rejects(
+      run(Buffer.from(testCase.input_frame_hex, "hex")),
+      (e) => e instanceof ExactModelError && e.code === testCase.code && e.reason === testCase.reason,
+      testCase.name,
+    );
   }
 });
 
@@ -534,6 +539,50 @@ test("guest ABI v2 (#1588): model_alloc buffers match the v1 echo; bad allocator
   });
   const future = new ExactModelBrowserHost([await pinFor("fixture.echo-v2", bytes)], TRUST);
   await assert.rejects(() => future.registerPackage(bytes, pkg.wasm, sig), (error) => error.reason === "manifest_invalid");
+});
+
+// Spec 138 0.14.0, Decision 115: each guest reject code maps to its own
+// public code and reason, identically to the Rust host.
+test("guest reject codes map to fault-based codes and stable reasons", async () => {
+  const { default: wabtInit } = await import("wabt");
+  const wabt = await wabtInit();
+  const guest = (result) =>
+    new Uint8Array(
+      wabt
+        .parseWat(
+          "r.wat",
+          `(module (memory (export "memory") 1)
+             (global $next (mut i32) (i32.const 1024))
+             (func (export "model_alloc") (param $len i32) (result i32)
+               global.get $next
+               (global.set $next (i32.add (global.get $next) (i32.add (local.get $len) (i32.const 8)))))
+             (func (export "model_execute") (param i32 i32 i32 i32) (result i32) ${result}))`,
+        )
+        .toBinary({}).buffer,
+    );
+  const pkg = fixture("fixture-echo-v2-1.0.0");
+  const cases = [
+    ["i32.const -2", "invalid_input", "frame_mismatch"],
+    ["i32.const -3", "execution_failed", "inference_failed"],
+    ["i32.const -4", "model_incompatible", "output_mismatch"],
+    ["i32.const -1", "execution_failed", "guest_rejected"],
+    ["i32.const -9", "execution_failed", "guest_rejected"],
+    ["i32.const 60000", "resource_exhausted", "output_limit_exceeded"],
+  ];
+  for (const [result, code, reason] of cases) {
+    const wasm = guest(result);
+    const { bytes, sig } = resigned(pkg.manifest, (m) => {
+      m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
+    });
+    const host = new ExactModelBrowserHost([await pinFor("fixture.echo-v2", bytes)], TRUST);
+    const digest = await host.registerPackage(bytes, wasm, sig);
+    const input_ref = host.io.stageModelInput(new Uint8Array([1, 2, 3]), 64);
+    await assert.rejects(
+      () => host.execute(executeArgs("fixture.echo-v2", digest, input_ref, "schema:fixture-in")),
+      (e) => e.code === code && e.reason === reason && !e.message.includes("invalid output length"),
+      result,
+    );
+  }
 });
 
 // Decision 103: the opt-in production key constant mirrors the committed

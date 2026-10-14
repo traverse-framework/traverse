@@ -13,7 +13,7 @@ use traverse_runtime::exact_model::{
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
-    MODEL_RUNTIME_CONNECTOR,
+    MODEL_RUNTIME_CONNECTOR, ModelFailureReason,
 };
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -160,14 +160,19 @@ fn trained_package_matches_the_conformance_vector_and_exposes_rights() {
 #[test]
 fn trained_package_fails_closed_on_bad_frames_and_enforces_fuel() {
     let (mut host, pin) = registered_host();
-    // Wrong dims: the guest rejects the frame (-1) and the host fails closed.
+    // Wrong dims: this guest rejects the frame with the generic `-1`, which
+    // the host reports as a guest reject (Spec 138 0.14.0, Decision 115).
     let bad = encode_guest_frame(2, &[63], &[0; 252]);
     let input_ref = host.io.stage_model_input(&bad, 268).expect("stage");
+    let error = host
+        .invoke(&request(&pin, &input_ref, &[]))
+        .expect_err("bad frame");
     assert_eq!(
-        host.invoke(&request(&pin, &input_ref, &[]))
-            .expect_err("bad frame")
-            .code,
-        HostConnectorErrorCode::ResourceExhausted
+        (error.code, error.reason),
+        (
+            HostConnectorErrorCode::ExecutionFailed,
+            Some(ModelFailureReason::GuestRejected)
+        )
     );
     // Oversized input exceeds the manifest's 268-byte ceiling.
     let input_ref = host.io.stage_model_input(&[0; 300], 4096).expect("stage");

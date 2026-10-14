@@ -3,6 +3,10 @@
 //! location, and views host-staged regions of this module's own memory.
 
 use crate::runner::{Model, parse_blob};
+
+/// Generic reject (Spec 138 0.14.0): bad call arguments, or no prepared
+/// model. Specific rejections come from [`crate::runner::Reject`].
+const REJECT_GENERIC: i32 = -1;
 use std::sync::OnceLock;
 
 /// `[blob_ptr, blob_len]`, patched by `traverse-cli model package-onnx`. The
@@ -49,11 +53,14 @@ pub extern "C" fn model_prepare() -> i32 {
     if MODEL.get_or_init(load_model).is_some() {
         0
     } else {
-        -1
+        REJECT_GENERIC
     }
 }
 
-/// `model_execute(in_ptr, in_len, out_ptr, out_cap) -> out_len`, or `-1`.
+/// `model_execute(in_ptr, in_len, out_ptr, out_cap) -> out_len`, or a
+/// negative Spec 138 reject code (0.14.0, Decision 115). An output longer
+/// than `out_cap` is not written; its length is returned so the host reports
+/// `output_limit_exceeded`.
 #[unsafe(no_mangle)]
 pub extern "C" fn model_execute(in_ptr: i32, in_len: i32, out_ptr: i32, out_cap: i32) -> i32 {
     let (Ok(in_ptr), Ok(in_len), Ok(out_ptr), Ok(out_cap)) = (
@@ -62,24 +69,28 @@ pub extern "C" fn model_execute(in_ptr: i32, in_len: i32, out_ptr: i32, out_cap:
         usize::try_from(out_ptr),
         usize::try_from(out_cap),
     ) else {
-        return -1;
+        return REJECT_GENERIC;
     };
     if in_ptr == 0 || out_ptr == 0 {
-        return -1;
+        return REJECT_GENERIC;
     }
-    let Some(model) = prepared() else { return -1 };
+    let Some(model) = prepared() else {
+        return REJECT_GENERIC;
+    };
     // SAFETY: under guest ABI v2 the host wrote `in_len` bytes into a region
     // this module's `model_alloc` returned; it is non-null and not aliased.
     let input = unsafe { core::slice::from_raw_parts(in_ptr as *const u8, in_len) };
-    let Some(frame) = model.run_frame(input) else {
-        return -1;
+    let frame = match model.run_frame(input) {
+        Ok(frame) => frame,
+        Err(reject) => return reject.code(),
     };
+    let len = i32::try_from(frame.len()).unwrap_or(i32::MAX);
     if frame.len() > out_cap {
-        return -1;
+        return len;
     }
     // SAFETY: the host reserved `out_cap >= frame.len()` bytes at `out_ptr`
     // via `model_alloc`, disjoint from the input (host-checked).
     let output = unsafe { core::slice::from_raw_parts_mut(out_ptr as *mut u8, frame.len()) };
     output.copy_from_slice(&frame);
-    i32::try_from(frame.len()).unwrap_or(-1)
+    len
 }

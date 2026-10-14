@@ -22,8 +22,8 @@ use traverse_runtime::exact_model::{
     ModelEngine, ModelUsage, TrustedModelKeys, decode_guest_frame, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{
-    HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
-    MODEL_RUNTIME_CONNECTOR,
+    HostConnectorError, HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort,
+    MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
 };
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -100,9 +100,9 @@ fn execute(
     host: &mut ExactModelHostConnector,
     pin: &ExactModelPin,
     frame: &[u8],
-) -> Result<Vec<u8>, HostConnectorErrorCode> {
+) -> Result<Vec<u8>, HostConnectorError> {
     let input_ref = host.io.stage_model_input(frame, 4096).expect("stage");
-    let result = host.invoke(&request(pin, &input_ref)).map_err(|e| e.code)?;
+    let result = host.invoke(&request(pin, &input_ref))?;
     Ok(host
         .io
         .read_model_output(
@@ -165,32 +165,32 @@ fn check_engine(engine: ModelEngine) {
     );
     assert_eq!(derivation.source_commercial_use, CommercialUse::Allowed);
 
-    let good = pixel_frame(2, &[1, 64], &[1.0; 64]);
-    let mut oversize = good.clone();
-    oversize.extend_from_slice(&[0; 4]);
-    let mut nan = [1.0_f32; 64];
-    nan[3] = f32::NAN;
-    let rejected = [
-        // dtype mismatch (output dtype code on the input)
-        pixel_frame(3, &[1, 64], &[1.0; 64]),
-        // shape mismatch: rank, then dims
-        pixel_frame(2, &[64], &[1.0; 64]),
-        pixel_frame(2, &[2, 32], &[1.0; 64]),
-        // trailing bytes past the declared payload
-        oversize,
-        // non-finite values
-        pixel_frame(2, &[1, 64], &nan),
-    ];
-    for frame in &rejected {
+    // Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with
+    // exactly its code and reason, as on every other host.
+    let rejected = vector()["rejected_cases"]
+        .as_array()
+        .expect("rejected_cases")
+        .clone();
+    assert_eq!(rejected.len(), 7);
+    for case in &rejected {
+        let frame = hex(case["input_frame_hex"].as_str().expect("frame"));
+        let error = execute(&mut host, &pin, &frame).expect_err("rejected");
         assert_eq!(
-            execute(&mut host, &pin, frame).expect_err("rejected"),
-            HostConnectorErrorCode::ResourceExhausted,
-            "{engine:?}"
+            (
+                json!(error.code.as_str()),
+                error.reason.map(|reason| json!(reason.as_str()))
+            ),
+            (case["code"].clone(), Some(case["reason"].clone())),
+            "{engine:?} {}",
+            case["name"]
         );
     }
-    // Larger than the manifest's max_input_bytes: refused before the guest.
+    // Larger than the manifest's max_input_bytes (including any trailing
+    // bytes past a full frame): refused by the host before the guest.
     assert_eq!(
-        execute(&mut host, &pin, &[0; (MAX_INPUT + 1) as usize]).expect_err("too big"),
+        execute(&mut host, &pin, &[0; (MAX_INPUT + 1) as usize])
+            .expect_err("too big")
+            .code,
         HostConnectorErrorCode::ResourceExhausted,
         "{engine:?}"
     );

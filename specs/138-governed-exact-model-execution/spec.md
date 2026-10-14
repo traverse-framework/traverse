@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.13.4
+**Version**: 0.14.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -157,6 +157,27 @@ one.
   ADR-0082) and the frame-protocol fields that configure it are now
   specified.
 Additive.
+**Amendment (2026-10-14, version 0.13.4 -> 0.14.0, approved under Decision 115)**: `#1678`.
+- "Guest reject codes" is new. Negative `model_execute` returns now carry
+  meaning on every ABI version:
+  - `-1` generic;
+  - `-2` frame mismatch;
+  - `-3` inference failed;
+  - `-4` output mismatch.
+
+  A too-small output buffer is answered with the needed length.
+- Every host maps those codes to fault-based public codes and new `reason`
+  values: `frame_mismatch`, `inference_failed`, `output_mismatch`,
+  `guest_rejected` and `output_limit_exceeded`. This replaces
+  `resource_exhausted` for every negative return (FR-070).
+- An adapter reports an input frame that breaks its contract the same way
+  (FR-071).
+- The generic ONNX runner adopts the codes. The runner-built fixtures are
+  repackaged and re-signed, and the signed digits-onnx vector gains a reject
+  corpus (scenario 33).
+
+Additive for guests: an existing guest's `-1` stays valid. Callers that
+matched `resource_exhausted` for a guest reject now see the new codes.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -335,6 +356,14 @@ native model engine cannot load, and `placement_unavailable`
 (`model_unavailable`) (0.12.0) when no placement listed by the execution
 policy can run the package.
 
+Guest execute rejections (0.14.0, Decision 115) carry their own reasons
+under fault-based codes (see "Guest reject codes"):
+- `frame_mismatch` (`invalid_input`);
+- `inference_failed` (`execution_failed`);
+- `output_mismatch` (`model_incompatible`);
+- `guest_rejected` (`execution_failed`);
+- `output_limit_exceeded` (`resource_exhausted`).
+
 ### Rights denial detail (0.8.0, Decision 107)
 
 These failures MUST carry a `detail` object: `rights_incomplete`,
@@ -432,6 +461,27 @@ candidate kind fails closed with `candidate_unsupported`. Mixed-candidate
   governed rules are under "Native accelerator adapters" (0.12.0).
 - Large models MAY declare a target unsupported rather than OOM or silent
   degrade.
+
+### Guest reject codes (0.14.0, Decision 115)
+
+`model_execute` returns the output length, or a negative reject code. The
+codes apply to every ABI version (v1, v2 and v3):
+
+| Return | Meaning | Public code / reason |
+|---|---|---|
+| `-2` | The input frame does not match the guest's tensor contract: frame version, dtype, rank, dims, payload length, or values. | `invalid_input` / `frame_mismatch` |
+| `-3` | Inference failed inside the guest. | `execution_failed` / `inference_failed` |
+| `-4` | The output does not match the guest's declared output shape. | `model_incompatible` / `output_mismatch` |
+| `-1`, or any other negative value | Generic reject. | `execution_failed` / `guest_rejected` |
+| A length above the output ceiling | The output does not fit. | `resource_exhausted` / `output_limit_exceeded` |
+
+- The frame-version field of a guest frame is always `1`. It is separate
+  from the manifest `abi_version`.
+- A guest whose output would exceed `out_cap` SHOULD return the length it
+  needs, without writing, so the host reports `output_limit_exceeded`.
+- A guest MUST NOT return a non-negative length for a call it rejected.
+- Guests that predate 0.14.0 return `-1` for every rejection. That stays
+  valid and is reported as `guest_rejected`.
 
 ### Guest ABI v2 (0.7.0, Decision 105)
 
@@ -668,7 +718,9 @@ such adapter.
 An adapter consumes the same staged input frame and produces the same
 little-endian output frame, output schema and `output_ref` as the `wasm-cpu`
 guest. Converting to and from native tensors is the adapter's job; guests
-and applications never see native tensor types.
+and applications never see native tensor types. An input frame that breaks
+the adapter's frame contract fails exactly as the `wasm-cpu` guest's `-2`
+does (FR-071).
 
 ## `model.execute` request payload (Spec 137 command `payload`)
 
@@ -1061,6 +1113,20 @@ Traverse MUST:
     object (`{"coreml": {"compute_units"?, "cache_dir"?}}`; absent means no
     adapter), and `register` takes `variant_paths`, naming one segment per
     fetched variant file.
+- **FR-070**: Every host MUST map a `model_execute` return through
+  "Guest reject codes" (0.14.0, Decision 115). This applies to every
+  engine, both ABI v3 paths, and the shared frame crate behind the Swift,
+  Kotlin and .NET shims, which MUST report identical codes and reasons.
+  The generic ONNX runner MUST return `-2` for a frame that does not match
+  its tensor config, `-3` when tract fails, and `-4` when the output is not
+  the declared `f32` shape. No host may report a guest reject as
+  `resource_exhausted`.
+- **FR-071**: An accelerator adapter MUST reject an input frame that is
+  malformed, carries another dtype, has dims that differ from the variant's
+  input shape, has a payload that is not exactly those dims' values, or
+  holds a non-finite value. It reports this as `invalid_input` /
+  `frame_mismatch` (0.14.0, Decision 115), so a placement change never
+  changes how a bad frame fails (Decision 110).
 
 ## Acceptance scenarios
 
@@ -1185,6 +1251,19 @@ Traverse MUST:
       `timeout`.
     - It fails closed with `engine_unavailable` when the native library is
       missing.
+33. (0.14.0) The signed digits-onnx vector's `rejected_cases` fail with
+    exactly their code and reason (`invalid_input` / `frame_mismatch`):
+    - on Rust (wasmtime and `wasmi`);
+    - on the web embedder;
+    - through the framed host protocol;
+    - in the Swift, Kotlin and .NET embedder tests;
+    - on the `coreml` placement.
+
+    The corpus holds a frame version of `3`, a payload length counted in
+    values, a wrong dtype, a wrong rank, wrong dims, a non-finite value, and
+    a truncated header. A guest returning `-3` or `-4`, an unknown negative
+    value, or an over-ceiling length fails with the mapped code and reason
+    on every engine. No message reads "invalid output length".
 
 ## Compatibility and non-goals
 

@@ -170,7 +170,8 @@ pub struct ModelRightsDenialDetail {
 }
 
 /// Stable `reason` values refining `model_unavailable` / `model_incompatible`
-/// (Spec 138 0.4.0, Decision 101).
+/// (Spec 138 0.4.0, Decision 101), and, since 0.14.0, guest execute
+/// rejections (Decision 115).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelFailureReason {
@@ -213,6 +214,19 @@ pub enum ModelFailureReason {
     /// No placement the execution policy lists can run the package (Spec 138
     /// 0.12.0 FR-060).
     PlacementUnavailable,
+    /// The guest rejected the input frame as not matching its tensor
+    /// contract (guest reject code `-2`; Spec 138 0.14.0, Decision 115).
+    FrameMismatch,
+    /// Inference failed inside the guest (reject code `-3`).
+    InferenceFailed,
+    /// The guest's output does not match its declared output shape (reject
+    /// code `-4`).
+    OutputMismatch,
+    /// The guest rejected the call without a specific reason (reject code
+    /// `-1`, or any other negative return).
+    GuestRejected,
+    /// The guest returned an output longer than the output ceiling.
+    OutputLimitExceeded,
 }
 
 impl ModelFailureReason {
@@ -237,6 +251,11 @@ impl ModelFailureReason {
             Self::PackageRevoked => "package_revoked",
             Self::RightsInconsistent => "rights_inconsistent",
             Self::PlacementUnavailable => "placement_unavailable",
+            Self::FrameMismatch => "frame_mismatch",
+            Self::InferenceFailed => "inference_failed",
+            Self::OutputMismatch => "output_mismatch",
+            Self::GuestRejected => "guest_rejected",
+            Self::OutputLimitExceeded => "output_limit_exceeded",
         }
     }
 }

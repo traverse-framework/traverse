@@ -296,7 +296,37 @@ writeJson(join(modelsDir, "conformance", "signed-digits-onnx.json"), {
       output_frame_hex: out.toString("hex"),
     };
     }),
+  // Reject corpus (Spec 138 0.14.0, Decision 115): malformed frames every
+  // model-capable host must fail with exactly this code and reason. Each
+  // frame is checked against the runner here, so a frame the runner accepts
+  // can never be committed.
+  rejected_cases: onnxRejectedFrames().map(([name, frame]) => {
+    if (rejectCode(onnxRunner, frame, 56) !== -2) {
+      throw new Error(`runner does not reject ${name} as a frame mismatch`);
+    }
+    return { name, input_frame_hex: frame.toString("hex"), code: "invalid_input", reason: "frame_mismatch" };
+  }),
 });
+
+function onnxRejectedFrames() {
+  const ones = f32Bytes(new Array(64).fill(1));
+  const good = guestFrame(2, [1, 64], ones);
+  const version = Buffer.from(good);
+  version.writeUInt16LE(3, 0); // the manifest ABI version instead of 1
+  const length = Buffer.from(good);
+  length.writeUInt32LE(64, 12); // payload length counting values, not bytes
+  const nan = f32Bytes(new Array(64).fill(1));
+  nan.writeFloatLE(Number.NaN, 12);
+  return [
+    ["frame_version", version],
+    ["payload_length_in_values", length],
+    ["dtype", guestFrame(3, [1, 64], ones)],
+    ["rank", guestFrame(2, [64], ones)],
+    ["dims", guestFrame(2, [2, 32], ones)],
+    ["non_finite_value", guestFrame(2, [1, 64], nan)],
+    ["truncated_header", good.subarray(0, 3)],
+  ];
+}
 
 // Guest ABI v3 vector (Decision 110, #1626): each case runs in a fresh,
 // freshly prepared instance, the reference every host must match on both
@@ -356,6 +386,13 @@ function runGuest(wasm, inputFrame, cap) {
   new Uint8Array(memory.buffer, inPtr, inputFrame.length).set(inputFrame);
   const len = instance.exports.model_execute(inPtr, inputFrame.length, outPtr, cap);
   return new Uint8Array(memory.buffer.slice(outPtr, outPtr + len));
+}
+
+function rejectCode(instance, inputFrame, cap) {
+  const inPtr = instance.exports.model_alloc(inputFrame.length);
+  const outPtr = instance.exports.model_alloc(cap);
+  new Uint8Array(instance.exports.memory.buffer, inPtr, inputFrame.length).set(inputFrame);
+  return instance.exports.model_execute(inPtr, inputFrame.length, outPtr, cap);
 }
 
 function runGuestV2(instance, inputFrame, cap) {

@@ -5,6 +5,11 @@
 use std::fs;
 use std::path::{Component, Path};
 
+use traverse_runtime::exact_model::decode_guest_frame;
+use traverse_runtime::host_connector_dispatch::{
+    HostConnectorError, HostConnectorErrorCode, ModelFailureReason,
+};
+
 /// Core ML compute units a host may select (Decision 112 rule 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComputeUnits {
@@ -319,6 +324,55 @@ pub fn f16_to_f32(bits: u16) -> f32 {
     }
 }
 
+/// `invalid_input` / `frame_mismatch`: the input frame does not match the
+/// variant's frame contract, reported exactly as the `wasm-cpu` runner reports
+/// it (Spec 138 0.14.0, Decision 115; FR-065).
+#[must_use]
+pub fn frame_mismatch(message: &str) -> HostConnectorError {
+    HostConnectorError {
+        code: HostConnectorErrorCode::InvalidInput,
+        reason: Some(ModelFailureReason::FrameMismatch),
+        detail: None,
+        message: message.to_string(),
+    }
+}
+
+/// Decodes an input frame against the variant's input dtype into its shape
+/// and finite `f32` values.
+///
+/// # Errors
+///
+/// [`frame_mismatch`] when the frame is malformed, carries another dtype,
+/// has a payload that is not exactly its dims' `f32` values, or holds a
+/// non-finite value.
+pub fn input_frame(
+    input: &[u8],
+    input_dtype: u8,
+) -> Result<(Vec<usize>, Vec<f32>), HostConnectorError> {
+    let (dtype, dims, payload) = decode_guest_frame(input)
+        .map_err(|_| frame_mismatch("input is not a well-formed guest frame"))?;
+    if dtype != input_dtype {
+        return Err(frame_mismatch(
+            "input frame dtype does not match the variant",
+        ));
+    }
+    let shape = dims
+        .iter()
+        .map(|dim| usize::try_from(*dim).ok())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| frame_mismatch("input dims are too large"))?;
+    let count = shape
+        .iter()
+        .try_fold(1_usize, |total, dim| total.checked_mul(*dim))
+        .ok_or_else(|| frame_mismatch("input dims are too large"))?;
+    let values = f32_values(&payload, count)
+        .ok_or_else(|| frame_mismatch("input payload is not its dims' f32 values"))?;
+    if !values.iter().all(|value| value.is_finite()) {
+        return Err(frame_mismatch("input holds a non-finite value"));
+    }
+    Ok((shape, values))
+}
+
 /// Little-endian `f32` values of a frame payload, or `None` when its length
 /// is not `count` values.
 #[must_use]
@@ -544,6 +598,38 @@ mod tests {
             read_f32_strided(&halves, Element::F16, &[2], &[1]),
             Some(vec![1.0, -2.0])
         );
+    }
+
+    #[test]
+    fn input_frames_that_break_the_contract_are_frame_mismatches() {
+        use traverse_runtime::exact_model::encode_guest_frame;
+        let ones: Vec<u8> = [1.0_f32; 4].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let good = encode_guest_frame(2, &[1, 4], &ones);
+        let (shape, values) = input_frame(&good, 2).expect("good");
+        assert_eq!((shape, values), (vec![1, 4], vec![1.0; 4]));
+        let mut nan = ones.clone();
+        nan[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let bad = [
+            ("malformed", good[..3].to_vec()),
+            ("dtype", encode_guest_frame(3, &[1, 4], &ones)),
+            ("payload", encode_guest_frame(2, &[1, 5], &ones)),
+            (
+                "dims overflow",
+                encode_guest_frame(2, &[u32::MAX, u32::MAX, u32::MAX], &ones),
+            ),
+            ("non-finite", encode_guest_frame(2, &[1, 4], &nan)),
+        ];
+        for (case, frame) in bad {
+            let error = input_frame(&frame, 2).expect_err(case);
+            assert_eq!(
+                (error.code, error.reason),
+                (
+                    HostConnectorErrorCode::InvalidInput,
+                    Some(ModelFailureReason::FrameMismatch)
+                ),
+                "{case}"
+            );
+        }
     }
 
     #[test]

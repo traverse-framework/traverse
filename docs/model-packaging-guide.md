@@ -25,8 +25,15 @@ locally, with no network access.
 
 - **Frames.** Input and output are little-endian frames: `u16` frame
   version (`1`), `u8` dtype, `u8` rank, `rank × u32` dims, `u32` payload
-  length, then the payload. The guest returns the output length, or `-1` to
-  fail closed.
+  length, then the payload. The frame version is always `1`, whatever the
+  manifest `abi_version`. The guest returns the output length, or a negative
+  reject code to fail closed (Spec 138 0.14.0):
+  - `-2`: the frame doesn't match the package (`invalid_input` /
+    `frame_mismatch`);
+  - `-3`: inference failed (`execution_failed` / `inference_failed`);
+  - `-4`: the output isn't the declared shape (`model_incompatible` /
+    `output_mismatch`);
+  - `-1`: generic (`execution_failed` / `guest_rejected`).
 - **ABI v1** (`abi_version: 1`). The host writes the input at offset 64 and
   reserves the output region right after it. Use this only for tiny guests
   without a heap.
@@ -153,8 +160,8 @@ traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;
 - the `tensor` config: input and output names, shapes, and dtypes, fixed at
-  package time and validated on every call. A mismatched frame returns `-1`
-  and the host fails closed;
+  package time and validated on every call. A mismatched frame returns `-2`,
+  which the host reports as `invalid_input` / `frame_mismatch`;
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
