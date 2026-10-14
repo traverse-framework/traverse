@@ -3,7 +3,9 @@
 # (`fixtures/onnx/runner.wasm`) comes from the reviewed source.
 #
 # 1. The runner passes its native tests (tract on the committed digits ONNX
-#    export, fail-closed tensor checks) and clippy on host and wasm32.
+#    export, fail-closed tensor checks, and the supported-operator list in
+#    docs/model-packaging-guide.md matching the pinned tract-onnx; Decision
+#    115) and clippy on host and wasm32.
 # 2. Rebuilding it with the pinned toolchain, simd128, and registry paths
 #    remapped yields byte-identical `fixtures/onnx/runner.wasm` with zero
 #    imports, on the canonical builder host (CI's x86_64-unknown-linux-gnu).
