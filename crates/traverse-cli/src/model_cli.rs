@@ -20,7 +20,8 @@ use traverse_runtime::exact_model::{
     ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     ModelEngine, ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU,
-    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, sign_model_manifest,
+    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, decode_guest_frame,
+    encode_guest_frame, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -585,18 +586,27 @@ fn pin_for(package_dir: &Path) -> Result<ExactModelPin, CliError> {
         serde_json::from_slice(&files.signature).map_err(|error| {
             CliError::ValidationFailed(format!("model.sig.json is malformed: {error}"))
         })?;
-    Ok(ExactModelPin {
+    Ok(pin_from(&files.manifest, manifest, signature.key_id))
+}
+
+/// The exact pin for these manifest bytes, signed by `key_id`.
+fn pin_from(
+    manifest_bytes: &[u8],
+    manifest: ModelPackageManifest,
+    key_id: String,
+) -> ExactModelPin {
+    ExactModelPin {
         model_id: manifest.model_id,
         version: manifest.version,
-        digest: sha256_hex(&files.manifest),
+        digest: sha256_hex(manifest_bytes),
         offline_allowed: manifest.offline_allowed,
         target: PLACEMENT_WASM_CPU.to_string(),
         rights: PinRights {
             license_id: manifest.rights.license_id,
             commercial_use: manifest.rights.commercial_use,
         },
-        key_id: Some(signature.key_id),
-    })
+        key_id: Some(key_id),
+    }
 }
 
 /// A host for one package. `non_commercial` usage judges the package itself,
@@ -611,6 +621,14 @@ fn host_for(
         keys.trust(&key_bytes(hex, "--trusted-key")?)
             .map_err(|error| CliError::UsageError(error.message))?;
     }
+    Ok(host_with_keys(pin, keys, limits))
+}
+
+fn host_with_keys(
+    pin: &ExactModelPin,
+    keys: TrustedModelKeys,
+    limits: HostModelLimits,
+) -> ExactModelHostConnector {
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
     host.model_usage = Some(ModelUsage::NonCommercial);
     host.host_limits = limits;
@@ -623,7 +641,7 @@ fn host_for(
             ..ExecutionPolicy::default()
         },
     );
-    Ok(host)
+    host
 }
 
 fn error_json(error: &HostConnectorError) -> Value {
@@ -784,42 +802,143 @@ fn execute_on(
     input: &[u8],
 ) -> Result<Vec<u8>, CliError> {
     let manifest = parse_manifest(&files.manifest)?;
-    let mut host = host_for(pin, trusted_keys_hex, HostModelLimits::default())?;
-    host.engine = engine;
-    host.register_package(&files.manifest, files.wasm.clone(), &files.signature)
-        .map_err(|error| CliError::ValidationFailed(error_json(&error).to_string()))?;
-    let input_ref = host
-        .io
-        .stage_model_input(
-            input,
-            usize::try_from(manifest.max_input_bytes).unwrap_or(usize::MAX),
-        )
-        .map_err(|error| CliError::ValidationFailed(error_json(&error).to_string()))?;
-    let result = host
-        .invoke(&HostConnectorHostRequest {
-            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
-            operation: MODEL_EXECUTE_OPERATION.to_string(),
-            binding_id: "model-conformance".to_string(),
-            target_family: "native".to_string(),
-            correlation_id: "model-conformance".to_string(),
-            payload: json!({
-                "model_ref": { "model_id": pin.model_id, "version": pin.version, "digest": pin.digest },
-                "input_ref": input_ref,
-                "policy_ref": CONFORMANCE_POLICY,
-                "data_classification": CONFORMANCE_CLASSIFICATION,
-                "input_schema_ref": manifest.input_schema_ref,
-                "input_schema_version": manifest.input_schema_version,
-                "max_output_bytes": manifest.max_output_bytes,
-            }),
-            cancel_requested: false,
-        })
-        .map_err(|error| CliError::ValidationFailed(error_json(&error).to_string()))?;
-    host.io
-        .read_model_output(
-            result.artifact_ref.as_deref().unwrap_or_default(),
-            usize::try_from(manifest.max_output_bytes).unwrap_or(usize::MAX),
-        )
+    let host = host_for(pin, trusted_keys_hex, HostModelLimits::default())?;
+    execute_governed(host, files, pin, &manifest, engine, input)
         .map_err(|error| CliError::ValidationFailed(error_json(&error).to_string()))
+}
+
+fn execute_governed(
+    mut host: ExactModelHostConnector,
+    files: &PackageFiles,
+    pin: &ExactModelPin,
+    manifest: &ModelPackageManifest,
+    engine: ModelEngine,
+    input: &[u8],
+) -> Result<Vec<u8>, HostConnectorError> {
+    host.engine = engine;
+    host.register_package(&files.manifest, files.wasm.clone(), &files.signature)?;
+    let input_ref = host.io.stage_model_input(
+        input,
+        usize::try_from(manifest.max_input_bytes).unwrap_or(usize::MAX),
+    )?;
+    let result = host.invoke(&HostConnectorHostRequest {
+        connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+        operation: MODEL_EXECUTE_OPERATION.to_string(),
+        binding_id: "model-conformance".to_string(),
+        target_family: "native".to_string(),
+        correlation_id: "model-conformance".to_string(),
+        payload: json!({
+            "model_ref": { "model_id": pin.model_id, "version": pin.version, "digest": pin.digest },
+            "input_ref": input_ref,
+            "policy_ref": CONFORMANCE_POLICY,
+            "data_classification": CONFORMANCE_CLASSIFICATION,
+            "input_schema_ref": manifest.input_schema_ref,
+            "input_schema_version": manifest.input_schema_version,
+            "max_output_bytes": manifest.max_output_bytes,
+        }),
+        cancel_requested: false,
+    })?;
+    host.io.read_model_output(
+        result.artifact_ref.as_deref().unwrap_or_default(),
+        usize::try_from(manifest.max_output_bytes).unwrap_or(usize::MAX),
+    )
+}
+
+/// Fixed preflight-only Ed25519 secret (Decision 115). It signs an in-memory
+/// copy of a freshly packaged manifest so the preflight can run it through
+/// the governed register → execute path; it is public, never written to
+/// disk, and trusted only by the preflight's own host.
+const PREFLIGHT_SECRET: [u8; 32] = *b"traverse-package-onnx-preflight!";
+
+/// `model package-onnx` preflight (Spec 138 0.14.0, Decision 115): run
+/// `model_prepare` and one zero-valued input frame built from the tensor
+/// config on every engine, under the manifest's limits and deadline, through
+/// the same audited runner every host executes. The outputs must agree byte
+/// for byte and carry the declared output dtype and shape.
+///
+/// # Errors
+///
+/// A JSON object naming the failing engine and the stable `code` / `reason`.
+pub(crate) fn preflight_package(
+    package: &crate::model_packaging::Package,
+    tensor: &crate::model_packaging::TensorConfig,
+) -> Result<crate::model_packaging::PreflightReport, String> {
+    let fail = |engine: &str, error: Value| {
+        json!({ "stage": "preflight", "engine": engine, "error": error }).to_string()
+    };
+    let manifest = parse_manifest(&package.manifest)
+        .map_err(|error| fail("none", json!({ "message": error.to_string() })))?;
+    let signature = sign_model_manifest(&PREFLIGHT_SECRET, &package.manifest);
+    let pin = pin_from(
+        &package.manifest,
+        manifest.clone(),
+        signature.key_id.clone(),
+    );
+    let files = PackageFiles {
+        manifest: package.manifest.clone(),
+        wasm: package.wasm.clone(),
+        signature: serde_json::to_vec(&signature).unwrap_or_default(),
+    };
+    let input = zero_frame(tensor);
+    let public = ed25519_dalek::SigningKey::from_bytes(&PREFLIGHT_SECRET)
+        .verifying_key()
+        .to_bytes();
+    let mut outputs = Vec::new();
+    for (name, engine) in ENGINES {
+        let mut keys = TrustedModelKeys::new();
+        keys.trust(&public)
+            .map_err(|error| fail(name, error_json(&error)))?;
+        let host = host_with_keys(&pin, keys, HostModelLimits::default());
+        let output = execute_governed(host, &files, &pin, &manifest, engine, &input)
+            .map_err(|error| fail(name, error_json(&error)))?;
+        outputs.push((name, output));
+    }
+    let output = agreed_output(outputs).map_err(|error| {
+        fail(
+            "all",
+            json!({ "code": "execution_failed", "reason": null, "message": error.to_string() }),
+        )
+    })?;
+    if !output_matches(&output, tensor) {
+        return Err(fail(
+            "all",
+            json!({
+                "code": "model_incompatible",
+                "reason": ModelFailureReason::OutputMismatch.as_str(),
+                "message": "preflight output frame does not carry the declared output dtype and shape",
+            }),
+        ));
+    }
+    Ok(crate::model_packaging::PreflightReport {
+        engines: ENGINES
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect(),
+        input_frame_bytes: u64::try_from(input.len()).unwrap_or(u64::MAX),
+        output_frame_sha256: sha256_hex(&output),
+    })
+}
+
+/// Whether an output frame carries the tensor config's output dtype and shape.
+fn output_matches(output: &[u8], tensor: &crate::model_packaging::TensorConfig) -> bool {
+    let declared: Vec<u32> = tensor
+        .output_shape
+        .iter()
+        .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
+        .collect();
+    decode_guest_frame(output)
+        .is_ok_and(|(dtype, dims, _)| dtype == tensor.output_dtype && dims == declared)
+}
+
+/// A zero-valued `f32` input frame matching the tensor config.
+fn zero_frame(tensor: &crate::model_packaging::TensorConfig) -> Vec<u8> {
+    let dims: Vec<u32> = tensor
+        .input_shape
+        .iter()
+        .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
+        .collect();
+    let count: usize = tensor.input_shape.iter().product();
+    encode_guest_frame(tensor.input_dtype, &dims, &vec![0; count.saturating_mul(4)])
 }
 
 /// Run a frame on every engine and require byte-identical output.
@@ -1399,6 +1518,78 @@ mod tests {
         );
     }
 
+    /// Decision 115: the package-time preflight runs the built package on both
+    /// engines and fails with the stable code and reason of whatever stage
+    /// breaks, before anything is written.
+    #[test]
+    fn package_onnx_preflight_reports_the_failing_stage_and_reason() {
+        use crate::model_packaging::{OnnxPackageSpec, build_package};
+        let runner = fs::read(repo("fixtures/onnx/runner.wasm")).expect("runner");
+        let onnx = fs::read(repo("fixtures/onnx/digits-mlp-1.0.0.onnx")).expect("onnx");
+        let base: Value = serde_json::from_slice(
+            &fs::read(repo("fixtures/onnx/digits-onnx.package.json")).expect("spec"),
+        )
+        .expect("spec json");
+        let preflight = |tweak: &dyn Fn(&mut Value)| {
+            let mut value = base.clone();
+            tweak(&mut value);
+            let spec: OnnxPackageSpec = serde_json::from_value(value).expect("spec");
+            let package = build_package(&runner, &onnx, &spec).expect("package");
+            preflight_package(&package, &spec.tensor)
+        };
+
+        let passed = preflight(&|_| {}).expect("digits passes");
+        assert_eq!(passed.engines, ["wasmtime", "wasmi"]);
+        assert_eq!(passed.input_frame_bytes, 272);
+
+        let failure = |tweak: &dyn Fn(&mut Value)| -> Value {
+            serde_json::from_str(&preflight(tweak).expect_err("preflight fails"))
+                .expect("failure json")
+        };
+        // An input shape the graph cannot run: tract fails (-3).
+        let inference = failure(&|v| v["tensor"]["input_shape"] = json!([1, 32]));
+        assert_eq!(
+            (&inference["stage"], &inference["engine"]),
+            (&json!("preflight"), &json!("wasmtime"))
+        );
+        assert_eq!(
+            (&inference["error"]["code"], &inference["error"]["reason"]),
+            (&json!("execution_failed"), &json!("inference_failed"))
+        );
+        // A declared output shape the graph does not produce (-4).
+        let output = failure(&|v| {
+            v["tensor"]["output_shape"] = json!([1, 11]);
+            v["max_output_bytes"] = json!(60);
+        });
+        assert_eq!(
+            (&output["error"]["code"], &output["error"]["reason"]),
+            (&json!("model_incompatible"), &json!("output_mismatch"))
+        );
+        // A tensor name the graph does not have: model_prepare fails.
+        let prepare = failure(&|v| v["tensor"]["input_name"] = json!("nope"));
+        assert_eq!(prepare["error"]["code"], json!("execution_failed"));
+        // Declared fuel below the measured need, for execute and for prepare.
+        for field in ["max_fuel", "max_prepare_fuel"] {
+            let fuel = failure(&|v| v[field] = json!(1000));
+            assert_eq!(fuel["error"]["code"], json!("execution_failed"), "{field}");
+        }
+    }
+
+    #[test]
+    fn preflight_output_check_requires_the_declared_dtype_and_shape() {
+        let tensor: crate::model_packaging::TensorConfig = serde_json::from_value(json!({
+            "input_name": "x", "output_name": "y", "input_shape": [1, 64],
+            "output_shape": [1, 10], "input_dtype": 2, "output_dtype": 3,
+        }))
+        .expect("tensor");
+        let frame = |dtype, dims: &[u32]| encode_guest_frame(dtype, dims, &[0; 40]);
+        assert!(output_matches(&frame(3, &[1, 10]), &tensor));
+        assert!(!output_matches(&frame(2, &[1, 10]), &tensor));
+        assert!(!output_matches(&frame(3, &[10, 1]), &tensor));
+        assert!(!output_matches(b"not a frame", &tensor));
+        assert_eq!(zero_frame(&tensor).len(), 4 + 8 + 4 + 256);
+    }
+
     /// #1591 DoD: `model package-onnx` → `model sign` → `model verify` →
     /// `model conformance` yields a registrable package. The result is
     /// byte-identical to the checked-in `digits-onnx-1.0.0` fixture that the
@@ -1411,6 +1602,7 @@ mod tests {
             &repo("fixtures/onnx/digits-mlp-1.0.0.onnx"),
             &repo("fixtures/onnx/digits-onnx.package.json"),
             &dir,
+            preflight_package,
         )
         .expect("package-onnx");
         let key = dir.join("key.hex");
