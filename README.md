@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-core%20100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.14.0-blue)](https://github.com/traverse-framework/traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.15.0-blue)](https://github.com/traverse-framework/traverse/releases)
 [![Registry](https://img.shields.io/badge/registry-live%20catalog-6f42c1)](https://registry.traverse-framework.com/)
 
 **Define once. Run anywhere.**
@@ -132,26 +132,26 @@ here:
 
 Public packages are on [crates.io](https://crates.io) and
 [npmjs](https://www.npmjs.com/package/traverse-embedder-web), not GitHub
-Packages. Current release: **v0.14.0**.
+Packages. Current release: **v0.15.0**.
 
 ```bash
 # Rust
-cargo add traverse-runtime@0.14.0
-cargo add traverse-embedder@0.14.0
+cargo add traverse-runtime@0.15.0
+cargo add traverse-embedder@0.15.0
 # also: traverse-contracts, traverse-mcp, traverse-cli-rs,
 #       traverse-expedition-wasm
 
 # Web / TypeScript
-npm install traverse-embedder-web@0.14.0
+npm install traverse-embedder-web@0.15.0
 ```
 
-Swift, Maven, and NuGet packages are published as of `v0.14.0` (see the
+Swift, Maven, and NuGet packages are published as of `v0.15.0` (see the
 platform table below). The GitHub Release is
-[**Traverse v0.14.0**](https://github.com/traverse-framework/traverse/releases/tag/v0.14.0);
+[**Traverse v0.15.0**](https://github.com/traverse-framework/traverse/releases/tag/v0.15.0);
 binary artifacts (like the Swift xcframework) ship on their own
 `swift-host-v*` artifact releases, never marked Latest.
-See [docs/releases/v0.14.0.md](docs/releases/v0.14.0.md) and the
-[v0.14.0 upgrade guide](docs/upgrade-to-v0.14.0.md) (breaking Spec 138 model-package changes).
+See [docs/releases/v0.15.0.md](docs/releases/v0.15.0.md) and the
+[v0.15.0 upgrade guide](docs/upgrade-to-v0.15.0.md) (breaking Spec 138 model-rights changes).
 
 ---
 
@@ -165,10 +165,10 @@ same Host ABI — the browser is one target among several, not the default.
 | Platform | Embedder | WASM host | Status |
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
-| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned `runtime.wasm`) | Published (npm `traverse-embedder-web@0.14.0`) |
-| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.14.0-4`) |
-| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.14.0) |
-| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.14.0) |
+| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned `runtime.wasm`) | Published (npm `traverse-embedder-web@0.15.0`) |
+| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.15.0`) |
+| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.15.0) |
+| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.15.0) |
 | **AI agent** | `traverse-mcp` stdio server | via the host embedder | Published on crates.io |
 
 All five embedders run against one CI-enforced conformance suite (spec
@@ -177,8 +177,9 @@ platform behaves the same on the rest. Desktop targets (Linux x86_64/aarch64,
 macOS x86_64/arm64, Windows x86_64) are covered by the CI matrix on every PR.
 No host is Certified under spec
 [`529-production-platform-certification`](specs/529-production-platform-certification/spec.md)
-yet. The Kotlin and .NET `ExactModelHost` (signed exact-ref model execution) is
-on `main` but not in the published 0.14.0 Maven/NuGet packages (#1651).
+yet. Signed exact-ref model execution (`ExactModelHost`) ships in every
+embedder as of 0.15.0. On Apple hosts it can also run a package's signed Core
+ML variant (on-device iPhone evidence: #1630).
 
 **Edge** placement is planned, not shipped. **Cloud** placement is an explicit
 non-goal for v0.1.
@@ -194,13 +195,13 @@ Guides: [docs/wasm-microservice-authoring-guide.md](docs/wasm-microservice-autho
 
 ## Project state
 
-Traverse is **pre-1.0 (`v0.14.0`)** and spec-driven — every capability below is
+Traverse is **pre-1.0 (`v0.15.0`)** and spec-driven — every capability below is
 real, running, tested code.
 
 | | |
 |---|---|
-| **Runtime crates** | 11 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.14.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates; `traverse-model-trainer` is an unpublished offline model trainer; `traverse-nested-wasm-spike` is historical. |
-| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.14.0`), Web/TypeScript (npm `traverse-embedder-web@0.14.0`), Swift/iOS+macOS (wasmi, SwiftPM), Kotlin/Android (Chicory, Maven Central), and .NET/Windows (Wasmtime, nuget.org) all published and aligned on the same app-owned `runtime.wasm` orchestrator. |
+| **Runtime crates** | 17 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.15.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates. The unpublished model-host crates are built into the platform packages: `traverse-model-host-frame`, `traverse-android-host`, `traverse-dotnet-host` and `traverse-coreml-adapter`. `traverse-onnx-runner-guest` and `traverse-digits-mlp-guest` are model guests. `traverse-model-trainer` is an unpublished offline model trainer, and `traverse-nested-wasm-spike` is historical. |
+| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.15.0`), Web/TypeScript (npm `traverse-embedder-web@0.15.0`), Swift/iOS+macOS (wasmi, SwiftPM), Kotlin/Android (Chicory, Maven Central), and .NET/Windows (Wasmtime, nuget.org) all published and aligned on the same app-owned `runtime.wasm` orchestrator. |
 | **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` on crates.io; live catalog at [registry.traverse-framework.com](https://registry.traverse-framework.com). |
 | **Governance** | Specs keep us honest (approved, immutable, merge-gating) — not the headline. List: `jq -r '.specs[].id' specs/governance/approved-specs.json` |
 | **Quality bar** | Core crates keep a hard coverage gate; every PR runs spec-alignment and a multi-OS CI matrix. Details live in CI, not in the pitch. |
@@ -334,7 +335,8 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 
 ### Releases
 
-- [docs/releases/v0.14.0.md](docs/releases/v0.14.0.md) — current release notes
+- [docs/releases/v0.15.0.md](docs/releases/v0.15.0.md) — current release notes
+- [docs/releases/v0.14.0.md](docs/releases/v0.14.0.md) — prior release notes
 - [docs/releases/v0.13.0.md](docs/releases/v0.13.0.md) — prior release notes
 - [docs/releases/v0.12.0.md](docs/releases/v0.12.0.md) — prior release notes
 - [docs/releases/v0.11.0.md](docs/releases/v0.11.0.md) — prior release notes
