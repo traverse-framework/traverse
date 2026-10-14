@@ -48,6 +48,54 @@ locally, with no network access.
 - Unsupported `schema_version` / `abi_version` values fail registration with
   `manifest_invalid` and a message that names the unsupported version.
 
+### Building a frame
+
+Every input and output crosses the boundary as one little-endian frame:
+
+| Bytes | Field | Value |
+| --- | --- | --- |
+| 2 | frame version (`u16`) | Always `1`. Not the manifest `abi_version`. |
+| 1 | dtype (`u8`) | The package's own code. For an ONNX runner package, `tensor.input_dtype` on input and `tensor.output_dtype` on output. |
+| 1 | rank (`u8`) | Number of dims. |
+| 4 × rank | dims (`u32` each) | Exactly the package's shape, for example `tensor.input_shape`. |
+| 4 | payload length (`u32`) | In **bytes**: values × 4 for `f32`. |
+| payload length | payload | Little-endian values. The ONNX runner takes finite `f32` only. |
+
+Dtype codes are not a global enum. Each package declares its own, and the
+frame must carry exactly that code. The ONNX runner rejects any frame that
+differs from its tensor config in any field with `-2` (`invalid_input` /
+`frame_mismatch`).
+
+A worked example: a zero-valued frame for a package declaring
+`"input_shape": [160000], "input_dtype": 2`, which is 10 s of 16 kHz mono
+`f32` audio:
+
+```python
+import struct
+
+shape = [160000]
+values = [0.0] * 160000
+payload = struct.pack(f"<{len(values)}f", *values)
+frame = (
+    struct.pack("<HBB", 1, 2, len(shape))      # frame version 1, dtype 2, rank
+    + struct.pack(f"<{len(shape)}I", *shape)   # dims
+    + struct.pack("<I", len(payload))          # payload length in bytes
+    + payload
+)
+assert len(frame) == 4 + 4 * len(shape) + 4 + 4 * 160000   # 640012 bytes
+```
+
+Common mistakes and what they return. Every one is `invalid_input` /
+`frame_mismatch` on a host with Spec 138 0.14.0, and a generic reject on an
+older one:
+- writing the manifest `abi_version` (`2` or `3`) as the frame version;
+- counting values instead of bytes in the payload length;
+- using a dtype code from another package, or the output dtype on input;
+- adding a batch dim the package doesn't declare (for example `[1, 160000]`
+  for `[160000]`);
+- sending raw PCM with no frame header;
+- NaN or infinite values.
+
 ## Limits and fuel
 
 The manifest declares `max_memory_bytes`, `max_fuel`, `max_input_bytes`,
@@ -194,6 +242,60 @@ traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
+### Supported ONNX operators
+
+The runner is tract. A graph can use only the operators below. The list is
+generated from the runner's pinned `tract-onnx` and checked in CI, so it
+always matches what ships.
+
+<!-- onnx-operators:begin (generated; see crates/traverse-onnx-runner-guest/tests/supported_operators.rs) -->
+
+The runner registers these 160 ONNX operators (`tract-onnx` 0.21.18, as pinned in
+`crates/traverse-onnx-runner-guest/Cargo.lock`):
+
+`Abs`, `Acos`, `Acosh`, `Add`, `And`, `ArgMax`, `ArgMin`,
+`ArrayFeatureExtractor`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AveragePool`,
+`BatchNormalization`, `BitShift`, `BitwiseAnd`, `BitwiseNot`, `BitwiseOr`,
+`BitwiseXor`, `BlackmanWindow`, `Cast`, `CastLike`, `CategoryMapper`, `Ceil`,
+`Celu`, `Clip`, `Compress`, `Concat`, `Constant`, `ConstantLike`,
+`ConstantOfShape`, `Conv`, `ConvInteger`, `ConvTranspose`, `Cos`, `Cosh`,
+`CumSum`, `DFT`, `DepthToSpace`, `DequantizeLinear`, `Div`, `Dropout`,
+`DynamicQuantizeLinear`, `Einsum`, `Elu`, `Equal`, `Erf`, `Exp`, `Expand`,
+`EyeLike`, `Flatten`, `Floor`, `GRU`, `Gather`, `GatherElements`, `GatherND`,
+`Gemm`, `GlobalAveragePool`, `GlobalLpPool`, `GlobalMaxPool`, `Greater`,
+`GreaterOrEqual`, `HammingWindow`, `HannWindow`, `HardSigmoid`, `HardSwish`,
+`Hardmax`, `Identity`, `If`, `InstanceNormalization`, `IsInf`, `IsNaN`,
+`LRN`, `LSTM`, `LayerNormalization`, `LeakyRelu`, `Less`, `LessOrEqual`,
+`Log`, `LogSoftmax`, `MatMul`, `MatMulInteger`, `Max`, `MaxPool`, `Mean`,
+`MelWeightMatrix`, `Min`, `Mod`, `Mul`, `Multinomial`, `Neg`,
+`NonMaxSuppression`, `NonZero`, `Not`, `OneHot`, `Or`, `PRelu`, `Pad`,
+`ParametricSoftplus`, `Pow`, `QLinearConv`, `QLinearMatMul`,
+`QuantizeLinear`, `RNN`, `RandomNormal`, `RandomNormalLike`, `RandomUniform`,
+`RandomUniformLike`, `Range`, `Reciprocal`, `ReduceL1`, `ReduceL2`,
+`ReduceLogSum`, `ReduceLogSumExp`, `ReduceMax`, `ReduceMean`, `ReduceMin`,
+`ReduceProd`, `ReduceSum`, `ReduceSumSquare`, `Relu`, `Reshape`, `Resize`,
+`Round`, `Rsqrt`, `STFT`, `ScaledTanh`, `Scan`, `Scatter`, `ScatterElements`,
+`ScatterND`, `Selu`, `Shape`, `Shrink`, `Sigmoid`, `Sign`, `Sin`, `Sinh`,
+`Size`, `Slice`, `Softmax`, `Softplus`, `Softsign`, `SpaceToDepth`, `Split`,
+`Sqrt`, `Squeeze`, `Sub`, `Sum`, `Tan`, `Tanh`, `ThresholdedRelu`, `Tile`,
+`TopK`, `Transpose`, `TreeEnsembleClassifier`, `Trilu`, `Unsqueeze`, `Where`,
+`Xor`
+
+<!-- onnx-operators:end -->
+
+A listed operator is necessary but not sufficient:
+- tract checks each operator's opset version and attributes when it loads
+  the graph;
+- shapes must be static after `tensor.symbols` is applied;
+- the graph must have exactly one input and one output, both `f32`.
+
+`RandomNormal`, `RandomNormalLike`, `RandomUniform`, `RandomUniformLike` and
+`Multinomial` are registered but fail closed. The runner is deterministic
+and has no entropy source.
+
+**The preflight below is the authority for any one graph.** If
+`package-onnx` succeeds, the graph runs.
+
 **Preflight.** Before it writes anything, the packager runs the package it
 just built (Spec 138 FR-072):
 - `model_prepare` plus one zero-valued input frame built from your `tensor`
@@ -278,6 +380,24 @@ exact equivalents.
 the conversion on a macOS arm64 runner and requires the committed digest
 (`scripts/ci/coreml_variant_reconvert_check.sh`). When you change
 `requirements.lock`, re-convert and re-add every committed variant.
+
+## Host compatibility
+
+A package runs on any host that supports its manifest schema and guest ABI:
+
+| Host | Engine | ABI v1 / v2 (schemas `2.0.0`, `2.1.0`) | ABI v3 (schema `2.2.0`, what `package-onnx` emits) | Specific reject codes (Spec 138 0.14.0) | Accelerator placements |
+| --- | --- | --- | --- | --- | --- |
+| Rust (`traverse-runtime`, CLI) | `wasmtime` or `wasmi` | yes | v0.15.0+ | after v0.15.0 | `coreml` on Apple (`traverse-coreml-adapter`) |
+| Browser (`traverse-embedder-web`) | browser WebAssembly | yes | v0.15.0+ (npm 0.14.0 rejects it with `manifest_invalid`) | after v0.15.0 | none (`wasm-cpu` only) |
+| Swift (`TraverseEmbedder`, xcframework) | `wasmi` | yes | `swift-host-v0.15.0`+ | needs a `swift-host` rebuild after v0.15.0 | `coreml` |
+| Kotlin / Android (JNI) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
+| .NET (P/Invoke) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
+
+Every host gives byte-identical `wasm-cpu` output for the same package and
+frame; that's what conformance vectors check. A host from before the
+reject codes reports every guest rejection as `resource_exhausted` /
+"model returned invalid output length". Read that error on an older host as
+"check the frame and the package", not as a resource limit.
 
 ## Provenance: two tiers (Spec 138 0.9.0)
 
