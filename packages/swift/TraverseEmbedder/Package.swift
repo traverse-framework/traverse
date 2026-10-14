@@ -9,13 +9,17 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "TraverseSwiftHost",
-            url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.14.0-4/TraverseSwiftHost.xcframework.zip",
-            checksum: "959fd0054d852e423d30999d405cb2cd5e6628cb2952eea0d8709e647dcca4d2"
+            url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.15.0/TraverseSwiftHost.xcframework.zip",
+            checksum: "18b23af1015b583da1945a081406279f2bbc22af5ae048259eee51057308e1d3"
         ),
         .target(
             name: "TraverseEmbedder",
             dependencies: [
                 "TraverseSwiftHost",
+            ],
+            // The Rust host's Core ML adapter (Decision 112, ADR-0082).
+            linkerSettings: [
+                .linkedFramework("CoreML"),
             ]
         ),
         // Manual macOS run for the Apple audio adapter (Spec 140, #1499). Not a product.

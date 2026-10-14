@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+## v0.15.0 — 2026-10-13
+
+Minor lockstep release with **breaking** Spec 138 exact-ref model changes. See
+[docs/releases/v0.15.0.md](docs/releases/v0.15.0.md) and
+[docs/upgrade-to-v0.15.0.md](docs/upgrade-to-v0.15.0.md).
+
+### Core ML accelerator adapter (Decisions 112 and 114, #1629 slice 3)
+
+- New crate `traverse-coreml-adapter` (ADR-0082). On Apple platforms it runs
+  a package's signed `mlpackage-zip` variant through Core ML via `objc2`,
+  behind the runtime's `AcceleratorAdapter`. It:
+  - unpacks and checks the package;
+  - compiles it on the device and caches it by digest;
+  - runs on host-chosen compute units (default `all`).
+
+  Its `unsafe` is confined to one audited module, which
+  `scoped_unsafe_boundary_check.sh` checks.
+- **Frame contract** (Spec 138 0.13.4, Decision 114): adapters take frame
+  dtype codes from the variant's conformance vector
+  (`CachedAcceleratorVariant::frame_contract()`). The self-check fails when
+  the cases disagree.
+- **Framed host protocol:**
+  - `create` takes an optional `accelerators` object;
+  - `register` takes `variant_paths` with one segment per variant file;
+  - each shim's `HostProfile` names its `AdapterFactory`.
+
+  `traverse-swift-host` enables Core ML through `accelerators.coreml`.
+- **Swift `ExactModelHost`:**
+  - `coreML:` on `init`;
+  - `variantFiles:` on `registerPackage`;
+  - `placements:` and `requireFuelMetering:` on `execute`;
+  - `placementEvidence` on the result.
+
+  The target links `CoreML.framework`. These calls run on Core ML after the
+  next swift-host xcframework release.
+- **Fails closed.** Objective-C exceptions are caught, and the package
+  manifest is checked before Core ML reads it, because Core ML throws an
+  uncatchable C++ exception on a malformed one. Error messages carry no host
+  paths.
+- **Verified on macOS:**
+  - the signed `digits-onnx-coreml` package matches `wasm-cpu` within
+    tolerance on every compute-unit setting;
+  - BirdNET on the 21-clip set gets top-5 21/21 with a worst |Δsig| of
+    8.3×10⁻⁴ (an ignored test, run with local weights).
+- New CI job `coreml-adapter` (`macos-14`).
+
+### Real ONNX → Core ML conversion (Decisions 112 and 113, #1663 slice 1)
+
+- `traverse-cli model convert-coreml` now drives the pinned converter in
+  `tools/coreml/`:
+  - a deterministic pre-pass, then onnx2torch, then coremltools;
+  - the output is an fp32 ML Program, written as a canonical zip;
+  - the #1628 stub that wrapped the ONNX bytes in a protobuf shell is gone.
+- New flags:
+  - `--python` (or `TRAVERSE_COREML_PYTHON`) and `--converter` on
+    `convert-coreml`;
+  - a repeatable `--f32-dtype` on `add-variant`, which records
+    `tolerance.f32_dtypes`.
+- **Breaking:** Spec 138 0.13.3 replaces the `coreml` variant format
+  `mlmodel` with `mlpackage-zip`, in the runtime, the web embedder and
+  manifest schema 2.2.0. No signed package carried an `mlmodel` variant.
+- `conversion.tool_version` is now `lock-sha256:<digest of
+  tools/coreml/requirements.lock>`.
+- New fixture `digits-onnx-coreml-1.0.0`: the ONNX digits package plus a real
+  Core ML variant (worst |Δlogit| 3.8×10⁻⁶ against `wasm-cpu`).
+- New CI job `coreml-variant-reconvert` (`macos-14`):
+  - installs the hash-locked environment;
+  - re-converts every committed Core ML variant and requires its committed
+    digest (FR-068).
+
 ### Native accelerator adapter framework (Decision 112, #1629 slice 2)
 
 - New `AcceleratorAdapter` trait in `traverse-runtime`: availability,

@@ -10776,6 +10776,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: Vec::new(),
             },
@@ -10935,7 +10939,7 @@ mod tests {
         );
         assert_eq!(
             json["errors"][0]["message"],
-            "only deprecated public registry versions for fixture:expedition.planning.validate-team-readiness satisfy >=1.0.0, <1.1.0"
+            "only deprecated or revoked public registry versions for fixture:expedition.planning.validate-team-readiness satisfy >=1.0.0, <1.1.0"
         );
         assert!(!state_root.join(".traverse/workspaces/local/apps").exists());
     }
@@ -11043,6 +11047,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: Vec::new(),
             },
@@ -11195,6 +11203,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: Vec::new(),
             },
@@ -12654,6 +12666,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         };
 
         let registered = load_registered_bundle_with_public_records(&manifest_path, &[public])
@@ -13827,6 +13843,10 @@ mod tests {
                 summary: String::new(), description: String::new(), use_cases: Vec::new(),
                 service_type: "stateless".to_string(), permitted_targets: Vec::new(),
                 lifecycle: "active".to_string(), provenance: None, commercial_use: "unknown".to_string(), redistribution: "unknown".to_string(), verification_status: "unknown".to_string(), license_expression: None,
+                ai: None,
+                status: None,
+                model_usage: Vec::new(),
+                revocation: None,
             }],
             events: Vec::new(),
         }
@@ -13857,6 +13877,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         }
     }
 
@@ -14799,6 +14823,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: Vec::new(),
             },
@@ -14848,6 +14876,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: Vec::new(),
             },
@@ -14922,6 +14954,10 @@ mod tests {
                     redistribution: "unknown".to_string(),
                     verification_status: "unknown".to_string(),
                     license_expression: None,
+                    ai: None,
+                    status: None,
+                    model_usage: Vec::new(),
+                    revocation: None,
                 }],
                 events: vec![PublicRegistryEventRecord {
                     namespace: "fixture".to_string(),
@@ -15168,6 +15204,10 @@ mod tests {
                 redistribution: "unknown".to_string(),
                 verification_status: "unknown".to_string(),
                 license_expression: None,
+                ai: None,
+                status: None,
+                model_usage: Vec::new(),
+                revocation: None,
             });
         }
         let obsolete = capabilities[0].clone();

@@ -919,7 +919,7 @@
     },
     {
       "id": "076-production-swift-wasmi-cabi",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/076-production-swift-wasmi-cabi/spec.md",
@@ -929,7 +929,8 @@
         "scripts/ci/scoped_unsafe_boundary_check.sh",
         "docs/adr/0015-production-swift-wasmi-c-abi.md",
         "specs/076-production-swift-wasmi-cabi/",
-        "docs/adr/0078-swift-host-model-call-abi.md"
+        "docs/adr/0078-swift-host-model-call-abi.md",
+        "docs/adr/0082-coreml-adapter-objc2-boundary.md"
       ]
     },
     {
@@ -1920,7 +1921,7 @@
     },
     {
       "id": "138-governed-exact-model-execution",
-      "version": "0.13.2",
+      "version": "0.13.4",
       "status": "approved",
       "immutable": true,
       "path": "specs/138-governed-exact-model-execution/spec.md",
@@ -1966,7 +1967,11 @@
         "docs/model-signing-key-runbook.md",
         "docs/adr/0080-model-signing-key-management.md",
         "scripts/build_android_host_ndk.sh",
-        "scripts/ci/android_aar_check.sh"
+        "scripts/ci/android_aar_check.sh",
+        "tools/coreml/",
+        "scripts/ci/coreml_variant_reconvert_check.sh",
+        "crates/traverse-coreml-adapter/",
+        "docs/adr/0082-coreml-adapter-objc2-boundary.md"
       ]
     },
     {

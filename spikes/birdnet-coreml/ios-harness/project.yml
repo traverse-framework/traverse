@@ -1,0 +1,29 @@
+name: TraverseProbe
+options:
+  bundleIdPrefix: dev.traverse.probe
+targets:
+  TraverseProbe:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Probe
+      - path: Resources/birdnet_pkg
+        type: folder
+        buildPhase: resources
+      - path: Resources/clips
+        type: folder
+        buildPhase: resources
+      - path: Resources/ref
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.traverse.probe.enrico
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "2"
+        SWIFT_OPTIMIZATION_LEVEL: "-O"

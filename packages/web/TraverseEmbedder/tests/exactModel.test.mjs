@@ -745,8 +745,8 @@ test("browser host validates accelerator variants and does not fetch them", asyn
   const source = "ab".repeat(32);
   const variant = {
     adapter: "coreml",
-    format: "mlmodel",
-    path: "variants/coreml/model.mlmodel",
+    format: "mlpackage-zip",
+    path: "variants/coreml/model.mlpackage.zip",
     digest: "cd".repeat(32),
     conversion: { tool: "traverse-coreml", tool_version: "1", source_digest: `sha256:${source}` },
     conformance_vector_path: "variants/coreml/conformance.json",

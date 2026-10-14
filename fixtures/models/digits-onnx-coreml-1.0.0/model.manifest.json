@@ -1,0 +1,60 @@
+{
+  "schema_version": "2.2.0",
+  "model_id": "traverse.digits-onnx-coreml",
+  "version": "1.0.0",
+  "wasm_digest": "225c51271b45c3e114a5015cefe7b0a22d0b1b559bb56bbff82cfe4c367d93f4",
+  "registry_ref": "registry:traverse.digits-onnx-coreml@1.0.0",
+  "executable_format": "traverse-model-wasm",
+  "abi_version": 3,
+  "input_schema_ref": "schema:traverse-digits-onnx-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:traverse-digits-onnx-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "CC-BY-4.0",
+    "attribution": "ONNX export of Traverse's digits MLP, trained on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0); packaged on the Traverse ONNX runner guest",
+    "redistribution": "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+    "commercial_use": "allowed",
+    "source_url": "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits",
+    "derivation": {
+      "kind": "converted",
+      "source_digest": "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc",
+      "source_license_id": "CC-BY-4.0",
+      "source_commercial_use": "allowed",
+      "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/digits-mlp-1.0.0.onnx"
+    }
+  },
+  "supported_profiles": [
+    "wasm-cpu"
+  ],
+  "max_memory_bytes": 4194304,
+  "max_fuel": 2000000000,
+  "max_input_bytes": 272,
+  "max_output_bytes": 56,
+  "max_execution_ms": 10000,
+  "offline_allowed": true,
+  "max_prepare_fuel": 2000000000,
+  "accelerator_variants": [
+    {
+      "adapter": "coreml",
+      "format": "mlpackage-zip",
+      "path": "variants/coreml/model.mlpackage.zip",
+      "digest": "baed7bdb555217bc995b15456a30721114cba64b20f315cae347b53baa8211f1",
+      "conversion": {
+        "tool": "traverse-coreml",
+        "tool_version": "lock-sha256:e6a67b7c977655163c28f91e548a2b9745eb42f3ca338aae0bad854ab08ae5bc",
+        "source_digest": "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc"
+      },
+      "conformance_vector_path": "variants/coreml/conformance.json",
+      "conformance_vector_digest": "68cdaf1800970c998b9b274ac3a54f44db84e03b026a46ff96f98938dc3f2e71",
+      "tolerance": {
+        "max_abs_diff": 0.005,
+        "top_k": 5,
+        "f32_dtypes": [
+          3
+        ]
+      },
+      "peak_memory_bytes": 33554432
+    }
+  ]
+}

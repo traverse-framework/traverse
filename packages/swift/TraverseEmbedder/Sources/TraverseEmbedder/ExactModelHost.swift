@@ -165,6 +165,38 @@ public struct ExactModelHostLimits: Sendable, Equatable {
     }
 }
 
+/// Opt-in Core ML accelerator for packages with a signed `coreml` variant
+/// (Spec 138 0.13, Decision 112). A call still runs on Core ML only when its
+/// execution policy lists `coreml` in `placements` and the variant passes
+/// its on-device self-check.
+public struct CoreMLAcceleratorConfig: Sendable, Equatable {
+    /// `all` (default), `cpu_only`, `cpu_and_gpu`, or `cpu_and_neural_engine`.
+    public let computeUnits: String
+    /// Private directory for unpacked and compiled variants; defaults to a
+    /// `traverse-coreml` folder in the temporary directory.
+    public let cacheDirectory: URL?
+
+    public init(computeUnits: String = "all", cacheDirectory: URL? = nil) {
+        self.computeUnits = computeUnits
+        self.cacheDirectory = cacheDirectory
+    }
+}
+
+/// Which placement ran a call, on which compute units, and whether fuel was
+/// metered (Spec 138 FR-061).
+public struct PlacementEvidence: Sendable, Equatable, Codable {
+    /// `wasm-cpu` or an adapter id such as `coreml`.
+    public let placement: String
+    /// `cpu` for `wasm-cpu`; the configured Core ML compute units otherwise.
+    public let computeUnits: String
+    /// `metered` or `not_applicable`.
+    public let fuelMetering: String
+
+    enum CodingKeys: String, CodingKey {
+        case placement, computeUnits = "compute_units", fuelMetering = "fuel_metering"
+    }
+}
+
 /// Typed `model.execute` result with identity, placement, and redacted trace.
 public struct ExactModelExecution: Sendable, Equatable {
     public let outputRef: String
@@ -179,6 +211,8 @@ public struct ExactModelExecution: Sendable, Equatable {
     public let durationMs: Double
     /// Verified rights record of the executed model (Spec 138 0.8.0 FR-040).
     public let modelEvidence: ModelRightsRecord?
+    /// The placement that ran the call (FR-061).
+    public let placementEvidence: PlacementEvidence?
 }
 
 /// Swift Spec 138 exact-ref model host (Decision 104). Verification and the
@@ -194,10 +228,13 @@ public final class ExactModelHost: @unchecked Sendable {
     ///     `usage_undeclared` when it is `nil`.
     ///   - hostRequiresCommercial: host tightening; the effective usage is
     ///     always `commercial`. A host can never relax an app's usage.
+    ///   - coreML: enables the Core ML accelerator; `nil` keeps every call on
+    ///     `wasm-cpu`.
     public init(pins: [ExactModelPin], trustedPublicKeysHex: [String],
                 modelUsage: String?,
                 hostRequiresCommercial: Bool = false,
-                limits: ExactModelHostLimits = ExactModelHostLimits()) throws {
+                limits: ExactModelHostLimits = ExactModelHostLimits(),
+                coreML: CoreMLAcceleratorConfig? = nil) throws {
         let pinsJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pins))
         var header: [String: Any] = [
             "op": "create",
@@ -212,6 +249,11 @@ public final class ExactModelHost: @unchecked Sendable {
         ]
         if let modelUsage { header["model_usage"] = modelUsage }
         header["host_requires_commercial"] = hostRequiresCommercial
+        if let coreML {
+            var config: [String: Any] = ["compute_units": coreML.computeUnits]
+            if let cacheDirectory = coreML.cacheDirectory { config["cache_dir"] = cacheDirectory.path }
+            header["accelerators"] = ["coreml": config]
+        }
         let response = try Self.call(handle: 0, header: header, segments: [], capacity: 64 * 1024)
         guard let handle = (response.header["handle"] as? NSNumber)?.uint64Value else {
             throw ExactModelError(code: "unavailable", reason: nil, message: "model host was not created")
@@ -224,11 +266,22 @@ public final class ExactModelHost: @unchecked Sendable {
     }
 
     /// Verify and admit a signed package; returns the pin digest it is cached under.
-    public func registerPackage(manifest: Data, wasm: Data, signature: Data) async throws -> String {
+    ///
+    /// - Parameter variantFiles: accelerator variant files this host fetched,
+    ///   keyed by their package path (for example
+    ///   `variants/coreml/model.mlpackage.zip` and its conformance vector).
+    ///   Only variants for an enabled accelerator are used, and each must
+    ///   match its signed digest (`digest_mismatch` otherwise).
+    public func registerPackage(manifest: Data, wasm: Data, signature: Data,
+                                variantFiles: [String: Data] = [:]) async throws -> String {
+        let paths = variantFiles.keys.sorted()
+        var header: [String: Any] = ["op": "register"]
+        if !paths.isEmpty { header["variant_paths"] = paths }
+        let segments = [("manifest", manifest), ("wasm", wasm), ("signature", signature)]
+            + paths.map { ($0, variantFiles[$0] ?? Data()) }
+        let request = try Self.encode(header: header, segments: segments)
         let response = try await background {
-            try Self.call(handle: self.handle, header: ["op": "register"],
-                          segments: [("manifest", manifest), ("wasm", wasm), ("signature", signature)],
-                          capacity: self.responseCapacity)
+            try Self.send(handle: self.handle, request: request, capacity: self.responseCapacity)
         }
         guard let digest = response.header["digest"] as? String else {
             throw ExactModelError(code: "model_incompatible", reason: nil, message: "registration returned no digest")
@@ -289,6 +342,13 @@ public final class ExactModelHost: @unchecked Sendable {
 
     /// Execute a pinned model. Swift `Task` cancellation interrupts the running
     /// inference mid-run (`cancelled`); `timeoutMs` bounds it (`timeout`).
+    ///
+    /// - Parameters:
+    ///   - placements: the policy's ordered placements (FR-060), for example
+    ///     `["coreml", "wasm-cpu"]`; `nil` means `["wasm-cpu"]`. A call that
+    ///     no listed placement can run fails with `placement_unavailable`.
+    ///   - requireFuelMetering: excludes placements that cannot meter fuel
+    ///     (FR-064), which includes Core ML.
     public func execute(
         modelRef: (modelId: String, version: String, digest: String),
         inputRef: String,
@@ -298,7 +358,9 @@ public final class ExactModelHost: @unchecked Sendable {
         inputSchemaVersion: String,
         maxOutputBytes: Int,
         allowedClassifications: [String],
-        timeoutMs: Int? = nil
+        timeoutMs: Int? = nil,
+        placements: [String]? = nil,
+        requireFuelMetering: Bool = false
     ) async throws -> ExactModelExecution {
         var payload: [String: Any] = [
             "model_ref": ["model_id": modelRef.modelId, "version": modelRef.version, "digest": modelRef.digest],
@@ -310,17 +372,22 @@ public final class ExactModelHost: @unchecked Sendable {
             "max_output_bytes": maxOutputBytes,
         ]
         if let timeoutMs { payload["timeout_ms"] = timeoutMs }
-        return try await execute(payload: payload, allowedClassifications: allowedClassifications)
+        return try await execute(payload: payload, allowedClassifications: allowedClassifications,
+                                 placements: placements, requireFuelMetering: requireFuelMetering)
     }
 
     /// Execute a raw Spec 137 `model.execute` payload (used by app-command routing).
-    public func execute(payload: [String: Any], allowedClassifications: [String]) async throws -> ExactModelExecution {
+    public func execute(payload: [String: Any], allowedClassifications: [String],
+                        placements: [String]? = nil,
+                        requireFuelMetering: Bool = false) async throws -> ExactModelExecution {
         try Task.checkCancellation()
         let executionID = UUID().uuidString
-        let header: [String: Any] = [
+        var header: [String: Any] = [
             "op": "execute", "execution_id": executionID,
             "allowed_classifications": allowedClassifications, "payload": payload,
         ]
+        if let placements { header["placements"] = placements }
+        if requireFuelMetering { header["require_fuel_metering"] = true }
         let handle = handle
         let capacity = responseCapacity
         let request = try Self.encode(header: header, segments: [])
@@ -344,7 +411,8 @@ public final class ExactModelHost: @unchecked Sendable {
             inputBytes: (usage["input_bytes"] as? NSNumber)?.intValue ?? 0,
             outputBytes: (usage["output_bytes"] as? NSNumber)?.intValue ?? 0,
             durationMs: (usage["duration_ms"] as? NSNumber)?.doubleValue ?? 0,
-            modelEvidence: try Self.decodeOptional(ModelRightsRecord.self, header2["model_evidence"])
+            modelEvidence: try Self.decodeOptional(ModelRightsRecord.self, header2["model_evidence"]),
+            placementEvidence: try Self.decodeOptional(PlacementEvidence.self, header2["placement_evidence"])
         )
     }
 
@@ -366,8 +434,11 @@ public final class ExactModelHost: @unchecked Sendable {
                 return Self.failed("invalid_input", nil, "model.execute payload is not a JSON object")
             }
             let allowed = payload.removeValue(forKey: "allowed_classifications") as? [String] ?? []
+            let placements = payload.removeValue(forKey: "placements") as? [String]
+            let requireFuelMetering = payload.removeValue(forKey: "require_fuel_metering") as? Bool ?? false
             do {
-                let result = try await execute(payload: payload, allowedClassifications: allowed)
+                let result = try await execute(payload: payload, allowedClassifications: allowed,
+                                               placements: placements, requireFuelMetering: requireFuelMetering)
                 var body: [String: Any] = [
                     "output_ref": result.outputRef, "placement": result.placement,
                     "model_id": result.modelId, "version": result.version, "digest": result.digest,

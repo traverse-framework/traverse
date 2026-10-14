@@ -10,9 +10,7 @@
 //! and `wasmi` and requires byte-identical output.
 
 use crate::CliError;
-use crate::model_packaging::{
-    COREML_CONVERT_TOOL, COREML_CONVERT_TOOL_VERSION, convert_onnx_to_mlmodel,
-};
+use crate::model_packaging::COREML_CONVERT_TOOL;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -80,12 +78,16 @@ pub(crate) enum ModelCommand {
         top_k: u32,
         tool: String,
         tool_version: String,
+        f32_dtypes: Vec<u8>,
         json: bool,
     },
-    /// Write a deterministic uncompressed Core ML model for an ONNX file.
+    /// Convert an ONNX file into a canonical `mlpackage-zip` Core ML variant
+    /// with the pinned converter (Decisions 112 and 113).
     ConvertCoreml {
         onnx_path: PathBuf,
         out_path: PathBuf,
+        python: String,
+        converter: PathBuf,
         json: bool,
     },
 }
@@ -123,11 +125,7 @@ pub(crate) fn parse(args: &[String]) -> Result<ModelCommand, String> {
             })
         }
         ["add-variant", package_dir, flags @ ..] => parse_add_variant(package_dir, flags, json),
-        ["convert-coreml", onnx, out] => Ok(ModelCommand::ConvertCoreml {
-            onnx_path: PathBuf::from(onnx),
-            out_path: PathBuf::from(out),
-            json,
-        }),
+        ["convert-coreml", onnx, out, flags @ ..] => parse_convert_coreml(onnx, out, flags, json),
         _ => Err(help(None)),
     }
 }
@@ -167,6 +165,35 @@ fn parse_verify(package_dir: &str, flags: &[&str], json: bool) -> Result<ModelCo
     })
 }
 
+/// Default converter entry point, relative to the repository root.
+pub(crate) const COREML_CONVERTER: &str = "tools/coreml/convert_variant.py";
+/// Environment variable naming the pinned converter Python.
+pub(crate) const COREML_PYTHON_ENV: &str = "TRAVERSE_COREML_PYTHON";
+
+fn parse_convert_coreml(
+    onnx: &str,
+    out: &str,
+    flags: &[&str],
+    json: bool,
+) -> Result<ModelCommand, String> {
+    let mut python = std::env::var(COREML_PYTHON_ENV).unwrap_or_else(|_| "python3".to_string());
+    let mut converter = PathBuf::from(COREML_CONVERTER);
+    for pair in flags.chunks(2) {
+        match pair {
+            ["--python", value] => python = (*value).to_string(),
+            ["--converter", value] => converter = PathBuf::from(value),
+            _ => return Err(help(Some("convert-coreml"))),
+        }
+    }
+    Ok(ModelCommand::ConvertCoreml {
+        onnx_path: PathBuf::from(onnx),
+        out_path: PathBuf::from(out),
+        python,
+        converter,
+        json,
+    })
+}
+
 fn parse_add_variant(
     package_dir: &str,
     flags: &[&str],
@@ -179,6 +206,7 @@ fn parse_add_variant(
     let mut top_k = None;
     let mut tool = None;
     let mut tool_version = None;
+    let mut f32_dtypes = Vec::new();
     for pair in flags.chunks(2) {
         match pair {
             ["--file", value] => file = Some(PathBuf::from(value)),
@@ -196,6 +224,9 @@ fn parse_add_variant(
             }
             ["--tool", value] => tool = Some((*value).to_string()),
             ["--tool-version", value] => tool_version = Some((*value).to_string()),
+            ["--f32-dtype", value] => f32_dtypes.push(value.parse::<u8>().map_err(|_| {
+                format!("--f32-dtype must be an integer in 0..=255, got '{value}'")
+            })?),
             _ => return Err(help(Some("add-variant"))),
         }
     }
@@ -225,6 +256,7 @@ fn parse_add_variant(
             top_k,
             tool,
             tool_version,
+            f32_dtypes,
             json,
         }),
         _ => Err(help(Some("add-variant"))),
@@ -330,26 +362,33 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
   Example:
     traverse-cli model conformance generate out/my-model --trusted-key <public-key-hex> --input in.bin --out out/my-model/conformance.json"
             .to_string(),
-        Some("add-variant") => "traverse-cli model add-variant <package-dir> --file <model.mlmodel> --conformance <vector.json> --peak-memory-bytes N --max-abs-diff N --top-k N --tool <name> --tool-version <version> [--json]
+        Some("add-variant") => "traverse-cli model add-variant <package-dir> --file <model.mlpackage.zip> --conformance <vector.json> --peak-memory-bytes N --max-abs-diff N --top-k N --tool <name> --tool-version <version> [--f32-dtype N]... [--json]
 
   Purpose:
-    Copy a Core ML variant and its conformance vector into variants/coreml/,
-    record their digests, and set conversion.source_digest from
-    rights.derivation.source_digest. Removes model.sig.json because the
-    manifest bytes changed; sign again before verify.
+    Copy a Core ML variant (mlpackage-zip) and its conformance vector into
+    variants/coreml/, record their digests, and set
+    conversion.source_digest from rights.derivation.source_digest.
+    --f32-dtype names each output dtype code holding f32 values (compared
+    under the tolerance); other outputs must match byte-for-byte. Removes
+    model.sig.json because the manifest bytes changed; sign again before
+    verify.
 
   Example:
-    traverse-cli model add-variant out/birdnet --file birdnet.mlmodel --conformance vector.json --peak-memory-bytes 180000000 --max-abs-diff 0.005 --top-k 5 --tool traverse-coreml --tool-version 1"
+    traverse-cli model add-variant out/birdnet --file birdnet.mlpackage.zip --conformance vector.json --peak-memory-bytes 180000000 --max-abs-diff 0.005 --top-k 5 --tool traverse-coreml --tool-version lock-sha256:<digest> --f32-dtype 3"
             .to_string(),
-        Some("convert-coreml") => "traverse-cli model convert-coreml <model.onnx> <out.mlmodel> [--json]
+        Some("convert-coreml") => "traverse-cli model convert-coreml <model.onnx> <out.mlpackage.zip> [--python <python>] [--converter <convert_variant.py>] [--json]
 
   Purpose:
-    Write a deterministic uncompressed Core ML model. The same ONNX bytes
-    always produce the same file. Record tool, tool_version, and
-    source_digest on the variant.
+    Convert ONNX into a real Core ML ML Program and write its canonical,
+    byte-reproducible mlpackage-zip (Decisions 112 and 113). Runs
+    tools/coreml/convert_variant.py with a Python that has the pinned
+    environment from tools/coreml/requirements.lock installed (--python, or
+    $TRAVERSE_COREML_PYTHON, default python3). Reports the tool,
+    tool_version (lock-sha256:<lockfile digest>), source_digest and digest
+    to record on the variant.
 
   Example:
-    traverse-cli model convert-coreml model.onnx out/model.mlmodel --json"
+    traverse-cli model convert-coreml model.onnx out/model.mlpackage.zip --python .venv/bin/python --json"
             .to_string(),
         _ => "traverse-cli model <subcommand> [options]
 
@@ -359,8 +398,8 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
     verify <package-dir> --trusted-key <hex>...     Verify a package as a host registers it.
     pin <package-dir>                               Print the exact_model_dependencies entry.
     conformance generate|check <package-dir> ...    Cross-engine (wasmtime + wasmi) conformance vectors.
-    convert-coreml <model.onnx> <out.mlmodel>       Deterministic ONNX → Core ML variant file.
-    add-variant <package-dir> --file <model.mlmodel> ...
+    convert-coreml <model.onnx> <out.mlpackage.zip> Pinned ONNX → Core ML ML Program (mlpackage-zip).
+    add-variant <package-dir> --file <model.mlpackage.zip> ...
                                                     Add a signed-ready coreml variant. Re-sign after.
     package-onnx <runner.wasm> <model.onnx> <package.json> <out-dir> [--json]
                                                     Package an ONNX model on the audited runner guest
@@ -421,6 +460,7 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             top_k,
             tool,
             tool_version,
+            f32_dtypes,
             json,
         } => add_variant(&AddVariantRequest {
             package_dir,
@@ -431,13 +471,16 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             top_k: *top_k,
             tool,
             tool_version,
+            f32_dtypes,
             json: *json,
         }),
         ModelCommand::ConvertCoreml {
             onnx_path,
             out_path,
+            python,
+            converter,
             json,
-        } => convert_coreml(onnx_path, out_path, *json),
+        } => convert_coreml(onnx_path, out_path, python, converter, *json),
     }
 }
 
@@ -960,6 +1003,7 @@ struct AddVariantRequest<'a> {
     top_k: u32,
     tool: &'a str,
     tool_version: &'a str,
+    f32_dtypes: &'a [u8],
     json: bool,
 }
 
@@ -973,6 +1017,7 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
         top_k,
         tool,
         tool_version,
+        f32_dtypes,
         json,
     } = request;
     let manifest_path = package_dir.join(MANIFEST_FILE);
@@ -991,7 +1036,7 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
         })?;
     let model_bytes = read(file)?;
     let vector_bytes = read(conformance)?;
-    let model_rel = format!("variants/{ADAPTER_COREML}/model.mlmodel");
+    let model_rel = format!("variants/{ADAPTER_COREML}/model.mlpackage.zip");
     let vector_rel = format!("variants/{ADAPTER_COREML}/conformance.json");
     let model_path = package_dir.join(&model_rel);
     let vector_path = package_dir.join(&vector_rel);
@@ -1020,7 +1065,7 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
         tolerance: VariantTolerance {
             max_abs_diff,
             top_k,
-            f32_dtypes: Vec::new(),
+            f32_dtypes: f32_dtypes.to_vec(),
         },
         peak_memory_bytes,
     });
@@ -1054,9 +1099,14 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
     }))
 }
 
-fn convert_coreml(onnx_path: &Path, out_path: &Path, json: bool) -> Result<String, CliError> {
+fn convert_coreml(
+    onnx_path: &Path,
+    out_path: &Path,
+    python: &str,
+    converter: &Path,
+    json: bool,
+) -> Result<String, CliError> {
     let onnx = read(onnx_path)?;
-    let model = convert_onnx_to_mlmodel(&onnx).map_err(CliError::ValidationFailed)?;
     if let Some(parent) = out_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1064,16 +1114,49 @@ fn convert_coreml(onnx_path: &Path, out_path: &Path, json: bool) -> Result<Strin
         fs::create_dir_all(parent)
             .map_err(|error| CliError::IoError(format!("{}: {error}", parent.display())))?;
     }
-    fs::write(out_path, &model)
-        .map_err(|error| CliError::IoError(format!("{}: {error}", out_path.display())))?;
-    let report = json!({
+    let output = std::process::Command::new(python)
+        .arg(converter)
+        .arg(onnx_path)
+        .arg(out_path)
+        .output()
+        .map_err(|error| CliError::IoError(format!("{python}: {error}")))?;
+    if !output.status.success() {
+        return Err(CliError::ValidationFailed(format!(
+            "Core ML converter failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report: Value = stdout
+        .lines()
+        .last()
+        .and_then(|line| serde_json::from_str(line).ok())
+        .ok_or_else(|| {
+            CliError::ValidationFailed("Core ML converter printed no JSON report".to_string())
+        })?;
+    let digest = sha256_hex(&read(out_path)?);
+    let field = |name: &str| report[name].as_str().unwrap_or_default().to_string();
+    if field("source_digest") != sha256_hex(&onnx) || field("digest") != digest {
+        return Err(CliError::ValidationFailed(
+            "Core ML converter report does not match the ONNX input or the written variant"
+                .to_string(),
+        ));
+    }
+    let lock_digest = field("lock_digest");
+    if lock_digest.len() != 64 || !lock_digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliError::ValidationFailed(
+            "Core ML converter report has no requirements.lock digest".to_string(),
+        ));
+    }
+    let summary = json!({
         "tool": COREML_CONVERT_TOOL,
-        "tool_version": COREML_CONVERT_TOOL_VERSION,
+        "tool_version": format!("lock-sha256:{lock_digest}"),
         "source_digest": sha256_hex(&onnx),
-        "digest": sha256_hex(&model),
+        "digest": digest,
         "path": out_path.display().to_string(),
+        "rewrites": report["rewrites"],
     });
-    Ok(render(json, &report, || {
+    Ok(render(json, &summary, || {
         format!("wrote {}", out_path.display())
     }))
 }
@@ -1650,6 +1733,8 @@ mod tests {
             vec!["conformance", "generate", "dir", "--nope", "x"],
             vec!["conformance", "check", "dir", "v.json"],
             vec!["conformance", "check", "dir", "v.json", "--bogus", "x"],
+            vec!["convert-coreml", "a.onnx", "b.zip", "--bogus", "x"],
+            vec!["add-variant", "pkg", "--f32-dtype", "256"],
         ] {
             assert!(parse(&args(&bad)).is_err(), "{bad:?}");
         }
@@ -1776,6 +1861,91 @@ mod tests {
     /// BirdNET-shaped package: signed `coreml` variant, reproducible conversion,
     /// and verify failures for a tampered digest and a missing variant file.
     /// The ONNX bytes are a stand-in; BirdNET weights are not in the repo.
+    const FAKE_LOCK: &str = "e6a67b7c977655163c28f91e548a2b9745eb42f3ca338aae0bad854ab08ae5bc";
+
+    /// A `sh` script standing in for `tools/coreml/convert_variant.py`: it
+    /// writes `variant` to its second argument and prints the report the real
+    /// converter prints, with `source` as the ONNX bytes it claims to read.
+    fn fake_converter(dir: &Path, source: &[u8], variant: &[u8], lock: &str) -> PathBuf {
+        let lock = if lock.is_empty() { FAKE_LOCK } else { lock };
+        let script = dir.join("fake-convert.sh");
+        let report = json!({
+            "source_digest": sha256_hex(source),
+            "digest": sha256_hex(variant),
+            "lock_digest": lock,
+            "rewrites": {"explicit_pads": 2, "reverse_slices": 0, "dynamic_int8_matmuls": 0},
+        });
+        fs::write(
+            &script,
+            format!(
+                "printf '%s' '{}' > \"$2\"\necho converting\necho '{report}'\n",
+                String::from_utf8_lossy(variant)
+            ),
+        )
+        .expect("script");
+        script
+    }
+
+    fn convert_error(dir: &Path, script: &Path, onnx: &Path) -> String {
+        let out = dir.join("out/model.mlpackage.zip");
+        match cli(&[
+            "convert-coreml",
+            path(onnx),
+            path(&out),
+            "--python",
+            "sh",
+            "--converter",
+            path(script),
+        ]) {
+            Err(error) => error.to_string(),
+            Ok(output) => panic!("expected failure, got {output}"),
+        }
+    }
+
+    #[test]
+    fn convert_coreml_rejects_a_failing_or_inconsistent_converter() {
+        let dir = temp_dir();
+        let onnx = dir.join("source.onnx");
+        fs::write(&onnx, b"onnx").expect("onnx");
+
+        let failing = dir.join("fail.sh");
+        fs::write(&failing, "echo 'unsupported op' >&2\nexit 3\n").expect("script");
+        assert!(convert_error(&dir, &failing, &onnx).contains("unsupported op"));
+
+        let silent = dir.join("silent.sh");
+        fs::write(&silent, "printf x > \"$2\"\necho done\n").expect("script");
+        assert!(convert_error(&dir, &silent, &onnx).contains("no JSON report"));
+
+        let wrong_source = fake_converter(&dir, b"other onnx", b"zip", "");
+        assert!(convert_error(&dir, &wrong_source, &onnx).contains("does not match"));
+
+        let no_lock = fake_converter(&dir, b"onnx", b"zip", "not-a-digest");
+        assert!(convert_error(&dir, &no_lock, &onnx).contains("requirements.lock"));
+
+        let wrong_digest = dir.join("wrong-digest.sh");
+        let report = json!({
+            "source_digest": sha256_hex(b"onnx"),
+            "digest": sha256_hex(b"claimed"),
+            "lock_digest": FAKE_LOCK,
+        });
+        fs::write(
+            &wrong_digest,
+            format!("printf actual > \"$2\"\necho '{report}'\n"),
+        )
+        .expect("script");
+        assert!(convert_error(&dir, &wrong_digest, &onnx).contains("does not match"));
+
+        let missing = cli(&[
+            "convert-coreml",
+            path(&onnx),
+            path(&dir.join("x.mlpackage.zip")),
+            "--python",
+            "/nonexistent/python3",
+        ])
+        .expect_err("missing interpreter");
+        assert!(missing.to_string().contains("/nonexistent/python3"));
+    }
+
     #[test]
     fn birdnet_package_signed_coreml_variant_verifies() {
         let package = unsigned_copy(
@@ -1794,29 +1964,23 @@ mod tests {
 
         let onnx_path = package.join("source.onnx");
         fs::write(&onnx_path, b"birdnet-onnx-stand-in").expect("onnx");
-        let mlmodel = package.join("converted.mlmodel");
+        let script = fake_converter(&package, b"birdnet-onnx-stand-in", b"canonical-zip", "");
+        let mlpackage = package.join("converted.mlpackage.zip");
         let converted = json_out(cli(&[
             "convert-coreml",
             path(&onnx_path),
-            path(&mlmodel),
+            path(&mlpackage),
+            "--python",
+            "sh",
+            "--converter",
+            path(&script),
             "--json",
         ]));
         assert_eq!(converted["tool"], json!(COREML_CONVERT_TOOL));
-        assert_eq!(
-            converted["tool_version"],
-            json!(COREML_CONVERT_TOOL_VERSION)
-        );
-        let again = json_out(cli(&[
-            "convert-coreml",
-            path(&onnx_path),
-            path(&package.join("converted-again.mlmodel")),
-            "--json",
-        ]));
-        assert_eq!(converted["digest"], again["digest"]);
-        assert_eq!(
-            fs::read(&mlmodel).expect("mlmodel"),
-            fs::read(package.join("converted-again.mlmodel")).expect("again")
-        );
+        let tool_version = format!("lock-sha256:{FAKE_LOCK}");
+        assert_eq!(converted["tool_version"], json!(tool_version));
+        assert_eq!(converted["digest"], json!(sha256_hex(b"canonical-zip")));
+        assert_eq!(converted["rewrites"]["explicit_pads"], json!(2));
 
         manifest["rights"]["derivation"]["source_digest"] = converted["source_digest"].clone();
         fs::write(
@@ -1830,7 +1994,7 @@ mod tests {
             "add-variant",
             path(&package),
             "--file",
-            path(&mlmodel),
+            path(&mlpackage),
             "--conformance",
             path(&vector),
             "--peak-memory-bytes",
@@ -1842,10 +2006,22 @@ mod tests {
             "--tool",
             COREML_CONVERT_TOOL,
             "--tool-version",
-            COREML_CONVERT_TOOL_VERSION,
+            &tool_version,
+            "--f32-dtype",
+            "3",
             "--json",
         ]));
         assert_eq!(added["model_id"], json!("birdnet-v2.4-int8"));
+        let signed: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+        assert_eq!(
+            signed["accelerator_variants"][0]["tolerance"]["f32_dtypes"],
+            json!([3])
+        );
+        assert_eq!(
+            signed["accelerator_variants"][0]["format"],
+            json!("mlpackage-zip")
+        );
         assert_eq!(added["adapter"], json!("coreml"));
 
         let key = package.join("key.hex");
@@ -1860,7 +2036,7 @@ mod tests {
         ]));
         assert_eq!(verified["ok"], json!(true), "{verified}");
 
-        let variant_path = package.join("variants/coreml/model.mlmodel");
+        let variant_path = package.join("variants/coreml/model.mlpackage.zip");
         let mut tampered = fs::read(&variant_path).expect("variant");
         tampered[0] = tampered[0].wrapping_add(1);
         fs::write(&variant_path, &tampered).expect("tamper");

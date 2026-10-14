@@ -125,6 +125,14 @@ const fixtures = [
     dir: "digits-onnx-1.0.0",
     prebuilt_manifest: true,
   },
+  // The same runner package plus a real Core ML variant (Decision 113, #1663):
+  // `model convert-coreml` then `model add-variant` (see
+  // docs/model-packaging-guide.md); scripts/ci/coreml_variant_reconvert_check.sh
+  // re-converts it and requires the committed digest.
+  {
+    dir: "digits-onnx-coreml-1.0.0",
+    prebuilt_manifest: true,
+  },
 ];
 
 const pins = {};

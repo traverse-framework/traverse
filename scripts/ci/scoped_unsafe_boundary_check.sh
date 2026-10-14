@@ -16,6 +16,9 @@ readonly digits_guest_root="crates/traverse-digits-mlp-guest/src/lib.rs"
 # ADR-0077 pattern, Decision 105: the generic ONNX runner guest's ABI v2 boundary.
 readonly onnx_runner_boundary="crates/traverse-onnx-runner-guest/src/abi.rs"
 readonly onnx_runner_root="crates/traverse-onnx-runner-guest/src/lib.rs"
+# ADR-0082 / Decision 112: the Core ML adapter's audited objc2 boundary.
+readonly coreml_boundary="crates/traverse-coreml-adapter/src/coreml.rs"
+readonly coreml_root="crates/traverse-coreml-adapter/src/lib.rs"
 
 if ! grep -Fqx 'unsafe_code = "deny"' Cargo.toml; then
   echo "Workspace unsafe-code lint must remain set to deny." >&2
@@ -44,8 +47,8 @@ while IFS= read -r path; do
   unsafe_files+=("${path}")
 done < <(grep -RIl --include='*.rs' -E '#\[unsafe\(|unsafe[[:space:]]*(\{|fn|impl|trait|extern)' crates || true)
 for path in "${unsafe_files[@]}"; do
-  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${android_boundary}" && "${path}" != "${dotnet_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" && "${path}" != "${onnx_runner_boundary}" ]]; then
-    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${android_boundary}, ${dotnet_boundary}, ${expedition_boundary}, ${digits_guest_boundary}, or ${onnx_runner_boundary}." >&2
+  if [[ "${path}" != "${swift_boundary}" && "${path}" != "${runtime_wasm_boundary}" && "${path}" != "${android_boundary}" && "${path}" != "${dotnet_boundary}" && "${path}" != "${expedition_boundary}" && "${path}" != "${digits_guest_boundary}" && "${path}" != "${onnx_runner_boundary}" && "${path}" != "${coreml_boundary}" ]]; then
+    echo "Unsafe syntax is permitted only in ${swift_boundary}, ${runtime_wasm_boundary}, ${android_boundary}, ${dotnet_boundary}, ${expedition_boundary}, ${digits_guest_boundary}, ${onnx_runner_boundary}, or ${coreml_boundary}." >&2
     exit 1
   fi
 done
@@ -130,6 +133,32 @@ if [[ -f "${onnx_runner_boundary}" ]]; then
   fi
   if grep -Eq 'extern[[:space:]]*"C"[[:space:]]*\{|#\[link' "${onnx_runner_boundary}"; then
     echo "The ONNX runner boundary must not import host functions." >&2
+    exit 1
+  fi
+fi
+
+# ADR-0082: the Core ML adapter scopes `unsafe` to one Apple-only `coreml`
+# module that calls objc2 Core ML bindings. It exports and imports nothing
+# itself, takes exactly two raw buffer views (the input and output arrays
+# Core ML lends to a block), and has exactly one unsafe impl (`Send`).
+if [[ -f "${coreml_boundary}" ]]; then
+  if [[ "$(grep -Fxc '#[allow(unsafe_code)]' "${coreml_root}")" -ne 1 ]] ||
+    [[ "$(grep -Fc 'mod coreml;' "${coreml_root}")" -ne 1 ]]; then
+    echo "The Core ML adapter must scope its unsafe-code allowance to exactly one coreml module." >&2
+    exit 1
+  fi
+  if grep -Eq 'extern[[:space:]]*"C"|#\[link|no_mangle|#\[unsafe\(' "${coreml_boundary}"; then
+    echo "The Core ML adapter boundary must not export or import symbols directly." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc 'slice::from_raw_parts_mut(' "${coreml_boundary}")" -ne 1 ]] ||
+    [[ "$(grep -Fc 'slice::from_raw_parts(' "${coreml_boundary}")" -ne 1 ]]; then
+    echo "The Core ML adapter boundary must contain exactly two audited buffer views." >&2
+    exit 1
+  fi
+  if [[ "$(grep -Ec '^[[:space:]]*unsafe[[:space:]]+impl' "${coreml_boundary}")" -ne 1 ]] ||
+    [[ "$(grep -Fc 'unsafe impl Send for CoreMlAdapter {}' "${coreml_boundary}")" -ne 1 ]]; then
+    echo "The Core ML adapter boundary may only declare unsafe impl Send for CoreMlAdapter." >&2
     exit 1
   fi
 fi

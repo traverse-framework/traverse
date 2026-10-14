@@ -50,8 +50,9 @@ pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
 pub const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED: &str = "2.2.0";
 /// First native accelerator adapter (Decision 110). Closed list: FR-066.
 pub const ADAPTER_COREML: &str = "coreml";
-/// Uncompressed Core ML model file produced for [`ADAPTER_COREML`].
-pub const COREML_VARIANT_FORMAT: &str = "mlmodel";
+/// Canonical, deterministic zip of a Core ML ML Program `.mlpackage`
+/// produced for [`ADAPTER_COREML`] (Spec 138 0.13.3, Decisions 112 and 113).
+pub const COREML_VARIANT_FORMAT: &str = "mlpackage-zip";
 /// Decision 106 / FR-058 ceiling for `tolerance.max_abs_diff`.
 pub const MAX_VARIANT_ABS_DIFF: f64 = 5e-3;
 /// The only accepted package signature algorithm.
@@ -196,6 +197,28 @@ pub struct CachedAcceleratorVariant {
     pub conformance_vector_path: String,
     /// Conformance vector bytes.
     pub conformance_vector: Vec<u8>,
+}
+
+/// The guest frame dtype codes a variant consumes and produces (Spec 138
+/// 0.13.4, FR-065). Dtype codes are guest-defined, so an adapter takes them
+/// from the variant's signed conformance vector rather than guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariantFrameContract {
+    /// Dtype code every input frame carries.
+    pub input_dtype: u8,
+    /// Dtype code the adapter writes on its output frame.
+    pub output_dtype: u8,
+}
+
+impl CachedAcceleratorVariant {
+    /// The frame contract of this variant's conformance vector: the input
+    /// and reference output dtype codes, which every case must share.
+    /// `None` when the vector is unreadable, empty, holds a malformed frame,
+    /// or its cases disagree; the device self-check then fails (FR-062).
+    #[must_use]
+    pub fn frame_contract(&self) -> Option<VariantFrameContract> {
+        adapter::frame_contract(&self.conformance_vector)
+    }
 }
 
 /// Host-owned lifecycle status of a package (Decision 107).
@@ -5410,7 +5433,10 @@ mod tests {
         let skipped = register_variant_host(
             &manifest,
             &[],
-            &[("variants/coreml/model.mlmodel", b"not-fetched".as_slice())],
+            &[(
+                "variants/coreml/model.mlpackage.zip",
+                b"not-fetched".as_slice(),
+            )],
         )
         .expect("wasm-cpu host skips unusable variants");
         assert!(
@@ -5422,7 +5448,7 @@ mod tests {
                 .is_empty()
         );
 
-        let model_path = "variants/coreml/model.mlmodel";
+        let model_path = "variants/coreml/model.mlpackage.zip";
         let vector_path = "variants/coreml/conformance.json";
         let missing = must_err(register_variant_host(
             &manifest,
@@ -5573,7 +5599,7 @@ mod tests {
         manifest.accelerator_variants = Some(vec![AcceleratorVariant {
             adapter: ADAPTER_COREML.to_string(),
             format: COREML_VARIANT_FORMAT.to_string(),
-            path: "variants/coreml/model.mlmodel".to_string(),
+            path: "variants/coreml/model.mlpackage.zip".to_string(),
             digest: digest_hex(model),
             conversion: VariantConversion {
                 tool: "traverse-coreml".to_string(),
@@ -5861,7 +5887,7 @@ mod tests {
             &manifest,
             &[ADAPTER_COREML],
             &[
-                ("variants/coreml/model.mlmodel", model.as_slice()),
+                ("variants/coreml/model.mlpackage.zip", model.as_slice()),
                 ("variants/coreml/conformance.json", vector.as_slice()),
             ],
         )

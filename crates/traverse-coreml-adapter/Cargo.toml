@@ -1,0 +1,24 @@
+[package]
+name = "traverse-coreml-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Spec 138 Core ML accelerator adapter (Decisions 112 and 113): runs a signed mlpackage-zip variant through objc2 Core ML bindings."
+publish = false
+
+[dependencies]
+serde_json = "1.0.145"
+traverse-runtime = { path = "../traverse-runtime", version = "0.15.0", default-features = false, features = ["wasmi-executor"] }
+
+# Core ML exists only on Apple platforms; elsewhere the crate is the safe,
+# platform-neutral helpers alone (ADR-0082).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+block2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2 = { version = "0.6", default-features = false, features = ["std", "exception"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSProcessInfo", "NSString", "NSURL", "NSValue"] }
+objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std", "block2", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLModel_MLModelCompilation", "MLMultiArray"] }
+
+[lints]
+workspace = true

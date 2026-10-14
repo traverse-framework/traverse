@@ -6624,3 +6624,274 @@ Three facts shape the fix:
 
 Approved by Enrico in `/brainstorm` (2026-10-13). Every recommended option
 was accepted.
+
+## Decision 113: Core ML Conversion Spike Verdict — GO (fp32 ML Program, Canonical Zip, ~10 ms per Clip on iPhone)
+
+- **Date**: 2026-10-13
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1663` (spike, slice 0), `#1629`, `#1630`, umbrella
+  `#1623`
+- **Origin**: the Decision 112 rule 1 spike; full data in
+  `docs/spikes/1663-birdnet-coreml.md`
+
+### Context
+
+Decision 112 gated the real Core ML route on a spike. The spike had to:
+- convert BirdNET v2.4 int8 through onnx2torch → coremltools in a pinned
+  environment;
+- check byte stability;
+- time it on the iPhone 14 Pro Max against the ≤ 1.5 s bar;
+- meet Decision 106's tolerance against the int8 reference.
+
+### Decision
+
+**GO**, with these conditions for slice 1 (`#1663`) and slice 3 (`#1629`):
+
+1. **Precision: fp32 ML Program.**
+   - fp32 passes on 21 of 21 clips: top-5 identical, with a worst
+     |Δ sigmoid| of 8.3×10⁻⁴.
+   - fp16 fails (top-5 0/21), because the mel front end loses too much in
+     float16.
+   - fp32 runs on the CPU and GPU (not the Neural Engine) at 9.9–12.8 ms per
+     clip, so no fp16 or mixed precision is needed.
+2. **The converter is the spike's pipeline:** the deterministic pre-pass
+   (explicit `SAME_UPPER` pads; reverse slices → `Gather`; the dynamic int8
+   matmul as exact float ops without `Min`/`Max`/`Clip`), plus a generic
+   `aten::broadcast_to` converter.
+   - The reverse-slice rewrite fixes a coremltools bug that drops one
+     element.
+   - Any future model must pass the same conformance comparison. Rewrites
+     that are model-specific stay out.
+3. **Reproducibility: byte-identical holds.** The `mlpackage-zip` writer
+   re-serializes `model.mlmodel` with protobuf `deterministic=True`, uses
+   UUIDv5 manifest ids, and writes a sorted, stored, fixed-timestamp zip.
+   That gave the same digest across runs and fresh environments on macOS
+   arm64. CI confirms it on a macOS arm64 runner that installs the
+   hash-locked environment (`pip --require-hashes`), not on a pinned Linux
+   container. This was the owner's choice for slice 1: the conversion runs
+   where it was proven, and Linux parity isn't needed. If it ever stops
+   reproducing, fall back to tolerance (Decision 112 rule 3).
+4. **Speed meets the bar with large headroom.** On the iPhone 14 Pro Max
+   (iOS 26.6), p95 is 10.7 ms with `cpuAndGPU` and 37 ms with `all` (one
+   1.25 s outlier), against 1,500 ms. Compiling on the device takes 0.22 s.
+5. **Correction to the #1591 record.** The Personal Team ID is
+   `5NBVKQJK8H`. `54SV734CXT` is the development certificate's identifier,
+   not a team, which explains #1591's "No Account for Team 54SV734CXT".
+
+### Alternatives Considered
+
+- fp16 or a mixed-precision split. Rejected: fp16 fails tolerance, and fp32
+  is already about 300× faster than `wasmi` on the phone.
+- A NO-GO and re-planning. Rejected: every measurement passed.
+
+### Approval
+
+Recorded per Decision 112 rule 1 (the spike records GO or NO-GO). The
+measured results meet every condition the owner set in Decision 112.
+
+## Decision 114: Accelerator Frame Contract Comes From the Conformance Vector
+
+- **Date**: 2026-10-13
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended to
+  0.13.4)
+- **Related issues**: `#1629` (slice 3); ADR-0082
+- **Origin**: a gap found while building the Core ML adapter
+
+### Context
+
+FR-065 says an adapter consumes and produces the same guest frames as
+`wasm-cpu`. Frame dtype codes are guest-defined: the ONNX runner's digits
+package reads `f32` input as dtype `2` and writes `f32` output as dtype `3`.
+That tensor configuration lives inside the WASM blob, which an adapter never
+sees. So nothing in a signed variant told the adapter which dtype code to
+accept or to write.
+
+### Decision
+
+1. **The variant's conformance vector is its frame contract.** Every case
+   input carries the input dtype, and every reference output carries the
+   output dtype. All cases must agree.
+2. **The runtime derives the contract**
+   (`CachedAcceleratorVariant::frame_contract()`) and gives it to adapters.
+   - An adapter rejects an input frame with any other dtype.
+   - It writes its output with the contract's output dtype.
+   - Output dims come from the native output shape.
+3. **No contract, no placement.** The device self-check fails when the
+   vector is unreadable or empty, holds a malformed frame, or its cases
+   disagree. The variant is then unavailable on that device (FR-062).
+4. No schema change. The vector is already mandatory, signed through its
+   digest, and holds the exact `wasm-cpu` frames the variant must match.
+
+### Alternatives Considered
+
+- **Declaring `frame: {input_dtype, output_dtype}` in the manifest.**
+  Rejected: it needs a new schema version, new `add-variant` flags and
+  re-signing, to restate what the vector already pins.
+- **The connector rewriting the adapter's dtype after prediction.**
+  Rejected: the connector would edit adapter output, which weakens the
+  FR-065 "same frames" check.
+
+### Approval
+
+Approved by Enrico on 2026-10-13, choosing "From the conformance vector
+(Recommended)" when starting `#1629` slice 3.
+
+## Decision 115: Model Guest Rejections — Additive Reject Codes, Fault-Based Public Codes, Package-Time Preflight
+
+- **Date**: 2026-10-14
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended to
+  0.14.0 in the first slice PR)
+- **Related issues**: `#1666` (umbrella)
+- **Origin**: `/brainstorm` on `#1666` (an external YAMNet ONNX
+  compatibility request)
+
+### Context
+
+An app team packaged a 16 MB YAMNet ONNX graph with `model package-onnx`.
+`model conformance generate` then failed with
+`resource_exhausted: model returned invalid output length`. They read that as
+an operator or limit problem in the generic runner.
+
+It was neither:
+- the same graph parses, types, optimizes and runs under tract natively;
+- the byte-identical package passes `conformance generate` and `check` on
+  wasmtime and `wasmi` with a well-formed frame;
+- the real fault was the input frame: its frame-version field held the ABI
+  version (`3`) instead of `1`.
+
+The message misled them because of two things:
+1. The runner returns `-1` for every failure: a frame that doesn't match the
+   tensor config, a tract run error, an output-shape mismatch, or an output
+   too large for `out_cap`.
+2. Every host maps any negative `model_execute` return to
+   `resource_exhausted` / "invalid output length".
+
+Nothing let an author check a graph before signing it, and the guide did not
+spell out how to build a frame.
+
+Separately, `#1666` reports the ABI v3 YAMNet package timing out on `wasmi`,
+which drives execution in 1,000,000-fuel slices. Its proposed cause (slice
+overhead) is inferred, not measured. A v2 run of the same graph passed both
+engines in about 4 s.
+
+### Decision
+
+These are project-wide rules for every model guest and every host, not
+rules for YAMNet or ONNX alone.
+
+1. **Additive guest reject codes.** Spec 138 defines negative
+   `model_execute` returns for every ABI version (v1, v2, v3):
+   - `-1`: generic reject (the existing meaning, so existing guests stay
+     valid);
+   - `-2`: the input frame does not match the guest's tensor contract
+     (frame version, dtype, rank, dims, payload length, or values);
+   - `-3`: inference failed inside the guest;
+   - `-4`: the guest's output does not match its declared output shape.
+
+   Any other negative value is treated as `-1`. A guest MUST NOT return a
+   positive length when it rejected the call.
+2. **Public codes follow who is at fault.** Each case keeps its own stable
+   `reason` (FR-022):
+   - `-2` → `invalid_input` / `frame_mismatch` (the caller must fix its
+     input);
+   - `-3` → `execution_failed` / `inference_failed`;
+   - `-4` → `model_incompatible` / `output_mismatch` (the package is
+     broken);
+   - `-1` → `execution_failed` / `guest_rejected`;
+   - a positive length above the output ceiling stays `resource_exhausted`,
+     with reason `output_limit_exceeded`.
+
+   Every host maps these identically: Rust, the web embedder, and the
+   shared frame crate behind Swift, Kotlin and .NET. On ABI v3 the snapshot
+   and fresh paths return identical failures (as they already must).
+3. **The generic ONNX runner adopts the codes.**
+   - `runner.wasm` is rebuilt with the codes, reproducibly as today.
+   - The digits ONNX package and its fixtures are repackaged and re-signed
+     through `sign-model-fixtures.mjs`.
+   - Existing accelerator variants keep their own digests. Only the manifest
+     signature changes.
+4. **`model package-onnx` preflights before writing anything.** After
+   patching, the packager:
+   - builds a zero-valued input frame from the tensor config;
+   - runs `model_prepare` (for v3) and one `model_execute` on wasmtime and
+     `wasmi` under the manifest's limits and deadline;
+   - checks the output frame against the declared output shape.
+
+   On any failure it writes nothing and reports the stable code and reason.
+   It uses the audited runner, never native tract, so a preflight pass
+   cannot diverge from execution. There is no opt-out flag and no new
+   command.
+5. **The supported-operator list is generated.**
+   - A script dumps the operators and opset range that the runner's pinned
+     tract version registers into the packaging guide.
+   - CI fails when the doc drifts from the runner's tract pin.
+   - The guide says that the preflight, not the list, is the authority for
+     any one graph.
+6. **The guide documents frame construction.** It covers:
+   - the frame-version field is `1`, and it is separate from the manifest
+     `abi_version`;
+   - the dtype byte must equal the package's own `input_dtype`;
+   - the payload length is in bytes;
+   - a worked `f32` example;
+   - a per-host compatibility table (which hosts run which ABI and schema).
+7. **The regression fixture is a shared reject corpus.** It holds malformed
+   frames: wrong frame version, dtype, rank, dims, payload length, and a
+   non-finite value.
+   - Each frame expects its exact code and reason on every model-capable
+     host, against the digits ONNX package.
+   - Large real graphs such as YAMNet stay local benchmarks and are not
+     vendored.
+8. **The `wasmi` timeout is root-caused before any fix.**
+   - Measure YAMNet on current `main` and split the time between:
+     - `prepare`;
+     - snapshot capture and restore;
+     - per-slice pause/resume overhead;
+     - the interpretation itself.
+   - The fix follows the measured cause. Raising the deadline, fuel or
+     memory ceilings is not a fix.
+   - Once fixed, the YAMNet preflight passing on both engines is the local
+     acceptance check.
+9. **Spec home and tracking.**
+   - Spec 138 is amended to `0.14.0` (new guest-ABI semantics, additive) in
+     the first slice PR.
+   - `#1666` is the umbrella, with one ticket per slice:
+     1. the spec amendment, guest codes and host mapping on every host, the
+        runner rebuild, the re-sign, and the reject corpus;
+     2. the `package-onnx` preflight;
+     3. the generated operator list, its CI drift check, and the guide's
+        frame and compatibility sections;
+     4. the `wasmi` timeout root cause and fix.
+
+### Alternatives Considered
+
+- **Host-only relabel.** Every negative return would become
+  `execution_failed` / `guest_rejected`. Rejected: no ABI change, but a bad
+  frame still looks the same as a failed inference.
+- **Host-side frame structure check.** Rejected: it catches a wrong frame
+  version or payload length, but the dtype and shape stay opaque, because
+  the tensor config lives inside the WASM. It is also redundant once the
+  guest returns `-2`.
+- **All rejects under `execution_failed`.** Rejected: callers would need to
+  read `reason` to tell "fix your input" from "broken package".
+- **A separate `model preflight` command, or documentation only.**
+  Rejected: authors can skip either, and the failure surfaces late.
+- **A hand-kept operator table.** Rejected: it drifts on every tract bump.
+  Pointing only to tract's own table was rejected because authors could not
+  see a list without leaving our docs.
+- **Vendoring the YAMNet package, or a synthetic graph covering its
+  operators.** Rejected: 16 MB plus label attribution, and slow `wasmi` CI.
+  The operators were never the problem.
+- **Adopting adaptive fuel slicing now.** Rejected: it rests on an
+  unmeasured cause. If `prepare` or snapshotting is the real cost, it would
+  not help.
+
+### Approval
+
+Approved by Enrico on 2026-10-14 in a `/brainstorm` on `#1666`, choosing the
+recommended option for each question: additive guest codes, fault-based
+public codes, preflight built into `package-onnx`, the `wasmi` timeout in
+scope with the root cause first, a generated CI-checked operator list, and
+the reject corpus on the digits package.
