@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Reproducible `runtime.wasm` (#1659)
+
+- `scripts/build-runtime-wasm.sh` rebuilds the nested-wasmi orchestrator from
+  `traverse-runtime-wasm` and writes `runtime-release.json` from the workspace
+  version (no hand-edited `runtime_version`).
+- CI job `runtime-wasm-reproducibility` fails when a rebuild digest drifts from
+  `runtime/runtime.wasm.sha256` or any bundled copy.
+- Committed `runtime/runtime-release.json` now matches workspace `0.15.0`
+  (was stale `0.12.0`).
+
 ### Specific guest reject codes (Spec 138 0.14.0, Decision 115, #1678)
 
 - **Guest reject codes.** Negative `model_execute` returns now carry

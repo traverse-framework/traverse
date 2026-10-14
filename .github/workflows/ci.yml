@@ -243,6 +243,28 @@ jobs:
       - name: Run web embedder package conformance
         run: bash scripts/ci/embedder_conformance/web_package.sh
 
+
+  runtime-wasm-reproducibility:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Rebuild runtime.wasm and verify committed digest
+        run: bash scripts/ci/runtime_wasm_reproducibility_check.sh
+
   native-artifact-certification:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'

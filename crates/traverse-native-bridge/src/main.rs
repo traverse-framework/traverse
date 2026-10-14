@@ -31,6 +31,30 @@ fn workspace_root() -> Result<PathBuf, String> {
 fn build_runtime_wasm_bytes() -> Result<Vec<u8>, String> {
     let root = workspace_root()?;
     let target_dir = root.join("target/native-bridge-build");
+    // Path-stable flags so checkout / cargo / rustup absolute paths do not
+    // leak into the wasm object code (#1659 reproducibility).
+    let cargo_home = env::var_os("CARGO_HOME").map_or_else(
+        || {
+            env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cargo"))
+                .unwrap_or_else(|| PathBuf::from("/.cargo"))
+        },
+        PathBuf::from,
+    );
+    let rustup_home = env::var_os("RUSTUP_HOME").map_or_else(
+        || {
+            env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".rustup"))
+                .unwrap_or_else(|| PathBuf::from("/.rustup"))
+        },
+        PathBuf::from,
+    );
+    let remap = format!(
+        "--remap-path-prefix={}=/ --remap-path-prefix={}=/.cargo --remap-path-prefix={}=/.rustup",
+        root.display(),
+        cargo_home.display(),
+        rustup_home.display()
+    );
     let status = Command::new("cargo")
         .args([
             "build",
@@ -41,7 +65,9 @@ fn build_runtime_wasm_bytes() -> Result<Vec<u8>, String> {
             "wasm32-unknown-unknown",
         ])
         .env("CARGO_TARGET_DIR", &target_dir)
-        .env_remove("RUSTFLAGS")
+        .env("CARGO_INCREMENTAL", "0")
+        .env("SOURCE_DATE_EPOCH", env::var_os("SOURCE_DATE_EPOCH").unwrap_or_else(|| "0".into()))
+        .env("RUSTFLAGS", &remap)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
