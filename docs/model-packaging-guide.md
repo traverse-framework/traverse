@@ -60,6 +60,35 @@ with `host_limit_exceeded`. Pass the target host's ceilings to `model verify`
 Size `max_fuel` so your conformance vector passes on both engines
 (`model conformance` checks this). `max_execution_ms` is the portable bound.
 
+**Measure and run with an optimized interpreter.** `wasmi`'s speed depends on
+how it was compiled. YAMNet (about 11.4 billion fuel) runs in about 3.5 s
+with an optimized `wasmi`, and takes over 10 minutes with an unoptimized one.
+So a debug host misses a `max_execution_ms` that a release host meets.
+- This repository's dev and test builds already optimize `wasmi` (#1681), so
+  `cargo run -p traverse-cli-rs` and the tests run at near-release speed.
+- An app that depends on `traverse-runtime` and builds it in its own debug
+  profile should add the same override to its workspace `Cargo.toml`:
+
+  ```toml
+  [profile.dev.package.wasmi]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_core]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_ir]
+  opt-level = 3
+  debug-assertions = false
+  [profile.dev.package.wasmi_collections]
+  opt-level = 3
+  debug-assertions = false
+  ```
+
+  Keep `debug-assertions = false`. With `wasmi` optimized but debug
+  assertions on, a long-running guest overflows the native stack and aborts
+  the process instead of failing closed.
+- Never set `max_execution_ms` from a debug measurement.
+
 ## Rights
 
 `rights` is required, and every field must be non-empty:
@@ -165,6 +194,30 @@ traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
+**Preflight.** Before it writes anything, the packager runs the package it
+just built (Spec 138 FR-072):
+- `model_prepare` plus one zero-valued input frame built from your `tensor`
+  config;
+- on `wasmtime` and `wasmi`, through the same governed path and audited
+  runner every host uses, under your manifest's limits and deadline;
+- the outputs must match byte for byte and carry the declared output dtype
+  and shape.
+
+If it fails, nothing is written. The command exits non-zero and prints
+`{"stage":"preflight","engine":...,"error":{"code","reason","message"}}`.
+The common causes:
+
+| `code` / `reason` | Likely cause |
+| --- | --- |
+| `execution_failed` / `inference_failed` | The graph can't run with your `input_shape` (or tract rejects an operator). |
+| `model_incompatible` / `output_mismatch` | `output_shape` isn't what the graph produces. |
+| `execution_failed`, no reason, "model_prepare ..." | The graph doesn't load: wrong tensor names, or `max_prepare_fuel` / memory too low. |
+| `execution_failed`, no reason, "model_execute ..." | `max_fuel` is below what one inference needs. |
+| `timeout` | `max_execution_ms` is too short. Run release builds: a debug CLI interprets far more slowly. |
+
+On success the JSON report gains a `preflight` object: the engines, the
+input frame size, and the output frame's SHA-256.
+
 The packager writes `model.wasm` and an unsigned schema `2.2.0` manifest
 (`abi_version: 3`, with `max_prepare_fuel`) whose `rights.derivation`
 records `kind: converted`, the ONNX file's SHA-256, and the `source`
@@ -253,3 +306,4 @@ the conversion on a macOS arm64 runner and requires the committed digest
 | `rights_inconsistent` | `commercial_use` is more permissive than `derivation.source_commercial_use`. |
 | `manifest_invalid` | Unknown fields, unsupported `schema_version` / `abi_version` (message names the value), bad limits, `derivation` in a `2.0.0` manifest, or WASM imports. |
 | `host_limit_exceeded` | The declared limits exceed the host's ceilings. Lower them, or target a larger host. |
+| `timeout` only in a debug build | The host's `wasmi` is unoptimized. Use a release build, or add the `wasmi` profile override under "Limits and fuel". |

@@ -1797,6 +1797,12 @@ fn help_model_package_onnx() -> String {
     the package.json `source` rights are recorded in rights.derivation), then
     prints a JSON report. Sign the manifest separately (traverse-cli model sign).
 
+    Before writing, it preflights the package (Spec 138 FR-072): model_prepare
+    and one zero-valued input frame on wasmtime and wasmi under the manifest
+    limits. On failure nothing is written, the command exits non-zero, and it
+    prints a JSON object with stage preflight, the failing engine, and the
+    error's code, reason, and message.
+
     Packages from this packager need an embedder newer than 0.14.0 (see #1652);
     npm 0.14.0 rejects schema {schema} / ABI v{abi} with manifest_invalid.
 
@@ -6625,8 +6631,14 @@ fn package_onnx_model(
     spec_path: &Path,
     out_dir: &Path,
 ) -> Result<String, CliError> {
-    let report = model_packaging::package_onnx(runner_path, onnx_path, spec_path, out_dir)
-        .map_err(CliError::IoError)?;
+    let report = model_packaging::package_onnx(
+        runner_path,
+        onnx_path,
+        spec_path,
+        out_dir,
+        model_cli::preflight_package,
+    )
+    .map_err(CliError::IoError)?;
     serde_json::to_string_pretty(&report)
         .map_err(|e| CliError::IoError(format!("failed to serialize packaging report: {e}")))
 }

@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.14.0
+**Version**: 0.14.1
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -178,6 +178,12 @@ Additive.
 
 Additive for guests: an existing guest's `-1` stays valid. Callers that
 matched `resource_exhausted` for a guest reject now see the new codes.
+**Amendment (2026-10-14, version 0.14.0 -> 0.14.1, approved under Decision 115)**: `#1679`.
+FR-072 is new. `traverse-cli model package-onnx` preflights a package
+before writing it. It runs `model_prepare` and one zero-valued input frame
+on `wasmtime` and `wasmi`, through the governed path under the manifest
+limits. A failure writes nothing and reports the stable code and reason.
+Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -805,6 +811,9 @@ in-repo training provenance. It MUST instead:
   other engine (`wasmtime`), checked by `model conformance check`;
 - record any source artifact it was built from in `rights.derivation`.
 
+A package built by `traverse-cli model package-onnx` is preflighted before
+it is written (FR-072, 0.14.1).
+
 The packaging workflow is documented in `docs/model-packaging-guide.md`.
 
 ## Resolver and cache behavior
@@ -1127,6 +1136,22 @@ Traverse MUST:
   holds a non-finite value. It reports this as `invalid_input` /
   `frame_mismatch` (0.14.0, Decision 115), so a placement change never
   changes how a bad frame fails (Decision 110).
+- **FR-072**: `traverse-cli model package-onnx` MUST preflight the package
+  it built before writing any file (0.14.1, Decision 115). The preflight:
+  - signs an in-memory copy of the manifest with a fixed, public,
+    preflight-only key that only the preflight's own host trusts;
+  - registers and executes it through the governed path on `wasmtime` and
+    `wasmi`, under the manifest's limits and deadline;
+  - runs `model_prepare` and one zero-valued input frame built from the
+    tensor config;
+  - requires byte-identical outputs that carry the declared output dtype and
+    shape.
+
+  The preflight uses the audited runner, never a native ONNX engine. On any
+  failure the packager writes nothing, exits non-zero, and reports
+  `{stage: "preflight", engine, error: {code, reason, message}}`. There is
+  no opt-out. A passing report records the engines, the input frame size,
+  and the output frame's SHA-256.
 
 ## Acceptance scenarios
 

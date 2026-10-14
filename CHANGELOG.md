@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Debug hosts run model guests at near-release speed (Decision 115, #1681)
+
+- **Cause.** The reported `wasmi` "timeout" on large ABI v3 packages came
+  from unoptimized host builds, not from fuel slicing. On YAMNet (about
+  11.4 billion fuel), slice size made no difference: 1 slice or 11,429
+  slices both took about 3.2 s in release. An opt-level 0 `wasmi` took
+  more than 10 minutes.
+- **Workspace profile.** The workspace's dev and test profiles now build the
+  `wasmi` crates with `opt-level = 3` and `debug-assertions = false`. No
+  deadline, fuel or memory ceiling changed.
+- **Stack-overflow hazard.** At opt-level 2+ `wasmi` uses tail-call
+  dispatch. Debug assertions keep that from compiling into jumps, so a long
+  guest overflowed the native stack and aborted the process.
+  `wasmi_long_guest_runs_without_native_stack_growth` pins this.
+- **Docs.** The packaging guide documents the same override for apps that
+  depend on `traverse-runtime`.
+### `model package-onnx` preflight (Spec 138 0.14.1 FR-072, Decision 115, #1679)
+
+- **Preflight before writing.** `traverse-cli model package-onnx` runs the
+  package it built before writing anything. It runs `model_prepare` and one
+  zero-valued input frame on `wasmtime` and `wasmi`, through the governed
+  path and audited runner, under the manifest limits.
+- **Checks.** Outputs must match byte for byte and carry the declared
+  output dtype and shape.
+- **On failure.** Nothing is written, the command exits non-zero, and it
+  prints `{stage: "preflight", engine, error: {code, reason, message}}`.
+- **On success.** The JSON report gains a `preflight` object.
+- **No opt-out, no new command.** The in-memory copy is signed with a fixed,
+  public, preflight-only key that only the preflight's host trusts.
+
 ### Specific guest reject codes (Spec 138 0.14.0, Decision 115, #1678)
 
 - **Guest reject codes.** Negative `model_execute` returns now carry

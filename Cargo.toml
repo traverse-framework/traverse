@@ -56,3 +56,30 @@ todo = "deny"
 all_features = true
 format = "json"
 output = "traverse-sbom.cdx.json"
+
+# #1681 (Decision 115). An unoptimized wasmi interprets model guests orders
+# of magnitude slower (YAMNet: ~3.5 s release vs. >10 min at opt-level 0), so
+# a debug host such as `cargo run -p traverse-cli-rs` misses a package's
+# `max_execution_ms` that a release host meets easily. Dev and test builds
+# therefore always optimize the interpreter.
+#
+# `debug-assertions = false` is required, not cosmetic. At opt-level 2+ wasmi
+# switches to tail-call dispatch, and debug assertions keep LLVM from turning
+# those calls into jumps, so a long guest overflows the native stack and
+# aborts the process (not a fail-closed error). The
+# `wasmi_long_guest_runs_without_native_stack_growth` test pins this.
+# Semantics, fuel accounting and every ceiling are unchanged. Only this
+# workspace's builds are affected; apps that depend on traverse-runtime add
+# the same override (docs/model-packaging-guide.md).
+[profile.dev.package.wasmi]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.wasmi_core]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+debug-assertions = false
+[profile.dev.package.wasmi_collections]
+opt-level = 3
+debug-assertions = false
