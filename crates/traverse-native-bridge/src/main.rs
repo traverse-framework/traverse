@@ -35,17 +35,19 @@ fn build_runtime_wasm_bytes() -> Result<Vec<u8>, String> {
     // leak into the wasm object code (#1659 reproducibility).
     let cargo_home = env::var_os("CARGO_HOME").map_or_else(
         || {
-            env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".cargo"))
-                .unwrap_or_else(|| PathBuf::from("/.cargo"))
+            env::var_os("HOME").map_or_else(
+                || PathBuf::from("/.cargo"),
+                |home| PathBuf::from(home).join(".cargo"),
+            )
         },
         PathBuf::from,
     );
     let rustup_home = env::var_os("RUSTUP_HOME").map_or_else(
         || {
-            env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".rustup"))
-                .unwrap_or_else(|| PathBuf::from("/.rustup"))
+            env::var_os("HOME").map_or_else(
+                || PathBuf::from("/.rustup"),
+                |home| PathBuf::from(home).join(".rustup"),
+            )
         },
         PathBuf::from,
     );
