@@ -36,6 +36,50 @@ async function initEmbedder(manifestPath, overrides = {}) {
 
 // --- init-shutdown scenario ---
 
+test("init fails closed when WASM initial memory exceeds host limits", async () => {
+  const large = await compileWat(`
+    (module
+      (import "wasi_snapshot_preview1" "fd_write"
+        (func $fd_write (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1024)
+      (func (export "_start"))
+    )
+  `);
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{ capabilityId: "fixture.large-mem", wasmBytes: large }],
+  });
+  await assert.rejects(
+    () => initEmbedder(manifestPath),
+    (error) => {
+      assert.ok(error instanceof BundleRejectedError);
+      assert.equal(error.embedderError.code, "resource_requirements_exceed_host");
+      assert.match(error.embedderError.message, /fixture\.large-mem/);
+      assert.match(error.embedderError.message, /67108864/);
+      return true;
+    },
+  );
+});
+
+test("init accepts large-memory capability when host limits are raised", async () => {
+  const large = await compileWat(`
+    (module
+      (import "wasi_snapshot_preview1" "fd_write"
+        (func $fd_write (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1024)
+      (func (export "_start"))
+    )
+  `);
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{ capabilityId: "fixture.large-mem", wasmBytes: large }],
+  });
+  const embedder = await initEmbedder(manifestPath, {
+    limits: { fuel: 50_000_000, maxMemoryBytes: 128 * 1024 * 1024 },
+  });
+  assert.equal(embedder.shutdown().killedInstances, 0);
+});
+
 test("init-shutdown: shutdown is idempotent and stops later submits", async () => {
   const echo = await compileWat(ECHO_WAT);
   const manifestPath = await writeBundleFixture({

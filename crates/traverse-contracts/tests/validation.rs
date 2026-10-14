@@ -807,6 +807,7 @@ fn valid_contract() -> CapabilityContract {
                 network_access: NetworkAccess::Forbidden,
                 filesystem_access: FilesystemAccess::None,
             },
+            resources: None,
         },
         policies: vec![IdReference {
             id: "default-comment-safety".to_string(),

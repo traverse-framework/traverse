@@ -122,7 +122,9 @@ impl LocalExecutor for ArtifactRouter {
 fn map_executor_error(error: &ExecutorError) -> LocalExecutionFailure {
     let code = match error {
         ExecutorError::Timeout(_) => LocalExecutionFailureCode::Timeout,
-        ExecutorError::ResourceExhausted(_) => LocalExecutionFailureCode::ResourceExhausted,
+        ExecutorError::ResourceExhausted(_) | ExecutorError::ResourceRequirementsExceedHost(_) => {
+            LocalExecutionFailureCode::ResourceExhausted
+        }
         ExecutorError::ChecksumMismatch { .. }
         | ExecutorError::MalformedWasmArtifact { .. }
         | ExecutorError::UnsupportedAbiVersion { .. }
@@ -334,6 +336,12 @@ mod tests {
             ),
             (
                 ExecutorError::ResourceExhausted("x".to_string()),
+                LocalExecutionFailureCode::ResourceExhausted,
+            ),
+            (
+                ExecutorError::ResourceRequirementsExceedHost(
+                    "resource_requirements_exceed_host: x".to_string(),
+                ),
                 LocalExecutionFailureCode::ResourceExhausted,
             ),
             (

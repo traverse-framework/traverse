@@ -41,7 +41,8 @@ export type EmbedderErrorCode =
   | "instance_not_running"
   | "app_state_machine_unavailable"
   | "ambiguous_submit"
-  | "invalid_app_command";
+  | "invalid_app_command"
+  | "resource_requirements_exceed_host";
 
 /** A structured embedder-boundary error. */
 export interface EmbedderError {

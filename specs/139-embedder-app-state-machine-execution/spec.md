@@ -169,8 +169,10 @@ UI shell  --submit(app_command)-->  Platform embedder
 - **FR-018**: Nested capability execution inside `runtime.wasm` MUST default
   to a **32 MiB** linear-memory ceiling (matching native `WasmExecutor` /
   `#1336`) so certified registry planners that reserve ~17 MiB initial
-  memory can instantiate. Changing the ceiling requires rebuilding and
-  re-certifying the published `runtime.wasm` digest.
+  memory can instantiate. Hosts MAY raise nested fuel and memory through
+  init `limits` (#1656 / Spec 1402 FR-012) up to an absolute safety ceiling;
+  changing the **default** still requires rebuilding and re-certifying the
+  published `runtime.wasm` digest when defaults themselves change.
 
 ## Acceptance scenarios
 

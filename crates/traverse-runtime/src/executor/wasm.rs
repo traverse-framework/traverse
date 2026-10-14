@@ -33,7 +33,7 @@ use crate::events::types::{LifecycleStatus, TraverseEvent};
 // drift on their values.
 use traverse_contracts::{
     ConnectorRequirement, EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_OK, EventReference,
-    ServiceType,
+    ExecutionResources, ServiceType, host_meets_execution_resources,
 };
 
 /// Traverse Host ABI v1 is independently versioned from the runtime crate.
@@ -277,6 +277,53 @@ impl WasmExecutor {
     /// Replaces or clears the injected `DataStore` for subsequent executions.
     pub fn set_data_store(&mut self, store: Option<RuntimeDataStore<InMemoryDataStore>>) {
         self.data_store = store.map(|store| Arc::new(Mutex::new(store)));
+    }
+
+    /// Fail closed when contract-declared resources exceed this executor's
+    /// host ceiling (#1656).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::ResourceRequirementsExceedHost`] when the
+    /// declared floor is above `limits`.
+    pub fn ensure_meets_resources(
+        &self,
+        capability_id: &str,
+        resources: &ExecutionResources,
+    ) -> Result<(), ExecutorError> {
+        // Host packages target 64-bit platforms where `usize` fits in `u64`.
+        let host_memory = self.limits.memory_bytes as u64;
+        host_meets_execution_resources(
+            capability_id,
+            resources,
+            host_memory,
+            self.limits.fuel_budget,
+        )
+        .map_err(ExecutorError::ResourceRequirementsExceedHost)
+    }
+
+    /// Fail closed when a WASM module's initial memory exceeds this
+    /// executor's host ceiling (#1656).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutorError::ResourceRequirementsExceedHost`] when the
+    /// module's first memory min size is above `limits.memory_bytes`.
+    pub fn ensure_meets_wasm_initial_memory(
+        &self,
+        capability_id: &str,
+        wasm_bytes: &[u8],
+    ) -> Result<(), ExecutorError> {
+        let Some(required) = wasm_initial_memory_bytes(wasm_bytes) else {
+            return Ok(());
+        };
+        if required > self.limits.memory_bytes {
+            return Err(ExecutorError::ResourceRequirementsExceedHost(format!(
+                "resource_requirements_exceed_host: capability '{capability_id}' requires {required} memory bytes; host ceiling is {}",
+                self.limits.memory_bytes
+            )));
+        }
+        Ok(())
     }
 
     /// Return current compiled-module cache counters.
@@ -796,6 +843,8 @@ impl WasmExecutor {
         connector_context: Option<MediatedConnectorContext>,
         checksum: Option<&str>,
     ) -> Result<ExecutorOutput, ExecutorError> {
+        self.ensure_meets_wasm_initial_memory(capability_id, wasm_bytes)?;
+
         let input_json = serde_json::to_string(input)
             .map_err(|e| ExecutorError::ExecutionFailed(format!("input serialization: {e}")))?;
 
@@ -1536,6 +1585,18 @@ fn classify_wasm_execution_error(error: &wasmtime::Error) -> ExecutorError {
     ExecutorError::ExecutionFailed(display)
 }
 
+/// Initial linear-memory bytes declared by the first memory in `wasm_bytes`.
+fn wasm_initial_memory_bytes(wasm_bytes: &[u8]) -> Option<usize> {
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes).flatten() {
+        if let wasmparser::Payload::MemorySection(reader) = payload {
+            let memory = reader.into_iter().next()?.ok()?;
+            let pages = usize::try_from(memory.initial).ok()?;
+            return pages.checked_mul(64 * 1024);
+        }
+    }
+    None
+}
+
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -1611,5 +1672,113 @@ mod binary_cache_tests {
         );
 
         assert!(matches!(result, Err(ExecutorError::BinaryLoadFailed(_))));
+    }
+
+    #[test]
+    fn ensure_meets_resources_rejects_under_ceiling_fuel_and_memory() {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+            fuel_budget: 1_000,
+            memory_bytes: 1024 * 1024,
+            ..WasmExecutionLimits::default()
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
+        let memory_err = executor.ensure_meets_resources(
+            "example.cap",
+            &ExecutionResources {
+                min_memory_bytes: Some(8 * 1024 * 1024),
+                max_fuel: None,
+            },
+        );
+        assert!(matches!(
+            memory_err,
+            Err(ExecutorError::ResourceRequirementsExceedHost(_))
+        ));
+        let fuel_err = executor.ensure_meets_resources(
+            "example.cap",
+            &ExecutionResources {
+                min_memory_bytes: None,
+                max_fuel: Some(50_000),
+            },
+        );
+        assert!(matches!(
+            fuel_err,
+            Err(ExecutorError::ResourceRequirementsExceedHost(_))
+        ));
+        assert!(
+            executor
+                .ensure_meets_resources(
+                    "example.cap",
+                    &ExecutionResources {
+                        min_memory_bytes: Some(512 * 1024),
+                        max_fuel: Some(500),
+                    },
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn ensure_meets_wasm_initial_memory_accepts_modules_without_memory() {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::new().expect("WasmExecutor::new should succeed");
+        // Minimal empty WASM module (no memory section).
+        let no_memory = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        assert!(
+            executor
+                .ensure_meets_wasm_initial_memory("example.cap", &no_memory)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn ensure_meets_wasm_initial_memory_rejects_module_above_host_ceiling() {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+            memory_bytes: 64 * 1024,
+            ..WasmExecutionLimits::default()
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
+        // WASM header + memory section: one memory, min 2 pages (128 KiB).
+        let with_memory = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
+        ];
+        let err = executor.ensure_meets_wasm_initial_memory("example.cap", &with_memory);
+        assert!(
+            matches!(&err, Err(ExecutorError::ResourceRequirementsExceedHost(_))),
+            "2-page initial memory must exceed a 1-page host ceiling, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_meets_wasm_initial_memory_accepts_module_within_host_ceiling() {
+        #[allow(clippy::expect_used)]
+        let executor = WasmExecutor::with_limits(WasmExecutionLimits {
+            memory_bytes: 256 * 1024,
+            ..WasmExecutionLimits::default()
+        })
+        .expect("WasmExecutor::with_limits should succeed for unit-test ceilings");
+        // WASM header + memory section: one memory, min 2 pages (128 KiB).
+        let with_memory = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x02,
+        ];
+        assert!(
+            executor
+                .ensure_meets_wasm_initial_memory("example.cap", &with_memory)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn resource_requirements_exceed_host_display_is_secret_free() {
+        let error = ExecutorError::ResourceRequirementsExceedHost(
+            "resource_requirements_exceed_host: capability 'x' requires 1 memory bytes; host ceiling is 0"
+                .to_string(),
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("resource_requirements_exceed_host")
+        );
     }
 }

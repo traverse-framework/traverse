@@ -31,10 +31,15 @@ use app_sm::{
     SubmitDiscrimination, discriminate_submit, parse_state_machine, resolve_command_transition,
     resolve_lifecycle_transition,
 };
-use executor::execute_nested_capability;
 use traverse_contracts::{
     EventReference, ExecutionTarget, PlacementConstraintEvaluator, PlacementError,
     PlacementRequest, RuntimeSnapshot, ServiceType,
+};
+
+pub use executor::{
+    DEFAULT_NESTED_FUEL, DEFAULT_NESTED_MEMORY_BYTES, MAX_HOST_NESTED_FUEL,
+    MAX_HOST_NESTED_MEMORY_BYTES, NestedExecutionLimits, execute_nested_capability,
+    execute_nested_capability_with_limits,
 };
 
 /// Traverse Host ABI v1 is independently versioned from this crate (spec
@@ -55,6 +60,8 @@ struct RuntimeState {
     target_hint: Option<ExecutionTarget>,
     runtime_snapshot: RuntimeSnapshot,
     wasm_artifact: Vec<u8>,
+    /// Host-supplied nested fuel / memory (#1656). Defaults match FR-012.
+    nested_limits: NestedExecutionLimits,
     execution_counter: u64,
     pending_events: VecDeque<Vec<u8>>,
     /// Spec 139 app state machine (optional). When present, `app_command`
@@ -93,6 +100,42 @@ struct InitPayload {
     runtime_snapshot: RuntimeSnapshot,
     wasm_artifact: Vec<u8>,
     app_state_machine: Option<AppStateMachine>,
+    nested_limits: NestedExecutionLimits,
+}
+
+fn parse_nested_limits(header: &serde_json::Value) -> Result<NestedExecutionLimits, String> {
+    let Some(limits) = header.get("limits") else {
+        return Ok(NestedExecutionLimits::default());
+    };
+    if limits.is_null() {
+        return Ok(NestedExecutionLimits::default());
+    }
+    let Some(map) = limits.as_object() else {
+        return Err("limits must be an object".to_string());
+    };
+    let mut parsed = NestedExecutionLimits::default();
+    if let Some(fuel_value) = map.get("fuel") {
+        let Some(fuel) = fuel_value.as_u64() else {
+            return Err("limits.fuel must be a non-negative integer".to_string());
+        };
+        if fuel == 0 {
+            return Err("limits.fuel must be greater than zero".to_string());
+        }
+        parsed.fuel = fuel;
+    }
+    if let Some(memory_value) = map.get("max_memory_bytes") {
+        let Some(memory) = memory_value.as_u64() else {
+            return Err("limits.max_memory_bytes must be a non-negative integer".to_string());
+        };
+        let Ok(memory) = usize::try_from(memory) else {
+            return Err("limits.max_memory_bytes exceeds platform size".to_string());
+        };
+        if memory == 0 {
+            return Err("limits.max_memory_bytes must be greater than zero".to_string());
+        }
+        parsed.max_memory_bytes = memory;
+    }
+    Ok(parsed.clamped())
 }
 
 fn parse_execution_target(raw: &str) -> Option<ExecutionTarget> {
@@ -238,6 +281,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         .map(|raw| parse_execution_target(raw).ok_or_else(|| format!("unknown target_hint: {raw}")))
         .transpose()?;
     let runtime_snapshot = parse_runtime_snapshot(&header)?;
+    let nested_limits = parse_nested_limits(&header)?;
 
     Ok(InitPayload {
         capability_id,
@@ -249,6 +293,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         runtime_snapshot,
         wasm_artifact,
         app_state_machine,
+        nested_limits,
     })
 }
 
@@ -601,11 +646,12 @@ fn run_capability_invoke_wait(
     ));
 
     let input = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
-    let outcome = execute_nested_capability(
+    let outcome = execute_nested_capability_with_limits(
         &state.wasm_artifact,
         &input,
         &state.service_type,
         &state.declared_emits,
+        state.nested_limits,
     );
 
     let (lifecycle_event_name, succeeded, output) = match outcome {
@@ -755,11 +801,12 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
         }
     }
 
-    let outcome = execute_nested_capability(
+    let outcome = execute_nested_capability_with_limits(
         &state.wasm_artifact,
         request,
         &state.service_type,
         &state.declared_emits,
+        state.nested_limits,
     );
 
     match outcome {
@@ -901,6 +948,7 @@ pub extern "C" fn traverse_init(ptr: i32, len: i32, out_descriptor: i32) -> i32 
                 target_hint: parsed.target_hint,
                 runtime_snapshot: parsed.runtime_snapshot,
                 wasm_artifact: parsed.wasm_artifact,
+                nested_limits: parsed.nested_limits,
                 execution_counter: 0,
                 pending_events: VecDeque::new(),
                 app_state_machine: parsed.app_state_machine,
@@ -1068,6 +1116,48 @@ mod tests {
         assert_eq!(parsed.service_type, ServiceType::Subscribable);
         assert_eq!(parsed.declared_emits.len(), 1);
         assert_eq!(parsed.wasm_artifact, artifact);
+        assert_eq!(parsed.nested_limits, NestedExecutionLimits::default());
+    }
+
+    #[test]
+    fn parse_init_payload_reads_host_limits() {
+        let header = serde_json::to_vec(&serde_json::json!({
+            "capability_id": "example.echo",
+            "service_type": "stateless",
+            "limits": {
+                "fuel": 2_000_000_000_000_u64,
+                "max_memory_bytes": 268_435_456_u64
+            }
+        }))
+        .unwrap_or_default();
+        let header_len = u32::try_from(header.len()).unwrap_or(u32::MAX);
+        let mut bytes = header_len.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(b"\0asm");
+        let parsed = parse_init_payload(&bytes).expect("must parse");
+        assert_eq!(parsed.nested_limits.fuel, 2_000_000_000_000);
+        assert_eq!(parsed.nested_limits.max_memory_bytes, 268_435_456);
+    }
+
+    #[test]
+    fn parse_init_payload_clamps_limits_above_absolute_ceiling() {
+        let header = serde_json::to_vec(&serde_json::json!({
+            "capability_id": "example.echo",
+            "limits": {
+                "fuel": u64::MAX,
+                "max_memory_bytes": u64::from(u32::MAX)
+            }
+        }))
+        .unwrap_or_default();
+        let header_len = u32::try_from(header.len()).unwrap_or(u32::MAX);
+        let mut bytes = header_len.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&header);
+        let parsed = parse_init_payload(&bytes).expect("must parse");
+        assert_eq!(parsed.nested_limits.fuel, MAX_HOST_NESTED_FUEL);
+        assert_eq!(
+            parsed.nested_limits.max_memory_bytes,
+            MAX_HOST_NESTED_MEMORY_BYTES
+        );
     }
 
     #[test]
@@ -1195,6 +1285,8 @@ mod tests {
             target_hint: None,
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: artifact,
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: None,
@@ -1238,6 +1330,8 @@ mod tests {
                 .collect(),
             },
             wasm_artifact: Vec::new(),
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: None,
@@ -1271,6 +1365,8 @@ mod tests {
             target_hint: Some(ExecutionTarget::Cloud),
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: Vec::new(),
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: None,
@@ -1375,6 +1471,8 @@ mod tests {
             target_hint: None,
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: artifact,
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: Some(machine),
@@ -1450,6 +1548,8 @@ mod tests {
             target_hint: None,
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: Vec::new(),
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: Some(machine),
@@ -1591,6 +1691,8 @@ mod tests {
             target_hint: None,
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: Vec::new(),
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: Some(machine),
@@ -1696,6 +1798,8 @@ mod tests {
             target_hint: None,
             runtime_snapshot: RuntimeSnapshot::default(),
             wasm_artifact: Vec::new(),
+
+            nested_limits: NestedExecutionLimits::default(),
             execution_counter: 0,
             pending_events: VecDeque::new(),
             app_state_machine: Some(machine),

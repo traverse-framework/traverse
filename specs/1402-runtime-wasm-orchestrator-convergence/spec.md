@@ -2,7 +2,7 @@
 
 **Status**: Approved
 **Canonical governing ID**: `1402-runtime-wasm-orchestrator-convergence`
-**Version**: 1.4.0
+**Version**: 1.5.0
 **Extends**: `071-native-runtime-wasm-bridge`, `068-public-platform-embedder-packages`,
 `098-capability-event-host-abi`, `995-local-executor-event-emission`
 **Amends**: `1277-browser-local-workflow-composition` (its composed-execution
@@ -65,6 +65,16 @@ unbounded. FR-014, FR-015, and FR-016 close this; `RuntimeWasmHostError`
 gains stable `timeout` / `resource_exhausted` / `invalid_response` codes
 alongside its existing message. Rides under this spec's existing `ADR-0072`
 evidence — the orchestrator design is unchanged, only bounded.
+
+**Amendment (2026-10-13, version 1.4.0 -> 1.5.0, issue #1656)**: Nested
+capability fuel / memory inside `runtime.wasm` remain **default** 10M / 32 MiB
+(FR-012), but hosts MUST be able to raise them through `traverse_init`
+`limits` (and `BundleEmbedder.init({ limits })`) up to an absolute safety
+ceiling. Contract `execution.resources` and WASM initial-memory size MUST
+fail closed at load/registration with `resource_requirements_exceed_host`
+when they exceed the host ceiling — not at first instantiate with a generic
+`execution_failed` message. Native `WasmExecutor` MUST enforce the same
+check.
 
 `runtime.wasm` (built by `crates/traverse-native-bridge`) is a hand-authored
 WAT fixture that returns hardcoded canned JSON for a fixed 3-event sequence.
@@ -206,7 +216,16 @@ question, out of scope here as it was for the originating investigation).
   and migration note, given the package is already in production use
   (`1277`, npm `0.9.0+`).
 - **FR-012**: Nested capability execution inside `runtime.wasm` MUST default to a
-  32 MiB linear-memory ceiling (Spec 139 FR-018), matching native `WasmExecutor`.
+  32 MiB linear-memory ceiling and a finite fuel budget (Spec 139 FR-018),
+  matching native `WasmExecutor` defaults. Hosts MUST be able to raise nested
+  fuel and memory through the `traverse_init` header (`limits.fuel`,
+  `limits.max_memory_bytes`) up to an absolute safety ceiling; hosts MUST NOT
+  remove the ceiling. When a capability's contract-declared
+  `execution.resources` or its WASM initial linear-memory size exceeds the
+  effective host ceiling, load or registration MUST fail closed with stable
+  reason `resource_requirements_exceed_host` (naming the capability, required
+  value, and host ceiling) rather than failing later with a generic
+  instantiate / `execution_failed` error.
 - **FR-013**: `runtime.wasm` MUST execute Spec 139 app state-machine command
   sessions, including host-connector bridge emits and host monotonic deadline
   callbacks for dual-deadline saga waits.

@@ -33,6 +33,13 @@ const embedder = await BundleEmbedder.init({
   manifestPath: "/bundles/my-app/app.manifest.json",
   loader: new FetchBundleLoader(),
   platform: "web",
+  // Optional (#1656): raise nested wasmi ceilings for large catalog WASM
+  // (defaults remain 10M fuel / 32 MiB). Init fails closed with
+  // resource_requirements_exceed_host when a capability needs more.
+  limits: {
+    fuel: 2_000_000_000_000,
+    maxMemoryBytes: 1024 * 1024 * 1024,
+  },
 });
 embedder.subscribe((event) => console.log(event));
 embedder.submit("my-app.process", { note: "hello" });

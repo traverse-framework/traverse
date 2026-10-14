@@ -1162,6 +1162,7 @@ fn capability_contract(
                 network_access: NetworkAccess::Forbidden,
                 filesystem_access: FilesystemAccess::None,
             },
+            resources: None,
         },
         policies: vec![IdReference {
             id: "policy.comments.default".to_string(),
@@ -1504,6 +1505,7 @@ fn simple_registration(scope: RegistryScope, id: &str, version: &str) -> Capabil
                 network_access: NetworkAccess::Forbidden,
                 filesystem_access: FilesystemAccess::None,
             },
+            resources: None,
         },
         policies: vec![IdReference {
             id: "policy.default".to_string(),

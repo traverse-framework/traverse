@@ -2038,7 +2038,7 @@
     },
     {
       "id": "1402-runtime-wasm-orchestrator-convergence",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/1402-runtime-wasm-orchestrator-convergence/spec.md",

@@ -29,9 +29,14 @@ import {
   mapServiceType,
   parseDeclaredEmits,
 } from "./runtimeWasmHost.js";
-import type { RuntimeWasmEmitRef, RuntimeWasmJson } from "./runtimeWasmHost.js";
+import type {
+  RuntimeWasmEmitRef,
+  RuntimeWasmJson,
+  RuntimeWasmNestedLimits,
+} from "./runtimeWasmHost.js";
 import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
+import { wasmInitialMemoryBytes } from "./wasmMemory.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
@@ -49,6 +54,16 @@ import type {
 } from "./types.js";
 
 const DEFAULT_RUNTIME_WASM_PATH = "runtime/runtime.wasm";
+/** Spec 1402 FR-012 default nested fuel when the host omits `limits`. */
+export const DEFAULT_NESTED_FUEL = 10_000_000;
+/** Spec 1402 FR-012 default nested memory ceiling (32 MiB). */
+export const DEFAULT_NESTED_MEMORY_BYTES = 32 * 1024 * 1024;
+
+/** Host-configurable nested capability limits (#1656). */
+export interface BundleNestedLimits {
+  readonly fuel?: number;
+  readonly maxMemoryBytes?: number;
+}
 
 /** Configuration for `BundleEmbedder.init` (`runtime.init` input). */
 export interface BundleEmbedderConfig {
@@ -65,6 +80,12 @@ export interface BundleEmbedderConfig {
    * Digest is read from the companion `<path>.sha256` sidecar.
    */
   readonly runtimeWasmPath?: string;
+  /**
+   * Nested wasmi fuel / memory granted to every bundled capability (#1656).
+   * Defaults remain 10M fuel / 32 MiB. Raise these for large catalog
+   * capabilities (for example HF-model artifacts that reserve >32 MiB).
+   */
+  readonly limits?: BundleNestedLimits;
 }
 
 interface WasmTarget {
@@ -77,6 +98,82 @@ interface WasmTarget {
   readonly serviceType: string | null;
   /** Declared contract `emits` entries forwarded to `runtime.wasm` init (spec 098). */
   readonly emits: readonly RuntimeWasmEmitRef[];
+  /** Contract-declared minimum memory, if present (#1656). */
+  readonly declaredMinMemoryBytes: number | null;
+  /** Contract-declared max fuel, if present (#1656). */
+  readonly declaredMaxFuel: number | null;
+}
+
+function resolveNestedLimits(limits: BundleNestedLimits | undefined): {
+  fuel: number;
+  maxMemoryBytes: number;
+} {
+  return {
+    fuel: limits?.fuel ?? DEFAULT_NESTED_FUEL,
+    maxMemoryBytes: limits?.maxMemoryBytes ?? DEFAULT_NESTED_MEMORY_BYTES,
+  };
+}
+
+function parseDeclaredResources(
+  record: Record<string, JsonValue>,
+  contractJson: JsonValue | null,
+): { minMemoryBytes: number | null; maxFuel: number | null } {
+  const fromObject = (value: JsonValue | undefined): {
+    minMemoryBytes: number | null;
+    maxFuel: number | null;
+  } => {
+    const obj = asRecord(value ?? null);
+    if (obj === null) {
+      return { minMemoryBytes: null, maxFuel: null };
+    }
+    const minMemory =
+      typeof obj["min_memory_bytes"] === "number" && Number.isFinite(obj["min_memory_bytes"])
+        ? obj["min_memory_bytes"]
+        : null;
+    const maxFuel =
+      typeof obj["max_fuel"] === "number" && Number.isFinite(obj["max_fuel"])
+        ? obj["max_fuel"]
+        : null;
+    return { minMemoryBytes: minMemory, maxFuel };
+  };
+  const direct = fromObject(record["resources"]);
+  if (direct.minMemoryBytes !== null || direct.maxFuel !== null) {
+    return direct;
+  }
+  const contract = asRecord(contractJson);
+  if (contract === null) {
+    return { minMemoryBytes: null, maxFuel: null };
+  }
+  const execution = asRecord(contract["execution"]);
+  if (execution === null) {
+    return { minMemoryBytes: null, maxFuel: null };
+  }
+  return fromObject(execution["resources"]);
+}
+
+function assertHostMeetsRequirements(
+  capabilityId: string,
+  requiredMemoryBytes: number,
+  requiredFuel: number | null,
+  host: { fuel: number; maxMemoryBytes: number },
+): void {
+  if (requiredMemoryBytes > host.maxMemoryBytes) {
+    throw new BundleRejectedError(
+      embedderError(
+        "resource_requirements_exceed_host",
+        `capability '${capabilityId}' requires ${requiredMemoryBytes} memory bytes; ` +
+          `host ceiling is ${host.maxMemoryBytes}`,
+      ),
+    );
+  }
+  if (requiredFuel !== null && requiredFuel > host.fuel) {
+    throw new BundleRejectedError(
+      embedderError(
+        "resource_requirements_exceed_host",
+        `capability '${capabilityId}' requires ${requiredFuel} fuel; host ceiling is ${host.fuel}`,
+      ),
+    );
+  }
 }
 
 interface WorkflowNodeSpec {
@@ -303,6 +400,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
   private readonly wasmComponentEvidence: readonly JsonValue[];
   private readonly stateMachine: JsonValue | null;
+  private readonly nestedLimits: { fuel: number; maxMemoryBytes: number };
   private indexedDbDataStore: IndexedDbDataStore | null = null;
   /** Long-lived Spec 139 app orchestrator instance (process-local sessions). */
   private appHost: RuntimeWasmHost | null = null;
@@ -318,6 +416,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     workflowTargets: ReadonlyMap<string, WorkflowTarget>,
     wasmComponentEvidence: readonly JsonValue[],
     stateMachine: JsonValue | null,
+    nestedLimits: { fuel: number; maxMemoryBytes: number },
   ) {
     this.core = core;
     this.runtimeModule = runtimeModule;
@@ -326,6 +425,14 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     this.workflowTargets = workflowTargets;
     this.wasmComponentEvidence = wasmComponentEvidence;
     this.stateMachine = stateMachine;
+    this.nestedLimits = nestedLimits;
+  }
+
+  private runtimeLimitsHeader(): RuntimeWasmNestedLimits {
+    return {
+      fuel: this.nestedLimits.fuel,
+      maxMemoryBytes: this.nestedLimits.maxMemoryBytes,
+    };
   }
 
   /**
@@ -345,6 +452,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
    */
   static async init(config: BundleEmbedderConfig): Promise<BundleEmbedder> {
     const { manifestPath, loader } = config;
+    const nestedLimits = resolveNestedLimits(config.limits);
     let manifestText: string;
     try {
       manifestText = await loader.loadText(manifestPath);
@@ -441,6 +549,29 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
       await verifyArtifactDigest(wasmBytes, wasmDigest, `component '${capabilityId}' artifact`);
 
+      let contractJson: JsonValue | null = null;
+      const contractRel = optionalString(record, "contract_path");
+      if (contractRel !== null && contractRel !== "unused-contract.json") {
+        const contractPath = loader.resolve(componentManifestPath, contractRel);
+        try {
+          const contractText = await loader.loadText(contractPath);
+          contractJson = JSON.parse(contractText) as JsonValue;
+        } catch {
+          // Optional for fail-fast resources; missing contract is not a load error
+          // unless the host already requires contracts for other reasons.
+          contractJson = null;
+        }
+      }
+      const declared = parseDeclaredResources(record, contractJson);
+      const initialMemory = wasmInitialMemoryBytes(wasmBytes) ?? 0;
+      const requiredMemory = Math.max(declared.minMemoryBytes ?? 0, initialMemory);
+      assertHostMeetsRequirements(
+        capabilityId,
+        requiredMemory,
+        declared.maxFuel,
+        nestedLimits,
+      );
+
       wasmTargets.set(capabilityId, {
         capabilityId,
         capabilityVersion,
@@ -448,6 +579,8 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         wasmBytes,
         serviceType: optionalString(record, "service_type"),
         emits: parseDeclaredEmits(record["emits"]),
+        declaredMinMemoryBytes: declared.minMemoryBytes,
+        declaredMaxFuel: declared.maxFuel,
       });
       wasmComponentEvidence.push({
         component_id: component.componentId,
@@ -561,6 +694,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       workflowTargets,
       wasmComponentEvidence,
       summary.stateMachine,
+      nestedLimits,
     );
   }
 
@@ -839,6 +973,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         hostPlacementTarget: "browser",
         permittedTargets: ["browser"],
         stateMachine: this.stateMachine as RuntimeWasmJson,
+        limits: this.runtimeLimitsHeader(),
       },
       nested.wasmBytes,
     );
@@ -895,15 +1030,21 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       }
     }
 
-    const result = executeWasmModule(this.runtimeModule, target, input, (event) => {
-      this.core.emit("capability_event", sessionId, {
-        execution_id: executionId,
-        capability_id: targetId,
-        event_id: event.event_id,
-        version: event.version,
-        payload: event.payload,
-      });
-    });
+    const result = executeWasmModule(
+      this.runtimeModule,
+      target,
+      input,
+      (event) => {
+        this.core.emit("capability_event", sessionId, {
+          execution_id: executionId,
+          capability_id: targetId,
+          event_id: event.event_id,
+          version: event.version,
+          payload: event.payload,
+        });
+      },
+      this.runtimeLimitsHeader(),
+    );
     this.core.recordTrace({
       executionId,
       targetId,
@@ -992,16 +1133,22 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
           break;
         }
       }
-      const result = executeWasmModule(this.runtimeModule, target, nodeInput, (event) => {
-        this.core.emit("capability_event", sessionId, {
-          execution_id: `exec_${requestId}`,
-          capability_id: node.capabilityId,
-          node_id: node.nodeId,
-          event_id: event.event_id,
-          version: event.version,
-          payload: event.payload,
-        });
-      });
+      const result = executeWasmModule(
+        this.runtimeModule,
+        target,
+        nodeInput,
+        (event) => {
+          this.core.emit("capability_event", sessionId, {
+            execution_id: `exec_${requestId}`,
+            capability_id: node.capabilityId,
+            node_id: node.nodeId,
+            event_id: event.event_id,
+            version: event.version,
+            payload: event.payload,
+          });
+        },
+        this.runtimeLimitsHeader(),
+      );
       if (!result.ok) {
         steps.push({
           stepIndex,
@@ -1151,6 +1298,7 @@ function executeWasmModule(
     version: string;
     payload: JsonValue;
   }) => void,
+  limits: RuntimeWasmNestedLimits,
 ): WasmExecutionResult {
   let host: RuntimeWasmHost;
   try {
@@ -1172,6 +1320,7 @@ function executeWasmModule(
         emits: target.emits,
         hostPlacementTarget: "browser",
         permittedTargets: ["browser"],
+        limits,
       },
       target.wasmBytes,
     );
