@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 serde_json = "1.0.145"
-traverse-runtime = { path = "../traverse-runtime", version = "0.14.0", default-features = false, features = ["wasmi-executor"] }
+traverse-runtime = { path = "../traverse-runtime", version = "0.15.0", default-features = false, features = ["wasmi-executor"] }
 
 # Core ML exists only on Apple platforms; elsewhere the crate is the safe,
 # platform-neutral helpers alone (ADR-0082).

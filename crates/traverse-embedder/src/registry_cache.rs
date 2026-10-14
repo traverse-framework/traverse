@@ -843,6 +843,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         };
         let older = PublicRegistryCapabilityRecord {
             namespace: "demo".to_string(),
@@ -864,6 +868,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),
@@ -1390,6 +1398,10 @@ mod tests {
                 redistribution: "unknown".to_string(),
                 verification_status: "unknown".to_string(),
                 license_expression: None,
+                ai: None,
+                status: None,
+                model_usage: Vec::new(),
+                revocation: None,
             },
         );
         let evidence = prepare(&cache, &snapshot, &reference, &fetcher).expect("prepare");
@@ -1491,6 +1503,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),
@@ -1549,6 +1565,10 @@ mod tests {
             redistribution: "unknown".to_string(),
             verification_status: "unknown".to_string(),
             license_expression: None,
+            ai: None,
+            status: None,
+            model_usage: Vec::new(),
+            revocation: None,
         };
         let snapshot = SyncedPublicRegistryState {
             schema_version: "1".to_string(),

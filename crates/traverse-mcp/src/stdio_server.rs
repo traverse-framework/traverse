@@ -3257,6 +3257,10 @@ mod tests {
                 redistribution: "unknown".to_string(),
                 verification_status: "unknown".to_string(),
                 license_expression: None,
+                ai: None,
+                status: None,
+                model_usage: Vec::new(),
+                revocation: None,
             };
             SyncedPublicRegistryState {
                 schema_version: "1.0.0".to_string(),
