@@ -389,7 +389,7 @@ A package runs on any host that supports its manifest schema and guest ABI:
 | --- | --- | --- | --- | --- | --- |
 | Rust (`traverse-runtime`, CLI) | `wasmtime` or `wasmi` | yes | v0.15.0+ | after v0.15.0 | `coreml` on Apple (`traverse-coreml-adapter`) |
 | Browser (`traverse-embedder-web`) | browser WebAssembly | yes | v0.15.0+ (npm 0.14.0 rejects it with `manifest_invalid`) | after v0.15.0 | none (`wasm-cpu` only) |
-| Swift (`TraverseEmbedder`, xcframework) | `wasmi` | yes | `swift-host-v0.15.0`+ | needs a `swift-host` rebuild after v0.15.0 | `coreml` |
+| Swift (`TraverseEmbedder`, xcframework) | `wasmi` | yes | `swift-host-v0.15.0`+ | `swift-host-v0.15.0-1`+ | `coreml` |
 | Kotlin / Android (JNI) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
 | .NET (P/Invoke) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
 

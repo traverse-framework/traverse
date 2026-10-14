@@ -101,9 +101,6 @@ final class OnnxRunnerTests: XCTestCase {
                     inputSchemaVersion: "1.0.0", maxOutputBytes: 56, allowedClassifications: ["sensitive"])
                 XCTFail("\(name) must be rejected")
             } catch let error as ExactModelError {
-                if error.code == "resource_exhausted" && error.reason == nil {
-                    throw XCTSkip("linked TraverseSwiftHost predates Spec 138 0.14.0 guest reject codes (needs a swift-host rebuild after #1678)")
-                }
                 XCTAssertEqual(error.code, testCase["code"] as? String, name)
                 XCTAssertEqual(error.reason, testCase["reason"] as? String, name)
             }
