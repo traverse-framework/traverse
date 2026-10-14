@@ -41,13 +41,13 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSInteger, NSNumber, NSProcessInfo, NSString, NSURL,
 };
 use traverse_runtime::exact_model::{
-    ADAPTER_COREML, AcceleratorAdapter, CachedAcceleratorVariant, decode_guest_frame, digest_hex,
-    encode_guest_frame,
+    ADAPTER_COREML, AcceleratorAdapter, CachedAcceleratorVariant, digest_hex, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{HostConnectorError, HostConnectorErrorCode};
 
 use crate::package::{
-    ComputeUnits, Element, f32_values, read_f32_strided, unpack_mlpackage_zip, write_f32_strided,
+    ComputeUnits, Element, frame_mismatch, input_frame, read_f32_strided, unpack_mlpackage_zip,
+    write_f32_strided,
 };
 
 /// Minimum OS for an fp32 ML Program built for iOS 17 (Spec 138 0.13.3).
@@ -109,11 +109,13 @@ fn sole_name<V: objc2::Message>(
     (keys.count() == 1).then(|| keys.firstObject()).flatten()
 }
 
-/// A compiled, loaded variant and its single input and output names.
+/// A compiled, loaded variant, its single input and output names, and the
+/// input's fixed shape (the converter makes every dimension static).
 struct LoadedModel {
     model: Retained<MLModel>,
     input: Retained<NSString>,
     output: Retained<NSString>,
+    input_shape: Vec<usize>,
 }
 
 /// The Core ML adapter (`coreml`, Spec 138 FR-063 to FR-066).
@@ -209,10 +211,20 @@ impl CoreMlAdapter {
             .ok_or_else(|| failed("Core ML variant must have exactly one input"))?;
         let output = sole_name(&outputs)
             .ok_or_else(|| failed("Core ML variant must have exactly one output"))?;
+        // SAFETY: getters on the sole input's description of a loaded model.
+        let input_shape = inputs
+            .objectForKey(&input)
+            .and_then(|feature| unsafe { feature.multiArrayConstraint() })
+            .and_then(|constraint| {
+                let shape = unsafe { constraint.shape() };
+                usizes(&shape)
+            })
+            .ok_or_else(|| failed("Core ML variant input must be a multi-array"))?;
         Ok(LoadedModel {
             model,
             input,
             output,
+            input_shape,
         })
     }
 }
@@ -356,22 +368,13 @@ impl CoreMlAdapter {
         let contract = variant
             .frame_contract()
             .ok_or_else(|| failed("variant conformance vector has no frame contract"))?;
-        let (dtype, dims, payload) = decode_guest_frame(input)?;
-        if dtype != contract.input_dtype {
-            return Err(failed("input frame dtype does not match the variant"));
-        }
-        let shape: Vec<usize> = dims
-            .iter()
-            .map(|dim| usize::try_from(*dim).ok())
-            .collect::<Option<_>>()
-            .ok_or_else(|| failed("input dims are too large"))?;
-        let count = shape
-            .iter()
-            .try_fold(1_usize, |total, dim| total.checked_mul(*dim))
-            .ok_or_else(|| failed("input dims are too large"))?;
-        let values =
-            f32_values(&payload, count).ok_or_else(|| failed("input payload is not f32 values"))?;
+        let (shape, values) = input_frame(input, contract.input_dtype)?;
         let loaded = self.load(variant)?;
+        if shape != loaded.input_shape {
+            return Err(frame_mismatch(
+                "input frame dims do not match the variant's input shape",
+            ));
+        }
         let (out_shape, out_values) = run(loaded, &shape, &values)?;
         let out_dims = out_shape
             .iter()

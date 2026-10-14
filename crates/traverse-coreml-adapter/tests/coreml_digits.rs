@@ -159,7 +159,14 @@ fn execute(
             }),
             cancel_requested: false,
         })
-        .map_err(|error| format!("{:?}: {}", error.reason, error.message))?;
+        .map_err(|error| {
+            format!(
+                "{} {:?}: {}",
+                error.code.as_str(),
+                error.reason,
+                error.message
+            )
+        })?;
     let output = connector
         .io
         .read_model_output(&result.artifact_ref.unwrap_or_default(), 4096)
@@ -246,6 +253,25 @@ fn malformed_inputs_fail_closed_without_touching_the_model() {
     // Payload shorter than its dims.
     let truncated = &input[..input.len() - 4];
     assert!(execute(&mut connector, &digest, truncated, &["coreml"]).is_err());
+    // Spec 138 0.14.0 (Decision 115): the shared reject corpus fails on the
+    // `coreml` placement with the same code and reason as on `wasm-cpu`.
+    let vector: Value = serde_json::from_slice(
+        &fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/models/conformance/signed-digits-onnx.json"
+        ))
+        .expect("vector"),
+    )
+    .expect("vector json");
+    for case in vector["rejected_cases"].as_array().expect("rejected") {
+        let frame = hex(case["input_frame_hex"].as_str().expect("frame"));
+        let error = execute(&mut connector, &digest, &frame, &["coreml"]).expect_err("rejected");
+        assert!(
+            error.starts_with("invalid_input Some(FrameMismatch)"),
+            "{}: {error}",
+            case["name"]
+        );
+    }
 }
 
 /// BirdNET v2.4 on the Decision 113 clip set, Decision 106's bar: top-5

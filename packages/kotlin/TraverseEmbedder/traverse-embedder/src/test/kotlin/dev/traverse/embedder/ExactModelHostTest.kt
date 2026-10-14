@@ -90,6 +90,35 @@ class ExactModelHostTest {
     @Test
     fun preparedV3VectorIsByteIdenticalFreshAndWarm() = vectorCheck("signed-prepared-v3.json", 4096, rounds = 3)
 
+    /** Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with exactly its code and reason. */
+    @Test
+    fun onnxRejectCorpusFailsWithItsCodeAndReason() = runBlocking {
+        val vector = json("fixtures/models/conformance/signed-digits-onnx.json")
+        val pin = pin(vector["pin"]!!)
+        ExactModelHost(listOf(pin), listOf(vector.s("trusted_public_key_hex")), "commercial").use { host ->
+            val dir = "fixtures/models/${vector.s("package_dir")}"
+            host.registerPackage(
+                repoFile("$dir/model.manifest.json").readBytes(),
+                repoFile("$dir/model.wasm").readBytes(),
+                repoFile("$dir/model.sig.json").readBytes(),
+            )
+            val rejected = vector["rejected_cases"]!!.jsonArray.map { it.jsonObject }
+            assertEquals(7, rejected.size)
+            for (case in rejected) {
+                val inputRef = host.stageModelInput(hex(case.s("input_frame_hex")), 4096)
+                try {
+                    host.execute(
+                        pin.modelId, pin.version, pin.digest, inputRef, "policy-1", "sensitive",
+                        vector["request"]!!.jsonObject.s("input_schema_ref"), "1.0.0", 56, listOf("sensitive"),
+                    )
+                    fail("${case.s("name")} must be rejected")
+                } catch (error: ExactModelError) {
+                    assertEquals(case.s("name"), case.s("code") to case.s("reason"), error.code to error.reason)
+                }
+            }
+        }
+    }
+
     /** The public error shape every embedder compares: code, reason, detail. */
     private fun errorJson(error: ExactModelError): JsonObject = buildJsonObject {
         put("ok", false)

@@ -2243,13 +2243,7 @@ fn execute_wasm_cpu_model(
             "model_execute trap or fuel exhausted",
         ));
     };
-    if out_len < 0 || u64::try_from(out_len).unwrap_or(u64::MAX) > max_output_bytes {
-        return Err(model_host_err(
-            HostConnectorErrorCode::ResourceExhausted,
-            "model returned invalid output length",
-        ));
-    }
-    let mut output = vec![0_u8; usize::try_from(out_len).unwrap_or(0)];
+    let mut output = vec![0_u8; guest_execute_outcome(out_len, max_output_bytes)?];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
 }
@@ -2493,6 +2487,66 @@ fn pages_for(bytes: usize) -> u64 {
 
 /// Output capacity handed to the guest, clamped to `i32`.
 #[allow(clippy::cast_possible_truncation)]
+/// Guest reject code: generic reject (Spec 138 0.14.0, Decision 115). Any
+/// negative return without its own meaning is treated as this one.
+pub const GUEST_REJECT_GENERIC: i32 = -1;
+/// Guest reject code: the input frame does not match the guest's tensor
+/// contract (frame version, dtype, rank, dims, payload length, or values).
+pub const GUEST_REJECT_FRAME_MISMATCH: i32 = -2;
+/// Guest reject code: inference failed inside the guest.
+pub const GUEST_REJECT_INFERENCE_FAILED: i32 = -3;
+/// Guest reject code: the output does not match the declared output shape.
+pub const GUEST_REJECT_OUTPUT_MISMATCH: i32 = -4;
+
+/// Maps a `model_execute` return to the output length, or to the stable
+/// failure for a guest reject code or an over-ceiling length (Spec 138
+/// 0.14.0, Decision 115). The public code follows who is at fault, so every
+/// engine and host reports the same rejection the same way.
+///
+/// # Errors
+///
+/// - `-2` → `invalid_input` / `frame_mismatch`;
+/// - `-3` → `execution_failed` / `inference_failed`;
+/// - `-4` → `model_incompatible` / `output_mismatch`;
+/// - `-1` or any other negative → `execution_failed` / `guest_rejected`;
+/// - a length above `max_output` → `resource_exhausted` /
+///   `output_limit_exceeded`.
+pub fn guest_execute_outcome(out_len: i32, max_output: u64) -> Result<usize, HostConnectorError> {
+    let Ok(len) = usize::try_from(out_len) else {
+        let (code, reason, message) = match out_len {
+            GUEST_REJECT_FRAME_MISMATCH => (
+                HostConnectorErrorCode::InvalidInput,
+                ModelFailureReason::FrameMismatch,
+                "model rejected the input frame: it does not match the package's tensor contract",
+            ),
+            GUEST_REJECT_INFERENCE_FAILED => (
+                HostConnectorErrorCode::ExecutionFailed,
+                ModelFailureReason::InferenceFailed,
+                "model inference failed inside the guest",
+            ),
+            GUEST_REJECT_OUTPUT_MISMATCH => (
+                HostConnectorErrorCode::ModelIncompatible,
+                ModelFailureReason::OutputMismatch,
+                "model output does not match the package's declared output shape",
+            ),
+            _ => (
+                HostConnectorErrorCode::ExecutionFailed,
+                ModelFailureReason::GuestRejected,
+                "model rejected the call",
+            ),
+        };
+        return Err(model_error(code, reason, message));
+    };
+    if len as u64 > max_output {
+        return Err(model_error(
+            HostConnectorErrorCode::ResourceExhausted,
+            ModelFailureReason::OutputLimitExceeded,
+            "model output exceeds the output ceiling",
+        ));
+    }
+    Ok(len)
+}
+
 fn output_capacity(max_output: u64) -> i32 {
     i32::try_from(max_output.min(u64::from(i32::MAX as u32))).unwrap_or(i32::MAX)
 }
@@ -2661,13 +2715,7 @@ fn execute_wasmi_model(
         out_cap,
     );
     let out_len = run_fuel_slices(&mut store, func, args, limits.fuel, control, execute_failed)?;
-    if out_len < 0 || out_len as u64 > limits.max_output {
-        return Err(model_error_plain(
-            HostConnectorErrorCode::ResourceExhausted,
-            "model returned invalid output length",
-        ));
-    }
-    let mut output = vec![0_u8; out_len as usize];
+    let mut output = vec![0_u8; guest_execute_outcome(out_len, limits.max_output)?];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
 }
@@ -2786,8 +2834,12 @@ fn run_fuel_slices<Params: wasmi::WasmParams>(
     loop {
         let Call::OutOfFuel(paused) = call else {
             // No host imports exist, so the only other outcome is Finished;
-            // anything else maps to an invalid length and fails closed below.
-            break Ok(if let Call::Finished(n) = call { n } else { -1 });
+            // anything else is a generic guest reject and fails closed.
+            break Ok(if let Call::Finished(n) = call {
+                n
+            } else {
+                GUEST_REJECT_GENERIC
+            });
         };
         if control.cancel.load(Ordering::SeqCst) {
             return Err(model_error_plain(
@@ -3845,9 +3897,9 @@ mod tests {
                 &input_ref,
                 serde_json::Map::new()
             ))
-            .expect_err("len")
+            .expect_err("guest reject")
             .code,
-            HostConnectorErrorCode::ResourceExhausted
+            HostConnectorErrorCode::ExecutionFailed
         );
 
         // Zero timeout fails closed after guest returns (elapsed > 0).
@@ -4097,7 +4149,7 @@ mod tests {
             host.invoke(&classifier_execute_request(&digest, &short_input_ref))
                 .expect_err("undersized input")
                 .code,
-            HostConnectorErrorCode::ResourceExhausted
+            HostConnectorErrorCode::ExecutionFailed
         );
 
         let frame = classifier_input_frame([1.0, 1.0, 1.0, 1.0]);
@@ -4108,9 +4160,15 @@ mod tests {
         if let Some(object) = request.payload.as_object_mut() {
             object.extend(extras);
         }
+        // This pre-0.14.0 guest answers a too-small output buffer with `-1`,
+        // which is a generic reject (Decision 115).
+        let error = host.invoke(&request).expect_err("undersized output");
         assert_eq!(
-            host.invoke(&request).expect_err("undersized output").code,
-            HostConnectorErrorCode::ResourceExhausted
+            (error.code, error.reason),
+            (
+                HostConnectorErrorCode::ExecutionFailed,
+                Some(ModelFailureReason::GuestRejected)
+            )
         );
     }
 
@@ -4443,6 +4501,44 @@ mod tests {
     }
 
     #[test]
+    fn guest_execute_outcome_maps_reject_codes_by_fault() {
+        use HostConnectorErrorCode as C;
+        use ModelFailureReason as R;
+        let cases = [
+            (
+                GUEST_REJECT_FRAME_MISMATCH,
+                C::InvalidInput,
+                R::FrameMismatch,
+            ),
+            (
+                GUEST_REJECT_INFERENCE_FAILED,
+                C::ExecutionFailed,
+                R::InferenceFailed,
+            ),
+            (
+                GUEST_REJECT_OUTPUT_MISMATCH,
+                C::ModelIncompatible,
+                R::OutputMismatch,
+            ),
+            (GUEST_REJECT_GENERIC, C::ExecutionFailed, R::GuestRejected),
+            (-5, C::ExecutionFailed, R::GuestRejected),
+            (i32::MIN, C::ExecutionFailed, R::GuestRejected),
+            (65, C::ResourceExhausted, R::OutputLimitExceeded),
+        ];
+        for (out_len, code, reason) in cases {
+            let error = guest_execute_outcome(out_len, 64).expect_err("reject");
+            assert_eq!(
+                (error.code, error.reason),
+                (code, Some(reason)),
+                "{out_len}"
+            );
+            assert!(!error.message.contains("invalid output length"));
+        }
+        assert_eq!(guest_execute_outcome(0, 64).expect("empty"), 0);
+        assert_eq!(guest_execute_outcome(64, 64).expect("at ceiling"), 64);
+    }
+
+    #[test]
     fn failure_reasons_have_stable_wire_names() {
         use ModelFailureReason as R;
         let all = [
@@ -4459,6 +4555,11 @@ mod tests {
             (R::CandidateUnsupported, "candidate_unsupported"),
             (R::HostLimitExceeded, "host_limit_exceeded"),
             (R::PlacementUnavailable, "placement_unavailable"),
+            (R::FrameMismatch, "frame_mismatch"),
+            (R::InferenceFailed, "inference_failed"),
+            (R::OutputMismatch, "output_mismatch"),
+            (R::GuestRejected, "guest_rejected"),
+            (R::OutputLimitExceeded, "output_limit_exceeded"),
         ];
         for (reason, name) in all {
             assert_eq!(reason.as_str(), name);
@@ -4736,6 +4837,38 @@ mod tests {
     }
 
     #[test]
+    fn guest_reject_codes_fail_identically_on_both_engines() {
+        use HostConnectorErrorCode as C;
+        use ModelFailureReason as R;
+        let cases = [
+            ("i32.const -2", C::InvalidInput, R::FrameMismatch),
+            ("i32.const -3", C::ExecutionFailed, R::InferenceFailed),
+            ("i32.const -4", C::ModelIncompatible, R::OutputMismatch),
+            ("i32.const -1", C::ExecutionFailed, R::GuestRejected),
+            ("i32.const -9", C::ExecutionFailed, R::GuestRejected),
+            (
+                "i32.const 60000",
+                C::ResourceExhausted,
+                R::OutputLimitExceeded,
+            ),
+        ];
+        let (mut host, _) = seeded_host();
+        for (body, code, reason) in cases {
+            let wasm = wat::parse_str(format!(
+                r#"(module (memory (export "memory") 1)
+                   (func (export "model_execute") (param i32 i32 i32 i32) (result i32) {body}))"#
+            ))
+            .expect("wat");
+            let digest = add_variant(&mut host, wasm, |_| {});
+            for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+                host.engine = engine;
+                let error = run(&mut host, &digest, serde_json::Map::new()).expect_err("reject");
+                assert_eq!((error.code, error.reason), (code, Some(reason)), "{body}");
+            }
+        }
+    }
+
+    #[test]
     fn wasmi_engine_fails_closed_like_wasmtime() {
         let (mut host, _) = seeded_host();
         host.engine = ModelEngine::Wasmi;
@@ -4807,7 +4940,7 @@ mod tests {
         );
         assert_eq!(
             code(&mut host, &bad_len),
-            HostConnectorErrorCode::ResourceExhausted
+            HostConnectorErrorCode::ExecutionFailed
         );
         // Output window spanning a second page: grow succeeds under the
         // ceiling and fails when the store limiter caps memory at one page.

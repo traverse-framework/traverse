@@ -84,6 +84,33 @@ public sealed class ExactModelHostTests
         }
     }
 
+    /// <summary>
+    /// Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with exactly
+    /// its code and reason, as on every other host.
+    /// </summary>
+    [Fact]
+    public async Task OnnxRejectCorpusFailsWithItsCodeAndReason()
+    {
+        var vector = Json("fixtures/models/conformance/signed-digits-onnx.json");
+        var pin = Pin(vector["pin"]);
+        using var host = new ExactModelHost([pin], [S(vector, "trusted_public_key_hex")], "commercial");
+        var dir = $"fixtures/models/{S(vector, "package_dir")}";
+        await host.RegisterPackageAsync(
+            Read($"{dir}/model.manifest.json"),
+            Read($"{dir}/model.wasm"),
+            Read($"{dir}/model.sig.json"));
+        var rejected = vector["rejected_cases"]!.AsArray();
+        Assert.Equal(7, rejected.Count);
+        foreach (var testCase in rejected)
+        {
+            var inputRef = host.StageModelInput(Hex(S(testCase, "input_frame_hex")), 4096);
+            var error = await Assert.ThrowsAsync<ExactModelException>(() => host.ExecuteAsync(
+                pin.ModelId, pin.Version, pin.Digest, inputRef, "policy-1", "sensitive",
+                S(vector["request"], "input_schema_ref"), "1.0.0", 56, ["sensitive"]));
+            Assert.Equal((S(testCase, "code"), S(testCase, "reason")), (error.Code, error.Reason));
+        }
+    }
+
     /// <summary>The public error shape every embedder compares: code, reason, detail.</summary>
     private static JsonObject ErrorJson(ExactModelException error)
     {

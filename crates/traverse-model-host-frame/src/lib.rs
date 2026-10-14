@@ -888,6 +888,25 @@ mod tests {
                 case["output_frame_hex"].as_str().expect("out")
             );
         }
+        // Shared reject corpus (Spec 138 0.14.0, Decision 115): model-level
+        // failures carry exactly the corpus code and reason.
+        let rejected = vector["rejected_cases"].as_array().expect("rejected");
+        assert_eq!(rejected.len(), 7);
+        for case in rejected {
+            let input = hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
+            let input_ref = stage(handle, &input);
+            let mut header = execute_header(&pin, &input_ref, "onnx-reject");
+            header["payload"]["input_schema_ref"] = vector["request"]["input_schema_ref"].clone();
+            header["payload"]["max_output_bytes"] = json!(56);
+            let executed = call(handle, &header, &[]);
+            assert_eq!(executed["ok"], json!(false), "{executed}");
+            assert_eq!(
+                (&executed["error"]["code"], &executed["error"]["reason"]),
+                (&case["code"], &case["reason"]),
+                "{}",
+                case["name"]
+            );
+        }
         call(handle, &json!({ "op": "destroy" }), &[]);
     }
 
