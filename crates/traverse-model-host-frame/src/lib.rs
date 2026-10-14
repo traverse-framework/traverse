@@ -901,10 +901,12 @@ mod tests {
             let executed = call(handle, &header, &[]);
             assert_eq!(executed["ok"], json!(false), "{executed}");
             assert_eq!(
-                (&executed["error"]["code"], &executed["error"]["reason"]),
-                (&case["code"], &case["reason"]),
-                "{}",
-                case["name"]
+                (
+                    &case["name"],
+                    &executed["error"]["code"],
+                    &executed["error"]["reason"]
+                ),
+                (&case["name"], &case["code"], &case["reason"])
             );
         }
         call(handle, &json!({ "op": "destroy" }), &[]);
