@@ -20,6 +20,9 @@ rebuild_out="$(mktemp "${TMPDIR:-/tmp}/traverse-runtime-rebuild.XXXXXX")"
 bash "${repo_root}/scripts/build-runtime-wasm.sh" >"${rebuild_out}"
 digest="$(tail -n 1 "${rebuild_out}")"
 built_path="$(tail -n 2 "${rebuild_out}" | head -n 1)"
+mkdir -p "${repo_root}/target/runtime-wasm-rebuild"
+cp "${built_path}" "${repo_root}/target/runtime-wasm-rebuild/runtime.wasm"
+printf '%s\n' "${digest}" >"${repo_root}/target/runtime-wasm-rebuild/runtime.wasm.sha256"
 rm -f "${rebuild_out}"
 
 if [[ "${digest}" != "${expected}" ]]; then
@@ -27,7 +30,12 @@ if [[ "${digest}" != "${expected}" ]]; then
   echo "  committed: ${expected}" >&2
   echo "  rebuilt:   ${digest}" >&2
   echo "  artifact:  ${built_path}" >&2
-  exit 1
+  # Linux CI is the source of truth for committed bytes (#1659). Darwin
+  # rustc can emit a different wasm32 object; fail only on Linux runners.
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    exit 1
+  fi
+  echo "runtime_wasm_reproducibility_check: Darwin mismatch tolerated; Linux CI is authoritative" >&2
 fi
 
 python3 - "${repo_root}" "${expected}" <<'PY'

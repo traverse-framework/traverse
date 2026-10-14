@@ -263,7 +263,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Rebuild runtime.wasm and verify committed digest
+        id: rebuild
         run: bash scripts/ci/runtime_wasm_reproducibility_check.sh
+
+      - name: Upload rebuilt runtime.wasm on mismatch
+        if: failure() && steps.rebuild.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-wasm-linux-rebuild
+          path: target/runtime-wasm-rebuild/
+          if-no-files-found: warn
+          retention-days: 7
 
   native-artifact-certification:
     needs: classify-changes

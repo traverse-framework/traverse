@@ -4836,6 +4836,34 @@ mod tests {
         );
     }
 
+    /// #1681 (Decision 115): a guest that runs millions of instructions on
+    /// `wasmi` finishes in this test build. Test builds inherit the
+    /// workspace's dev profile, which optimizes wasmi with debug assertions
+    /// off. If wasmi's tail-call dispatch ran without sibling-call
+    /// optimization, each executed op would add a native stack frame, and
+    /// this would abort with a stack overflow instead of returning.
+    #[test]
+    fn wasmi_long_guest_runs_without_native_stack_growth() {
+        let (mut host, _) = seeded_host();
+        host.engine = ModelEngine::Wasmi;
+        let wasm = wat::parse_str(
+            r#"(module (memory (export "memory") 1)
+               (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+                 (local $i i32)
+                 (local.set $i (i32.const 5000000))
+                 (loop $spin
+                   (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+                   (br_if $spin (local.get $i)))
+                 i32.const 0))"#,
+        )
+        .expect("wat");
+        let digest = add_variant(&mut host, wasm, |m| m.max_fuel = 100_000_000);
+        assert_eq!(
+            run(&mut host, &digest, serde_json::Map::new()).expect("long guest"),
+            Vec::<u8>::new()
+        );
+    }
+
     #[test]
     fn guest_reject_codes_fail_identically_on_both_engines() {
         use HostConnectorErrorCode as C;
