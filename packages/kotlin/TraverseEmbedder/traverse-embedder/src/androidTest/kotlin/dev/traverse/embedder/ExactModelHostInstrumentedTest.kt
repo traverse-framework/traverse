@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -91,6 +92,39 @@ class ExactModelHostInstrumentedTest {
 
     @Test
     fun onnxRunnerVectorIsByteIdenticalWithSimd() = vectorCheck("signed-digits-onnx.json", 56)
+
+    /**
+     * Spec 138 0.14.0 (Decision 115, #1693): the shared reject corpus fails on the Android
+     * runtime with exactly its code and reason, as on every other host.
+     */
+    @Test
+    fun onnxRejectCorpusFailsWithItsCodeAndReason() = runBlocking {
+        requireLoadedFromApk()
+        val vector = json("fixtures/models/conformance/signed-digits-onnx.json")
+        val pin = pin(vector["pin"]!!)
+        ExactModelHost(listOf(pin), listOf(vector.s("trusted_public_key_hex")), "commercial").use { host ->
+            val dir = "fixtures/models/${vector.s("package_dir")}"
+            host.registerPackage(
+                read("$dir/model.manifest.json"),
+                read("$dir/model.wasm"),
+                read("$dir/model.sig.json"),
+            )
+            val rejected = vector["rejected_cases"]!!.jsonArray.map { it.jsonObject }
+            assertEquals(7, rejected.size)
+            for (case in rejected) {
+                val inputRef = host.stageModelInput(hex(case.s("input_frame_hex")), 4096)
+                try {
+                    host.execute(
+                        pin.modelId, pin.version, pin.digest, inputRef, "policy-1", "sensitive",
+                        vector["request"]!!.jsonObject.s("input_schema_ref"), "1.0.0", 56, listOf("sensitive"),
+                    )
+                    fail("${case.s("name")} must be rejected")
+                } catch (error: ExactModelError) {
+                    assertEquals(case.s("name"), case.s("code") to case.s("reason"), error.code to error.reason)
+                }
+            }
+        }
+    }
 
     /** Guest ABI v3 (Decision 110): the first round prepares, later rounds restore the snapshot. */
     @Test
