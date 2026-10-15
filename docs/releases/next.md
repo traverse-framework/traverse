@@ -13,6 +13,16 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - Spec 1402 FR-012 amended to 1.5.0; contract `execution.resources` is
   optional and backwards-compatible.
 
+## Fix: reproducible `runtime.wasm` build + digest CI (`#1659`)
+
+- `scripts/build-runtime-wasm.sh` rebuilds `runtime.wasm` from
+  `traverse-runtime-wasm` via `traverse-native-bridge` with path-stable
+  `RUSTFLAGS` and writes `runtime-release.json` from the workspace version.
+- `scripts/ci/runtime_wasm_reproducibility_check.sh` fails CI when a rebuild
+  digest drifts from `runtime/runtime.wasm.sha256` (or any bundled copy).
+- Committed `runtime/runtime-release.json` now reports workspace `0.15.0`
+  (was stale `0.12.0`) and a freshly rebuilt digest.
+
 ## Breaking: host-side contract input schema enforcement (`#1658`)
 
 - Capability inputs are validated against the contract `inputs.schema` before
