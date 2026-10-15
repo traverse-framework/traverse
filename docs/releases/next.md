@@ -2,6 +2,12 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Feature: packaged `traverse-mcp` Mode A binaries (`#1653`)
+
+- Product tags publish `traverse-mcp-vX.Y.Z` with Linux x86_64 + macOS arm64
+  archives, `SHA256SUMS`, and build-provenance attestations (never Latest).
+- `traverse-mcp --version` reports workspace version and the tagged commit.
+
 ## Fix: `model verify --model-usage` and JSON usage errors (`#1686`)
 
 - `traverse-cli model verify` (and `conformance generate|check`) accept
