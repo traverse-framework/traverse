@@ -11,7 +11,7 @@
 //! The unsigned `model.manifest.json` is written next to it; signing is a
 //! separate step (`model sign`, or the fixture signing script).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
@@ -41,18 +41,210 @@ pub const AUDITED_ONNX_RUNNER_SHA256: &str =
 const PAGE: u64 = 65_536;
 const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 
-/// Tensor config fixed at package time; mirrors the runner's `TensorConfig`.
+/// Physical element type carried in a guest-frame payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElementType {
+    /// Little-endian IEEE `f32` (4 bytes). Finite values only.
+    F32,
+    /// Little-endian `i64` (8 bytes). Used for token ids / masks.
+    I64,
+}
+
+impl ElementType {
+    /// Bytes per element in the frame payload.
+    #[must_use]
+    pub const fn width(self) -> usize {
+        match self {
+            Self::F32 => 4,
+            Self::I64 => 8,
+        }
+    }
+}
+
+impl Default for ElementType {
+    fn default() -> Self {
+        Self::F32
+    }
+}
+
+/// One named tensor fixed at package time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NamedTensor {
+    /// ONNX graph tensor name.
+    pub name: String,
+    /// Exact shape after symbol concretization.
+    pub shape: Vec<usize>,
+    /// Guest-defined frame dtype code this tensor's frame must carry.
+    pub dtype: u8,
+    /// Physical payload element type. Defaults to `f32`.
+    #[serde(default)]
+    pub element: ElementType,
+}
+
+/// Tensor config fixed at package time; mirrors the runner's `TensorConfig`.
+///
+/// JSON accepts the legacy single-IO form (`input_name` / `output_name` / …)
+/// and the multi-IO form (`inputs` / `outputs`). Both serialize back to the
+/// same shape they were read as, so single-IO packages keep working.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorConfig {
-    pub input_name: String,
-    pub output_name: String,
-    pub input_shape: Vec<usize>,
-    pub output_shape: Vec<usize>,
-    pub input_dtype: u8,
-    pub output_dtype: u8,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Ordered named inputs (at least one).
+    pub inputs: Vec<NamedTensor>,
+    /// Ordered named outputs (at least one).
+    pub outputs: Vec<NamedTensor>,
+    /// Symbolic dimensions to concretize (for example `{"batch": 1}`).
     pub symbols: BTreeMap<String, i64>,
+    /// Whether this config was read (and should be written) as legacy JSON.
+    legacy_single: bool,
+}
+
+impl TensorConfig {
+    /// Build a multi-IO config.
+    #[must_use]
+    pub fn multi(
+        inputs: Vec<NamedTensor>,
+        outputs: Vec<NamedTensor>,
+        symbols: BTreeMap<String, i64>,
+    ) -> Self {
+        Self {
+            inputs,
+            outputs,
+            symbols,
+            legacy_single: false,
+        }
+    }
+
+    /// Build a legacy single-IO config (`f32` elements).
+    #[must_use]
+    pub fn single(
+        input_name: impl Into<String>,
+        output_name: impl Into<String>,
+        input_shape: Vec<usize>,
+        output_shape: Vec<usize>,
+        input_dtype: u8,
+        output_dtype: u8,
+        symbols: BTreeMap<String, i64>,
+    ) -> Self {
+        Self {
+            inputs: vec![NamedTensor {
+                name: input_name.into(),
+                shape: input_shape,
+                dtype: input_dtype,
+                element: ElementType::F32,
+            }],
+            outputs: vec![NamedTensor {
+                name: output_name.into(),
+                shape: output_shape,
+                dtype: output_dtype,
+                element: ElementType::F32,
+            }],
+            symbols,
+            legacy_single: true,
+        }
+    }
+
+    /// True when the config was (or should be) the legacy single-IO JSON.
+    #[must_use]
+    pub const fn is_legacy_single(&self) -> bool {
+        self.legacy_single
+    }
+}
+
+impl<'de> Deserialize<'de> for TensorConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Multi {
+            inputs: Vec<NamedTensor>,
+            outputs: Vec<NamedTensor>,
+            #[serde(default)]
+            symbols: BTreeMap<String, i64>,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Single {
+            input_name: String,
+            output_name: String,
+            input_shape: Vec<usize>,
+            output_shape: Vec<usize>,
+            input_dtype: u8,
+            output_dtype: u8,
+            #[serde(default)]
+            symbols: BTreeMap<String, i64>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Form {
+            Multi(Multi),
+            Single(Single),
+        }
+        match Form::deserialize(deserializer)? {
+            Form::Multi(multi) => Ok(Self {
+                inputs: multi.inputs,
+                outputs: multi.outputs,
+                symbols: multi.symbols,
+                legacy_single: false,
+            }),
+            Form::Single(single) => Ok(Self::single(
+                single.input_name,
+                single.output_name,
+                single.input_shape,
+                single.output_shape,
+                single.input_dtype,
+                single.output_dtype,
+                single.symbols,
+            )),
+        }
+    }
+}
+
+impl Serialize for TensorConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.legacy_single {
+            if self.inputs.len() != 1 || self.outputs.len() != 1 {
+                return Err(serde::ser::Error::custom(
+                    "legacy single tensor config must have exactly one input and one output",
+                ));
+            }
+            #[derive(Serialize)]
+            struct Single<'a> {
+                input_name: &'a str,
+                output_name: &'a str,
+                input_shape: &'a [usize],
+                output_shape: &'a [usize],
+                input_dtype: u8,
+                output_dtype: u8,
+                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+                symbols: &'a BTreeMap<String, i64>,
+            }
+            Single {
+                input_name: &self.inputs[0].name,
+                output_name: &self.outputs[0].name,
+                input_shape: &self.inputs[0].shape,
+                output_shape: &self.outputs[0].shape,
+                input_dtype: self.inputs[0].dtype,
+                output_dtype: self.outputs[0].dtype,
+                symbols: &self.symbols,
+            }
+            .serialize(serializer)
+        } else {
+            #[derive(Serialize)]
+            struct Multi<'a> {
+                inputs: &'a [NamedTensor],
+                outputs: &'a [NamedTensor],
+                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+                symbols: &'a BTreeMap<String, i64>,
+            }
+            Multi {
+                inputs: &self.inputs,
+                outputs: &self.outputs,
+                symbols: &self.symbols,
+            }
+            .serialize(serializer)
+        }
+    }
 }
 
 /// `package.json`: the manifest fields the packager owns, plus the tensor
@@ -112,8 +304,8 @@ pub struct PackageOnnxReport {
 }
 
 /// A passed package-time preflight: `model_prepare` and one zero-valued
-/// input frame on every engine, byte-identical, with the declared output
-/// shape (Spec 138 0.14.0, Decision 115).
+/// input frame bundle on every engine, byte-identical, with the declared
+/// output bundle shapes (Spec 138 0.14.0, Decision 115; multi-IO `#1661`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PreflightReport {
     pub engines: Vec<String>,
@@ -230,28 +422,43 @@ pub fn build_package(
 }
 
 fn check_tensor_config(tensor: &TensorConfig) -> Result<(), String> {
-    if tensor.input_name.trim().is_empty() || tensor.output_name.trim().is_empty() {
-        return Err("tensor input_name and output_name are required".to_string());
+    if tensor.inputs.is_empty() || tensor.outputs.is_empty() {
+        return Err("tensor inputs and outputs must be non-empty".to_string());
     }
-    for (name, shape) in [
-        ("input_shape", &tensor.input_shape),
-        ("output_shape", &tensor.output_shape),
-    ] {
-        if shape.is_empty() || shape.len() > 8 || shape.contains(&0) {
-            return Err(format!("tensor {name} must have 1-8 non-zero dimensions"));
+    if tensor.inputs.len() > 16 || tensor.outputs.len() > 16 {
+        return Err("tensor inputs and outputs are limited to 16 each".to_string());
+    }
+    for (role, tensors) in [("input", &tensor.inputs), ("output", &tensor.outputs)] {
+        for (index, named) in tensors.iter().enumerate() {
+            if named.name.trim().is_empty() {
+                return Err(format!("tensor {role}[{index}] name is required"));
+            }
+            if named.shape.is_empty() || named.shape.len() > 8 || named.shape.contains(&0) {
+                return Err(format!(
+                    "tensor {role}[{index}] shape must have 1-8 non-zero dimensions"
+                ));
+            }
         }
     }
     Ok(())
 }
 
-/// Spec 138 frame size: `u16 version, u8 dtype, u8 rank, u32 dims[rank],
-/// u32 payload_len, f32 payload[count]`.
-fn frame_bytes(shape: &[usize]) -> Option<u64> {
-    let count = shape
+/// Spec 138 frame size for one named tensor: header plus element-width payload.
+fn frame_bytes(tensor: &NamedTensor) -> Option<u64> {
+    let count = tensor
+        .shape
         .iter()
         .try_fold(1_u64, |acc, dim| acc.checked_mul(u64::try_from(*dim).ok()?))?;
-    let header = 8 + 4 * u64::try_from(shape.len()).ok()?;
-    header.checked_add(count.checked_mul(4)?)
+    let header = 8 + 4 * u64::try_from(tensor.shape.len()).ok()?;
+    let payload = count.checked_mul(u64::try_from(tensor.element.width()).ok()?)?;
+    header.checked_add(payload)
+}
+
+/// Total size of a concatenated frame bundle.
+fn bundle_bytes(tensors: &[NamedTensor]) -> Option<u64> {
+    tensors
+        .iter()
+        .try_fold(0_u64, |acc, tensor| acc.checked_add(frame_bytes(tensor)?))
 }
 
 fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
@@ -259,24 +466,101 @@ fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
         (
             "max_input_bytes",
             spec.max_input_bytes,
-            &spec.tensor.input_shape,
+            &spec.tensor.inputs,
         ),
         (
             "max_output_bytes",
             spec.max_output_bytes,
-            &spec.tensor.output_shape,
+            &spec.tensor.outputs,
         ),
     ];
-    for (name, limit, shape) in pairs {
+    for (name, limit, tensors) in pairs {
         let needed =
-            frame_bytes(shape).ok_or_else(|| format!("tensor shape for {name} overflows"))?;
+            bundle_bytes(tensors).ok_or_else(|| format!("tensor shape for {name} overflows"))?;
         if limit < needed {
             return Err(format!(
-                "{name} {limit} is below the {needed}-byte tensor frame"
+                "{name} {limit} is below the {needed}-byte tensor frame bundle"
             ));
         }
     }
     Ok(())
+}
+
+/// Public helpers used by package-time preflight (Spec 138 FR-072).
+impl TensorConfig {
+    /// Byte length of the zero-valued input bundle built for preflight.
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> Option<u64> {
+        bundle_bytes(&self.inputs)
+    }
+
+    /// Byte length of the declared output bundle.
+    #[must_use]
+    pub fn output_bundle_bytes(&self) -> Option<u64> {
+        bundle_bytes(&self.outputs)
+    }
+
+    /// A zero-valued input bundle matching `inputs` order and element types.
+    #[must_use]
+    pub fn zero_input_bundle(&self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        for tensor in &self.inputs {
+            let count: usize = tensor.shape.iter().product();
+            let dims: Vec<u32> = tensor
+                .shape
+                .iter()
+                .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
+                .collect();
+            let payload_len = count.saturating_mul(tensor.element.width());
+            out.extend_from_slice(&traverse_runtime::exact_model::encode_guest_frame(
+                tensor.dtype,
+                &dims,
+                &vec![0; payload_len],
+            ));
+        }
+        Some(out)
+    }
+
+    /// Whether `bundle` is exactly one frame per declared output tensor.
+    #[must_use]
+    pub fn output_bundle_matches(&self, bundle: &[u8]) -> bool {
+        let mut offset: usize = 0;
+        for tensor in &self.outputs {
+            let Some(frame_len) = frame_bytes(tensor).and_then(|n| usize::try_from(n).ok()) else {
+                return false;
+            };
+            let Some(frame) = bundle.get(offset..offset.saturating_add(frame_len)) else {
+                return false;
+            };
+            let Ok((dtype, dims, payload)) =
+                traverse_runtime::exact_model::decode_guest_frame(frame)
+            else {
+                return false;
+            };
+            let declared: Vec<u32> = tensor
+                .shape
+                .iter()
+                .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
+                .collect();
+            if dtype != tensor.dtype
+                || dims != declared
+                || payload.len() != count_elems(&tensor.shape).saturating_mul(tensor.element.width())
+            {
+                return false;
+            }
+            // decode_guest_frame accepts trailing bytes after the first frame;
+            // require an exact slice match by length.
+            if frame.len() != frame_len {
+                return false;
+            }
+            offset = offset.saturating_add(frame_len);
+        }
+        offset == bundle.len()
+    }
+}
+
+fn count_elems(shape: &[usize]) -> usize {
+    shape.iter().product()
 }
 
 fn model_blob(tensor: &TensorConfig, onnx: &[u8]) -> Result<Vec<u8>, String> {
@@ -760,21 +1044,21 @@ mod tests {
             cases.push((value, expected));
         };
         spec_with(
-            |s| s.tensor.input_name = " ".to_string(),
-            "input_name and output_name",
+            |s| s.tensor.inputs[0].name = " ".to_string(),
+            "input[0] name is required",
         );
         spec_with(
-            |s| s.tensor.output_name = String::new(),
-            "input_name and output_name",
+            |s| s.tensor.outputs[0].name = String::new(),
+            "output[0] name is required",
         );
-        spec_with(|s| s.tensor.input_shape = vec![], "input_shape must have");
+        spec_with(|s| s.tensor.inputs[0].shape = vec![], "input[0] shape must have");
         spec_with(
-            |s| s.tensor.output_shape = vec![1, 0],
-            "output_shape must have",
+            |s| s.tensor.outputs[0].shape = vec![1, 0],
+            "output[0] shape must have",
         );
         spec_with(
-            |s| s.tensor.input_shape = vec![1; 9],
-            "input_shape must have",
+            |s| s.tensor.inputs[0].shape = vec![1; 9],
+            "input[0] shape must have",
         );
         spec_with(
             |s| s.max_input_bytes = 271,
@@ -784,7 +1068,7 @@ mod tests {
             |s| s.max_output_bytes = 55,
             "max_output_bytes 55 is below the 56-byte",
         );
-        spec_with(|s| s.tensor.input_shape = vec![usize::MAX, 2], "overflows");
+        spec_with(|s| s.tensor.inputs[0].shape = vec![usize::MAX, 2], "overflows");
         spec_with(
             |s| s.max_memory_bytes = 65_536,
             "below the packaged initial memory",
@@ -919,8 +1203,81 @@ mod tests {
     fn passed(_: &Package, tensor: &TensorConfig) -> Result<PreflightReport, String> {
         Ok(PreflightReport {
             engines: vec!["stub".to_string()],
-            input_frame_bytes: u64::try_from(tensor.input_shape.len()).unwrap_or(0),
+            input_frame_bytes: tensor.input_bundle_bytes().unwrap_or(0),
             output_frame_sha256: String::new(),
         })
+    }
+
+    #[test]
+    fn accepts_multi_io_tensor_config_and_i64_frame_limits() {
+        let mut spec = spec();
+        spec.tensor = TensorConfig::multi(
+            vec![
+                NamedTensor {
+                    name: "input_ids".into(),
+                    shape: vec![1, 4],
+                    dtype: 6,
+                    element: ElementType::I64,
+                },
+                NamedTensor {
+                    name: "attention_mask".into(),
+                    shape: vec![1, 4],
+                    dtype: 6,
+                    element: ElementType::I64,
+                },
+            ],
+            vec![
+                NamedTensor {
+                    name: "last_hidden_state".into(),
+                    shape: vec![1, 4, 8],
+                    dtype: 2,
+                    element: ElementType::F32,
+                },
+                NamedTensor {
+                    name: "pooler_output".into(),
+                    shape: vec![1, 8],
+                    dtype: 3,
+                    element: ElementType::F32,
+                },
+            ],
+            BTreeMap::new(),
+        );
+        spec.max_input_bytes = 96;
+        spec.max_output_bytes = 196;
+        check_tensor_config(&spec.tensor).expect("multi ok");
+        check_frame_limits(&spec).expect("limits ok");
+        assert_eq!(spec.tensor.input_bundle_bytes(), Some(96));
+        assert_eq!(spec.tensor.output_bundle_bytes(), Some(196));
+        let blob = model_blob(&spec.tensor, b"onnx").expect("blob");
+        let config_len =
+            usize::try_from(u32::from_le_bytes(blob[8..12].try_into().unwrap())).unwrap();
+        let embedded: TensorConfig =
+            serde_json::from_slice(&blob[16..16 + config_len]).expect("config");
+        assert!(!embedded.is_legacy_single());
+        assert_eq!(embedded.inputs.len(), 2);
+        assert_eq!(embedded.inputs[0].element, ElementType::I64);
+        spec.max_input_bytes = 95;
+        assert!(
+            check_frame_limits(&spec)
+                .unwrap_err()
+                .contains("max_input_bytes 95 is below the 96-byte")
+        );
+    }
+
+    #[test]
+    fn legacy_tensor_json_round_trips() {
+        let legacy: TensorConfig = serde_json::from_value(serde_json::json!({
+            "input_name": "x",
+            "output_name": "y",
+            "input_shape": [1, 64],
+            "output_shape": [1, 10],
+            "input_dtype": 2,
+            "output_dtype": 3
+        }))
+        .expect("legacy");
+        assert!(legacy.is_legacy_single());
+        let value = serde_json::to_value(&legacy).expect("ser");
+        assert_eq!(value["input_name"], "x");
+        assert!(value.get("inputs").is_none());
     }
 }

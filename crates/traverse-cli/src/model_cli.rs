@@ -20,8 +20,8 @@ use traverse_runtime::exact_model::{
     ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     ModelEngine, ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU,
-    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, decode_guest_frame,
-    encode_guest_frame, sign_model_manifest,
+    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, encode_guest_frame,
+    sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -1023,7 +1023,16 @@ pub(crate) fn preflight_package(
         wasm: package.wasm.clone(),
         signature: serde_json::to_vec(&signature).unwrap_or_default(),
     };
-    let input = zero_frame(tensor);
+    let input = tensor.zero_input_bundle().ok_or_else(|| {
+        fail(
+            "none",
+            json!({
+                "code": "model_incompatible",
+                "reason": null,
+                "message": "tensor config input bundle overflows",
+            }),
+        )
+    })?;
     let public = ed25519_dalek::SigningKey::from_bytes(&PREFLIGHT_SECRET)
         .verifying_key()
         .to_bytes();
@@ -1043,13 +1052,13 @@ pub(crate) fn preflight_package(
             json!({ "code": "execution_failed", "reason": null, "message": error.to_string() }),
         )
     })?;
-    if !output_matches(&output, tensor) {
+    if !tensor.output_bundle_matches(&output) {
         return Err(fail(
             "all",
             json!({
                 "code": "model_incompatible",
                 "reason": ModelFailureReason::OutputMismatch.as_str(),
-                "message": "preflight output frame does not carry the declared output dtype and shape",
+                "message": "preflight output frame bundle does not carry the declared output dtypes and shapes",
             }),
         ));
     }
@@ -1063,26 +1072,14 @@ pub(crate) fn preflight_package(
     })
 }
 
-/// Whether an output frame carries the tensor config's output dtype and shape.
+/// Whether an output frame bundle carries every declared output dtype and shape.
 fn output_matches(output: &[u8], tensor: &crate::model_packaging::TensorConfig) -> bool {
-    let declared: Vec<u32> = tensor
-        .output_shape
-        .iter()
-        .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
-        .collect();
-    decode_guest_frame(output)
-        .is_ok_and(|(dtype, dims, _)| dtype == tensor.output_dtype && dims == declared)
+    tensor.output_bundle_matches(output)
 }
 
-/// A zero-valued `f32` input frame matching the tensor config.
+/// A zero-valued input bundle matching the tensor config (legacy or multi-IO).
 fn zero_frame(tensor: &crate::model_packaging::TensorConfig) -> Vec<u8> {
-    let dims: Vec<u32> = tensor
-        .input_shape
-        .iter()
-        .map(|dim| u32::try_from(*dim).unwrap_or(u32::MAX))
-        .collect();
-    let count: usize = tensor.input_shape.iter().product();
-    encode_guest_frame(tensor.input_dtype, &dims, &vec![0; count.saturating_mul(4)])
+    tensor.zero_input_bundle().unwrap_or_default()
 }
 
 /// Run a frame on every engine and require byte-identical output.
@@ -1760,6 +1757,25 @@ mod tests {
         assert!(!output_matches(&frame(3, &[10, 1]), &tensor));
         assert!(!output_matches(b"not a frame", &tensor));
         assert_eq!(zero_frame(&tensor).len(), 4 + 8 + 4 + 256);
+
+        let multi: crate::model_packaging::TensorConfig = serde_json::from_value(json!({
+            "inputs": [
+                {"name": "input_ids", "shape": [1, 4], "dtype": 6, "element": "i64"},
+                {"name": "attention_mask", "shape": [1, 4], "dtype": 6, "element": "i64"}
+            ],
+            "outputs": [
+                {"name": "last_hidden_state", "shape": [1, 4, 8], "dtype": 2},
+                {"name": "pooler_output", "shape": [1, 8], "dtype": 3}
+            ]
+        }))
+        .expect("multi");
+        assert_eq!(zero_frame(&multi).len(), 96);
+        let hidden = encode_guest_frame(2, &[1, 4, 8], &[0; 128]);
+        let pooler = encode_guest_frame(3, &[1, 8], &[0; 32]);
+        let mut good = hidden.clone();
+        good.extend_from_slice(&pooler);
+        assert!(output_matches(&good, &multi));
+        assert!(!output_matches(&hidden, &multi));
     }
 
     /// #1591 DoD: `model package-onnx` → `model sign` → `model verify` →
