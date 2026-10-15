@@ -2,8 +2,6 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
-<<<<<<< HEAD
-
 ## Docs/packaging: CLI install path + ONNX runner distribution (`#1687`)
 
 - README and `docs/model-packaging-guide.md` document `cargo install
@@ -14,7 +12,14 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - `model package-onnx` fails closed when the given runner digest is not the
   audited guest. CI installs the CLI from a packaged `.crate` and runs the
   digits-onnx package → verify → conformance path.
-=======
+
+## Fix: reject invalid web `modelUsage` (`#1685`)
+
+- `ExactModelBrowserHost` and the framed native create path only accept
+  `commercial` | `non_commercial`. Any other value fails closed with
+  `usage_invalid` and structured `detail` (`field: model_usage`).
+- Spec 138 0.14.2; shared rights suite scenario 11.
+
 ## Fix: `model verify --model-usage` and JSON usage errors (`#1686`)
 
 - `traverse-cli model verify` (and `conformance generate|check`) accept
@@ -28,8 +33,6 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - When `--json` is present, argument/usage errors (malformed keys, unknown
   flags, bad `--model-usage`) emit a JSON error envelope on stdout with
   `error.code: "usage_error"` and a non-zero exit.
-
->>>>>>> origin/main
 
 ## Fix: host-configurable nested limits for `runtime.wasm` (`#1656`)
 

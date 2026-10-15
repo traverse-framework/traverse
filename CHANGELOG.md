@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the
@@ -11,7 +10,17 @@
   with sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` and build provenance attestation.
 - `traverse-cli model package-onnx` rejects a runner whose digest is not the
   audited guest. CI covers the published-style `.crate` install path.
-=======
+
+### Reject invalid `modelUsage` on every string-typed host (#1685)
+
+- Web `ExactModelBrowserHost`, and the framed create path used by Swift,
+  Kotlin and .NET, now fail closed with `model_incompatible` /
+  `usage_invalid` when `model_usage` is present but not exactly
+  `commercial` or `non_commercial` (including `""`, `"Commercial"`,
+  `"research"`, and non-strings).
+- The shared rights conformance suite adds scenario 11 for those cases.
+- Spec 138 amended to 0.14.2 (FR-035).
+
 ### CLI `--model-usage` and JSON usage errors (#1686)
 
 - `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`
@@ -19,8 +28,6 @@
 - Undeclared package usage no longer reports `effective_usage: non_commercial`
   as if the package declared it.
 - With `--json`, usage/flag parse errors emit a JSON error envelope on stdout.
-
->>>>>>> origin/main
 
 ### Reproducible `runtime.wasm` (#1659)
 

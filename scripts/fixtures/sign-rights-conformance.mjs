@@ -268,6 +268,70 @@ const cases = [
     ],
   },
   {
+    id: "invalid-usage-research",
+    scenarios: [11],
+    pins: [pin("permissive")],
+    model_usage: "research",
+    steps: [
+      {
+        op: "construct",
+        expect: err("model_incompatible", "usage_invalid", {
+          field: "model_usage",
+          expected: "commercial|non_commercial",
+          actual: "research",
+        }),
+      },
+    ],
+  },
+  {
+    id: "invalid-usage-commercial-capitalized",
+    scenarios: [11],
+    pins: [pin("permissive")],
+    model_usage: "Commercial",
+    steps: [
+      {
+        op: "construct",
+        expect: err("model_incompatible", "usage_invalid", {
+          field: "model_usage",
+          expected: "commercial|non_commercial",
+          actual: "Commercial",
+        }),
+      },
+    ],
+  },
+  {
+    id: "invalid-usage-empty",
+    scenarios: [11],
+    pins: [pin("permissive")],
+    model_usage: "",
+    steps: [
+      {
+        op: "construct",
+        expect: err("model_incompatible", "usage_invalid", {
+          field: "model_usage",
+          expected: "commercial|non_commercial",
+          actual: "",
+        }),
+      },
+    ],
+  },
+  {
+    id: "invalid-usage-non-string",
+    scenarios: [11],
+    pins: [pin("permissive")],
+    model_usage: 42,
+    steps: [
+      {
+        op: "construct",
+        expect: err("model_incompatible", "usage_invalid", {
+          field: "model_usage",
+          expected: "commercial|non_commercial",
+          actual: "42",
+        }),
+      },
+    ],
+  },
+  {
     id: "missing-attribution",
     scenarios: [4],
     pins: [pin("missing-attribution")],
