@@ -190,14 +190,9 @@ fn rights_conformance_suite_passes_on_the_native_host() {
     for case in cases {
         let id = case["id"].as_str().expect("id");
         let steps = case["steps"].as_array().expect("steps");
-        if steps
-            .first()
-            .and_then(|step| step["op"].as_str())
-            == Some("construct")
-        {
-            let error = match host_for(&suite, case) {
-                Err(error) => error,
-                Ok(_) => panic!("{id}: construct should fail"),
+        if steps.first().and_then(|step| step["op"].as_str()) == Some("construct") {
+            let Err(error) = host_for(&suite, case) else {
+                panic!("{id}: construct should fail");
             };
             assert_eq!(error_json(&error), steps[0]["expect"], "{id} construct");
             scenarios.extend(

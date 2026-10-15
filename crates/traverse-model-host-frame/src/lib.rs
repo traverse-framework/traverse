@@ -719,11 +719,7 @@ mod tests {
                 }
                 out
             };
-            if steps
-                .first()
-                .and_then(|step| step["op"].as_str())
-                == Some("construct")
-            {
+            if steps.first().and_then(|step| step["op"].as_str()) == Some("construct") {
                 let response = call(0, &create, &[]);
                 assert_eq!(as_error(&response), steps[0]["expect"], "{id} construct");
                 continue;

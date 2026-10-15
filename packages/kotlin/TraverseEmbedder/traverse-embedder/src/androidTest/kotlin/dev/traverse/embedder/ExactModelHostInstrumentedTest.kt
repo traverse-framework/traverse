@@ -175,7 +175,7 @@ class ExactModelHostInstrumentedTest {
                 return primitive.content
             }
             val steps = case["steps"]!!.jsonArray.map { it.jsonObject }
-            if (steps.firstOrNull()?.s("op") == "construct") {
+            if (steps.firstOrNull()?.let { it.s("op") } == "construct") {
                 val actual = attempt {
                     ExactModelHost(
                         pins,

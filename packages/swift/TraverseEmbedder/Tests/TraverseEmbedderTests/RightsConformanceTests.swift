@@ -41,7 +41,11 @@ final class RightsConformanceTests: XCTestCase {
     private func errorJSON(_ error: Error) throws -> [String: Any] {
         let error = try XCTUnwrap(error as? ExactModelError, "unexpected error \(error)")
         var out: [String: Any] = ["ok": false, "code": error.code, "reason": error.reason ?? NSNull()]
-        if let detail = error.detail { out["detail"] = try jsonObject(detail) }
+        if let detail = error.detail {
+            // Match native serde: omit null optional identity / usage fields.
+            let encoded = try XCTUnwrap(try jsonObject(detail) as? [String: Any])
+            out["detail"] = encoded.filter { !($0.value is NSNull) }
+        }
         return out
     }
 
