@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Avoid cloning framed model output just for length (#1697)
+
+- `ModelIoStore::output_len` reports stored output size without copying bytes;
+  the framed host `execute` path uses it for `trace.usage.output_bytes`.
+
 ### CLI `--model-usage` and JSON usage errors (#1686)
 
 - `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`

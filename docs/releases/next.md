@@ -2,6 +2,10 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Perf: framed host output length without clone (`#1697`)
+
+- `execute` reports `usage.output_bytes` via `ModelIoStore::output_len` (no buffer copy).
+
 ## Fix: `model verify --model-usage` and JSON usage errors (`#1686`)
 
 - `traverse-cli model verify` (and `conformance generate|check`) accept
