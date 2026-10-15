@@ -159,6 +159,16 @@ Map licence terms to `commercial_use` as follows:
 Hosts check these rights against the app's declared `model_usage`. For
 example, a `commercial` app can't load a `prohibited` package.
 
+`traverse-cli model verify` accepts the same declaration via
+`--model-usage commercial|non_commercial`. Without the flag, the CLI still
+uses a non-commercial *verification* default (so `prohibited` packages
+verify) but reports `rights_record.effective_usage: null` and keeps
+`verification_usage` explicit. Pass `--require-model-usage` with no
+`--model-usage` to reproduce `usage_undeclared` like Node/Browser/Swift.
+Invalid values (for example `research`) fail closed. With `--json`,
+argument and usage errors are a JSON object on stdout with
+`error.code: "usage_error"` (exit 5).
+
 **Derivatives** (converted, quantized, or fine-tuned from someone else's
 weights) use manifest schema `2.1.0` and add `rights.derivation`:
 
@@ -205,7 +215,9 @@ traverse-cli model digest out/digits/model.manifest.json --json
 traverse-cli model sign out/digits/model.manifest.json --key ~/keys/model-signing.hex
 
 # 3. Verify exactly as a host would (exits non-zero on failure).
-traverse-cli model verify out/digits --trusted-key <public-key-hex> --json
+# Pass --model-usage commercial|non_commercial to match an app's declaration;
+# without it, verification_usage stays non_commercial and effective_usage is null.
+traverse-cli model verify out/digits --trusted-key <public-key-hex> --model-usage commercial --json
 
 # 4. Generate a cross-engine conformance vector from sample input frames.
 traverse-cli model conformance generate out/digits --trusted-key <public-key-hex> \

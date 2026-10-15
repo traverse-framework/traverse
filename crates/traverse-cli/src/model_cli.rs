@@ -50,6 +50,10 @@ pub(crate) enum ModelCommand {
         package_dir: PathBuf,
         trusted_keys_hex: Vec<String>,
         limits: HostModelLimits,
+        /// App `model_usage` to judge rights against (`None` = undeclared).
+        model_usage: Option<ModelUsage>,
+        /// When set with no `--model-usage`, registration fails `usage_undeclared`.
+        require_model_usage: bool,
         json: bool,
     },
     Pin {
@@ -59,6 +63,8 @@ pub(crate) enum ModelCommand {
     ConformanceGenerate {
         package_dir: PathBuf,
         trusted_keys_hex: Vec<String>,
+        model_usage: Option<ModelUsage>,
+        require_model_usage: bool,
         inputs: Vec<PathBuf>,
         out_path: PathBuf,
         json: bool,
@@ -66,6 +72,8 @@ pub(crate) enum ModelCommand {
     ConformanceCheck {
         package_dir: PathBuf,
         trusted_keys_hex: Vec<String>,
+        model_usage: Option<ModelUsage>,
+        require_model_usage: bool,
         vector_path: PathBuf,
         json: bool,
     },
@@ -117,10 +125,12 @@ pub(crate) fn parse(args: &[String]) -> Result<ModelCommand, String> {
             parse_conformance_generate(package_dir, flags, json)
         }
         ["conformance", "check", package_dir, vector, flags @ ..] => {
-            let trusted_keys_hex = trusted_keys(flags, "conformance")?;
+            let registration = parse_registration_flags(flags, "conformance")?;
             Ok(ModelCommand::ConformanceCheck {
                 package_dir: PathBuf::from(package_dir),
-                trusted_keys_hex,
+                trusted_keys_hex: registration.trusted_keys_hex,
+                model_usage: registration.model_usage,
+                require_model_usage: registration.require_model_usage,
                 vector_path: PathBuf::from(vector),
                 json,
             })
@@ -139,12 +149,71 @@ fn parse_u64(flag: &str, value: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("{flag} must be a positive integer, got '{value}'"))
 }
 
-fn parse_verify(package_dir: &str, flags: &[&str], json: bool) -> Result<ModelCommand, String> {
+fn parse_model_usage_value(value: &str) -> Result<ModelUsage, String> {
+    match value {
+        "commercial" => Ok(ModelUsage::Commercial),
+        "non_commercial" => Ok(ModelUsage::NonCommercial),
+        other => Err(format!(
+            "--model-usage must be commercial or non_commercial (got '{other}')"
+        )),
+    }
+}
+
+fn model_usage_wire(usage: ModelUsage) -> &'static str {
+    match usage {
+        ModelUsage::Commercial => "commercial",
+        ModelUsage::NonCommercial => "non_commercial",
+    }
+}
+
+/// Drop a boolean flag from `flags`; returns whether it was present.
+fn take_bool_flag(flags: &mut Vec<&str>, name: &str) -> bool {
+    let before = flags.len();
+    flags.retain(|flag| *flag != name);
+    before != flags.len()
+}
+
+/// Shared `--trusted-key` / `--model-usage` / `--require-model-usage` parsing.
+struct RegistrationFlags {
+    trusted_keys_hex: Vec<String>,
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
+}
+
+fn parse_registration_flags(flags: &[&str], subcommand: &str) -> Result<RegistrationFlags, String> {
+    let mut flags = flags.to_vec();
+    let require_model_usage = take_bool_flag(&mut flags, "--require-model-usage");
     let mut trusted_keys_hex = Vec::new();
-    let mut limits = HostModelLimits::default();
+    let mut model_usage = None;
     for pair in flags.chunks(2) {
         match pair {
             ["--trusted-key", key] => trusted_keys_hex.push((*key).to_string()),
+            ["--model-usage", value] => model_usage = Some(parse_model_usage_value(value)?),
+            _ => return Err(help(Some(subcommand))),
+        }
+    }
+    if trusted_keys_hex.is_empty() {
+        return Err(format!(
+            "model {subcommand} requires at least one --trusted-key <hex>"
+        ));
+    }
+    Ok(RegistrationFlags {
+        trusted_keys_hex,
+        model_usage,
+        require_model_usage,
+    })
+}
+
+fn parse_verify(package_dir: &str, flags: &[&str], json: bool) -> Result<ModelCommand, String> {
+    let mut flags = flags.to_vec();
+    let require_model_usage = take_bool_flag(&mut flags, "--require-model-usage");
+    let mut trusted_keys_hex = Vec::new();
+    let mut limits = HostModelLimits::default();
+    let mut model_usage = None;
+    for pair in flags.chunks(2) {
+        match pair {
+            ["--trusted-key", key] => trusted_keys_hex.push((*key).to_string()),
+            ["--model-usage", value] => model_usage = Some(parse_model_usage_value(value)?),
             ["--max-package-bytes", value] => {
                 limits.max_package_bytes = parse_u64("--max-package-bytes", value)?;
             }
@@ -162,6 +231,8 @@ fn parse_verify(package_dir: &str, flags: &[&str], json: bool) -> Result<ModelCo
         package_dir: PathBuf::from(package_dir),
         trusted_keys_hex,
         limits,
+        model_usage,
+        require_model_usage,
         json,
     })
 }
@@ -264,44 +335,32 @@ fn parse_add_variant(
     }
 }
 
-/// `--trusted-key <hex>` pairs only; at least one is required.
-fn trusted_keys(flags: &[&str], subcommand: &str) -> Result<Vec<String>, String> {
-    let mut keys = Vec::new();
-    for pair in flags.chunks(2) {
-        match pair {
-            ["--trusted-key", key] => keys.push((*key).to_string()),
-            _ => return Err(help(Some(subcommand))),
-        }
-    }
-    if keys.is_empty() {
-        return Err(format!(
-            "model {subcommand} requires at least one --trusted-key <hex>"
-        ));
-    }
-    Ok(keys)
-}
-
 fn parse_conformance_generate(
     package_dir: &str,
     flags: &[&str],
     json: bool,
 ) -> Result<ModelCommand, String> {
+    let mut flags = flags.to_vec();
+    let require_model_usage = take_bool_flag(&mut flags, "--require-model-usage");
     let mut inputs = Vec::new();
     let mut out_path = None;
-    let mut key_flags = Vec::new();
+    let mut registration_flags = Vec::new();
     for pair in flags.chunks(2) {
         match pair {
             ["--input", path] => inputs.push(PathBuf::from(path)),
             ["--out", path] => out_path = Some(PathBuf::from(path)),
-            ["--trusted-key", key] => key_flags.extend(["--trusted-key", *key]),
+            ["--trusted-key", key] => registration_flags.extend(["--trusted-key", *key]),
+            ["--model-usage", value] => registration_flags.extend(["--model-usage", *value]),
             _ => return Err(help(Some("conformance"))),
         }
     }
-    let trusted_keys_hex = trusted_keys(&key_flags, "conformance")?;
+    let registration = parse_registration_flags(&registration_flags, "conformance")?;
     match out_path {
         Some(out_path) if !inputs.is_empty() => Ok(ModelCommand::ConformanceGenerate {
             package_dir: PathBuf::from(package_dir),
-            trusted_keys_hex,
+            trusted_keys_hex: registration.trusted_keys_hex,
+            model_usage: registration.model_usage,
+            require_model_usage: require_model_usage || registration.require_model_usage,
             inputs,
             out_path,
             json,
@@ -331,7 +390,7 @@ pub(crate) fn help(subcommand: Option<&str>) -> String {
   Example:
     traverse-cli model sign out/my-model/model.manifest.json --key ~/keys/model-signing.hex"
             .to_string(),
-        Some("verify") => "traverse-cli model verify <package-dir> --trusted-key <hex>... [--max-package-bytes N] [--max-memory-bytes N] [--max-fuel N] [--json]
+        Some("verify") => "traverse-cli model verify <package-dir> --trusted-key <hex>... [--model-usage commercial|non_commercial] [--require-model-usage] [--max-package-bytes N] [--max-memory-bytes N] [--max-fuel N] [--json]
 
   Purpose:
     Verify a package exactly as a host registers it: manifest schema and
@@ -339,8 +398,18 @@ pub(crate) fn help(subcommand: Option<&str>) -> String {
     digest, wasm-cpu target, declared limits against the host ceilings, and
     zero WASM imports. Exits non-zero with the stable code/reason on failure.
 
+  Usage policy:
+    --model-usage sets the app model_usage rights are checked against
+    (commercial|non_commercial). Without it, verification still uses a
+    non_commercial default so prohibited packages verify, but the JSON
+    report sets rights_record.effective_usage to null and keeps
+    verification_usage explicit. --require-model-usage with no
+    --model-usage reproduces usage_undeclared like other hosts. Invalid
+    --model-usage values fail closed. With --json, argument/usage errors
+    are a JSON error envelope on stdout (code usage_error).
+
   Example:
-    traverse-cli model verify out/my-model --trusted-key <public-key-hex> --json"
+    traverse-cli model verify out/my-model --trusted-key <public-key-hex> --model-usage commercial --json"
             .to_string(),
         Some("pin") => "traverse-cli model pin <package-dir> [--json]
 
@@ -351,14 +420,16 @@ pub(crate) fn help(subcommand: Option<&str>) -> String {
   Example:
     traverse-cli model pin out/my-model --json"
             .to_string(),
-        Some("conformance") => "traverse-cli model conformance generate <package-dir> --trusted-key <hex> --input <frame.bin>... --out <vector.json> [--json]
-traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <hex> [--json]
+        Some("conformance") => "traverse-cli model conformance generate <package-dir> --trusted-key <hex> [--model-usage commercial|non_commercial] [--require-model-usage] --input <frame.bin>... --out <vector.json> [--json]
+traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <hex> [--model-usage commercial|non_commercial] [--require-model-usage] [--json]
 
   Purpose:
     generate: run each input frame on wasmtime and wasmi, require
     byte-identical output, and write a conformance vector.
     check: re-run a vector on both engines and compare with its expected
     outputs. Third-party packages ship a vector that passes here.
+    --model-usage / --require-model-usage match model verify (registration
+    uses the same rights policy as other hosts).
 
   Example:
     traverse-cli model conformance generate out/my-model --trusted-key <public-key-hex> --input in.bin --out out/my-model/conformance.json"
@@ -432,8 +503,17 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             package_dir,
             trusted_keys_hex,
             limits,
+            model_usage,
+            require_model_usage,
             json,
-        } => verify(package_dir, trusted_keys_hex, *limits, *json),
+        } => verify(
+            package_dir,
+            trusted_keys_hex,
+            *limits,
+            *model_usage,
+            *require_model_usage,
+            *json,
+        ),
         ModelCommand::Pin { package_dir, json } => {
             let pin = pin_for(package_dir)?;
             let value = to_json(&pin)?;
@@ -442,16 +522,35 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
         ModelCommand::ConformanceGenerate {
             package_dir,
             trusted_keys_hex,
+            model_usage,
+            require_model_usage,
             inputs,
             out_path,
             json,
-        } => conformance_generate(package_dir, trusted_keys_hex, inputs, out_path, *json),
+        } => conformance_generate(
+            package_dir,
+            trusted_keys_hex,
+            *model_usage,
+            *require_model_usage,
+            inputs,
+            out_path,
+            *json,
+        ),
         ModelCommand::ConformanceCheck {
             package_dir,
             trusted_keys_hex,
+            model_usage,
+            require_model_usage,
             vector_path,
             json,
-        } => conformance_check(package_dir, trusted_keys_hex, vector_path, *json),
+        } => conformance_check(
+            package_dir,
+            trusted_keys_hex,
+            *model_usage,
+            *require_model_usage,
+            vector_path,
+            *json,
+        ),
         ModelCommand::AddVariant {
             package_dir,
             file,
@@ -609,28 +708,47 @@ fn pin_from(
     }
 }
 
-/// A host for one package. `non_commercial` usage judges the package itself,
-/// not an app's commercial policy, so `prohibited` packages still verify.
+/// A host for one package.
+///
+/// When `model_usage` is `None` and `require_model_usage` is false, the host
+/// uses a non-commercial *verification* default so `prohibited` packages still
+/// verify; callers must not report that default as an app `effective_usage`.
+/// When `require_model_usage` is true and usage is undeclared, registration
+/// fails with `usage_undeclared` like other hosts.
 fn host_for(
     pin: &ExactModelPin,
     trusted_keys_hex: &[String],
     limits: HostModelLimits,
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
 ) -> Result<ExactModelHostConnector, CliError> {
     let mut keys = TrustedModelKeys::new();
     for hex in trusted_keys_hex {
         keys.trust(&key_bytes(hex, "--trusted-key")?)
             .map_err(|error| CliError::UsageError(error.message))?;
     }
-    Ok(host_with_keys(pin, keys, limits))
+    Ok(host_with_keys(
+        pin,
+        keys,
+        limits,
+        model_usage,
+        require_model_usage,
+    ))
 }
 
 fn host_with_keys(
     pin: &ExactModelPin,
     keys: TrustedModelKeys,
     limits: HostModelLimits,
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
 ) -> ExactModelHostConnector {
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
-    host.model_usage = Some(ModelUsage::NonCommercial);
+    host.model_usage = if require_model_usage && model_usage.is_none() {
+        None
+    } else {
+        Some(model_usage.unwrap_or(ModelUsage::NonCommercial))
+    };
     host.host_limits = limits;
     host.policies.insert(
         CONFORMANCE_POLICY.to_string(),
@@ -695,11 +813,19 @@ fn verify(
     package_dir: &Path,
     trusted_keys_hex: &[String],
     limits: HostModelLimits,
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
     json: bool,
 ) -> Result<String, CliError> {
     let files = package_files(package_dir)?;
     let pin = pin_for(package_dir)?;
-    let mut host = host_for(&pin, trusted_keys_hex, limits)?;
+    let mut host = host_for(
+        &pin,
+        trusted_keys_hex,
+        limits,
+        model_usage,
+        require_model_usage,
+    )?;
     let variant_files = variant_files(package_dir, &files.manifest)?;
     let variant_refs: Vec<(&str, &[u8])> = variant_files
         .iter()
@@ -720,6 +846,12 @@ fn verify(
         &variant_refs,
     );
     let imports = wasm_import_count(&files.wasm);
+    // Usage actually applied to the host for this run (#1660 / #1686).
+    let verification_usage = match (model_usage, require_model_usage) {
+        (Some(usage), _) => json!(model_usage_wire(usage)),
+        (None, true) => Value::Null,
+        (None, false) => json!("non_commercial"),
+    };
     let mut report = json!({
         "ok": registered.is_ok() && imports == Some(0),
         "package_dir": package_dir.display().to_string(),
@@ -728,15 +860,19 @@ fn verify(
         "digest": pin.digest,
         "key_id": pin.key_id,
         "imports": imports,
-        // CLI verify always judges the package under non_commercial usage so
-        // `prohibited` packages still verify; apps must still declare their
-        // own `model_usage`. `rights_record.effective_usage` reflects this
-        // judgment, not an undeclared app usage (#1660).
-        "verification_usage": "non_commercial",
+        "verification_usage": verification_usage,
     });
     match &registered {
         Ok(_) => {
-            report["rights_record"] = to_json(&host.model_rights_record(&pin.digest))?;
+            let mut rights = to_json(&host.model_rights_record(&pin.digest))?;
+            // Without --model-usage, do not claim an app effective_usage even
+            // though verification used the non_commercial default (#1686).
+            if model_usage.is_none()
+                && let Some(record) = rights.as_object_mut()
+            {
+                record.insert("effective_usage".to_string(), Value::Null);
+            }
+            report["rights_record"] = rights;
             if imports != Some(0) {
                 report["error"] = json!({
                     "code": "model_incompatible",
@@ -798,11 +934,19 @@ fn execute_on(
     files: &PackageFiles,
     pin: &ExactModelPin,
     trusted_keys_hex: &[String],
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
     engine: ModelEngine,
     input: &[u8],
 ) -> Result<Vec<u8>, CliError> {
     let manifest = parse_manifest(&files.manifest)?;
-    let host = host_for(pin, trusted_keys_hex, HostModelLimits::default())?;
+    let host = host_for(
+        pin,
+        trusted_keys_hex,
+        HostModelLimits::default(),
+        model_usage,
+        require_model_usage,
+    )?;
     execute_governed(host, files, pin, &manifest, engine, input)
         .map_err(|error| CliError::ValidationFailed(error_json(&error).to_string()))
 }
@@ -888,7 +1032,7 @@ pub(crate) fn preflight_package(
         let mut keys = TrustedModelKeys::new();
         keys.trust(&public)
             .map_err(|error| fail(name, error_json(&error)))?;
-        let host = host_with_keys(&pin, keys, HostModelLimits::default());
+        let host = host_with_keys(&pin, keys, HostModelLimits::default(), None, false);
         let output = execute_governed(host, &files, &pin, &manifest, engine, &input)
             .map_err(|error| fail(name, error_json(&error)))?;
         outputs.push((name, output));
@@ -946,13 +1090,23 @@ fn cross_engine(
     files: &PackageFiles,
     pin: &ExactModelPin,
     trusted_keys_hex: &[String],
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
     input: &[u8],
 ) -> Result<Vec<u8>, CliError> {
     let mut outputs = Vec::new();
     for (name, engine) in ENGINES {
         outputs.push((
             name,
-            execute_on(files, pin, trusted_keys_hex, engine, input)?,
+            execute_on(
+                files,
+                pin,
+                trusted_keys_hex,
+                model_usage,
+                require_model_usage,
+                engine,
+                input,
+            )?,
         ));
     }
     agreed_output(outputs)
@@ -975,6 +1129,8 @@ fn agreed_output(outputs: Vec<(&str, Vec<u8>)>) -> Result<Vec<u8>, CliError> {
 fn conformance_generate(
     package_dir: &Path,
     trusted_keys_hex: &[String],
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
     inputs: &[PathBuf],
     out_path: &Path,
     json: bool,
@@ -985,7 +1141,14 @@ fn conformance_generate(
     let mut cases = Vec::new();
     for input_path in inputs {
         let input = read(input_path)?;
-        let output = cross_engine(&files, &pin, trusted_keys_hex, &input)?;
+        let output = cross_engine(
+            &files,
+            &pin,
+            trusted_keys_hex,
+            model_usage,
+            require_model_usage,
+            &input,
+        )?;
         cases.push(ConformanceCase {
             input_frame_hex: hex_encode(&input),
             output_frame_hex: hex_encode(&output),
@@ -1029,6 +1192,8 @@ fn conformance_generate(
 fn conformance_check(
     package_dir: &Path,
     trusted_keys_hex: &[String],
+    model_usage: Option<ModelUsage>,
+    require_model_usage: bool,
     vector_path: &Path,
     json: bool,
 ) -> Result<String, CliError> {
@@ -1048,7 +1213,14 @@ fn conformance_check(
         let input = hex_decode(&case.input_frame_hex).ok_or_else(|| {
             CliError::ValidationFailed(format!("case {index}: input_frame_hex is not hex"))
         })?;
-        let output = cross_engine(&files, &pin, trusted_keys_hex, &input)?;
+        let output = cross_engine(
+            &files,
+            &pin,
+            trusted_keys_hex,
+            model_usage,
+            require_model_usage,
+            &input,
+        )?;
         if hex_encode(&output) != case.output_frame_hex {
             failures.push(index);
         }
@@ -1683,6 +1855,113 @@ mod tests {
     }
 
     #[test]
+    fn verify_model_usage_flag_and_json_usage_errors() {
+        let public = test_key("public_key_hex");
+        let permissive = rights_package("permissive");
+        let prohibited = rights_package("non-commercial");
+
+        let undeclared = json_out(cli(&[
+            "verify",
+            path(&permissive),
+            "--trusted-key",
+            &public,
+            "--json",
+        ]));
+        assert_eq!(undeclared["ok"], json!(true), "{undeclared}");
+        assert_eq!(undeclared["verification_usage"], json!("non_commercial"));
+        assert_eq!(undeclared["rights_record"]["effective_usage"], Value::Null);
+
+        let commercial = json_out(cli(&[
+            "verify",
+            path(&permissive),
+            "--trusted-key",
+            &public,
+            "--model-usage",
+            "commercial",
+            "--json",
+        ]));
+        assert_eq!(commercial["ok"], json!(true), "{commercial}");
+        assert_eq!(commercial["verification_usage"], json!("commercial"));
+        assert_eq!(
+            commercial["rights_record"]["effective_usage"],
+            json!("commercial")
+        );
+
+        let denied = json_out(cli(&[
+            "verify",
+            path(&prohibited),
+            "--trusted-key",
+            &public,
+            "--model-usage",
+            "commercial",
+            "--json",
+        ]));
+        assert_eq!(denied["ok"], json!(false), "{denied}");
+        assert_eq!(denied["error"]["reason"], json!("rights_policy_denied"));
+
+        let require = json_out(cli(&[
+            "verify",
+            path(&permissive),
+            "--trusted-key",
+            &public,
+            "--require-model-usage",
+            "--json",
+        ]));
+        assert_eq!(require["ok"], json!(false), "{require}");
+        assert_eq!(require["error"]["reason"], json!("usage_undeclared"));
+        assert_eq!(require["verification_usage"], Value::Null);
+
+        let args = |rest: &[&str]| -> Vec<String> {
+            ["traverse-cli", "model"]
+                .iter()
+                .chain(rest)
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert!(
+            parse(&args(&[
+                "verify",
+                "dir",
+                "--trusted-key",
+                "k",
+                "--model-usage",
+                "research",
+            ]))
+            .unwrap_err()
+            .contains("commercial or non_commercial")
+        );
+        assert_eq!(
+            parse(&args(&[
+                "verify",
+                "dir",
+                "--trusted-key",
+                "k",
+                "--model-usage",
+                "commercial",
+                "--require-model-usage",
+            ])),
+            Ok(ModelCommand::Verify {
+                package_dir: PathBuf::from("dir"),
+                trusted_keys_hex: vec!["k".to_string()],
+                limits: HostModelLimits::default(),
+                model_usage: Some(ModelUsage::Commercial),
+                require_model_usage: true,
+                json: false,
+            })
+        );
+
+        // UsageError path with --json must be a JSON envelope (exercised via
+        // run(), matching main's emit_usage_error for the binary).
+        let short_key = cli(&["verify", path(&permissive), "--trusted-key", "00", "--json"]);
+        match short_key {
+            Err(CliError::UsageError(message)) => {
+                assert!(message.contains("64 hex"), "{message}");
+            }
+            other => panic!("expected usage error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn verify_reports_runtime_rights_rules_with_stable_reasons() {
         let public = test_key("public_key_hex");
         for ok in ["non-commercial", "restricted", "derivative"] {
@@ -1903,6 +2182,14 @@ mod tests {
             vec!["sign", "m.json"],
             vec!["verify", "dir"],
             vec!["verify", "dir", "--bogus", "x"],
+            vec![
+                "verify",
+                "dir",
+                "--trusted-key",
+                "k",
+                "--model-usage",
+                "research",
+            ],
             vec!["verify", "dir", "--trusted-key", "k", "--max-fuel", "0"],
             vec![
                 "verify",
@@ -1952,6 +2239,8 @@ mod tests {
                     max_fuel: 3,
                     ..HostModelLimits::default()
                 },
+                model_usage: None,
+                require_model_usage: false,
                 json: false,
             })
         );
