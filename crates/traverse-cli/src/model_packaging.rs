@@ -121,16 +121,6 @@ pub struct PreflightReport {
     pub output_frame_sha256: String,
 }
 
-/// Package `onnx` into `out_dir/model.wasm` + `out_dir/model.manifest.json`.
-/// `preflight` runs on the built package before anything is written, so a
-/// package that cannot run never reaches disk (Decision 115).
-///
-/// # Errors
-///
-/// Fails closed on unreadable inputs, an invalid spec or tensor config,
-/// limits the package could never meet, a runner that is not an unpatched,
-/// import-free runner guest, or a failed preflight.
-
 /// Fail closed when `runner` bytes are not the audited ONNX runner guest.
 ///
 /// Used by the CLI `model package-onnx` entrypoint so a wrong download fails
@@ -150,6 +140,15 @@ pub fn ensure_audited_onnx_runner(runner: &[u8]) -> Result<(), String> {
     ))
 }
 
+/// Package `onnx` into `out_dir/model.wasm` + `out_dir/model.manifest.json`.
+/// `preflight` runs on the built package before anything is written, so a
+/// package that cannot run never reaches disk (Decision 115).
+///
+/// # Errors
+///
+/// Fails closed on unreadable inputs, an invalid spec or tensor config,
+/// limits the package could never meet, a runner that is not an unpatched,
+/// import-free runner guest, or a failed preflight.
 pub fn package_onnx(
     runner_path: &Path,
     onnx_path: &Path,
