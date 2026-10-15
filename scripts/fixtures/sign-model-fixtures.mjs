@@ -8,7 +8,7 @@
 //
 //   node scripts/fixtures/sign-model-fixtures.mjs
 import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -135,17 +135,22 @@ const fixtures = [
   },
   // Multi-IO HF-style text-encoder toy (Decision 105, #1661): package-onnx
   // with inputs/outputs + i64 token frames; this script signs and writes the
-  // cross-host conformance vector.
+  // cross-host conformance vector when the package directory is present.
   {
     dir: "hf-text-encoder-toy-1.0.0",
     prebuilt_manifest: true,
+    optional: true,
   },
 ];
 
 const pins = {};
 for (const fixture of fixtures) {
   const dir = join(modelsDir, fixture.dir);
-  const wasm = readFileSync(join(dir, "model.wasm"));
+  const wasmPath = join(dir, "model.wasm");
+  if (fixture.optional && !existsSync(wasmPath)) {
+    continue;
+  }
+  const wasm = readFileSync(wasmPath);
   if (fixture.prebuilt_manifest) {
     const manifestBytes = readFileSync(join(dir, "model.manifest.json"));
     const manifest = JSON.parse(manifestBytes);
@@ -349,54 +354,58 @@ function textEncoderInput(ids, mask) {
 }
 
 // Multi-IO HF text-encoder toy (#1661): two i64 inputs, two f32 outputs.
-const textWasm = readFileSync(join(modelsDir, "hf-text-encoder-toy-1.0.0", "model.wasm"));
-const textRunner = new WebAssembly.Instance(new WebAssembly.Module(textWasm), {});
-const textCases = [
-  { name: "tokens_123", ids: [1, 2, 3, 0], mask: [1, 1, 1, 0] },
-  { name: "tokens_zeros", ids: [0, 0, 0, 0], mask: [0, 0, 0, 0] },
-  { name: "tokens_full_mask", ids: [7, 8, 9, 10], mask: [1, 1, 1, 1] },
-];
-writeJson(join(modelsDir, "conformance", "signed-hf-text-encoder-toy.json"), {
-  governing_spec: "138-governed-exact-model-execution",
-  package_dir: "hf-text-encoder-toy-1.0.0",
-  trusted_public_key_hex: publicKey.toString("hex"),
-  pin: pins["traverse.hf-text-encoder-toy"],
-  request: {
-    policy_ref: "policy-1",
-    data_classification: "sensitive",
-    input_schema_ref: "schema:traverse-hf-text-encoder-toy-in",
-    input_schema_version: "1.0.0",
-    max_output_bytes: 196,
-  },
-  cases: textCases.map((testCase) => {
-    const input = textEncoderInput(testCase.ids, testCase.mask);
-    const out = Buffer.from(runGuestV2(textRunner, input, 196));
-    return {
-      name: testCase.name,
-      input_frame_hex: input.toString("hex"),
-      output_frame_hex: out.toString("hex"),
-    };
-  }),
-  rejected_cases: (() => {
-    const good = textEncoderInput([1, 2, 3, 0], [1, 1, 1, 0]);
-    const truncated = good.subarray(0, good.length - 8);
-    const extra = Buffer.concat([good, guestFrame(6, [1, 4], i64Bytes([0, 0, 0, 0]))]);
-    const badDtype = Buffer.concat([
-      guestFrame(6, [1, 4], i64Bytes([1, 2, 3, 0])),
-      guestFrame(7, [1, 4], i64Bytes([1, 1, 1, 0])),
-    ]);
-    return [
-      ["truncated_bundle", truncated],
-      ["extra_frame", extra],
-      ["wrong_mask_dtype", badDtype],
-    ].map(([name, frame]) => {
-      if (rejectCode(textRunner, frame, 196) !== -2) {
-        throw new Error(`text-encoder runner does not reject ${name} as a frame mismatch`);
-      }
-      return { name, input_frame_hex: frame.toString("hex"), code: "invalid_input", reason: "frame_mismatch" };
-    });
-  })(),
-});
+// Generated only when the package exists (after Linux runner rebuild + package-onnx).
+const textPackageWasm = join(modelsDir, "hf-text-encoder-toy-1.0.0", "model.wasm");
+if (existsSync(textPackageWasm)) {
+  const textWasm = readFileSync(textPackageWasm);
+  const textRunner = new WebAssembly.Instance(new WebAssembly.Module(textWasm), {});
+  const textCases = [
+    { name: "tokens_123", ids: [1, 2, 3, 0], mask: [1, 1, 1, 0] },
+    { name: "tokens_zeros", ids: [0, 0, 0, 0], mask: [0, 0, 0, 0] },
+    { name: "tokens_full_mask", ids: [7, 8, 9, 10], mask: [1, 1, 1, 1] },
+  ];
+  writeJson(join(modelsDir, "conformance", "signed-hf-text-encoder-toy.json"), {
+    governing_spec: "138-governed-exact-model-execution",
+    package_dir: "hf-text-encoder-toy-1.0.0",
+    trusted_public_key_hex: publicKey.toString("hex"),
+    pin: pins["traverse.hf-text-encoder-toy"],
+    request: {
+      policy_ref: "policy-1",
+      data_classification: "sensitive",
+      input_schema_ref: "schema:traverse-hf-text-encoder-toy-in",
+      input_schema_version: "1.0.0",
+      max_output_bytes: 196,
+    },
+    cases: textCases.map((testCase) => {
+      const input = textEncoderInput(testCase.ids, testCase.mask);
+      const out = Buffer.from(runGuestV2(textRunner, input, 196));
+      return {
+        name: testCase.name,
+        input_frame_hex: input.toString("hex"),
+        output_frame_hex: out.toString("hex"),
+      };
+    }),
+    rejected_cases: (() => {
+      const good = textEncoderInput([1, 2, 3, 0], [1, 1, 1, 0]);
+      const truncated = good.subarray(0, good.length - 8);
+      const extra = Buffer.concat([good, guestFrame(6, [1, 4], i64Bytes([0, 0, 0, 0]))]);
+      const badDtype = Buffer.concat([
+        guestFrame(6, [1, 4], i64Bytes([1, 2, 3, 0])),
+        guestFrame(7, [1, 4], i64Bytes([1, 1, 1, 0])),
+      ]);
+      return [
+        ["truncated_bundle", truncated],
+        ["extra_frame", extra],
+        ["wrong_mask_dtype", badDtype],
+      ].map(([name, frame]) => {
+        if (rejectCode(textRunner, frame, 196) !== -2) {
+          throw new Error(`text-encoder runner does not reject ${name} as a frame mismatch`);
+        }
+        return { name, input_frame_hex: frame.toString("hex"), code: "invalid_input", reason: "frame_mismatch" };
+      });
+    })(),
+  });
+}
 
 // Guest ABI v3 vector (Decision 110, #1626): each case runs in a fresh,
 // freshly prepared instance, the reference every host must match on both
