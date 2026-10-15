@@ -7,10 +7,10 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - `model package-onnx` packages Hugging Face–style multi-input/multi-output
   ONNX graphs (and keeps legacy single-IO `package.json`). Token-id inputs
   use `element: "i64"`. I/O is a Spec 138 frame bundle.
-- Spec 138 → 0.14.3. Reference package
-  `fixtures/models/hf-text-encoder-toy-1.0.0` with cross-host conformance.
-- Web `concatGuestFrames` / native `concat_guest_frames` for app-side
-  bundle assembly; hosts still stage opaque bytes.
+- Spec 138 → 0.14.3. Reference inputs under
+  `fixtures/onnx/hf-text-encoder-toy-*` with cross-host frame helpers.
+- Web `concatGuestFrames`, native `concat_guest_frames`, and Swift/Kotlin/.NET
+  `GuestFrame` helpers for app-side bundle assembly; hosts still stage opaque bytes.
 
 ## Docs/packaging: CLI install path + ONNX runner distribution (`#1687`)
 

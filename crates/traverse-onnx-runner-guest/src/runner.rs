@@ -31,10 +31,11 @@ impl Reject {
 }
 
 /// Physical element type carried in a guest-frame payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ElementType {
     /// Little-endian IEEE `f32` (4 bytes). Finite values only.
+    #[default]
     F32,
     /// Little-endian `i64` (8 bytes). Used for token ids / masks.
     I64,
@@ -48,12 +49,6 @@ impl ElementType {
             Self::F32 => 4,
             Self::I64 => 8,
         }
-    }
-}
-
-impl Default for ElementType {
-    fn default() -> Self {
-        Self::F32
     }
 }
 
@@ -189,6 +184,26 @@ impl<'de> Deserialize<'de> for TensorConfig {
     }
 }
 
+#[derive(Serialize)]
+struct LegacySingleSer<'a> {
+    input_name: &'a str,
+    output_name: &'a str,
+    input_shape: &'a [usize],
+    output_shape: &'a [usize],
+    input_dtype: u8,
+    output_dtype: u8,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    symbols: &'a BTreeMap<String, i64>,
+}
+
+#[derive(Serialize)]
+struct MultiSer<'a> {
+    inputs: &'a [NamedTensor],
+    outputs: &'a [NamedTensor],
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    symbols: &'a BTreeMap<String, i64>,
+}
+
 impl Serialize for TensorConfig {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if self.legacy_single {
@@ -197,18 +212,7 @@ impl Serialize for TensorConfig {
                     "legacy single tensor config must have exactly one input and one output",
                 ));
             }
-            #[derive(Serialize)]
-            struct Single<'a> {
-                input_name: &'a str,
-                output_name: &'a str,
-                input_shape: &'a [usize],
-                output_shape: &'a [usize],
-                input_dtype: u8,
-                output_dtype: u8,
-                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-                symbols: &'a BTreeMap<String, i64>,
-            }
-            Single {
+            LegacySingleSer {
                 input_name: &self.inputs[0].name,
                 output_name: &self.outputs[0].name,
                 input_shape: &self.inputs[0].shape,
@@ -219,14 +223,7 @@ impl Serialize for TensorConfig {
             }
             .serialize(serializer)
         } else {
-            #[derive(Serialize)]
-            struct Multi<'a> {
-                inputs: &'a [NamedTensor],
-                outputs: &'a [NamedTensor],
-                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-                symbols: &'a BTreeMap<String, i64>,
-            }
-            Multi {
+            MultiSer {
                 inputs: &self.inputs,
                 outputs: &self.outputs,
                 symbols: &self.symbols,
@@ -347,7 +344,7 @@ impl Model {
         for tensor in &self.config.inputs {
             let (consumed, values) = decode_frame_at(frame, offset, tensor).ok_or(Reject::Frame)?;
             offset = offset.checked_add(consumed).ok_or(Reject::Frame)?;
-            let array = array_from_values(tensor, values).map_err(|_| Reject::Frame)?;
+            let array = array_from_values(tensor, values).map_err(|()| Reject::Frame)?;
             inputs.push(array.into());
         }
         if offset != frame.len() {
@@ -675,7 +672,8 @@ mod tests {
         let output = model.run_frame(&input).unwrap();
         assert!(bundle_matches(&output, &model.config.outputs));
         assert_eq!(output, model.run_frame(&input).unwrap());
-        let hidden_bytes = frame_byte_len(&model.config.outputs[0]).unwrap() as usize;
+        let hidden_bytes = usize::try_from(frame_byte_len(&model.config.outputs[0]).unwrap())
+            .expect("frame fits usize");
         let hidden = decode_frame(&output[..hidden_bytes], 2, &[1, 4, 8]).unwrap();
         let pooler = decode_frame(&output[hidden_bytes..], 3, &[1, 8]).unwrap();
         assert_eq!(hidden.len(), 32);

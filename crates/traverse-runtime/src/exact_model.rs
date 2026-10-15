@@ -3659,6 +3659,17 @@ mod tests {
     }
 
     #[test]
+    fn concat_guest_frames_preserves_order_and_bytes() {
+        let a = encode_guest_frame(6, &[1, 4], &[1, 0, 0, 0, 0, 0, 0, 0]);
+        let b = encode_guest_frame(2, &[1, 2], &[0; 8]);
+        let bundled = concat_guest_frames(&[&a, &b]);
+        assert_eq!(bundled.len(), a.len() + b.len());
+        assert_eq!(&bundled[..a.len()], a.as_slice());
+        assert_eq!(&bundled[a.len()..], b.as_slice());
+        assert!(concat_guest_frames(&[]).is_empty());
+    }
+
+    #[test]
     fn invoke_rejects_wrong_route_cancel_and_invalid_payload() {
         let (mut host, digest) = seeded_host();
         assert_eq!(

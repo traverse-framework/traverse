@@ -219,6 +219,38 @@ test("ONNX runner package (#1591) matches the native vector byte-for-byte and fa
   }
 });
 
+test("multi-IO HF text-encoder toy (#1661) matches the native vector byte-for-byte", async () => {
+  const vector = JSON.parse(readFileSync(new URL("conformance/signed-hf-text-encoder-toy.json", MODELS), "utf8"));
+  const pkg = fixture(vector.package_dir);
+  const host = new ExactModelBrowserHost([vector.pin], {
+    trustedPublicKeysHex: [vector.trusted_public_key_hex],
+    modelUsage: "commercial",
+  });
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const maxOut = vector.request.max_output_bytes;
+  const run = async (frame) => {
+    const input_ref = host.io.stageModelInput(frame, 4096);
+    const result = await host.execute(
+      executeArgs(vector.pin.model_id, digest, input_ref, vector.request.input_schema_ref, {
+        max_output_bytes: maxOut,
+      }),
+    );
+    return host.io.readModelOutput(result.output_ref, maxOut);
+  };
+  for (const testCase of vector.cases) {
+    const output = await run(Buffer.from(testCase.input_frame_hex, "hex"));
+    assert.equal(Buffer.from(output).toString("hex"), testCase.output_frame_hex, testCase.name);
+  }
+  assert.equal(vector.rejected_cases.length, 3);
+  for (const testCase of vector.rejected_cases) {
+    await assert.rejects(
+      run(Buffer.from(testCase.input_frame_hex, "hex")),
+      (e) => e instanceof ExactModelError && e.code === testCase.code && e.reason === testCase.reason,
+      testCase.name,
+    );
+  }
+});
+
 test("classifier fixture computes real inference, not a pass-through", async () => {
   const { host, digest } = await registeredHost("fixture-classifier-1.0.0", "fixture.classifier");
   const features = Float32Array.from([1.0, 2.0, -1.0, 4.0]);

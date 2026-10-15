@@ -10,10 +10,11 @@
 - Package-time preflight builds a zero-valued input bundle and checks every
   output frame. Help text and `docs/model-packaging-guide.md` document both
   forms. Spec 138 amended to 0.14.3 (FR-073).
-- Hosts stage opaque bytes unchanged; web `concatGuestFrames` and native
-  `concat_guest_frames` build bundles. Reference fixture
-  `fixtures/models/hf-text-encoder-toy-1.0.0` plus signed conformance vector.
-- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only).
+- Hosts stage opaque bytes unchanged; web `concatGuestFrames`, native
+  `concat_guest_frames`, and Swift/Kotlin/.NET `GuestFrame.concat` build
+  bundles. Reference ONNX + `package.json` live under `fixtures/onnx/hf-text-encoder-toy-*`.
+- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only). Linux CI
+  rebuilds `fixtures/onnx/runner.wasm` when guest source changes.
 
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 

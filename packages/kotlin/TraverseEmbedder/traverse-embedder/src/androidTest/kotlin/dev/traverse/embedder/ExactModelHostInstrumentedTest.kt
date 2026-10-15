@@ -93,6 +93,10 @@ class ExactModelHostInstrumentedTest {
     @Test
     fun onnxRunnerVectorIsByteIdenticalWithSimd() = vectorCheck("signed-digits-onnx.json", 56)
 
+    /** Multi-IO ONNX runner (#1661): HF-style text-encoder toy frame bundle. */
+    @Test
+    fun hfTextEncoderToyVectorIsByteIdentical() = vectorCheck("signed-hf-text-encoder-toy.json", 196)
+
     /**
      * Spec 138 0.14.0 (Decision 115, #1693): the shared reject corpus fails on the Android
      * runtime with exactly its code and reason, as on every other host.
