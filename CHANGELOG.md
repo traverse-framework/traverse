@@ -21,6 +21,18 @@
 - The shared rights conformance suite adds scenario 11 for those cases.
 - Spec 138 amended to 0.14.2 (FR-035).
 
+### Avoid cloning framed model output just for length (#1697)
+
+- `ModelIoStore::output_len` reports stored output size without copying bytes;
+  the framed host `execute` path uses it for `trace.usage.output_bytes`.
+### Packaged `traverse-mcp` Mode A binaries (#1653)
+
+- Workflow `.github/workflows/mcp-server-publish.yml` builds Linux x86_64 and
+  macOS arm64 release archives on product tag `v*`, publishes artifact release
+  `traverse-mcp-vX.Y.Z` (never Latest) with `SHA256SUMS` and build provenance.
+- `traverse-mcp --version` prints `traverse-mcp X.Y.Z (<git-sha>)`.
+- Docs rewrite the packaged MCP artifact path to the real pin-and-verify flow.
+
 ### CLI `--model-usage` and JSON usage errors (#1686)
 
 - `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`

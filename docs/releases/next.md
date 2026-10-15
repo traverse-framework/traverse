@@ -20,6 +20,15 @@ Unreleased changes since `v0.15.0` will be recorded here.
   `usage_invalid` and structured `detail` (`field: model_usage`).
 - Spec 138 0.14.2; shared rights suite scenario 11.
 
+## Perf: framed host output length without clone (`#1697`)
+
+- `execute` reports `usage.output_bytes` via `ModelIoStore::output_len` (no buffer copy).
+## Feature: packaged `traverse-mcp` Mode A binaries (`#1653`)
+
+- Product tags publish `traverse-mcp-vX.Y.Z` with Linux x86_64 + macOS arm64
+  archives, `SHA256SUMS`, and build-provenance attestations (never Latest).
+- `traverse-mcp --version` reports workspace version and the tagged commit.
+
 ## Fix: `model verify --model-usage` and JSON usage errors (`#1686`)
 
 - `traverse-cli model verify` (and `conformance generate|check`) accept

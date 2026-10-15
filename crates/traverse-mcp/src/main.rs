@@ -6,7 +6,7 @@ fn main() -> ExitCode {
     run(std::env::args().skip(1))
 }
 
-const USAGE: &str = "Usage: traverse-mcp stdio [--cache <dir>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]";
+const USAGE: &str = "Usage: traverse-mcp [--version]\n       traverse-mcp stdio [--cache <dir>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]";
 
 /// Testable core of [`main`]: takes the argument iterator directly instead of
 /// reading `std::env::args()` so the CLI parsing branches can be exercised
@@ -16,6 +16,14 @@ fn run(args: impl Iterator<Item = String>) -> ExitCode {
         Err(message) => {
             eprintln!("{message}");
             ExitCode::from(1)
+        }
+        Ok(Command::Version) => {
+            println!(
+                "traverse-mcp {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                env!("TRAVERSE_GIT_SHA")
+            );
+            ExitCode::SUCCESS
         }
         Ok(Command::Stdio {
             simulate_startup_failure,
@@ -54,6 +62,7 @@ fn run(args: impl Iterator<Item = String>) -> ExitCode {
 }
 
 enum Command {
+    Version,
     Stdio {
         simulate_startup_failure: bool,
         cache: Option<PathBuf>,
@@ -71,6 +80,12 @@ fn parse_command(mut args: impl Iterator<Item = String>) -> Result<Command, Stri
         return Err(USAGE.to_string());
     };
     match command.as_str() {
+        "--version" | "-V" | "version" => {
+            if args.next().is_some() {
+                return Err("traverse-mcp --version takes no arguments".to_string());
+            }
+            Ok(Command::Version)
+        }
         "stdio" => parse_stdio(args),
         "prepare-cache" => parse_prepare_cache(args),
         other => Err(format!("Unsupported command: {other}")),
@@ -150,6 +165,22 @@ mod tests {
     #[test]
     fn unsupported_command_exits_with_failure() {
         assert_eq!(run(["bogus".to_string()].into_iter()), ExitCode::from(1));
+    }
+
+    #[test]
+    fn version_flag_parses_and_succeeds() {
+        assert!(matches!(
+            parse_command(["--version".to_string()].into_iter()),
+            Ok(Command::Version)
+        ));
+        assert!(matches!(
+            parse_command(["-V".to_string()].into_iter()),
+            Ok(Command::Version)
+        ));
+        assert_eq!(
+            run(["--version".to_string()].into_iter()),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]
@@ -253,7 +284,7 @@ mod tests {
                 assert!(!simulate_startup_failure);
                 assert_eq!(cache, Some(PathBuf::from("/srv/cache")));
             }
-            Command::PrepareCache { .. } => panic!("expected stdio"),
+            Command::PrepareCache { .. } | Command::Version => panic!("expected stdio"),
         }
     }
 
@@ -416,7 +447,7 @@ mod tests {
                 assert_eq!(refs, vec!["core/core.normalize-participants@=1.1.0"]);
                 assert!(json_output);
             }
-            Command::Stdio { .. } => panic!("expected prepare-cache"),
+            Command::Stdio { .. } | Command::Version => panic!("expected prepare-cache"),
         }
     }
 }

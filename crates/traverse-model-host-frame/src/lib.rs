@@ -474,11 +474,8 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
         Err(error) => return Ok(error_response(&error)),
     };
     let output_ref = result.artifact_ref.unwrap_or_default();
-    let output_bytes = connector
-        .io
-        .read_model_output(&output_ref, usize::MAX)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
+    // Length only — do not clone the output buffer just for trace usage (#1697).
+    let output_bytes = connector.io.output_len(&output_ref).unwrap_or(0);
     let model_ref = payload.get("model_ref").cloned().unwrap_or(Value::Null);
     let evidence = json!(result.model_evidence);
     let placement_evidence = result

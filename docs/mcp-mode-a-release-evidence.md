@@ -12,52 +12,38 @@ workflows (`cargo run -p traverse-mcp -- stdio`) remain contributor-only.
 
 The Mode A binary is released through the packaged MCP server artifact path
 defined in
-[docs/packaged-traverse-mcp-server-artifact.md](packaged-traverse-mcp-server-artifact.md)
-and the downstream publication strategy in
-[specs/023-downstream-publication-strategy/spec.md](../specs/023-downstream-publication-strategy/spec.md).
-Each release provides:
+[docs/packaged-traverse-mcp-server-artifact.md](packaged-traverse-mcp-server-artifact.md).
+Each product tag `vX.Y.Z` publishes artifact release `traverse-mcp-vX.Y.Z`
+(never Latest) with:
 
-- a version tag matching the workspace version (see
-  [docs/release-process.md](release-process.md))
-- the `traverse-mcp` binary for each supported host target
-- a published SHA-256 checksum for every binary
-- provenance evidence (the build's `cargo build --locked` invocation and the
-  release tag) carried in the supply-chain attestation produced by
-  `scripts/ci/supply_chain_check.sh`
+- `traverse-mcp` archives for `x86_64-unknown-linux-gnu` and
+  `aarch64-apple-darwin`
+- per-archive `.sha256` files and aggregated `SHA256SUMS`
+- GitHub Attestations build provenance (`actions/attest-build-provenance`)
+
+`traverse-mcp --version` reports `X.Y.Z` and the tagged commit SHA.
 
 ## Client pin and verification
 
-A local client configuration pins the exact released version and verifies the
-downloaded binary before first launch:
-
-1. Record the pinned version, e.g. `traverse-mcp 0.11.0`.
-2. Download the binary for the host target and its published `.sha256`.
-3. Recompute and compare: `shasum -a 256 traverse-mcp` must equal the published
-   digest.
-4. Confirm the provenance attestation names the same version tag and the
-   `cargo build --locked` build invocation.
-5. Launch with the verified registry cache the host prepared:
+1. Record the pinned artifact tag, e.g. `traverse-mcp-v0.15.0`.
+2. Download the archive for the host target and `SHA256SUMS`.
+3. `sha256sum -c --ignore-missing SHA256SUMS`.
+4. `gh attestation verify traverse-mcp-<target>.tar.gz --repo traverse-framework/traverse`.
+5. Extract and confirm `./traverse-mcp --version`.
+6. Launch with the verified registry cache the host prepared:
 
    ```bash
    TRAVERSE_MCP_REGISTRY_CACHE=/path/to/verified-registry-cache \
-     traverse-mcp stdio
+     ./traverse-mcp stdio
    ```
 
 Discovery and execution then run entirely from the prepared, digest-verified
 state — see [docs/mcp-stdio-server.md](mcp-stdio-server.md) for the command
 surface.
 
-## v0.1.0 posture
-
-The Spec 080 verified registry cache that Mode A consumes is digest-based and
-carries no per-artifact signature, so the runtime executes verified WASM in
-development security mode with the artifact digest checked twice (cache resolve
-and WASM-executor checksum). Adding an Ed25519 / Sigstore signature layer to the
-Mode A execution path is a tracked follow-up and does not change the pin-and-
-verify release evidence above.
-
 ## Verification
 
 ```bash
+bash scripts/ci/packaged_traverse_mcp_server_artifact_smoke.sh
 bash scripts/ci/mcp_stdio_server_mode_a_smoke.sh
 ```
