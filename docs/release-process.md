@@ -127,6 +127,23 @@ crates.io and npm list the new `X.Y.Z`, finish the human-facing surfaces:
       `runtime.wasm`, publish a new `runtime_version` row in
       `runtime/native-runtime-registry.json` (spec `075` FR-007 forbids
       overwriting). See [native-runtime-artifact-registry.md](native-runtime-artifact-registry.md).
+- [ ] Rebuild and pin `runtime.wasm` with
+      `bash scripts/build-runtime-wasm.sh --install`. Confirm
+      `runtime/runtime-release.json.runtime_version` equals the workspace
+      version and that
+      `bash scripts/ci/runtime_wasm_reproducibility_check.sh` passes
+      (Linux CI job `runtime-wasm-reproducibility` enforces the same gate).
+
+### Verify `runtime.wasm` (any checkout)
+
+```bash
+bash scripts/build-runtime-wasm.sh --install   # refresh committed bytes + metadata
+bash scripts/ci/runtime_wasm_reproducibility_check.sh
+shasum -a 256 runtime/runtime.wasm             # must match runtime/runtime.wasm.sha256
+```
+
+Every in-repo copy (`examples/applications/*/runtime/`,
+`packages/web/TraverseEmbedder/tests/fixtures/`) must share that digest.
 
 ### 2. Website (`traverse-framework/website`)
 

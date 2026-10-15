@@ -56,6 +56,14 @@ for entry in "${targets[@]}"; do
     continue
   fi
 
+  # CI coverage-gate runs on Linux. On Darwin the Core ML adapter compiles the
+  # Apple-only objc2 module, which the Linux 100% floor does not cover
+  # (ci/coverage-targets.txt + the macOS coreml-adapter job).
+  if [[ "${crate_name}" == "traverse-coreml-adapter" && "$(uname -s)" == "Darwin" ]]; then
+    echo "Skipping traverse-coreml-adapter coverage on Darwin (Linux CI is the gate)"
+    continue
+  fi
+
   echo "Measuring line coverage for ${crate_name} with threshold ${minimum_percent}%"
   coverage_output="$(cargo llvm-cov --package "${crate_name}" --lcov -- --test-threads=1)"
   line_counts="$(

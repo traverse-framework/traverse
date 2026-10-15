@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Reproducible `runtime.wasm` (#1659)
+
+- `scripts/build-runtime-wasm.sh` rebuilds the nested-wasmi orchestrator from
+  `traverse-runtime-wasm` and writes `runtime-release.json` from the workspace
+  version (no hand-edited `runtime_version`).
+- CI job `runtime-wasm-reproducibility` fails when a rebuild digest drifts from
+  `runtime/runtime.wasm.sha256` or any bundled copy. Linux CI is the
+  authoritative digest; Darwin rebuilds may differ and must not overwrite
+  the committed bytes without a Linux verification pass.
+- Committed `runtime/runtime-release.json` now matches workspace `0.15.0`
+  (was stale `0.12.0`).
+
 ### Swift host rebuild with guest reject codes (#1692)
 
 - **Repin.** `Package.swift` now points at `swift-host-v0.15.0-1`, an
@@ -44,6 +56,7 @@
   `wasmi_long_guest_runs_without_native_stack_growth` pins this.
 - **Docs.** The packaging guide documents the same override for apps that
   depend on `traverse-runtime`.
+
 ### `model package-onnx` preflight (Spec 138 0.14.1 FR-072, Decision 115, #1679)
 
 - **Preflight before writing.** `traverse-cli model package-onnx` runs the
