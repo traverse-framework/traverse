@@ -867,10 +867,10 @@ fn verify(
             let mut rights = to_json(&host.model_rights_record(&pin.digest))?;
             // Without --model-usage, do not claim an app effective_usage even
             // though verification used the non_commercial default (#1686).
-            if model_usage.is_none() {
-                if let Some(record) = rights.as_object_mut() {
-                    record.insert("effective_usage".to_string(), Value::Null);
-                }
+            if model_usage.is_none()
+                && let Some(record) = rights.as_object_mut()
+            {
+                record.insert("effective_usage".to_string(), Value::Null);
             }
             report["rights_record"] = rights;
             if imports != Some(0) {
