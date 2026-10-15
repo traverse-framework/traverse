@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Logit outputs compared on their scores (Spec 138 0.15.0, Decision 116, #1630)
+
+- New optional variant `tolerance.score_transform` (`identity` | `sigmoid`)
+  in the new manifest schema `2.3.0`, a superset of `2.2.0`. The device
+  self-check maps declared `f32` outputs through it before `max_abs_diff`
+  and `top_k`.
+- `model add-variant --score-transform sigmoid` writes `2.3.0`.
+- Native and web hosts validate the same rules.
+
+### Fix: web embedder accepts variant `f32_dtypes` (#1703)
+
+- `ExactModelBrowserHost` no longer rejects packages whose variant declares
+  `tolerance.f32_dtypes`, for example the signed `digits-onnx-coreml`
+  fixture.
+
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the

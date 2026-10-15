@@ -26,11 +26,18 @@ export const MODEL_PACKAGE_SCHEMA_VERSION = "2.0.0" as const;
 /** Manifest schema adding optional `rights.derivation` (Spec 138 0.8.0, Decision 107). Both are accepted. */
 export const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION = "2.1.0" as const;
 /**
- * Manifest schema adding `max_prepare_fuel` for guest ABI v3 (Spec 138
- * 0.12.0). Accelerator variants (also 2.2.0) land with #1628 and fail closed
- * as unknown fields until then.
+ * Manifest schema adding `max_prepare_fuel` for guest ABI v3 and optional
+ * `accelerator_variants` (Spec 138 0.12.0). A browser host has no adapter,
+ * so it validates variant shape and runs every package on `wasm-cpu`.
  */
 export const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED = "2.2.0" as const;
+/**
+ * Manifest schema adding an optional variant `tolerance.score_transform`
+ * (Spec 138 0.15.0, Decision 116). A superset of 2.2.0.
+ */
+export const MODEL_PACKAGE_SCHEMA_VERSION_SCORED = "2.3.0" as const;
+/** How declared `f32` outputs are mapped before comparison (Decision 116). */
+export type ScoreTransform = "identity" | "sigmoid";
 /** Default `maxSnapshotBytes`, the same as the native default. */
 export const DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024;
 export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
@@ -157,7 +164,14 @@ export type AcceleratorVariant = {
   readonly conversion: VariantConversion;
   readonly conformance_vector_path: string;
   readonly conformance_vector_digest: string;
-  readonly tolerance: { readonly max_abs_diff: number; readonly top_k: number };
+  readonly tolerance: {
+    readonly max_abs_diff: number;
+    readonly top_k: number;
+    /** Output dtype codes holding f32 values (Spec 138 0.13.2). */
+    readonly f32_dtypes?: readonly number[];
+    /** Schema 2.3.0 only; absent means `identity` (Decision 116). */
+    readonly score_transform?: ScoreTransform;
+  };
   readonly peak_memory_bytes: number;
 };
 
@@ -342,10 +356,25 @@ const VARIANT_KEYS = [
 ] as const;
 const CONVERSION_KEYS = ["tool", "tool_version", "source_digest"] as const;
 const TOLERANCE_KEYS = ["max_abs_diff", "top_k"] as const;
+const TOLERANCE_OPTIONAL_KEYS = ["f32_dtypes", "score_transform"] as const;
+const SCORE_TRANSFORMS: readonly string[] = ["identity", "sigmoid"];
 const COMMERCIAL_USE: readonly string[] = ["allowed", "restricted", "prohibited"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Required keys present, every other key among `optional` (serde deny_unknown_fields with defaults). */
+function hasKeys(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => required.includes(key) || optional.includes(key))
+  );
 }
 
 /** Exact key set, fail closed on unknown or missing fields (mirrors serde deny_unknown_fields). */
@@ -462,7 +491,9 @@ function validateManifest(manifest: ModelPackageManifest): void {
   ) {
     throw incompatible("manifest_invalid", "model manifest missing required field");
   }
-  const preparedSchema = manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+  const preparedSchema =
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_PREPARED ||
+    manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_SCORED;
   const schemaSupported =
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION ||
     manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION ||
@@ -470,10 +501,10 @@ function validateManifest(manifest: ModelPackageManifest): void {
   if (!schemaSupported) {
     throw incompatible(
       "manifest_invalid",
-      `unsupported schema_version ${manifest.schema_version} (supported: ${MODEL_PACKAGE_SCHEMA_VERSION}, ${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}, ${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED})`,
+      `unsupported schema_version ${manifest.schema_version} (supported: ${MODEL_PACKAGE_SCHEMA_VERSION}, ${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}, ${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}, ${MODEL_PACKAGE_SCHEMA_VERSION_SCORED})`,
       denial(
         "schema_version",
-        `${MODEL_PACKAGE_SCHEMA_VERSION}|${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}`,
+        `${MODEL_PACKAGE_SCHEMA_VERSION}|${MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|${MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}|${MODEL_PACKAGE_SCHEMA_VERSION_SCORED}`,
         manifest.schema_version,
       ),
     );
@@ -485,7 +516,7 @@ function validateManifest(manifest: ModelPackageManifest): void {
       denial("abi_version", `1..=${MAX_MODEL_ABI_VERSION}`, String(manifest.abi_version)),
     );
   }
-  // abi_version 3 needs schema 2.2.0 and a positive prepare budget; no other ABI may carry one.
+  // abi_version 3 needs schema 2.2.0+ and a positive prepare budget; no other ABI may carry one.
   const prepareValid =
     manifest.abi_version === MODEL_GUEST_ABI_PREPARED
       ? preparedSchema && (manifest.max_prepare_fuel ?? 0) > 0
@@ -528,12 +559,34 @@ function variantPathOk(adapter: string, path: string): boolean {
   );
 }
 
+/** Optional `f32_dtypes`: unique integer dtype codes in 0..=255 (#1703). */
+function f32DtypesOk(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.every((code) => Number.isInteger(code) && code >= 0 && code <= 255) &&
+      new Set(value).size === value.length)
+  );
+}
+
+/** Optional `score_transform`: a known value, and non-identity only on schema 2.3.0. */
+function scoreTransformOk(value: unknown, scoredSchema: boolean): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  return typeof value === "string" && SCORE_TRANSFORMS.includes(value) && (value === "identity" || scoredSchema);
+}
+
 function validateAcceleratorVariants(manifest: ModelPackageManifest): void {
   const variants = manifest.accelerator_variants;
   if (variants === undefined) {
     return;
   }
-  if (manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_PREPARED || variants.length === 0) {
+  const scoredSchema = manifest.schema_version === MODEL_PACKAGE_SCHEMA_VERSION_SCORED;
+  if (
+    (manifest.schema_version !== MODEL_PACKAGE_SCHEMA_VERSION_PREPARED && !scoredSchema) ||
+    variants.length === 0
+  ) {
     throw incompatible("manifest_invalid", "accelerator variant fields are invalid");
   }
   const seen = new Set<string>();
@@ -572,7 +625,9 @@ function validateAcceleratorVariants(manifest: ModelPackageManifest): void {
       conversion.tool.trim() === "" ||
       conversion.tool_version.trim() === "" ||
       !isSha256Hex(conversion.source_digest) ||
-      !hasExactKeys(tolerance, TOLERANCE_KEYS) ||
+      !hasKeys(tolerance, TOLERANCE_KEYS, TOLERANCE_OPTIONAL_KEYS) ||
+      !f32DtypesOk(tolerance.f32_dtypes) ||
+      !scoreTransformOk(tolerance.score_transform, scoredSchema) ||
       typeof tolerance.max_abs_diff !== "number" ||
       !Number.isFinite(tolerance.max_abs_diff) ||
       tolerance.max_abs_diff < 0 ||

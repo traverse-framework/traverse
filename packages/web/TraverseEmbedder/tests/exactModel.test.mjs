@@ -7,6 +7,7 @@ import {
   ExactModelBrowserHost,
   ExactModelError,
   ModelIoStore,
+  MODEL_PACKAGE_SCHEMA_VERSION_SCORED,
   encodeGuestFrame,
   modelSigningKeyId,
   normalizeModelExecuteEvidence,
@@ -834,3 +835,60 @@ test("browser host validates accelerator variants and does not fetch them", asyn
   const bad = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", mismatch.bytes)], TRUST);
   await assert.rejects(() => bad.registerPackage(mismatch.bytes, pkg.wasm, mismatch.sig), reason("rights_inconsistent"));
 });
+
+test("browser host registers signed variants with f32_dtypes (#1703) and checks score_transform (Decision 116)", async () => {
+  const signed = fixture("digits-onnx-coreml-1.0.0");
+  const signedHost = new ExactModelBrowserHost([await pinFor("traverse.digits-onnx-coreml", signed.manifest, { rights: { license_id: "CC-BY-4.0", commercial_use: "allowed" } })], TRUST);
+  await signedHost.registerPackage(signed.manifest, signed.wasm, signed.sig);
+
+  const source = "ab".repeat(32);
+  const variant = (tolerance) => ({
+    adapter: "coreml",
+    format: "mlpackage-zip",
+    path: "variants/coreml/model.mlpackage.zip",
+    digest: "cd".repeat(32),
+    conversion: { tool: "traverse-coreml", tool_version: "1", source_digest: source },
+    conformance_vector_path: "variants/coreml/conformance.json",
+    conformance_vector_digest: "ef".repeat(32),
+    tolerance: { max_abs_diff: 0.005, top_k: 5, ...tolerance },
+    peak_memory_bytes: 1024,
+  });
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const register = async (schemaVersion, tolerance) => {
+    const { bytes, sig } = resigned(pkg.manifest, (m) => {
+      m.schema_version = schemaVersion;
+      m.rights.derivation = {
+        kind: "converted",
+        source_digest: source,
+        source_license_id: "Apache-2.0",
+        source_commercial_use: "allowed",
+        source_url: "https://example.invalid/source",
+      };
+      m.accelerator_variants = [variant(tolerance)];
+    });
+    const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
+    return host.registerPackage(bytes, pkg.wasm, sig);
+  };
+  assert.equal(MODEL_PACKAGE_SCHEMA_VERSION_SCORED, "2.3.0");
+  for (const [schemaVersion, tolerance] of [
+    ["2.2.0", { f32_dtypes: [3] }],
+    ["2.2.0", { score_transform: "identity" }],
+    ["2.3.0", { f32_dtypes: [3], score_transform: "sigmoid" }],
+    ["2.3.0", {}],
+  ]) {
+    await register(schemaVersion, tolerance);
+  }
+  for (const [schemaVersion, tolerance] of [
+    ["2.2.0", { score_transform: "sigmoid" }],
+    ["2.3.0", { score_transform: "tanh" }],
+    ["2.3.0", { score_transform: 1 }],
+    ["2.2.0", { f32_dtypes: [3, 3] }],
+    ["2.2.0", { f32_dtypes: [256] }],
+    ["2.2.0", { f32_dtypes: "3" }],
+    ["2.2.0", { unknown: true }],
+    ["2.1.0", {}],
+  ]) {
+    await assert.rejects(() => register(schemaVersion, tolerance), reason("manifest_invalid"), JSON.stringify(tolerance));
+  }
+});
+

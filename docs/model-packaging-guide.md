@@ -432,6 +432,16 @@ converter makes dynamic dimensions static (size 1). Before conversion it
 rewrites `SAME_UPPER` padding, reverse slices and dynamic int8 matmuls into
 exact equivalents.
 
+**Classifiers that output logits** add `--score-transform sigmoid`. The
+device self-check then compares sigmoid scores, `1 / (1 + e^-x)`, under
+`--max-abs-diff` and `--top-k` instead of raw logits (Spec 138 0.15.0,
+Decision 116). Converted logits often differ by more than 5×10⁻³ while
+their scores stay within Decision 106's bar. Without the flag, a variant
+that is accurate on scores can fail the raw check, and every call falls
+back to `wasm-cpu`. The flag writes manifest schema `2.3.0`, which hosts
+newer than 0.15.0 accept. Leave it off for outputs that are already scores
+or plain values; those keep schema `2.2.0`.
+
 `fixtures/models/digits-onnx-coreml-1.0.0` is the worked example. CI re-runs
 the conversion on a macOS arm64 runner and requires the committed digest
 (`scripts/ci/coreml_variant_reconvert_check.sh`). When you change
