@@ -47,8 +47,9 @@ Default launch is `local_trust` (the parent process already owns the local
 session). For stricter launchers, set `TRAVERSE_MCP_STDIO_BEARER_TOKEN` as
 documented in [Start The Server](#start-the-server). Production pin-and-verify
 for a versioned binary plus a host-owned verified cache is
-[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md) — do not
-paste a Mode A config here until that binary is checksum-verified.
+[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md) — download
+from `traverse-mcp-vX.Y.Z`, verify `SHA256SUMS` + attestation, then point
+`command` at that binary.
 
 ### Cursor
 
@@ -58,15 +59,15 @@ Project config: `.cursor/mcp.json`. User config lives in Cursor Settings → MCP
 {
   "mcpServers": {
     "traverse": {
-      "command": "traverse-mcp",
+      "command": "/absolute/path/to/verified/traverse-mcp",
       "args": ["stdio"]
     }
   }
 }
 ```
 
-If `traverse-mcp` is not on `PATH`, set `command` to the absolute path of the
-built binary. Keep `args` as `["stdio"]`.
+Prefer the checksum-verified release binary over a contributor `cargo build`
+output. Keep `args` as `["stdio"]`.
 
 ### Claude Desktop
 
@@ -78,7 +79,7 @@ Desktop requires an absolute `command` path.
 {
   "mcpServers": {
     "traverse": {
-      "command": "/absolute/path/to/traverse-mcp",
+      "command": "/absolute/path/to/verified/traverse-mcp",
       "args": ["stdio"]
     }
   }

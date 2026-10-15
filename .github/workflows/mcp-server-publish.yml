@@ -1,0 +1,219 @@
+name: Publish traverse-mcp binaries
+
+# Spec 119 FR-006 / #1653: Mode A ships as a versioned standalone binary with
+# checksums and build provenance. Artifact release tag is traverse-mcp-vX.Y.Z
+# (never Latest); product tag vX.Y.Z remains crates.io / product notes.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Product tag to package, e.g. v0.15.0. Dispatch against the ref that
+          has this workflow (usually main), not the tag itself.
+        required: true
+      rebuild:
+        description: >-
+          Optional rebuild number N for traverse-mcp-v<version>-N when the
+          immutable release must be replaced after a packaging fix.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: traverse-mcp-aarch64-apple-darwin.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          targets: ${{ matrix.target }}
+
+      - name: Resolve versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          release_tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag_version="${release_tag#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${release_tag}." >&2
+            exit 1
+          fi
+          rebuild="${{ github.event.inputs.rebuild }}"
+          if [[ -z "${rebuild}" ]]; then
+            mcp_tag="traverse-mcp-v${tag_version}"
+          elif [[ "${rebuild}" =~ ^[1-9][0-9]*$ ]]; then
+            mcp_tag="traverse-mcp-v${tag_version}-${rebuild}"
+          else
+            echo "rebuild must be a positive integer, got '${rebuild}'." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+          echo "MCP_RELEASE_TAG=${mcp_tag}" >> "$GITHUB_ENV"
+          echo "GIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cargo build --locked -p traverse-mcp --release --target "${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/release/traverse-mcp"
+          "$bin" --version | tee version.txt
+          grep -F "traverse-mcp ${TAG_VERSION}" version.txt
+          grep -F "${GIT_SHA}" version.txt
+          stage="$(mktemp -d)"
+          cp "$bin" "${stage}/traverse-mcp"
+          tar -C "${stage}" -czf "${{ matrix.archive }}" traverse-mcp
+          python3 - "${{ matrix.archive }}" <<'PY'
+          import hashlib, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          line = f"{digest}  {path.name}\n"
+          path.with_name(path.name + ".sha256").write_text(line, encoding="utf-8")
+          print(line, end="")
+          PY
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-${{ matrix.target }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          release_tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag_version="${release_tag#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${release_tag}." >&2
+            exit 1
+          fi
+          rebuild="${{ github.event.inputs.rebuild }}"
+          if [[ -z "${rebuild}" ]]; then
+            mcp_tag="traverse-mcp-v${tag_version}"
+          elif [[ "${rebuild}" =~ ^[1-9][0-9]*$ ]]; then
+            mcp_tag="traverse-mcp-v${tag_version}-${rebuild}"
+          else
+            echo "rebuild must be a positive integer, got '${rebuild}'." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+          echo "MCP_RELEASE_TAG=${mcp_tag}" >> "$GITHUB_ENV"
+
+      - name: Download archives
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          pattern: mcp-*
+          merge-multiple: true
+
+      - name: Assemble SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 | sort > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -la
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
+            dist/traverse-mcp-aarch64-apple-darwin.tar.gz
+
+      - name: Create immutable artifact release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "${MCP_RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${MCP_RELEASE_TAG} already exists (immutable). Use rebuild N for traverse-mcp-v${TAG_VERSION}-N." >&2
+            exit 1
+          fi
+          notes="$(cat <<NOTES
+          Artifact-only release for the Mode A \`traverse-mcp\` stdio binary (Spec 119 FR-006).
+
+          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\`. This repository's immutable-releases policy requires a dedicated \`traverse-mcp-v*\` tag so assets ship in one create call and are never marked Latest.
+
+          Verify:
+
+          \`\`\`bash
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${MCP_RELEASE_TAG}/traverse-mcp-<target>.tar.gz
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${MCP_RELEASE_TAG}/SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS
+          gh attestation verify traverse-mcp-<target>.tar.gz --repo ${{ github.repository }}
+          tar -xzf traverse-mcp-<target>.tar.gz
+          ./traverse-mcp --version
+          \`\`\`
+
+          Built from commit \`${GITHUB_SHA}\` for workspace **v${TAG_VERSION}**.
+          NOTES
+          )"
+          gh release create "${MCP_RELEASE_TAG}" \
+            dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz \
+            dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+            dist/traverse-mcp-aarch64-apple-darwin.tar.gz \
+            dist/traverse-mcp-aarch64-apple-darwin.tar.gz.sha256 \
+            dist/SHA256SUMS \
+            --repo "${{ github.repository }}" \
+            --title "traverse-mcp binaries (workspace v${TAG_VERSION})" \
+            --notes "${notes}" \
+            --latest=false
