@@ -1,0 +1,45 @@
+{
+  "governing_issue": 1658,
+  "description": "Host-side inputs.schema subset: additionalProperties, required, maxLength",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["text"],
+    "properties": {
+      "text": { "type": "string", "maxLength": 20000 }
+    }
+  },
+  "cases": [
+    {
+      "id": "valid",
+      "input": { "text": "Maria Lopez from Northwind Bank in Toronto says her card was charged twice." },
+      "expect": "accept"
+    },
+    {
+      "id": "unknown-fields",
+      "input": {
+        "text": "Maria Lopez from Northwind Bank in Toronto says her card was charged twice.",
+        "skip_redaction": true,
+        "return_raw": true
+      },
+      "expect": "reject",
+      "paths": ["/skip_redaction", "/return_raw"],
+      "keyword": "additionalProperties"
+    },
+    {
+      "id": "missing-required",
+      "input": {},
+      "expect": "reject",
+      "paths": ["/text"],
+      "keyword": "required"
+    },
+    {
+      "id": "max-length",
+      "input": { "text": "PLACEHOLDER_OVER_MAX" },
+      "expect": "reject",
+      "paths": ["/text"],
+      "keyword": "maxLength",
+      "over_max_length": 20001
+    }
+  ]
+}

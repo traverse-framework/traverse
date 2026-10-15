@@ -22,3 +22,15 @@ Unreleased changes since `v0.15.0` will be recorded here.
   digest drifts from `runtime/runtime.wasm.sha256` (or any bundled copy).
 - Committed `runtime/runtime-release.json` now reports workspace `0.15.0`
   (was stale `0.12.0`) and a freshly rebuilt digest.
+
+## Breaking: host-side contract input schema enforcement (`#1658`)
+
+- Capability inputs are validated against the contract `inputs.schema` before
+  the artifact runs (native runtime path and web `BundleEmbedder` when a
+  component declares `contract_path`).
+- `additionalProperties: false` is enforced; unknown fields fail with
+  `invalid_input` / `RequestInvalid` and JSON Pointer violation paths
+  (e.g. `/skip_redaction`).
+- `maxLength` on strings is enforced. Raw `WasmExecutor::run_bytes` still
+  does not validate — callers must validate or use the governed runtime /
+  embedder path.

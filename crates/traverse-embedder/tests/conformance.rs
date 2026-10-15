@@ -169,7 +169,9 @@ fn embedded_trace_companion_projects_production_capability_and_workflow_evidence
         EMBEDDED_TRACE_API_VERSION
     );
 
-    let _ = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "secret": "input-secret" }));
+    // Use schema-valid inputs that still embed secret substrings so the
+    // public trace surface can prove they stay redacted (#1658).
+    let _ = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "input-secret" }));
     let _ = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "workflow-secret" }));
 
     let page = embedder

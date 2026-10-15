@@ -132,6 +132,16 @@
                 "type": "string"
               },
               "uniqueItems": true
+            },
+            "cancel_deadline": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "has_open_children": {
+              "type": "boolean"
+            },
+            "requires_dual_approval": {
+              "type": "boolean"
             }
           }
         },

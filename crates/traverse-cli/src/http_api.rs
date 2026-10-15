@@ -8269,7 +8269,8 @@ mod tests {
                 "inputs": {"schema": {"type": "object"}},
                 "outputs": {"schema": {
                     "type": "object",
-                    "required": projection,
+                    "required": projection.clone(),
+                    "properties": projection.iter().map(|name| (name.clone(), json!({"type": "object"}))).collect::<serde_json::Map<String, serde_json::Value>>(),
                     "additionalProperties": false
                 }},
                 "nodes": nodes,

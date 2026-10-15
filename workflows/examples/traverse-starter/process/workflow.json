@@ -52,6 +52,9 @@
         },
         "status": {
           "type": "string"
+        },
+        "note": {
+          "type": "string"
         }
       },
       "additionalProperties": false
