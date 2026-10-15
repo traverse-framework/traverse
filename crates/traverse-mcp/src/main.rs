@@ -177,7 +177,10 @@ mod tests {
             parse_command(["-V".to_string()].into_iter()),
             Ok(Command::Version)
         ));
-        assert_eq!(run(["--version".to_string()].into_iter()), ExitCode::SUCCESS);
+        assert_eq!(
+            run(["--version".to_string()].into_iter()),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]
