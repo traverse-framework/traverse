@@ -2,6 +2,12 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Fix: reject invalid web `modelUsage` (`#1685`)
+
+- `ExactModelBrowserHost` and the framed native create path only accept
+  `commercial` | `non_commercial`. Any other value fails closed with
+  `usage_invalid` and structured `detail` (`field: model_usage`).
+- Spec 138 0.14.2; shared rights suite scenario 11.
 ## Feature: packaged `traverse-mcp` Mode A binaries (`#1653`)
 
 - Product tags publish `traverse-mcp-vX.Y.Z` with Linux x86_64 + macOS arm64

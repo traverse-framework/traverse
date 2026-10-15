@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Traverse.Embedder;
 using Xunit;
@@ -161,14 +162,53 @@ public sealed class ExactModelHostTests
             var id = S(testCase, "id");
             var pins = testCase["pins"]!.AsArray().Select(Pin).ToList();
             ExactModelPin PinFor(string name) => pins.First(pin => pin.ModelId == $"fixture.rights.{name}");
+            static string? DeclaredUsage(JsonNode node)
+            {
+                var value = node["model_usage"];
+                if (value is null || value.GetValueKind() == JsonValueKind.Null)
+                {
+                    return null;
+                }
+
+                if (value is JsonValue json && json.TryGetValue<string>(out var text))
+                {
+                    return text;
+                }
+
+                return value.ToJsonString().Trim('"');
+            }
+            var steps = testCase["steps"]!.AsArray().Select(item => item!).ToList();
+            if (S(steps[0], "op") == "construct")
+            {
+                var actual = await Attempt(async () =>
+                {
+                    using var failed = new ExactModelHost(
+                        pins,
+                        [S(suite, "trusted_public_key_hex")],
+                        DeclaredUsage(testCase),
+                        testCase["host_requires_commercial"]?.GetValue<bool>() ?? false);
+                    await Task.CompletedTask;
+                    return new JsonObject { ["ok"] = true };
+                });
+                Assert.True(
+                    JsonNode.DeepEquals(steps[0]["expect"], actual),
+                    $"{id} construct: expected {steps[0]["expect"]?.ToJsonString()} got {actual?.ToJsonString()}");
+                foreach (var scenario in testCase["scenarios"]!.AsArray())
+                {
+                    scenarios.Add(scenario!.GetValue<int>());
+                }
+
+                continue;
+            }
+
             using var host = new ExactModelHost(
                 pins,
                 [S(suite, "trusted_public_key_hex")],
-                testCase["model_usage"] is JsonValue usage && usage.TryGetValue<string>(out var text) ? text : null,
+                DeclaredUsage(testCase),
                 testCase["host_requires_commercial"]?.GetValue<bool>() ?? false);
             host.SetPackageStatus(StatusEntries(testCase["package_status"]));
             var index = 0;
-            foreach (var step in testCase["steps"]!.AsArray().Select(item => item!))
+            foreach (var step in steps)
             {
                 JsonNode? actual;
                 switch (S(step, "op"))
@@ -239,7 +279,7 @@ public sealed class ExactModelHostTests
             }
         }
 
-        Assert.Equal(Enumerable.Range(1, 10).ToHashSet(), scenarios);
+        Assert.Equal(Enumerable.Range(1, 11).ToHashSet(), scenarios);
     }
 
     private static async Task<(ExactModelHost Host, ExactModelPin Pin, string InputHex)> PermissiveHost()

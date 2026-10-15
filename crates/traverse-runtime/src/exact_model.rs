@@ -102,6 +102,38 @@ pub enum ModelUsage {
     NonCommercial,
 }
 
+impl ModelUsage {
+    /// Parse an optional JSON `model_usage`. `null` / missing stays undeclared;
+    /// any other value that is not exactly `commercial` or `non_commercial`
+    /// fails closed with `usage_invalid` (FR-035).
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_incompatible` / `usage_invalid` with structured detail.
+    pub fn parse_optional(value: &serde_json::Value) -> Result<Option<Self>, HostConnectorError> {
+        match value {
+            serde_json::Value::Null => Ok(None),
+            serde_json::Value::String(text) if text == "commercial" => Ok(Some(Self::Commercial)),
+            serde_json::Value::String(text) if text == "non_commercial" => {
+                Ok(Some(Self::NonCommercial))
+            }
+            other => {
+                let actual = match other {
+                    serde_json::Value::String(text) => text.clone(),
+                    _ => other.to_string(),
+                };
+                Err(with_detail(
+                    incompatible(
+                        ModelFailureReason::UsageInvalid,
+                        "model_usage must be commercial or non_commercial",
+                    ),
+                    denial("model_usage", "commercial|non_commercial", &actual),
+                ))
+            }
+        }
+    }
+}
+
 /// How a derivative package was produced from its source (Decision 107).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -4554,6 +4586,11 @@ mod tests {
             (R::CryptoUnavailable, "crypto_unavailable"),
             (R::CandidateUnsupported, "candidate_unsupported"),
             (R::HostLimitExceeded, "host_limit_exceeded"),
+            (R::UsageUndeclared, "usage_undeclared"),
+            (R::UsageInvalid, "usage_invalid"),
+            (R::RightsPolicyDenied, "rights_policy_denied"),
+            (R::PackageRevoked, "package_revoked"),
+            (R::RightsInconsistent, "rights_inconsistent"),
             (R::PlacementUnavailable, "placement_unavailable"),
             (R::FrameMismatch, "frame_mismatch"),
             (R::InferenceFailed, "inference_failed"),

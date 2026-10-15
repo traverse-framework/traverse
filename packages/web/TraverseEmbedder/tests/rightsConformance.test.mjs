@@ -29,13 +29,26 @@ function errorJson(error) {
 const asJson = (value) => JSON.parse(JSON.stringify(value));
 
 function hostFor(testCase) {
-  const host = new ExactModelBrowserHost(testCase.pins, {
+  const options = {
     trustedPublicKeysHex: [SUITE.trusted_public_key_hex],
-    ...(testCase.model_usage ? { modelUsage: testCase.model_usage } : {}),
     hostRequiresCommercial: testCase.host_requires_commercial ?? false,
-  });
+  };
+  if (testCase.model_usage !== undefined && testCase.model_usage !== null) {
+    options.modelUsage = testCase.model_usage;
+  }
+  const host = new ExactModelBrowserHost(testCase.pins, options);
   host.setPackageStatus(testCase.package_status ?? {});
   return host;
+}
+
+/** The public error shape every embedder compares for a thrown construct. */
+function constructError(testCase) {
+  try {
+    hostFor(testCase);
+    assert.fail(`${testCase.id}: construct should fail`);
+  } catch (error) {
+    return errorJson(error);
+  }
 }
 
 const pinFor = (testCase, name) => testCase.pins.find((pin) => pin.model_id === `fixture.rights.${name}`);
@@ -92,6 +105,11 @@ async function execute(host, testCase, step) {
 test("rights conformance suite passes on the browser host (native parity)", async () => {
   const scenarios = new Set([10]);
   for (const testCase of SUITE.cases) {
+    if (testCase.steps[0]?.op === "construct") {
+      assert.deepEqual(asJson(constructError(testCase)), testCase.steps[0].expect, `${testCase.id} construct`);
+      testCase.scenarios.forEach((scenario) => scenarios.add(scenario));
+      continue;
+    }
     const host = hostFor(testCase);
     for (const [index, step] of testCase.steps.entries()) {
       let actual;
@@ -110,7 +128,7 @@ test("rights conformance suite passes on the browser host (native parity)", asyn
     }
     testCase.scenarios.forEach((scenario) => scenarios.add(scenario));
   }
-  assert.deepEqual([...scenarios].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual([...scenarios].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 });
 
 test("rights record is undefined until registered and usage is declared", async () => {

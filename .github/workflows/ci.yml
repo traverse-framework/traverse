@@ -288,6 +288,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.94.0
+          # native_artifact_certification rebuilds TraverseSwiftHost from this
+          # checkout (scripts/build_swift_host_xcframework.sh) so framed-host
+          # changes are covered before the next swift-host-v* publish.
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-darwin
 
       - name: Set up Java
         uses: actions/setup-java@v6

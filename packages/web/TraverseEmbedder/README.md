@@ -129,6 +129,24 @@ never silently dropped. Private operations fail with `key_provider_required`,
 and `prune`, `backup`, and `restore` fail with `unsupported`; IndexedDB v1 does
 not store private plaintext or provide maintenance archives.
 
+## Exact-ref model host
+
+`ExactModelBrowserHost` runs Spec 138 packages in the browser. Pass app
+manifest `modelUsage` as exactly `"commercial"` or `"non_commercial"` when
+the app declares model pins. A missing value fails closed with
+`usage_undeclared` at registration; any other value (including `""`,
+`"Commercial"`, `"research"`, or a non-string) fails closed at construction
+with `usage_invalid` and structured `detail` (`field: model_usage`).
+
+```ts
+import { ExactModelBrowserHost } from "traverse-embedder-web";
+
+const host = new ExactModelBrowserHost(pins, {
+  trustedPublicKeysHex: [...],
+  modelUsage: "non_commercial",
+});
+```
+
 ## Error mapping
 
 Boundary failures use stable `EmbedderErrorCode` values —

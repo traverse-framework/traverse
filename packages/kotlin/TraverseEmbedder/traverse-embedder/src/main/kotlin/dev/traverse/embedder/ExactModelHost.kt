@@ -171,7 +171,8 @@ internal object ExactModelNative {
  * `model_unavailable` / `engine_unavailable`.
  *
  * @param modelUsage the app manifest `model_usage` (`commercial` | `non_commercial`); registration
- *   fails closed with `usage_undeclared` when it is null.
+ *   fails closed with `usage_undeclared` when it is null, and construction fails closed with
+ *   `usage_invalid` for any other string.
  * @param hostRequiresCommercial host tightening; a host can never relax an app's usage.
  */
 class ExactModelHost(

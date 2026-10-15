@@ -37,6 +37,10 @@ print(json.dumps({"artifact": "runtime.wasm", "release": release, "digest_verifi
 PY
 
 export TRAVERSE_NATIVE_ARTIFACT_ROOT="${artifact_root}"
+# Rebuild TraverseSwiftHost from this checkout so Swift rights/model tests
+# exercise the framed host in-tree (Package.swift prefers target/apple when
+# present). The published swift-host-v* pin stays the consumer default.
+bash "${repo_root}/scripts/build_swift_host_xcframework.sh"
 swift test --package-path "${repo_root}/packages/swift/TraverseEmbedder"
 pushd "${repo_root}/packages/kotlin/TraverseEmbedder" >/dev/null
 "${GRADLE:-gradle}" --no-daemon :traverse-embedder:testDebugUnitTest
