@@ -38,7 +38,6 @@ import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js"
 import { validatePayloadAgainstContract } from "./schemaValidate.js";
 import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
 import { wasmInitialMemoryBytes } from "./wasmMemory.js";
-import { validatePayloadAgainstContract } from "./schemaValidate.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
