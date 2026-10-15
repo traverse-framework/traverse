@@ -36,7 +36,8 @@ pub const RUNNER_ABI_VERSION: u16 = 3;
 /// SHA-256 of the audited ONNX runner guest (`fixtures/onnx/runner.wasm`).
 /// Kept in lockstep with `fixtures/onnx/runner.wasm.sha256` by
 /// `scripts/ci/onnx_runner_guest_check.sh`.
-pub const AUDITED_ONNX_RUNNER_SHA256: &str = "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966";
+pub const AUDITED_ONNX_RUNNER_SHA256: &str =
+    "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966";
 const PAGE: u64 = 65_536;
 const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 
@@ -903,9 +904,11 @@ mod tests {
 
     #[test]
     fn audited_runner_digest_helper_rejects_unknown_bytes() {
-        assert!(ensure_audited_onnx_runner(b"not-the-audited-runner")
-            .unwrap_err()
-            .contains("is not the audited ONNX runner guest"));
+        assert!(
+            ensure_audited_onnx_runner(b"not-the-audited-runner")
+                .unwrap_err()
+                .contains("is not the audited ONNX runner guest")
+        );
         assert!(ensure_audited_onnx_runner(&pristine_fixture_runner()).is_ok());
     }
 
