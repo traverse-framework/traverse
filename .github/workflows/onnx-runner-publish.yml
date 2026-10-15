@@ -1,0 +1,124 @@
+name: Publish ONNX runner guest
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Product version tag to publish the ONNX runner for, e.g. v0.15.0.
+          Creates artifact release onnx-runner-vX.Y.Z (--latest=false).
+          Dispatch against the ref that has the fixture bytes (usually main).
+        required: true
+      rebuild:
+        description: >-
+          Optional rebuild number N when republishing the same workspace
+          version (immutable releases forbid replacing assets). Publishes
+          onnx-runner-vX.Y.Z-N instead of onnx-runner-vX.Y.Z.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
+
+      - name: Verify release tag matches Cargo workspace version
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              found = 1
+              exit
+            }
+            END { if (!found) exit 1 }
+          ' Cargo.toml)"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "${workspace_version}" != "${tag_version}" ]]; then
+            echo "Cargo.toml workspace version ${workspace_version} does not match tag ${RELEASE_TAG}." >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=${tag_version}" >> "$GITHUB_ENV"
+          rebuild="${{ github.event.inputs.rebuild }}"
+          if [[ -z "${rebuild}" ]]; then
+            echo "ONNX_RELEASE_TAG=onnx-runner-v${tag_version}" >> "$GITHUB_ENV"
+            echo "REBUILD_LABEL=" >> "$GITHUB_ENV"
+          elif [[ "${rebuild}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ONNX_RELEASE_TAG=onnx-runner-v${tag_version}-${rebuild}" >> "$GITHUB_ENV"
+            echo "REBUILD_LABEL=, rebuild ${rebuild}" >> "$GITHUB_ENV"
+          else
+            echo "rebuild must be a positive integer, got '${rebuild}'." >&2
+            exit 1
+          fi
+
+      - name: Verify committed runner digest
+        id: digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner="fixtures/onnx/runner.wasm"
+          expected="$(tr -d '[:space:]' < fixtures/onnx/runner.wasm.sha256)"
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "${runner}" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "${runner}" | awk '{print $1}')"
+          fi
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "runner.wasm digest ${actual} does not match fixtures/onnx/runner.wasm.sha256 ${expected}" >&2
+            exit 1
+          fi
+          cp "${runner}" "runner.wasm"
+          cp fixtures/onnx/runner.wasm.sha256 "runner.wasm.sha256"
+          echo "value=${actual}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: runner.wasm
+
+      - name: Create the release with the runner attached
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECKSUM: ${{ steps.digest.outputs.value }}
+        run: |
+          set -euo pipefail
+          if gh release view "${ONNX_RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${ONNX_RELEASE_TAG} already exists; immutable releases cannot gain or replace assets. Use rebuild N for a new tag." >&2
+            exit 1
+          fi
+          notes="$(cat <<NOTES
+          Artifact-only release for the audited ONNX runner guest (\`runner.wasm\`).
+
+          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\` (crates.io / npm / Maven / NuGet). The immutable-releases policy of this repository forbids adding assets to a release after it is published, so the runner ships on its own dedicated \`onnx-runner-v*\` release (same pattern as \`swift-host-v*\` / \`runtime-wasm-v*\`), never marked Latest.
+
+          Used by \`traverse-cli model package-onnx\` (crate \`traverse-cli-rs\`). Download URL and digest are documented in \`docs/model-packaging-guide.md\`.
+
+          Asset digest (sha256): \`${CHECKSUM}\`
+          NOTES
+          )"
+          gh release create "${ONNX_RELEASE_TAG}" runner.wasm runner.wasm.sha256 \
+            --repo "${{ github.repository }}" \
+            --title "ONNX runner guest (workspace v${TAG_VERSION}${REBUILD_LABEL})" \
+            --notes "${notes}" \
+            --latest=false

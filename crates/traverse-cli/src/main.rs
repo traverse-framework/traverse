@@ -1821,7 +1821,10 @@ fn help_model_package_onnx() -> String {
     npm 0.14.0 rejects schema {schema} / ABI v{abi} with manifest_invalid.
 
   Required arguments:
-    <runner.wasm>    The pristine runner (fixtures/onnx/runner.wasm).
+    <runner.wasm>    The audited ONNX runner guest (sha256 pinned as
+                    AUDITED_ONNX_RUNNER_SHA256 / fixtures/onnx/runner.wasm.sha256).
+                    Download from the onnx-runner-v* GitHub Release when you
+                    do not have a checkout.
     <model.onnx>     ONNX model with exactly one input and one output tensor.
     <package.json>   Manifest fields (model_id, version, rights, limits, ...)
                      plus `tensor`: input/output names, shapes, and dtypes.
@@ -6645,6 +6648,10 @@ fn package_onnx_model(
     spec_path: &Path,
     out_dir: &Path,
 ) -> Result<String, CliError> {
+    let runner_bytes = std::fs::read(runner_path).map_err(|error| {
+        CliError::IoError(format!("failed to read {}: {error}", runner_path.display()))
+    })?;
+    model_packaging::ensure_audited_onnx_runner(&runner_bytes).map_err(CliError::IoError)?;
     let report = model_packaging::package_onnx(
         runner_path,
         onnx_path,

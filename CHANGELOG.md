@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Docs/packaging: CLI install + ONNX runner release (`#1687`)
+
+- Document `cargo +1.94.0 install traverse-cli-rs --locked` and the
+  crates.io `traverse-cli` name clash in the README and packaging guide.
+- Publish `fixtures/onnx/runner.wasm` on `onnx-runner-v*` artifact releases
+  with sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` and build provenance attestation.
+- `traverse-cli model package-onnx` rejects a runner whose digest is not the
+  audited guest. CI covers the published-style `.crate` install path.
+
 ### Reject invalid `modelUsage` on every string-typed host (#1685)
 
 - Web `ExactModelBrowserHost`, and the framed create path used by Swift,
@@ -16,6 +25,7 @@
 
 - `ModelIoStore::output_len` reports stored output size without copying bytes;
   the framed host `execute` path uses it for `trace.usage.output_bytes`.
+
 ### Packaged `traverse-mcp` Mode A binaries (#1653)
 
 - Workflow `.github/workflows/mcp-server-publish.yml` builds Linux x86_64 and

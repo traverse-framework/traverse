@@ -78,15 +78,56 @@ if [[ "${host}" != "${canonical_host}" ]]; then
   echo "ONNX runner guest check passed on ${host}: zero imports and required exports (byte comparison runs only on ${canonical_host})."
   exit 0
 fi
+sha_file="${runner_wasm}.sha256"
+cli_const_file="${repo_root}/crates/traverse-cli/src/model_packaging.rs"
+
+sync_digest_pins() {
+  local digest="$1"
+  printf '%s\n' "${digest}" > "${sha_file}"
+  python3 - "${cli_const_file}" "${digest}" <<'PIN'
+from pathlib import Path
+import re
+import sys
+path = Path(sys.argv[1])
+digest = sys.argv[2]
+text = path.read_text()
+pattern = r'pub const AUDITED_ONNX_RUNNER_SHA256: &str = "[0-9a-f]{64}";'
+replacement = f'pub const AUDITED_ONNX_RUNNER_SHA256: &str = "{digest}";'
+updated, n = re.subn(pattern, replacement, text, count=1)
+if n != 1:
+    raise SystemExit("failed to update AUDITED_ONNX_RUNNER_SHA256 in model_packaging.rs")
+path.write_text(updated)
+PIN
+}
+
 if [[ "${1:-}" == "--update" ]]; then
   cp "${built}" "${runner_wasm}"
-  echo "Updated ${runner_wasm} (${actual}). Re-run traverse-cli model package-onnx for each runner package, then scripts/fixtures/sign-model-fixtures.mjs."
+  sync_digest_pins "${actual}"
+  echo "Updated ${runner_wasm} (${actual}), ${sha_file}, and AUDITED_ONNX_RUNNER_SHA256. Re-run traverse-cli model package-onnx for each runner package, then scripts/fixtures/sign-model-fixtures.mjs."
   exit 0
 fi
 expected="$(sha256 "${runner_wasm}")"
 if [[ "${actual}" != "${expected}" ]]; then
   echo "Rebuilt ONNX runner ${actual} does not match checked-in runner.wasm ${expected}." >&2
   echo "Run scripts/ci/onnx_runner_guest_check.sh --update, repackage, and re-sign." >&2
+  exit 1
+fi
+pinned="$(tr -d '[:space:]' < "${sha_file}")"
+if [[ "${actual}" != "${pinned}" ]]; then
+  echo "runner.wasm digest ${actual} does not match ${sha_file} ${pinned}." >&2
+  exit 1
+fi
+# rustfmt may wrap the string literal onto the next line; accept either form.
+if ! awk -v d="${actual}" '
+  $0 ~ "AUDITED_ONNX_RUNNER_SHA256: &str = \"" d "\"" { found=1; exit }
+  $0 ~ /AUDITED_ONNX_RUNNER_SHA256: &str =$/ { want=1; next }
+  want {
+    if ($0 ~ "\"" d "\"") found=1
+    exit
+  }
+  END { exit !found }
+' "${cli_const_file}"; then
+  echo "AUDITED_ONNX_RUNNER_SHA256 in model_packaging.rs does not match runner.wasm ${actual}." >&2
   exit 1
 fi
 

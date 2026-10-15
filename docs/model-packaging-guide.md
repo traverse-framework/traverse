@@ -6,6 +6,43 @@ native, browser, and iOS/macOS hosts. Everything here uses `traverse-cli
 model` (Decision 105, `#1589`). The host behaviour it targets is described in
 [`exact-ref-model-execution.md`](exact-ref-model-execution.md).
 
+## Install the CLI
+
+Package models with the published Traverse CLI. The crate is
+**`traverse-cli-rs`** (binary `traverse-cli`). It requires **rustc ≥ 1.94**.
+
+```bash
+rustup toolchain install 1.94.0
+cargo +1.94.0 install traverse-cli-rs --version =0.15.0 --locked
+```
+
+> **Warning:** crates.io [`traverse-cli`](https://crates.io/crates/traverse-cli)
+> is an unrelated Solidity project. `cargo install traverse-cli` installs the
+> wrong tool with the same binary name. Always install `traverse-cli-rs`.
+
+For ONNX packaging you also need the audited runner guest. Download it from
+the `onnx-runner-v*` artifact release (never marked Latest; same pattern as
+`swift-host-v*` / `runtime-wasm-v*`):
+
+```bash
+VERSION=0.15.0
+curl -fsSL -o runner.wasm \
+  "https://github.com/traverse-framework/traverse/releases/download/onnx-runner-v${VERSION}/runner.wasm"
+echo "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966  runner.wasm" | shasum -a 256 -c -
+```
+
+Pinned digest for `onnx-runner-v0.15.0` / `fixtures/onnx/runner.wasm`:
+`f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`.
+
+Digits fixture inputs (no git checkout required):
+
+```bash
+TAG=v0.15.0
+BASE="https://raw.githubusercontent.com/traverse-framework/traverse/${TAG}/fixtures/onnx"
+curl -fsSL -o digits-mlp-1.0.0.onnx "${BASE}/digits-mlp-1.0.0.onnx"
+curl -fsSL -o digits-onnx.package.json "${BASE}/digits-onnx.package.json"
+```
+
 ## What a package is
 
 A package is a directory with three files:
@@ -243,8 +280,15 @@ from `crates/traverse-onnx-runner-guest` on tract with `+simd128`):
 - every other section, including the runner's code, is copied byte for byte.
 
 ```bash
+# With a checkout:
 traverse-cli model package-onnx fixtures/onnx/runner.wasm my-model.onnx my-model.package.json out/my-model
+
+# Without a checkout (runner from onnx-runner-v* release; digest must match):
+traverse-cli model package-onnx runner.wasm my-model.onnx my-model.package.json out/my-model
 ```
+
+`package-onnx` fails closed if `<runner.wasm>` is not the audited guest
+(sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`).
 
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;

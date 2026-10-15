@@ -28,6 +28,7 @@ Use the release helper from a clean `main` checkout after CI is green:
 | Product | `vX.Y.Z` | `Traverse vX.Y.Z` (exactly) | **yes** |
 | Swift artifact | `swift-host-vX.Y.Z[-N]` | `TraverseSwiftHost xcframework (workspace vX.Y.Z…)` | never |
 | runtime.wasm artifact | `runtime-wasm-vX.Y.Z` | `runtime.wasm vX.Y.Z (…)` | never |
+| ONNX runner guest | `onnx-runner-vX.Y.Z[-N]` | `ONNX runner guest (workspace vX.Y.Z…)` | never |
 
 - The product release is notes-only, so the immutable-releases policy (which
   only forbids adding assets after publish) never blocks it. Only
@@ -90,6 +91,23 @@ already updates the web package/lockfile and creates `web-v<version>`. Push
 that tag after `main` to trigger the credential-free npm Trusted Publishing
 workflow. See [the web embedder npm publish runbook](web-embedder-npm-publish-runbook.md)
 for setup assumptions and verification.
+
+
+## ONNX runner guest artifact
+
+Each product cut also publishes the audited ONNX runner guest used by
+`traverse-cli model package-onnx` under a dedicated
+`onnx-runner-vX.Y.Z` artifact release (`--latest=false`), via
+`.github/workflows/onnx-runner-publish.yml` (triggered on `v*` tags, or
+`workflow_dispatch` for backfills / rebuilds). Assets:
+
+- `runner.wasm` — byte-identical to `fixtures/onnx/runner.wasm`
+- `runner.wasm.sha256` — matching digest (also committed in-tree)
+
+The product `Traverse vX.Y.Z` release stays notes-only. Document the pinned
+URL and digest in `docs/model-packaging-guide.md` whenever the runner bytes
+change. Rebuilds at the same workspace version use `onnx-runner-vX.Y.Z-N`
+(immutable releases forbid replacing assets).
 
 ## Native artifact releases (Maven, NuGet, Swift)
 
