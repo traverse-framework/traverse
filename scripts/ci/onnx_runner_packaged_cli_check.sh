@@ -30,6 +30,19 @@ crate_dir="$(find "${workdir}/crate" -mindepth 1 -maxdepth 1 -type d | head -n 1
 echo "==> cargo install --path from .crate"
 install_root="${workdir}/install"
 mkdir -p "${install_root}"
+# The packaged crate rewrites workspace path deps to crates.io versions. Until
+# those versions are republished from this tip, patch them back to the checkout
+# so the install proves the published-style .crate layout without requiring a
+# crates.io release mid-PR.
+mkdir -p "${crate_dir}/.cargo"
+cat >"${crate_dir}/.cargo/config.toml" <<EOF
+[patch.crates-io]
+traverse-contracts = { path = "${repo_root}/crates/traverse-contracts" }
+traverse-mcp = { path = "${repo_root}/crates/traverse-mcp" }
+traverse-runtime = { path = "${repo_root}/crates/traverse-runtime" }
+EOF
+# Packaged crates omit Cargo.lock; copy the workspace lock so --locked works.
+cp "${repo_root}/Cargo.lock" "${crate_dir}/Cargo.lock"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo install --path "${crate_dir}" --root "${install_root}" --locked --force
 cli="${install_root}/bin/traverse-cli"
 test -x "${cli}"

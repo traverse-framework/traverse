@@ -117,7 +117,16 @@ if [[ "${actual}" != "${pinned}" ]]; then
   echo "runner.wasm digest ${actual} does not match ${sha_file} ${pinned}." >&2
   exit 1
 fi
-if ! grep -Fq "pub const AUDITED_ONNX_RUNNER_SHA256: &str = \"${actual}\";" "${cli_const_file}"; then
+# rustfmt may wrap the string literal onto the next line; accept either form.
+if ! awk -v d="${actual}" '
+  $0 ~ "AUDITED_ONNX_RUNNER_SHA256: &str = \"" d "\"" { found=1; exit }
+  $0 ~ /AUDITED_ONNX_RUNNER_SHA256: &str =$/ { want=1; next }
+  want {
+    if ($0 ~ "\"" d "\"") found=1
+    exit
+  }
+  END { exit !found }
+' "${cli_const_file}"; then
   echo "AUDITED_ONNX_RUNNER_SHA256 in model_packaging.rs does not match runner.wasm ${actual}." >&2
   exit 1
 fi
