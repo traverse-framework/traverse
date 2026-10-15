@@ -1,5 +1,23 @@
 // swift-tools-version: 6.0
+import Foundation
 import PackageDescription
+
+// Prefer a locally built xcframework (scripts/build_swift_host_xcframework.sh)
+// when present so PR CI can exercise frame changes before the next
+// swift-host-v* publish. Consumers without a local build keep the pinned
+// release binary.
+let localSwiftHost = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("../../../target/apple/TraverseSwiftHost.xcframework")
+    .standardizedFileURL
+    .path
+let traverseSwiftHost: Target = FileManager.default.fileExists(atPath: localSwiftHost)
+    ? .binaryTarget(name: "TraverseSwiftHost", path: localSwiftHost)
+    : .binaryTarget(
+        name: "TraverseSwiftHost",
+        url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.15.0-1/TraverseSwiftHost.xcframework.zip",
+        checksum: "bc741716851f1f3559c2c7571002546d4b9d2bf36d81c88ef399e746c05ddd6e"
+    )
 
 let package = Package(
     name: "TraverseEmbedder",
@@ -7,11 +25,7 @@ let package = Package(
     products: [.library(name: "TraverseEmbedder", targets: ["TraverseEmbedder"])],
     dependencies: [],
     targets: [
-        .binaryTarget(
-            name: "TraverseSwiftHost",
-            url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.15.0-1/TraverseSwiftHost.xcframework.zip",
-            checksum: "bc741716851f1f3559c2c7571002546d4b9d2bf36d81c88ef399e746c05ddd6e"
-        ),
+        traverseSwiftHost,
         .target(
             name: "TraverseEmbedder",
             dependencies: [
