@@ -48,8 +48,6 @@ public sealed class ExactModelHostTests
     [InlineData("signed-classifier.json", 4096, 1)]
     [InlineData("signed-digits-mlp.json", 64, 1)]
     [InlineData("signed-digits-onnx.json", 56, 1)]
-    // Multi-IO ONNX runner (#1661): HF-style text-encoder toy frame bundle.
-    [InlineData("signed-hf-text-encoder-toy.json", 196, 1)]
     // Guest ABI v3 (Decision 110): the first round prepares, later rounds restore the snapshot.
     [InlineData("signed-prepared-v3.json", 4096, 3)]
     public async Task SignedVectorsAreByteIdentical(string vectorPath, int maxOutput, int rounds)

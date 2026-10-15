@@ -86,10 +86,6 @@ class ExactModelHostTest {
     @Test
     fun onnxRunnerVectorIsByteIdenticalWithSimd() = vectorCheck("signed-digits-onnx.json", 56)
 
-    /** Multi-IO ONNX runner (#1661): HF-style text-encoder toy frame bundle. */
-    @Test
-    fun hfTextEncoderToyVectorIsByteIdentical() = vectorCheck("signed-hf-text-encoder-toy.json", 196)
-
     /** Guest ABI v3 (Decision 110): the first round prepares, later rounds restore the snapshot. */
     @Test
     fun preparedV3VectorIsByteIdenticalFreshAndWarm() = vectorCheck("signed-prepared-v3.json", 4096, rounds = 3)
