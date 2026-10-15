@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Reject invalid `modelUsage` on every string-typed host (#1685)
+
+- Web `ExactModelBrowserHost`, and the framed create path used by Swift,
+  Kotlin and .NET, now fail closed with `model_incompatible` /
+  `usage_invalid` when `model_usage` is present but not exactly
+  `commercial` or `non_commercial` (including `""`, `"Commercial"`,
+  `"research"`, and non-strings).
+- The shared rights conformance suite adds scenario 11 for those cases.
+- Spec 138 amended to 0.14.2 (FR-035).
+
 ### Avoid cloning framed model output just for length (#1697)
 
 - `ModelIoStore::output_len` reports stored output size without copying bytes;
@@ -14,7 +24,6 @@
 - Undeclared package usage no longer reports `effective_usage: non_commercial`
   as if the package declared it.
 - With `--json`, usage/flag parse errors emit a JSON error envelope on stdout.
-
 
 ### Reproducible `runtime.wasm` (#1659)
 
