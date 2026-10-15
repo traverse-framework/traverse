@@ -105,9 +105,7 @@ final class ExactModelHostTests: XCTestCase {
 
     /// Decision 112 (#1629 slice 3): the Core ML accelerator is opt-in at
     /// `init`, variant files go in at registration, and the policy's
-    /// placements choose it per call. Skipped only while the pinned
-    /// `TraverseSwiftHost` xcframework predates manifest schema 2.2.0
-    /// variants; it runs in full after the next swift-host release.
+    /// placements choose it per call.
     func testCoreMLPlacementIsOptInAndReportsItsEvidence() async throws {
         let package = "digits-onnx-coreml-1.0.0"
         let manifestData = try fixture("\(package)/model.manifest.json")
@@ -124,17 +122,12 @@ final class ExactModelHostTests: XCTestCase {
             coreML: CoreMLAcceleratorConfig(computeUnits: "cpu_only", cacheDirectory: cache))
         let zipPath = "variants/coreml/model.mlpackage.zip"
         let vectorPath = "variants/coreml/conformance.json"
-        let registered: String
-        do {
-            registered = try await host.registerPackage(
-                manifest: manifestData,
-                wasm: try fixture("\(package)/model.wasm"),
-                signature: try fixture("\(package)/model.sig.json"),
-                variantFiles: [zipPath: try fixture("\(package)/\(zipPath)"),
-                               vectorPath: try fixture("\(package)/\(vectorPath)")])
-        } catch let error as ExactModelError where error.reason == "manifest_invalid" {
-            throw XCTSkip("the pinned TraverseSwiftHost xcframework predates accelerator variants: \(error.message)")
-        }
+        let registered = try await host.registerPackage(
+            manifest: manifestData,
+            wasm: try fixture("\(package)/model.wasm"),
+            signature: try fixture("\(package)/model.sig.json"),
+            variantFiles: [zipPath: try fixture("\(package)/\(zipPath)"),
+                           vectorPath: try fixture("\(package)/\(vectorPath)")])
         XCTAssertEqual(registered, digest)
         let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture("\(package)/\(vectorPath)")) as? [String: Any])
         let testCase = try XCTUnwrap((vector["cases"] as? [[String: Any]])?.first)
