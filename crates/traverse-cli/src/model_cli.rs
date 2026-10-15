@@ -180,10 +180,7 @@ struct RegistrationFlags {
     require_model_usage: bool,
 }
 
-fn parse_registration_flags(
-    flags: &[&str],
-    subcommand: &str,
-) -> Result<RegistrationFlags, String> {
+fn parse_registration_flags(flags: &[&str], subcommand: &str) -> Result<RegistrationFlags, String> {
     let mut flags = flags.to_vec();
     let require_model_usage = take_bool_flag(&mut flags, "--require-model-usage");
     let mut trusted_keys_hex = Vec::new();
@@ -1035,13 +1032,7 @@ pub(crate) fn preflight_package(
         let mut keys = TrustedModelKeys::new();
         keys.trust(&public)
             .map_err(|error| fail(name, error_json(&error)))?;
-        let host = host_with_keys(
-            &pin,
-            keys,
-            HostModelLimits::default(),
-            None,
-            false,
-        );
+        let host = host_with_keys(&pin, keys, HostModelLimits::default(), None, false);
         let output = execute_governed(host, &files, &pin, &manifest, engine, &input)
             .map_err(|error| fail(name, error_json(&error)))?;
         outputs.push((name, output));
@@ -1961,13 +1952,7 @@ mod tests {
 
         // UsageError path with --json must be a JSON envelope (exercised via
         // run(), matching main's emit_usage_error for the binary).
-        let short_key = cli(&[
-            "verify",
-            path(&permissive),
-            "--trusted-key",
-            "00",
-            "--json",
-        ]);
+        let short_key = cli(&["verify", path(&permissive), "--trusted-key", "00", "--json"]);
         match short_key {
             Err(CliError::UsageError(message)) => {
                 assert!(message.contains("64 hex"), "{message}");
@@ -2197,7 +2182,14 @@ mod tests {
             vec!["sign", "m.json"],
             vec!["verify", "dir"],
             vec!["verify", "dir", "--bogus", "x"],
-            vec!["verify", "dir", "--trusted-key", "k", "--model-usage", "research"],
+            vec![
+                "verify",
+                "dir",
+                "--trusted-key",
+                "k",
+                "--model-usage",
+                "research",
+            ],
             vec!["verify", "dir", "--trusted-key", "k", "--max-fuel", "0"],
             vec![
                 "verify",
