@@ -2070,6 +2070,19 @@ pub fn encode_guest_frame(dtype: u8, dims: &[u32], payload: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Concatenate Spec 138 guest frames into one staged input / output bundle
+/// (ONNX runner multi-IO, Spec 138 / `#1661`). Hosts treat the result as
+/// opaque bytes; order must match the package tensor config.
+#[must_use]
+pub fn concat_guest_frames(frames: &[&[u8]]) -> Vec<u8> {
+    let total = frames.iter().map(|frame| frame.len()).sum();
+    let mut out = Vec::with_capacity(total);
+    for frame in frames {
+        out.extend_from_slice(frame);
+    }
+    out
+}
+
 /// Decode a guest frame; fail closed on truncation.
 ///
 /// # Errors

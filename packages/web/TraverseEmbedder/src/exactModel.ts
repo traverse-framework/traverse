@@ -659,6 +659,25 @@ export function encodeGuestFrame(dtype: number, dims: readonly number[], payload
   return out;
 }
 
+/**
+ * Concatenate Spec 138 guest frames into one staged input / output bundle
+ * (ONNX runner multi-IO, Spec 138 / #1661). Hosts treat the result as opaque
+ * bytes; order must match the package tensor config.
+ */
+export function concatGuestFrames(frames: readonly Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const frame of frames) {
+    total += frame.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const frame of frames) {
+    out.set(frame, offset);
+    offset += frame.length;
+  }
+  return out;
+}
+
 export class ModelIoStore {
   private inputs = new Map<string, Uint8Array>();
   private outputs = new Map<string, Uint8Array>();
