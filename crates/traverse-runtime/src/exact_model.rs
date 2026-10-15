@@ -1917,7 +1917,8 @@ impl HostConnectorPort for ExactModelHostConnector {
                 &mut reuse,
             )?,
         };
-        if started.elapsed() > timeout {
+        // `timeout_ms: 0` must fail closed even when the clock has not advanced.
+        if started.elapsed() >= timeout {
             return Err(HostConnectorError {
                 code: HostConnectorErrorCode::Timeout,
                 reason: None,
@@ -2022,7 +2023,8 @@ fn run_adapter(
                 &format!("model.execute cancelled {phase} the accelerator prediction"),
             ));
         }
-        (Instant::now() > control.deadline).then(|| {
+        // Inclusive: a zero-duration deadline must reject before prediction.
+        (Instant::now() >= control.deadline).then(|| {
             model_error_plain(
                 HostConnectorErrorCode::Timeout,
                 &format!("model.execute exceeded timeout {phase} the accelerator prediction"),
@@ -2887,7 +2889,7 @@ fn run_fuel_slices<Params: wasmi::WasmParams>(
                 "model.execute cancelled mid-run",
             ));
         }
-        if Instant::now() > control.deadline {
+        if Instant::now() >= control.deadline {
             return Err(model_error_plain(
                 HostConnectorErrorCode::Timeout,
                 "model.execute exceeded timeout mid-run",
