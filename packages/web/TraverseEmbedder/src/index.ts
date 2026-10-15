@@ -29,6 +29,11 @@ export {
   PACKAGE_VERSION,
   SUPPORTED_BUNDLE_SCHEMA_VERSIONS,
 } from "./types.js";
+export {
+  validatePayloadAgainstContract,
+  validateValueAgainstSchema,
+} from "./schemaValidate.js";
+export type { SchemaViolation } from "./schemaValidate.js";
 export type {
   AppCommandEnvelope,
   CompatibleLifecycleOutcome,

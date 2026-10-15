@@ -367,16 +367,30 @@ fn main() -> ExitCode {
                 eprintln!("{msg}");
                 ExitCode::from(4)
             }
-            Err(CliError::UsageError(msg)) => {
-                eprintln!("{msg}");
-                ExitCode::from(5)
-            }
+            Err(CliError::UsageError(msg)) => emit_usage_error(&args, &msg),
         },
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::from(5)
-        }
+        Err(error) => emit_usage_error(&args, &error),
     }
+}
+
+/// When `--json` is present, usage/parse errors are a stable JSON envelope on
+/// stdout (exit 5); otherwise they stay plain text on stderr (#1686).
+fn emit_usage_error(args: &[String], message: &str) -> ExitCode {
+    if args.iter().any(|arg| arg == "--json") {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "usage_error",
+                    "message": message,
+                }
+            })
+        );
+    } else {
+        eprintln!("{message}");
+    }
+    ExitCode::from(5)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -12236,6 +12250,25 @@ mod tests {
         assert!(text.contains("artifact verify"));
         assert!(text.contains("<artifact-or-manifest-path>"));
         assert!(text.contains("Example:"));
+    }
+
+    #[test]
+    fn usage_error_json_envelope_matches_1686_contract() {
+        let envelope = serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "usage_error",
+                "message": "--trusted-key must be 64 hex characters",
+            }
+        });
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["error"]["code"], "usage_error");
+        assert!(
+            envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("64 hex")
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+<<<<<<< HEAD
 
 ## Docs/packaging: CLI install path + ONNX runner distribution (`#1687`)
 
@@ -13,6 +14,22 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - `model package-onnx` fails closed when the given runner digest is not the
   audited guest. CI installs the CLI from a packaged `.crate` and runs the
   digits-onnx package → verify → conformance path.
+=======
+## Fix: `model verify --model-usage` and JSON usage errors (`#1686`)
+
+- `traverse-cli model verify` (and `conformance generate|check`) accept
+  `--model-usage commercial|non_commercial` and optional
+  `--require-model-usage`.
+- Without `--model-usage`, verification still uses a non-commercial default
+  but the JSON report sets `rights_record.effective_usage` to `null` and
+  keeps `verification_usage` explicit (no false app declaration).
+- `--model-usage commercial` on a `commercial_use: prohibited` package fails
+  with `rights_policy_denied`; invalid values fail closed.
+- When `--json` is present, argument/usage errors (malformed keys, unknown
+  flags, bad `--model-usage`) emit a JSON error envelope on stdout with
+  `error.code: "usage_error"` and a non-zero exit.
+
+>>>>>>> origin/main
 
 ## Fix: host-configurable nested limits for `runtime.wasm` (`#1656`)
 
@@ -34,3 +51,15 @@ Unreleased changes since `v0.15.0` will be recorded here.
   digest drifts from `runtime/runtime.wasm.sha256` (or any bundled copy).
 - Committed `runtime/runtime-release.json` now reports workspace `0.15.0`
   (was stale `0.12.0`) and a freshly rebuilt digest.
+
+## Breaking: host-side contract input schema enforcement (`#1658`)
+
+- Capability inputs are validated against the contract `inputs.schema` before
+  the artifact runs (native runtime path and web `BundleEmbedder` when a
+  component declares `contract_path`).
+- `additionalProperties: false` is enforced; unknown fields fail with
+  `invalid_input` / `RequestInvalid` and JSON Pointer violation paths
+  (e.g. `/skip_redaction`).
+- `maxLength` on strings is enforced. Raw `WasmExecutor::run_bytes` still
+  does not validate — callers must validate or use the governed runtime /
+  embedder path.

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the
@@ -10,6 +11,16 @@
   with sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` and build provenance attestation.
 - `traverse-cli model package-onnx` rejects a runner whose digest is not the
   audited guest. CI covers the published-style `.crate` install path.
+=======
+### CLI `--model-usage` and JSON usage errors (#1686)
+
+- `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`
+  and optional `--require-model-usage`.
+- Undeclared package usage no longer reports `effective_usage: non_commercial`
+  as if the package declared it.
+- With `--json`, usage/flag parse errors emit a JSON error envelope on stdout.
+
+>>>>>>> origin/main
 
 ### Reproducible `runtime.wasm` (#1659)
 
