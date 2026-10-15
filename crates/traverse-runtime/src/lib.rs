@@ -3091,11 +3091,8 @@ pub(crate) fn validate_value_against_schema(
                     return;
                 };
                 if let Some(max_length) = schema_object.get("maxLength").and_then(Value::as_u64) {
-                    let too_long = match u64::try_from(text.chars().count()) {
-                        Ok(len) => len > max_length,
-                        Err(_) => true,
-                    };
-                    if too_long {
+                    // char count fits in u64 on every Traverse host (usize ≤ u64).
+                    if text.chars().count() as u64 > max_length {
                         errors.push(json!({
                             "path": display_pointer(path),
                             "keyword": "maxLength",
@@ -5078,6 +5075,17 @@ mod tests {
         assert_eq!(
             too_long.details["violations"][0]["keyword"],
             json!("maxLength")
+        );
+        let wrong_root_type = validate_payload_against_contract(
+            &json!("not-an-object"),
+            &schema,
+            super::RuntimeErrorCode::RequestInvalid,
+            "wrong root type",
+        )
+        .expect_err("type");
+        assert_eq!(
+            wrong_root_type.details["violations"][0]["path"],
+            json!("/")
         );
     }
 
