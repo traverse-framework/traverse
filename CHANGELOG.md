@@ -25,6 +25,7 @@
 
 - `ModelIoStore::output_len` reports stored output size without copying bytes;
   the framed host `execute` path uses it for `trace.usage.output_bytes`.
+
 ### Packaged `traverse-mcp` Mode A binaries (#1653)
 
 - Workflow `.github/workflows/mcp-server-publish.yml` builds Linux x86_64 and

@@ -23,6 +23,7 @@ Unreleased changes since `v0.15.0` will be recorded here.
 ## Perf: framed host output length without clone (`#1697`)
 
 - `execute` reports `usage.output_bytes` via `ModelIoStore::output_len` (no buffer copy).
+
 ## Feature: packaged `traverse-mcp` Mode A binaries (`#1653`)
 
 - Product tags publish `traverse-mcp-vX.Y.Z` with Linux x86_64 + macOS arm64
