@@ -184,7 +184,8 @@ public sealed class ExactModelHost : IDisposable
     /// <param name="trustedPublicKeysHex">Host-owned trusted Ed25519 public keys (hex, raw 32 bytes).</param>
     /// <param name="modelUsage">
     /// The app manifest <c>model_usage</c> (<c>commercial</c> | <c>non_commercial</c>); registration
-    /// fails closed with <c>usage_undeclared</c> when it is null.
+    /// fails closed with <c>usage_undeclared</c> when it is null, and construction fails closed with
+    /// <c>usage_invalid</c> for any other string.
     /// </param>
     /// <param name="hostRequiresCommercial">Host tightening; a host can never relax an app's usage.</param>
     /// <param name="limits">Host ceilings; desktop defaults when omitted.</param>

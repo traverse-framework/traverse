@@ -365,6 +365,150 @@
       ]
     },
     {
+      "id": "invalid-usage-research",
+      "scenarios": [
+        11
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "research",
+      "steps": [
+        {
+          "op": "construct",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "usage_invalid",
+            "detail": {
+              "field": "model_usage",
+              "expected": "commercial|non_commercial",
+              "actual": "research"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid-usage-commercial-capitalized",
+      "scenarios": [
+        11
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "Commercial",
+      "steps": [
+        {
+          "op": "construct",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "usage_invalid",
+            "detail": {
+              "field": "model_usage",
+              "expected": "commercial|non_commercial",
+              "actual": "Commercial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid-usage-empty",
+      "scenarios": [
+        11
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": "",
+      "steps": [
+        {
+          "op": "construct",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "usage_invalid",
+            "detail": {
+              "field": "model_usage",
+              "expected": "commercial|non_commercial",
+              "actual": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid-usage-non-string",
+      "scenarios": [
+        11
+      ],
+      "pins": [
+        {
+          "model_id": "fixture.rights.permissive",
+          "version": "1.0.0",
+          "digest": "7653ea206fa269521422aa2d5a6c93144d5bfcd990e3b12dfe042ecdc81fc0ef",
+          "offline_allowed": true,
+          "target": "wasm-cpu",
+          "rights": {
+            "license_id": "Apache-2.0",
+            "commercial_use": "allowed"
+          },
+          "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+        }
+      ],
+      "model_usage": 42,
+      "steps": [
+        {
+          "op": "construct",
+          "expect": {
+            "ok": false,
+            "code": "model_incompatible",
+            "reason": "usage_invalid",
+            "detail": {
+              "field": "model_usage",
+              "expected": "commercial|non_commercial",
+              "actual": "42"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "missing-attribution",
       "scenarios": [
         4

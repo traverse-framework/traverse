@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Reject invalid `modelUsage` on every string-typed host (#1685)
+
+- Web `ExactModelBrowserHost`, and the framed create path used by Swift,
+  Kotlin and .NET, now fail closed with `model_incompatible` /
+  `usage_invalid` when `model_usage` is present but not exactly
+  `commercial` or `non_commercial` (including `""`, `"Commercial"`,
+  `"research"`, and non-strings).
+- The shared rights conformance suite adds scenario 11 for those cases.
+- Spec 138 amended to 0.14.2 (FR-035).
 ### CLI `--model-usage` and JSON usage errors (#1686)
 
 - `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`

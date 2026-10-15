@@ -71,7 +71,7 @@ fn status_entries(value: &Value) -> Vec<(String, PackageStatusEntry)> {
         .unwrap_or_default()
 }
 
-fn host_for(suite: &Value, case: &Value) -> ExactModelHostConnector {
+fn host_for(suite: &Value, case: &Value) -> Result<ExactModelHostConnector, HostConnectorError> {
     let pins: Vec<ExactModelPin> = serde_json::from_value(case["pins"].clone()).expect("pins");
     let public: [u8; 32] = hex(suite["trusted_public_key_hex"].as_str().expect("key"))
         .try_into()
@@ -79,8 +79,7 @@ fn host_for(suite: &Value, case: &Value) -> ExactModelHostConnector {
     let mut keys = TrustedModelKeys::new();
     keys.trust(&public).expect("trust");
     let mut host = ExactModelHostConnector::new(pins, keys);
-    host.model_usage = serde_json::from_value::<Option<ModelUsage>>(case["model_usage"].clone())
-        .expect("model_usage");
+    host.model_usage = ModelUsage::parse_optional(&case["model_usage"])?;
     host.host_requires_commercial = case["host_requires_commercial"].as_bool().unwrap_or(false);
     host.set_package_status(status_entries(&case["package_status"]));
     let execute = &suite["execute"];
@@ -102,7 +101,7 @@ fn host_for(suite: &Value, case: &Value) -> ExactModelHostConnector {
             ..ExecutionPolicy::default()
         },
     );
-    host
+    Ok(host)
 }
 
 fn register(suite: &Value, host: &mut ExactModelHostConnector, step: &Value) -> Value {
@@ -190,8 +189,23 @@ fn rights_conformance_suite_passes_on_the_native_host() {
     let mut scenarios: Vec<u64> = Vec::new();
     for case in cases {
         let id = case["id"].as_str().expect("id");
-        let mut host = host_for(&suite, case);
-        for (index, step) in case["steps"].as_array().expect("steps").iter().enumerate() {
+        let steps = case["steps"].as_array().expect("steps");
+        if steps.first().and_then(|step| step["op"].as_str()) == Some("construct") {
+            let Err(error) = host_for(&suite, case) else {
+                panic!("{id}: construct should fail");
+            };
+            assert_eq!(error_json(&error), steps[0]["expect"], "{id} construct");
+            scenarios.extend(
+                case["scenarios"]
+                    .as_array()
+                    .expect("scenarios")
+                    .iter()
+                    .map(|scenario| scenario.as_u64().expect("scenario")),
+            );
+            continue;
+        }
+        let mut host = host_for(&suite, case).expect("host");
+        for (index, step) in steps.iter().enumerate() {
             let actual = match step["op"].as_str().expect("op") {
                 "register" => register(&suite, &mut host, step),
                 "execute" => execute(&suite, &mut host, step),
@@ -226,5 +240,5 @@ fn rights_conformance_suite_passes_on_the_native_host() {
     scenarios.push(10);
     scenarios.sort_unstable();
     scenarios.dedup();
-    assert_eq!(scenarios, (1..=10).collect::<Vec<_>>());
+    assert_eq!(scenarios, (1..=11).collect::<Vec<_>>());
 }
