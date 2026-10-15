@@ -6648,8 +6648,9 @@ fn package_onnx_model(
     spec_path: &Path,
     out_dir: &Path,
 ) -> Result<String, CliError> {
-    let runner_bytes = std::fs::read(runner_path)
-        .map_err(|error| CliError::IoError(format!("{}: {error}", runner_path.display())))?;
+    let runner_bytes = std::fs::read(runner_path).map_err(|error| {
+        CliError::IoError(format!("failed to read {}: {error}", runner_path.display()))
+    })?;
     model_packaging::ensure_audited_onnx_runner(&runner_bytes).map_err(CliError::IoError)?;
     let report = model_packaging::package_onnx(
         runner_path,
