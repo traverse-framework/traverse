@@ -1,0 +1,37 @@
+{
+  "model_id": "birdnet.v2_4-global-6k-int8",
+  "version": "2.4.0",
+  "registry_ref": "registry:birdnet.v2_4-global-6k-int8@2.4.0",
+  "input_schema_ref": "schema:birdnet-audio-48k-3s-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:birdnet-6522-logits-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "CC-BY-NC-SA-4.0",
+    "attribution": "BirdNET v2.4 (GLOBAL 6K), K. Lisa Yang Center for Conservation Bioacoustics (Cornell Lab of Ornithology) and Chemnitz University of Technology; int8 ARM ONNX export tphakala/BirdNET-v2.4@d016ed1; packaged on the Traverse ONNX runner guest",
+    "redistribution": "Not redistributed: local #1630 device evidence only, CC BY-NC-SA 4.0; signed with the test-only key (no production trust)",
+    "commercial_use": "prohibited",
+    "source_url": "https://huggingface.co/tphakala/BirdNET-v2.4"
+  },
+  "supported_profiles": ["wasm-cpu"],
+  "max_memory_bytes": 268435456,
+  "max_fuel": 50000000000,
+  "max_input_bytes": 576016,
+  "max_output_bytes": 26104,
+  "max_execution_ms": 60000,
+  "max_prepare_fuel": 50000000000,
+  "offline_allowed": true,
+  "source": {
+    "license_id": "CC-BY-NC-SA-4.0",
+    "commercial_use": "prohibited",
+    "url": "https://huggingface.co/tphakala/BirdNET-v2.4/resolve/d016ed1/BirdNET_v2.4_int8_arm.onnx"
+  },
+  "tensor": {
+    "input_name": "input",
+    "output_name": "output",
+    "input_shape": [1, 144000],
+    "output_shape": [1, 6522],
+    "input_dtype": 2,
+    "output_dtype": 3
+  }
+}
