@@ -20,8 +20,7 @@ use traverse_runtime::exact_model::{
     ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     ModelEngine, ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU,
-    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, encode_guest_frame,
-    sign_model_manifest,
+    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -1023,16 +1022,7 @@ pub(crate) fn preflight_package(
         wasm: package.wasm.clone(),
         signature: serde_json::to_vec(&signature).unwrap_or_default(),
     };
-    let input = tensor.zero_input_bundle().ok_or_else(|| {
-        fail(
-            "none",
-            json!({
-                "code": "model_incompatible",
-                "reason": null,
-                "message": "tensor config input bundle overflows",
-            }),
-        )
-    })?;
+    let input = tensor.zero_input_bundle();
     let public = ed25519_dalek::SigningKey::from_bytes(&PREFLIGHT_SECRET)
         .verifying_key()
         .to_bytes();
@@ -1073,13 +1063,15 @@ pub(crate) fn preflight_package(
 }
 
 /// Whether an output frame bundle carries every declared output dtype and shape.
+#[cfg(test)]
 fn output_matches(output: &[u8], tensor: &crate::model_packaging::TensorConfig) -> bool {
     tensor.output_bundle_matches(output)
 }
 
 /// A zero-valued input bundle matching the tensor config (legacy or multi-IO).
+#[cfg(test)]
 fn zero_frame(tensor: &crate::model_packaging::TensorConfig) -> Vec<u8> {
-    tensor.zero_input_bundle().unwrap_or_default()
+    tensor.zero_input_bundle()
 }
 
 /// Run a frame on every engine and require byte-identical output.
@@ -1460,6 +1452,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use traverse_runtime::exact_model::encode_guest_frame;
 
     const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 

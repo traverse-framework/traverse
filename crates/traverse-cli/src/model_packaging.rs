@@ -42,10 +42,11 @@ const PAGE: u64 = 65_536;
 const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 
 /// Physical element type carried in a guest-frame payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ElementType {
     /// Little-endian IEEE `f32` (4 bytes). Finite values only.
+    #[default]
     F32,
     /// Little-endian `i64` (8 bytes). Used for token ids / masks.
     I64,
@@ -59,12 +60,6 @@ impl ElementType {
             Self::F32 => 4,
             Self::I64 => 8,
         }
-    }
-}
-
-impl Default for ElementType {
-    fn default() -> Self {
-        Self::F32
     }
 }
 
@@ -103,6 +98,7 @@ pub struct TensorConfig {
 impl TensorConfig {
     /// Build a multi-IO config.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn multi(
         inputs: Vec<NamedTensor>,
         outputs: Vec<NamedTensor>,
@@ -147,6 +143,7 @@ impl TensorConfig {
 
     /// True when the config was (or should be) the legacy single-IO JSON.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const fn is_legacy_single(&self) -> bool {
         self.legacy_single
     }
@@ -181,12 +178,7 @@ impl<'de> Deserialize<'de> for TensorConfig {
             Single(Single),
         }
         match Form::deserialize(deserializer)? {
-            Form::Multi(multi) => Ok(Self {
-                inputs: multi.inputs,
-                outputs: multi.outputs,
-                symbols: multi.symbols,
-                legacy_single: false,
-            }),
+            Form::Multi(multi) => Ok(Self::multi(multi.inputs, multi.outputs, multi.symbols)),
             Form::Single(single) => Ok(Self::single(
                 single.input_name,
                 single.output_name,
@@ -200,26 +192,35 @@ impl<'de> Deserialize<'de> for TensorConfig {
     }
 }
 
+#[derive(Serialize)]
+struct TensorConfigSingleSer<'a> {
+    input_name: &'a str,
+    output_name: &'a str,
+    input_shape: &'a [usize],
+    output_shape: &'a [usize],
+    input_dtype: u8,
+    output_dtype: u8,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    symbols: &'a BTreeMap<String, i64>,
+}
+
+#[derive(Serialize)]
+struct TensorConfigMultiSer<'a> {
+    inputs: &'a [NamedTensor],
+    outputs: &'a [NamedTensor],
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    symbols: &'a BTreeMap<String, i64>,
+}
+
 impl Serialize for TensorConfig {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.legacy_single {
+        if self.is_legacy_single() {
             if self.inputs.len() != 1 || self.outputs.len() != 1 {
                 return Err(serde::ser::Error::custom(
                     "legacy single tensor config must have exactly one input and one output",
                 ));
             }
-            #[derive(Serialize)]
-            struct Single<'a> {
-                input_name: &'a str,
-                output_name: &'a str,
-                input_shape: &'a [usize],
-                output_shape: &'a [usize],
-                input_dtype: u8,
-                output_dtype: u8,
-                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-                symbols: &'a BTreeMap<String, i64>,
-            }
-            Single {
+            TensorConfigSingleSer {
                 input_name: &self.inputs[0].name,
                 output_name: &self.outputs[0].name,
                 input_shape: &self.inputs[0].shape,
@@ -230,14 +231,7 @@ impl Serialize for TensorConfig {
             }
             .serialize(serializer)
         } else {
-            #[derive(Serialize)]
-            struct Multi<'a> {
-                inputs: &'a [NamedTensor],
-                outputs: &'a [NamedTensor],
-                #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-                symbols: &'a BTreeMap<String, i64>,
-            }
-            Multi {
+            TensorConfigMultiSer {
                 inputs: &self.inputs,
                 outputs: &self.outputs,
                 symbols: &self.symbols,
@@ -463,16 +457,20 @@ fn bundle_bytes(tensors: &[NamedTensor]) -> Option<u64> {
 
 fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
     let pairs = [
-        ("max_input_bytes", spec.max_input_bytes, &spec.tensor.inputs),
+        (
+            "max_input_bytes",
+            spec.max_input_bytes,
+            spec.tensor.input_bundle_bytes(),
+        ),
         (
             "max_output_bytes",
             spec.max_output_bytes,
-            &spec.tensor.outputs,
+            spec.tensor.output_bundle_bytes(),
         ),
     ];
-    for (name, limit, tensors) in pairs {
+    for (name, limit, needed) in pairs {
         let needed =
-            bundle_bytes(tensors).ok_or_else(|| format!("tensor shape for {name} overflows"))?;
+            needed.ok_or_else(|| format!("tensor shape for {name} overflows"))?;
         if limit < needed {
             return Err(format!(
                 "{name} {limit} is below the {needed}-byte tensor frame bundle"
@@ -486,19 +484,21 @@ fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
 impl TensorConfig {
     /// Byte length of the zero-valued input bundle built for preflight.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn input_bundle_bytes(&self) -> Option<u64> {
         bundle_bytes(&self.inputs)
     }
 
     /// Byte length of the declared output bundle.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn output_bundle_bytes(&self) -> Option<u64> {
         bundle_bytes(&self.outputs)
     }
 
     /// A zero-valued input bundle matching `inputs` order and element types.
     #[must_use]
-    pub fn zero_input_bundle(&self) -> Option<Vec<u8>> {
+    pub fn zero_input_bundle(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for tensor in &self.inputs {
             let count: usize = tensor.shape.iter().product();
@@ -514,7 +514,7 @@ impl TensorConfig {
                 &vec![0; payload_len],
             ));
         }
-        Some(out)
+        out
     }
 
     /// Whether `bundle` is exactly one frame per declared output tensor.
