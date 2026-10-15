@@ -4,9 +4,8 @@ fn main() {
         .or_else(|_| std::env::var("TRAVERSE_GIT_SHA"))
         .unwrap_or_else(|_| "unknown".to_string());
     // Only accept hex so a hostile env cannot inject rustc-env newlines.
+    // Non-hex values (including the default "unknown") collapse to "unknown".
     let sha = if sha.chars().all(|c| c.is_ascii_hexdigit()) && (7..=64).contains(&sha.len()) {
-        sha
-    } else if sha == "unknown" {
         sha
     } else {
         "unknown".to_string()
