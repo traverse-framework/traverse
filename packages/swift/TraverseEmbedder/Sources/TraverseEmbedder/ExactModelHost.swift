@@ -11,7 +11,8 @@ public struct ExactModelError: Error, Sendable, Equatable {
     public let message: String
     /// Structured rights-denial detail (Spec 138 0.8.0, Decision 107) on
     /// `rights_incomplete`, `rights_mismatch`, `rights_policy_denied`,
-    /// `rights_inconsistent`, `package_revoked`, and `usage_undeclared`.
+    /// `rights_inconsistent`, `package_revoked`, `usage_undeclared`, and
+    /// `usage_invalid`.
     public let detail: ModelRightsDenialDetail?
 
     public init(code: String, reason: String?, message: String, detail: ModelRightsDenialDetail? = nil) {
@@ -225,7 +226,8 @@ public final class ExactModelHost: @unchecked Sendable {
     /// - Parameters:
     ///   - modelUsage: the app manifest `model_usage` (`commercial` |
     ///     `non_commercial`, Spec 138 0.8.0); registration fails closed with
-    ///     `usage_undeclared` when it is `nil`.
+    ///     `usage_undeclared` when it is `nil`, and construction fails closed
+    ///     with `usage_invalid` for any other string.
     ///   - hostRequiresCommercial: host tightening; the effective usage is
     ///     always `commercial`. A host can never relax an app's usage.
     ///   - coreML: enables the Core ML accelerator; `nil` keeps every call on

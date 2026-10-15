@@ -194,6 +194,7 @@ export type ModelFailureReason =
   | "crypto_unavailable"
   | "candidate_unsupported"
   | "usage_undeclared"
+  | "usage_invalid"
   | "rights_policy_denied"
   | "package_revoked"
   | "rights_inconsistent"
@@ -247,6 +248,31 @@ function incompatible(
 
 function denial(field: string, expected: string, actual: string, effectiveUsage?: ModelUsage): ModelRightsDenialDetail {
   return { field, expected, actual, ...(effectiveUsage ? { effective_usage: effectiveUsage } : {}) };
+}
+
+const MODEL_USAGES: readonly ModelUsage[] = ["commercial", "non_commercial"];
+
+/** Runtime-check `modelUsage`: TypeScript cannot stop a JS caller. */
+function parseDeclaredModelUsage(value: unknown): ModelUsage | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string" && (MODEL_USAGES as readonly string[]).includes(value)) {
+    return value as ModelUsage;
+  }
+  const actual =
+    typeof value === "string"
+      ? value
+      : value === null
+        ? "null"
+        : typeof value === "object"
+          ? JSON.stringify(value)
+          : String(value);
+  throw incompatible(
+    "usage_invalid",
+    "model_usage must be commercial or non_commercial",
+    denial("model_usage", "commercial|non_commercial", actual),
+  );
 }
 
 /** Attach package identity to an error's rights detail, if it has one (native `for_package`). */
@@ -726,7 +752,8 @@ export type ExactModelBrowserHostOptions = {
   /**
    * App manifest `model_usage` (Spec 138 0.8.0). Required whenever pins
    * exist: without it registration and execution fail closed with
-   * `usage_undeclared`.
+   * `usage_undeclared`. Only `commercial` and `non_commercial` are
+   * accepted; any other value fails closed with `usage_invalid`.
    */
   readonly modelUsage?: ModelUsage;
   /** Host tightening: the effective usage is always `commercial`. A host can never relax it. */
@@ -771,7 +798,7 @@ export class ExactModelBrowserHost {
     }
     this.pins = pins;
     this.trustedPublicKeysHex = options.trustedPublicKeysHex;
-    this.modelUsage = options.modelUsage;
+    this.modelUsage = parseDeclaredModelUsage(options.modelUsage as unknown);
     this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
   }

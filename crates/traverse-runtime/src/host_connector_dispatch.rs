@@ -203,6 +203,9 @@ pub enum ModelFailureReason {
     HostLimitExceeded,
     /// The app declares model pins but no `model_usage` (Decision 107).
     UsageUndeclared,
+    /// `model_usage` is present but not `commercial` or `non_commercial`
+    /// (Decision 107; string-typed hosts must fail closed).
+    UsageInvalid,
     /// The signed `commercial_use` is not permitted for the effective usage
     /// (Decision 107).
     RightsPolicyDenied,
@@ -247,6 +250,7 @@ impl ModelFailureReason {
             Self::CandidateUnsupported => "candidate_unsupported",
             Self::HostLimitExceeded => "host_limit_exceeded",
             Self::UsageUndeclared => "usage_undeclared",
+            Self::UsageInvalid => "usage_invalid",
             Self::RightsPolicyDenied => "rights_policy_denied",
             Self::PackageRevoked => "package_revoked",
             Self::RightsInconsistent => "rights_inconsistent",

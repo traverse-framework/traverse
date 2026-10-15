@@ -113,15 +113,39 @@ final class RightsConformanceTests: XCTestCase {
         var scenarios: Set<Int> = [10]
         for testCase in cases {
             let id = try XCTUnwrap(testCase["id"] as? String)
+            let steps = try XCTUnwrap(testCase["steps"] as? [[String: Any]])
             let pins = try JSONDecoder().decode([ExactModelPin].self,
                                                 from: JSONSerialization.data(withJSONObject: try XCTUnwrap(testCase["pins"])))
+            let modelUsage: String?
+            if testCase["model_usage"] is NSNull || testCase["model_usage"] == nil {
+                modelUsage = nil
+            } else if let text = testCase["model_usage"] as? String {
+                modelUsage = text
+            } else {
+                // Non-string values (suite scenario 11) still reach the frame.
+                modelUsage = "\(try XCTUnwrap(testCase["model_usage"]))"
+            }
+            if try XCTUnwrap(steps.first?["op"] as? String) == "construct" {
+                do {
+                    _ = try ExactModelHost(
+                        pins: pins,
+                        trustedPublicKeysHex: [try XCTUnwrap(suite["trusted_public_key_hex"] as? String)],
+                        modelUsage: modelUsage,
+                        hostRequiresCommercial: testCase["host_requires_commercial"] as? Bool ?? false)
+                    XCTFail("\(id): construct should fail")
+                } catch {
+                    XCTAssertEqual(try errorJSON(error) as? NSObject, steps[0]["expect"] as? NSObject, "\(id) construct")
+                }
+                for scenario in try XCTUnwrap(testCase["scenarios"] as? [Int]) { scenarios.insert(scenario) }
+                continue
+            }
             let host = try ExactModelHost(
                 pins: pins,
                 trustedPublicKeysHex: [try XCTUnwrap(suite["trusted_public_key_hex"] as? String)],
-                modelUsage: testCase["model_usage"] as? String,
+                modelUsage: modelUsage,
                 hostRequiresCommercial: testCase["host_requires_commercial"] as? Bool ?? false)
             try host.setPackageStatus(try statusEntries(testCase["package_status"]))
-            for (index, step) in try XCTUnwrap(testCase["steps"] as? [[String: Any]]).enumerated() {
+            for (index, step) in steps.enumerated() {
                 let op = try XCTUnwrap(step["op"] as? String)
                 let actual: Any
                 switch op {
@@ -141,6 +165,6 @@ final class RightsConformanceTests: XCTestCase {
             }
             for scenario in try XCTUnwrap(testCase["scenarios"] as? [Int]) { scenarios.insert(scenario) }
         }
-        XCTAssertEqual(scenarios, Set(1...10))
+        XCTAssertEqual(scenarios, Set(1...11))
     }
 }

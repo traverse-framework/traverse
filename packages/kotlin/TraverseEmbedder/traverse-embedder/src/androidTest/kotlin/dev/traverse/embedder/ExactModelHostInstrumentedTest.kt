@@ -168,14 +168,35 @@ class ExactModelHostInstrumentedTest {
             fun statusEntries(value: JsonElement?) = (value as? JsonObject)?.mapValues { (_, entry) ->
                 PackageStatusEntry(entry.jsonObject.s("status"), entry.jsonObject.s("reason"))
             }.orEmpty()
+            fun declaredUsage(): String? {
+                val value = case["model_usage"] ?: return null
+                if (value is JsonNull) return null
+                val primitive = value as? JsonPrimitive ?: return value.toString()
+                return primitive.content
+            }
+            val steps = case["steps"]!!.jsonArray.map { it.jsonObject }
+            if (steps.firstOrNull()?.s("op") == "construct") {
+                val actual = attempt {
+                    ExactModelHost(
+                        pins,
+                        listOf(suite.s("trusted_public_key_hex")),
+                        declaredUsage(),
+                        (case["host_requires_commercial"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    ).close()
+                    buildJsonObject { put("ok", true) }
+                }
+                assertEquals("$id construct", steps.first()["expect"], actual)
+                case["scenarios"]!!.jsonArray.forEach { scenarios.add(it.jsonPrimitive.int) }
+                continue
+            }
             ExactModelHost(
                 pins,
                 listOf(suite.s("trusted_public_key_hex")),
-                (case["model_usage"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+                declaredUsage(),
                 (case["host_requires_commercial"] as? JsonPrimitive)?.booleanOrNull ?: false,
             ).use { host ->
                 host.setPackageStatus(statusEntries(case["package_status"]))
-                for ((index, step) in case["steps"]!!.jsonArray.map { it.jsonObject }.withIndex()) {
+                for ((index, step) in steps.withIndex()) {
                     val actual: JsonElement = when (step.s("op")) {
                         "register" -> attempt {
                             val dir = "${suite.s("package_dir")}/${step.s("package")}"
@@ -222,7 +243,7 @@ class ExactModelHostInstrumentedTest {
             }
             case["scenarios"]!!.jsonArray.forEach { scenarios.add(it.jsonPrimitive.int) }
         }
-        assertEquals((1..10).toSet(), scenarios)
+        assertEquals((1..11).toSet(), scenarios)
     }
 
     /**
