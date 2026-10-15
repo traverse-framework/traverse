@@ -226,6 +226,30 @@ jobs:
       - name: Run Rust embedder package conformance
         run: bash scripts/ci/embedder_conformance/rust_package.sh
 
+
+  onnx-runner-packaged-cli:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Packaged CLI + digest-pinned runner packaging (#1687)
+        env:
+          CARGO_TARGET_DIR: /tmp/traverse-1687-target
+        run: bash scripts/ci/onnx_runner_packaged_cli_check.sh
+
   web-embedder-package:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'

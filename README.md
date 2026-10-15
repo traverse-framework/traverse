@@ -134,8 +134,28 @@ Public packages are on [crates.io](https://crates.io) and
 [npmjs](https://www.npmjs.com/package/traverse-embedder-web), not GitHub
 Packages. Current release: **v0.15.0**.
 
+### Install the CLI
+
+The Traverse CLI is published as **`traverse-cli-rs`** (binary name
+`traverse-cli`). It needs **rustc ≥ 1.94**.
+
 ```bash
-# Rust
+rustup toolchain install 1.94.0
+cargo +1.94.0 install traverse-cli-rs --version =0.15.0 --locked
+```
+
+**Name clash:** crates.io [`traverse-cli`](https://crates.io/crates/traverse-cli)
+is an **unrelated** Solidity tooling project. `cargo install traverse-cli`
+installs the wrong binary with the same name — always install
+`traverse-cli-rs`.
+
+ONNX packaging (`traverse-cli model package-onnx`) also needs the audited
+runner guest from the `onnx-runner-v*` artifact release (not the product
+`Traverse v*` notes-only release). See
+[docs/model-packaging-guide.md](docs/model-packaging-guide.md).
+
+```bash
+# Rust libraries
 cargo add traverse-runtime@0.15.0
 cargo add traverse-embedder@0.15.0
 # also: traverse-contracts, traverse-mcp, traverse-cli-rs,

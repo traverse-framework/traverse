@@ -33,6 +33,10 @@ pub const BLOB_EXPORT: &str = "TRAVERSE_MODEL_BLOB";
 pub const EXECUTABLE_FORMAT: &str = "traverse-model-wasm";
 /// Runner guests speak guest ABI v3 (`model_prepare` then `model_alloc`).
 pub const RUNNER_ABI_VERSION: u16 = 3;
+/// SHA-256 of the audited ONNX runner guest (`fixtures/onnx/runner.wasm`).
+/// Kept in lockstep with `fixtures/onnx/runner.wasm.sha256` by
+/// `scripts/ci/onnx_runner_guest_check.sh`.
+pub const AUDITED_ONNX_RUNNER_SHA256: &str = "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966";
 const PAGE: u64 = 65_536;
 const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 
@@ -125,6 +129,26 @@ pub struct PreflightReport {
 /// Fails closed on unreadable inputs, an invalid spec or tensor config,
 /// limits the package could never meet, a runner that is not an unpatched,
 /// import-free runner guest, or a failed preflight.
+
+/// Fail closed when `runner` bytes are not the audited ONNX runner guest.
+///
+/// Used by the CLI `model package-onnx` entrypoint so a wrong download fails
+/// with the published digest, while library tests can still exercise packaging
+/// against synthetic runners.
+///
+/// # Errors
+///
+/// Returns an error naming the actual and expected SHA-256 digests.
+pub fn ensure_audited_onnx_runner(runner: &[u8]) -> Result<(), String> {
+    let runner_digest = sha256_hex(runner);
+    if runner_digest == AUDITED_ONNX_RUNNER_SHA256 {
+        return Ok(());
+    }
+    Err(format!(
+        "runner.wasm digest {runner_digest} is not the audited ONNX runner guest ({AUDITED_ONNX_RUNNER_SHA256}); download runner.wasm from the onnx-runner-v* GitHub Release (see docs/model-packaging-guide.md) or use fixtures/onnx/runner.wasm from a matching checkout"
+    ))
+}
+
 pub fn package_onnx(
     runner_path: &Path,
     onnx_path: &Path,
@@ -875,6 +899,18 @@ mod tests {
         assert!(!refused.exists());
         let _ = fs::remove_dir_all(&out);
         let _ = fs::remove_file(&runner);
+    }
+
+    #[test]
+    fn audited_runner_digest_helper_rejects_unknown_bytes() {
+        assert!(ensure_audited_onnx_runner(b"not-the-audited-runner")
+            .unwrap_err()
+            .contains("is not the audited ONNX runner guest"));
+        assert!(ensure_audited_onnx_runner(&pristine_fixture_runner()).is_ok());
+    }
+
+    fn pristine_fixture_runner() -> Vec<u8> {
+        fs::read(root("fixtures/onnx/runner.wasm")).expect("fixture runner")
     }
 
     #[allow(clippy::unnecessary_wraps)] // matches package_onnx's preflight signature

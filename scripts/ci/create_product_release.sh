@@ -3,7 +3,7 @@
 #
 # Naming convention: tag `vX.Y.Z` -> release titled exactly `Traverse vX.Y.Z`,
 # notes from `docs/releases/vX.Y.Z.md`, marked Latest. Artifact releases
-# (`swift-host-v*`, `runtime-wasm-v*`) never use this title and are never
+# (`swift-host-v*`, `runtime-wasm-v*`, `onnx-runner-v*`) never use this title and are never
 # Latest (enforced by scripts/ci/release_naming_check.sh).
 #
 # The release is notes-only, so this repo's immutable-releases policy (which

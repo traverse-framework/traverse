@@ -2,6 +2,18 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+
+## Docs/packaging: CLI install path + ONNX runner distribution (`#1687`)
+
+- README and `docs/model-packaging-guide.md` document `cargo install
+  traverse-cli-rs` (rustc ≥ 1.94), and warn that crates.io `traverse-cli` is
+  an unrelated Solidity tool.
+- Audited ONNX runner guest ships on `onnx-runner-v*` artifact releases with
+  sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` (matches `fixtures/onnx/runner.wasm`).
+- `model package-onnx` fails closed when the given runner digest is not the
+  audited guest. CI installs the CLI from a packaged `.crate` and runs the
+  digits-onnx package → verify → conformance path.
+
 ## Fix: host-configurable nested limits for `runtime.wasm` (`#1656`)
 
 - Nested capability fuel / memory inside `runtime.wasm` stay defaulted to
