@@ -8,6 +8,10 @@ Unreleased changes since `v0.15.0` will be recorded here.
   `commercial` | `non_commercial`. Any other value fails closed with
   `usage_invalid` and structured `detail` (`field: model_usage`).
 - Spec 138 0.14.2; shared rights suite scenario 11.
+
+## Perf: framed host output length without clone (`#1697`)
+
+- `execute` reports `usage.output_bytes` via `ModelIoStore::output_len` (no buffer copy).
 ## Feature: packaged `traverse-mcp` Mode A binaries (`#1653`)
 
 - Product tags publish `traverse-mcp-vX.Y.Z` with Linux x86_64 + macOS arm64
@@ -27,7 +31,6 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - When `--json` is present, argument/usage errors (malformed keys, unknown
   flags, bad `--model-usage`) emit a JSON error envelope on stdout with
   `error.code: "usage_error"` and a non-zero exit.
-
 
 ## Fix: host-configurable nested limits for `runtime.wasm` (`#1656`)
 

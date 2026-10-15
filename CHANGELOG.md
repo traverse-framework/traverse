@@ -11,6 +11,11 @@
   `"research"`, and non-strings).
 - The shared rights conformance suite adds scenario 11 for those cases.
 - Spec 138 amended to 0.14.2 (FR-035).
+
+### Avoid cloning framed model output just for length (#1697)
+
+- `ModelIoStore::output_len` reports stored output size without copying bytes;
+  the framed host `execute` path uses it for `trace.usage.output_bytes`.
 ### Packaged `traverse-mcp` Mode A binaries (#1653)
 
 - Workflow `.github/workflows/mcp-server-publish.yml` builds Linux x86_64 and
@@ -26,7 +31,6 @@
 - Undeclared package usage no longer reports `effective_usage: non_commercial`
   as if the package declared it.
 - With `--json`, usage/flag parse errors emit a JSON error envelope on stdout.
-
 
 ### Reproducible `runtime.wasm` (#1659)
 

@@ -1023,6 +1023,14 @@ impl ModelIoStore {
         id
     }
 
+    /// Length of a stored output without copying its bytes (#1697).
+    ///
+    /// Returns `None` when the ref is missing or expired.
+    #[must_use]
+    pub fn output_len(&self, output_ref: &str) -> Option<usize> {
+        self.outputs.get(output_ref).map(Vec::len)
+    }
+
     /// Read output bytes by ref.
     ///
     /// # Errors
@@ -3549,10 +3557,12 @@ mod tests {
         let artifact_ref = io.stage_artifact(b"abc", 8).expect("artifact");
         let input_ref = io.stage_model_input(b"abc", 8).expect("input");
         let output_ref = io.put_output(b"abc".to_vec());
+        assert_eq!(io.output_len(&output_ref), Some(3));
         io.shutdown();
         assert!(io.read_artifact(&artifact_ref, 8).is_err());
         assert!(io.take_input(&input_ref).is_err());
         assert!(io.read_model_output(&output_ref, 8).is_err());
+        assert_eq!(io.output_len(&output_ref), None);
     }
 
     #[test]
@@ -3574,6 +3584,8 @@ mod tests {
         );
 
         let output_ref = io.put_output(vec![1, 2, 3, 4]);
+        assert_eq!(io.output_len(&output_ref), Some(4));
+        assert_eq!(io.output_len("missing"), None);
         assert_eq!(
             io.read_model_output(&output_ref, 2).expect_err("cap").code,
             HostConnectorErrorCode::InputLimitExceeded
@@ -3588,6 +3600,7 @@ mod tests {
         );
         io.drop_ref(&output_ref);
         assert!(io.read_model_output(&output_ref, 8).is_err());
+        assert_eq!(io.output_len(&output_ref), None);
     }
 
     #[test]
