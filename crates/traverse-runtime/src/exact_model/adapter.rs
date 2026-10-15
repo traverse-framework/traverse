@@ -179,7 +179,9 @@ pub(super) fn frame_contract(vector: &[u8]) -> Option<VariantFrameContract> {
 /// (FR-062, Decision 106). Frames must agree on dtype and dims. For a dtype
 /// the variant declares in `tolerance.f32_dtypes`, every element must be
 /// within `max_abs_diff`, and the indices of the `top_k` largest values must
-/// match in order. Any other dtype must match byte-for-byte.
+/// match in order. Declared outputs are first mapped by
+/// `tolerance.score_transform` (Decision 116). Any other dtype must match
+/// byte-for-byte.
 pub(super) fn within_tolerance(
     expected: &[u8],
     actual: &[u8],
@@ -199,9 +201,10 @@ pub(super) fn within_tolerance(
     let (Some(reference), Some(values)) = (f32s(&reference), f32s(&values)) else {
         return false;
     };
+    let transform = tolerance.score_transform;
     if reference.len() != values.len()
         || reference.iter().zip(&values).any(|(left, right)| {
-            !(f64::from(*left) - f64::from(*right))
+            !(transform.apply(*left) - transform.apply(*right))
                 .abs()
                 .le(&tolerance.max_abs_diff)
         })
@@ -252,6 +255,7 @@ mod tests {
             max_abs_diff: 5e-3,
             top_k,
             f32_dtypes: vec![3],
+            score_transform: crate::exact_model::ScoreTransform::Identity,
         }
     }
 
@@ -301,6 +305,25 @@ mod tests {
         // A declared float dtype whose payload is not a whole number of f32s.
         let ragged = encode_guest_frame(3, &[1], &[1, 2, 3]);
         assert!(!within_tolerance(&ragged, &ragged, &tolerance(0)));
+    }
+
+    #[test]
+    fn score_transform_compares_sigmoid_scores_instead_of_raw_logits() {
+        use crate::exact_model::ScoreTransform;
+        assert!((ScoreTransform::Sigmoid.apply(0.0) - 0.5).abs() < 1e-12);
+        assert!((ScoreTransform::Identity.apply(1.5) - 1.5).abs() < 1e-12);
+        // Logits far from 0 differ by 3e-2 raw, but their sigmoid scores
+        // differ by under 5e-3 (Decision 106's bar for BirdNET).
+        let reference = frame(3, &[6.0, -6.0, 2.0]);
+        let accelerated = frame(3, &[6.03, -6.03, 2.001]);
+        let mut raw = tolerance(3);
+        assert!(!within_tolerance(&reference, &accelerated, &raw));
+        raw.score_transform = ScoreTransform::Sigmoid;
+        assert!(within_tolerance(&reference, &accelerated, &raw));
+        // Near 0 the sigmoid is steep enough that a 3e-2 logit change fails.
+        let near_zero = frame(3, &[0.0, -6.0, 2.0]);
+        let shifted = frame(3, &[0.03, -6.0, 2.0]);
+        assert!(!within_tolerance(&near_zero, &shifted, &raw));
     }
 
     #[test]
