@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.14.1
+**Version**: 0.14.2
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -179,6 +179,11 @@ Additive.
 Additive for guests: an existing guest's `-1` stays valid. Callers that
 matched `resource_exhausted` for a guest reject now see the new codes.
 **Amendment (2026-10-14, version 0.14.0 -> 0.14.1, approved under Decision 115)**: `#1679`.
+
+**Amendment (2026-10-15, version 0.14.1 -> 0.14.2, approved under Decision 107)**: `#1685`.
+String-typed hosts MUST reject a present but non-enum `model_usage` with
+`usage_invalid` (FR-035). The shared rights suite covers the invalid-usage
+cases (scenario 11).
 FR-072 is new. `traverse-cli model package-onnx` preflights a package
 before writing it. It runs `model_prepare` and one zero-valued input frame
 on `wasmtime` and `wasmi`, through the governed path under the manifest
@@ -262,7 +267,8 @@ and `version` is ambiguous and fails closed.
 
 An application that declares any `exact_model_dependencies` MUST also declare
 `model_usage`: `commercial` or `non_commercial`. A missing value fails closed
-with `model_incompatible` / `usage_undeclared`. The host MAY require
+with `model_incompatible` / `usage_undeclared`. A present value outside that
+enum fails closed with `model_incompatible` / `usage_invalid`. The host MAY require
 commercial usage. It can never relax a `commercial` app to `non_commercial`.
 The **effective usage** is `commercial` when either the app or the host says
 so, and otherwise `non_commercial`.
@@ -355,7 +361,7 @@ and add a stable `reason`: `pin_mismatch`, `pin_ambiguous`,
 `signature_invalid`, `key_untrusted`, `digest_mismatch`, `manifest_invalid`,
 `rights_incomplete`, `rights_mismatch`, `target_unsupported`,
 `crypto_unavailable`, `candidate_unsupported`, `host_limit_exceeded` (0.6.0),
-`usage_undeclared`, `rights_policy_denied`, `rights_inconsistent` (all
+`usage_undeclared`, `usage_invalid`, `rights_policy_denied`, `rights_inconsistent` (all
 `model_incompatible`), and `package_revoked` (`model_unavailable`) (0.8.0),
 and `engine_unavailable` (`model_unavailable`) (0.10.0) when an embedder's
 native model engine cannot load, and `placement_unavailable`
@@ -928,8 +934,10 @@ Traverse MUST:
   lesser of its originally staged ceiling and the consuming capability's
   declared input limit, without invoking the capability (Decision 99).
 - **FR-035**: An app with model pins MUST declare `model_usage`; hosts MUST
-  fail closed with `usage_undeclared` when it is missing, and MUST let the
-  host tighten but never relax it.
+  fail closed with `usage_undeclared` when it is missing, MUST fail closed
+  with `usage_invalid` when a present value is not exactly `commercial` or
+  `non_commercial` (structured `detail` with `field: model_usage`), and
+  MUST let the host tighten but never relax it.
 - **FR-036**: Hosts MUST apply the fixed usage table at registration and on
   every execute, denying with `rights_policy_denied`.
 - **FR-037**: The rights failures listed under "Rights denial detail" MUST
@@ -951,7 +959,9 @@ Traverse MUST:
   - revoked and deprecated packages;
   - offline cache-only activation;
   - derivation;
-  - evidence.
+  - evidence;
+  - invalid `model_usage` values (`research`, `Commercial`, empty, non-string)
+    failing closed with `usage_invalid` at host construction (0.14.2).
 
   Every model-capable embedder MUST pass it with identical codes, reasons,
   details and evidence.

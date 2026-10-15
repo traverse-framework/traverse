@@ -310,13 +310,14 @@ fn create(profile: HostProfile, request: &Request<'_>) -> Result<Vec<u8>, Envelo
         max_snapshot_bytes,
     };
     // App `model_usage` (Decision 107): absent stays undeclared so
-    // registration fails closed with `usage_undeclared`.
+    // registration fails closed with `usage_undeclared`. A present but
+    // non-enum value fails closed with `usage_invalid` (FR-035).
     let model_usage = match request.header.get("model_usage") {
         None => None,
-        Some(value) => Some(
-            serde_json::from_value::<ModelUsage>(value.clone())
-                .map_err(|_| EnvelopeError::InvalidInput("model_usage"))?,
-        ),
+        Some(value) => match ModelUsage::parse_optional(value) {
+            Ok(usage) => usage,
+            Err(error) => return Ok(error_response(&error)),
+        },
     };
     let host_requires_commercial = match request.header.get("host_requires_commercial") {
         None => false,
@@ -695,6 +696,7 @@ mod tests {
         let run = &suite["execute"];
         for case in suite["cases"].as_array().expect("cases") {
             let id = case["id"].as_str().expect("id");
+            let steps = case["steps"].as_array().expect("steps");
             let mut create = json!({
                 "op": "create",
                 "pins": case["pins"],
@@ -704,6 +706,20 @@ mod tests {
             });
             if !case["model_usage"].is_null() {
                 create["model_usage"] = case["model_usage"].clone();
+            }
+            let as_error = |response: &Value| {
+                let error = &response["error"];
+                let mut out =
+                    json!({ "ok": false, "code": error["code"], "reason": error["reason"] });
+                if let Some(detail) = error.get("detail") {
+                    out["detail"] = detail.clone();
+                }
+                out
+            };
+            if steps.first().and_then(|step| step["op"].as_str()) == Some("construct") {
+                let response = call(0, &create, &[]);
+                assert_eq!(as_error(&response), steps[0]["expect"], "{id} construct");
+                continue;
             }
             let handle = call(0, &create, &[])["handle"].as_u64().expect("handle");
             let set_status = |entries: &Value| {
@@ -724,16 +740,7 @@ mod tests {
                     .expect("pin")
                     .clone()
             };
-            let as_error = |response: &Value| {
-                let error = &response["error"];
-                let mut out =
-                    json!({ "ok": false, "code": error["code"], "reason": error["reason"] });
-                if let Some(detail) = error.get("detail") {
-                    out["detail"] = detail.clone();
-                }
-                out
-            };
-            for (index, step) in case["steps"].as_array().expect("steps").iter().enumerate() {
+            for (index, step) in steps.iter().enumerate() {
                 let package = step["package"].as_str().unwrap_or_default();
                 let actual = match step["op"].as_str().expect("op") {
                     "register" => {
