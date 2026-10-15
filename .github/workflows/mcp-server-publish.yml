@@ -191,7 +191,7 @@ jobs:
           notes="$(cat <<NOTES
           Artifact-only release for the Mode A \`traverse-mcp\` stdio binary (Spec 119 FR-006).
 
-          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\`. This repository's immutable-releases policy requires a dedicated \`traverse-mcp-v*\` tag so assets ship in one create call and are never marked Latest.
+          This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\`. The immutable-releases policy for this repository requires a dedicated \`traverse-mcp-v*\` tag so assets ship in one create call and are never marked Latest.
 
           Verify:
 
