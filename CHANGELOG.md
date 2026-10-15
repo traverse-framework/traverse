@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Feature: multi-IO ONNX packaging for HF-style encoders (`#1661`)
+
+- ONNX runner guest and `model package-onnx` accept N named inputs and M
+  named outputs (`inputs`/`outputs` with optional `element: f32|i64`), plus
+  legacy single-IO JSON. Staged I/O is a concatenated Spec 138 frame bundle.
+- Package-time preflight builds a zero-valued input bundle and checks every
+  output frame. Help text and `docs/model-packaging-guide.md` document both
+  forms. Spec 138 amended to 0.14.3 (FR-073).
+- Hosts stage opaque bytes unchanged; web `concatGuestFrames` and native
+  `concat_guest_frames` build bundles. Reference fixture
+  `fixtures/models/hf-text-encoder-toy-1.0.0` plus signed conformance vector.
+- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only).
+
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the

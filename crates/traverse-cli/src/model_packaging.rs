@@ -463,11 +463,7 @@ fn bundle_bytes(tensors: &[NamedTensor]) -> Option<u64> {
 
 fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
     let pairs = [
-        (
-            "max_input_bytes",
-            spec.max_input_bytes,
-            &spec.tensor.inputs,
-        ),
+        ("max_input_bytes", spec.max_input_bytes, &spec.tensor.inputs),
         (
             "max_output_bytes",
             spec.max_output_bytes,
@@ -544,7 +540,8 @@ impl TensorConfig {
                 .collect();
             if dtype != tensor.dtype
                 || dims != declared
-                || payload.len() != count_elems(&tensor.shape).saturating_mul(tensor.element.width())
+                || payload.len()
+                    != count_elems(&tensor.shape).saturating_mul(tensor.element.width())
             {
                 return false;
             }
@@ -1051,7 +1048,10 @@ mod tests {
             |s| s.tensor.outputs[0].name = String::new(),
             "output[0] name is required",
         );
-        spec_with(|s| s.tensor.inputs[0].shape = vec![], "input[0] shape must have");
+        spec_with(
+            |s| s.tensor.inputs[0].shape = vec![],
+            "input[0] shape must have",
+        );
         spec_with(
             |s| s.tensor.outputs[0].shape = vec![1, 0],
             "output[0] shape must have",
@@ -1068,7 +1068,10 @@ mod tests {
             |s| s.max_output_bytes = 55,
             "max_output_bytes 55 is below the 56-byte",
         );
-        spec_with(|s| s.tensor.inputs[0].shape = vec![usize::MAX, 2], "overflows");
+        spec_with(
+            |s| s.tensor.inputs[0].shape = vec![usize::MAX, 2],
+            "overflows",
+        );
         spec_with(
             |s| s.max_memory_bytes = 65_536,
             "below the packaged initial memory",

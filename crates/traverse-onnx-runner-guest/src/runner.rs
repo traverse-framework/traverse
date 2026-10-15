@@ -432,11 +432,7 @@ fn encode_tensor_frame(tensor: &NamedTensor, value: &Tensor) -> Result<Vec<u8>, 
 }
 
 /// Decode one frame starting at `offset`; returns `(bytes_consumed, values)`.
-fn decode_frame_at(
-    bundle: &[u8],
-    offset: usize,
-    tensor: &NamedTensor,
-) -> Option<(usize, Decoded)> {
+fn decode_frame_at(bundle: &[u8], offset: usize, tensor: &NamedTensor) -> Option<(usize, Decoded)> {
     let frame = bundle.get(offset..)?;
     let version = u16::from_le_bytes([*frame.first()?, *frame.get(1)?]);
     let rank = usize::from(*frame.get(3)?);
@@ -511,7 +507,11 @@ fn write_frame(
     for dim in shape {
         out.extend_from_slice(&u32::try_from(*dim).unwrap_or(u32::MAX).to_le_bytes());
     }
-    out.extend_from_slice(&u32::try_from(payload_bytes).unwrap_or(u32::MAX).to_le_bytes());
+    out.extend_from_slice(
+        &u32::try_from(payload_bytes)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
     write_payload(&mut out);
     out
 }
@@ -688,10 +688,7 @@ mod tests {
         let model = text_encoder();
         let good = text_input([1, 2, 3, 0], [1, 1, 1, 0]);
         assert!(model.run_frame(&good).is_ok());
-        assert_eq!(
-            model.run_frame(&good[..good.len() - 8]),
-            Err(Reject::Frame)
-        );
+        assert_eq!(model.run_frame(&good[..good.len() - 8]), Err(Reject::Frame));
         let mut extra = good.clone();
         extra.extend_from_slice(&encode_frame_i64(6, &[1, 4], &[0; 4]));
         assert_eq!(model.run_frame(&extra), Err(Reject::Frame));

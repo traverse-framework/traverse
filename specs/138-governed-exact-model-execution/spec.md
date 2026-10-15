@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.14.2
+**Version**: 0.14.3
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -189,6 +189,26 @@ before writing it. It runs `model_prepare` and one zero-valued input frame
 on `wasmtime` and `wasmi`, through the governed path under the manifest
 limits. A failure writes nothing and reports the stable code and reason.
 Additive.
+
+**Amendment (2026-10-15, version 0.14.2 -> 0.14.3, approved under Decision 105)**: `#1661`.
+- The generic ONNX runner blob tensor config accepts either the legacy
+  single-IO JSON (`input_name` / `output_name` / shapes / dtypes) or a
+  multi-IO form (`inputs` / `outputs` arrays of `{name, shape, dtype,
+  element?}` with `element` `f32` | `i64`, default `f32`).
+- Staged input and returned output for a multi-IO package are **frame
+  bundles**: the concatenation of one Spec 138 little-endian frame per
+  declared tensor, in config order. Manifest `max_input_bytes` /
+  `max_output_bytes` cover the full bundle. Hosts continue to stage and
+  return opaque bytes; no host connector ABI change.
+- FR-070 output mismatch (`-4`) applies to every declared output tensor's
+  shape and element type (not only `f32`).
+- FR-072 preflight builds a zero-valued input **bundle** and checks every
+  output frame in the returned bundle.
+- Manifest schema stays `2.2.0` and guest ABI stays `3` (blob-config only).
+  Reference fixture: `fixtures/models/hf-text-encoder-toy-1.0.0` (and its
+  signed conformance vector).
+
+Additive; legacy single-IO packages keep verifying and running.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -1136,10 +1156,10 @@ Traverse MUST:
   "Guest reject codes" (0.14.0, Decision 115). This applies to every
   engine, both ABI v3 paths, and the shared frame crate behind the Swift,
   Kotlin and .NET shims, which MUST report identical codes and reasons.
-  The generic ONNX runner MUST return `-2` for a frame that does not match
-  its tensor config, `-3` when tract fails, and `-4` when the output is not
-  the declared `f32` shape. No host may report a guest reject as
-  `resource_exhausted`.
+  The generic ONNX runner MUST return `-2` for an input frame bundle that
+  does not match its tensor config, `-3` when tract fails, and `-4` when
+  any output is not the declared shape or element type (`f32` or `i64`).
+  No host may report a guest reject as `resource_exhausted`.
 - **FR-071**: An accelerator adapter MUST reject an input frame that is
   malformed, carries another dtype, has dims that differ from the variant's
   input shape, has a payload that is not exactly those dims' values, or
@@ -1147,21 +1167,28 @@ Traverse MUST:
   `frame_mismatch` (0.14.0, Decision 115), so a placement change never
   changes how a bad frame fails (Decision 110).
 - **FR-072**: `traverse-cli model package-onnx` MUST preflight the package
-  it built before writing any file (0.14.1, Decision 115). The preflight:
+  it built before writing any file (0.14.1, Decision 115; multi-IO 0.14.3,
+  `#1661`). The preflight:
   - signs an in-memory copy of the manifest with a fixed, public,
     preflight-only key that only the preflight's own host trusts;
   - registers and executes it through the governed path on `wasmtime` and
     `wasmi`, under the manifest's limits and deadline;
-  - runs `model_prepare` and one zero-valued input frame built from the
-    tensor config;
-  - requires byte-identical outputs that carry the declared output dtype and
-    shape.
+  - runs `model_prepare` and one zero-valued input frame **bundle** built
+    from the tensor config (legacy single frame or multi-IO concatenation);
+  - requires byte-identical outputs that carry every declared output dtype
+    and shape in order.
 
   The preflight uses the audited runner, never a native ONNX engine. On any
   failure the packager writes nothing, exits non-zero, and reports
   `{stage: "preflight", engine, error: {code, reason, message}}`. There is
   no opt-out. A passing report records the engines, the input frame size,
   and the output frame's SHA-256.
+
+- **FR-073**: The ONNX runner model-blob tensor config MUST accept legacy
+  single-IO JSON and multi-IO `inputs`/`outputs` arrays (0.14.3, `#1661`).
+  Multi-IO I/O MUST be Spec 138 frame bundles (frames concatenated in
+  config order). Manifest schema and guest ABI are unchanged (`2.2.0` /
+  ABI 3). Legacy single-IO packages MUST keep verifying and running.
 
 ## Acceptance scenarios
 
