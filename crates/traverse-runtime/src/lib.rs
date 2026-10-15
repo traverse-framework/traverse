@@ -5083,10 +5083,7 @@ mod tests {
             "wrong root type",
         )
         .expect_err("type");
-        assert_eq!(
-            wrong_root_type.details["violations"][0]["path"],
-            json!("/")
-        );
+        assert_eq!(wrong_root_type.details["violations"][0]["path"], json!("/"));
     }
 
     #[test]
