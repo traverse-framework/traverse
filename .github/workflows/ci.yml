@@ -312,7 +312,8 @@ jobs:
         run: bash scripts/ci/cross_host_native_fixture.sh
 
   # Decision 108 (#1580): cross-build the Android JNI model host for the
-  # shipped ABIs and prove the AAR carries it, on every PR.
+  # shipped ABIs and prove the AAR carries it, then run the Kotlin JVM unit
+  # tests (#1693), on every PR.
   android-native-package:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
@@ -346,6 +347,21 @@ jobs:
 
       - name: Verify the AAR carries both ABIs
         run: bash scripts/ci/android_aar_check.sh packages/kotlin/TraverseEmbedder/traverse-embedder/build/outputs/aar/traverse-embedder-release.aar
+
+      # #1693: the Kotlin JVM unit tests (signed vectors, the Spec 138 rights
+      # suite, the 0.14.0 reject corpus) used to run only at release time in
+      # maven-embedder-publish.yml. They build the host-JVM
+      # traverse-android-host themselves (scripts/build_android_host_jvm.sh).
+      - name: Run the Kotlin JVM unit tests
+        working-directory: packages/kotlin/TraverseEmbedder
+        run: gradle --no-daemon :traverse-embedder:testDebugUnitTest
+
+      - name: Upload Kotlin unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kotlin-unit-test-reports
+          path: packages/kotlin/TraverseEmbedder/traverse-embedder/build/reports/tests/
 
   # Decision 111 (#1642): build the .NET P/Invoke model host for linux-x64
   # and run the .NET model tests (signed vectors, rights suite, mid-run

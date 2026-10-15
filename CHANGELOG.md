@@ -14,6 +14,14 @@
 - Committed `runtime/runtime-release.json` now matches workspace `0.15.0`
   (was stale `0.12.0`).
 
+### Swift host rebuild with guest reject codes (#1692)
+
+- **Repin.** `Package.swift` now points at `swift-host-v0.15.0-1`, an
+  xcframework rebuilt from `main` with the Spec 138 0.14.0 guest reject
+  codes. Swift apps now get `invalid_input` / `frame_mismatch` and the
+  other fault-based codes instead of `resource_exhausted`.
+- **Test.** The Swift reject-corpus test no longer skips.
+
 ### Packaging guide: operators, frames, host compatibility (Decision 115, #1680)
 
 - **Supported operators.** `docs/model-packaging-guide.md` lists the 160
