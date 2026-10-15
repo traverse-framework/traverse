@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### CLI `--model-usage` and JSON usage errors (#1686)
+
+- `traverse-cli model verify` accepts `--model-usage commercial|non_commercial`
+  and optional `--require-model-usage`.
+- Undeclared package usage no longer reports `effective_usage: non_commercial`
+  as if the package declared it.
+- With `--json`, usage/flag parse errors emit a JSON error envelope on stdout.
+
+
 ### Reproducible `runtime.wasm` (#1659)
 
 - `scripts/build-runtime-wasm.sh` rebuilds the nested-wasmi orchestrator from
