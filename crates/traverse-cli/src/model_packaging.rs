@@ -469,8 +469,7 @@ fn check_frame_limits(spec: &OnnxPackageSpec) -> Result<(), String> {
         ),
     ];
     for (name, limit, needed) in pairs {
-        let needed =
-            needed.ok_or_else(|| format!("tensor shape for {name} overflows"))?;
+        let needed = needed.ok_or_else(|| format!("tensor shape for {name} overflows"))?;
         if limit < needed {
             return Err(format!(
                 "{name} {limit} is below the {needed}-byte tensor frame bundle"
