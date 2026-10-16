@@ -13,6 +13,16 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - Web `concatGuestFrames`, native `concat_guest_frames`, and Swift/Kotlin/.NET
   `GuestFrame` helpers for app-side bundle assembly; hosts still stage opaque bytes.
 
+## Evidence: BirdNET in real time on iPhone on the governed path (`#1630`)
+
+- iPhone 14 Pro Max, Release build, policy `[coreml, wasm-cpu]`, default
+  compute units: p95 is **141 ms per 3 s clip** (bar 1.5 s). Top-5 is
+  identical and |Δ sigmoid| ≤ 4.8×10⁻³ against `wasm-cpu`. `wasm-cpu`
+  alone takes about 10 s per clip. See
+  `docs/evidence/birdnet-iphone-governed-2026-10-15.md`.
+- New harness `tools/model-evidence/ios` reproduces it. No weights or audio
+  are committed.
+
 ## Logit outputs compared on their scores: `tolerance.score_transform` (Spec 138 0.15.0, Decision 116, `#1630`)
 
 - A variant's tolerance may declare `score_transform: sigmoid` (default
