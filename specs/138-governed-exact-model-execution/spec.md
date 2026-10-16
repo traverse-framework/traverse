@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.14.3
+**Version**: 0.15.1
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -189,8 +189,18 @@ before writing it. It runs `model_prepare` and one zero-valued input frame
 on `wasmtime` and `wasmi`, through the governed path under the manifest
 limits. A failure writes nothing and reports the stable code and reason.
 Additive.
+**Amendment (2026-10-15, version 0.14.2 -> 0.15.0, approved under Decision 116)**: `#1630`.
+Manifest schema `2.3.0` is new, a superset of `2.2.0`. A variant's
+`tolerance` may declare `score_transform`: `identity` (the default) or
+`sigmoid`. Declared `f32` outputs are mapped through it before
+`max_abs_diff` and `top_k` are applied, so a classifier that outputs logits
+is held to Decision 106's sigmoid-score bar rather than to a raw-logit
+bound that no accurate conversion meets. A non-`identity` transform is valid
+only in a `2.3.0` manifest, which keeps `2.2.0` closed. FR-058 and FR-062
+are amended. Hosts at or below 0.15.0 reject `2.3.0` manifests, so
+`add-variant` writes `2.3.0` only when a transform is declared.
 
-**Amendment (2026-10-15, version 0.14.2 -> 0.14.3, approved under Decision 105)**: `#1661`.
+**Amendment (2026-10-15, version 0.15.0 -> 0.15.1, approved under Decision 105)**: `#1661` (multi-IO; first drafted as 0.14.3 before Decision 116 landed as 0.15.0).
 - The generic ONNX runner blob tensor config accepts either the legacy
   single-IO JSON (`input_name` / `output_name` / shapes / dtypes) or a
   multi-IO form (`inputs` / `outputs` arrays of `{name, shape, dtype,
@@ -335,13 +345,14 @@ least:
 - optional quantization / numeric precision metadata;
 - provenance / source revision and build reproducibility evidence;
 - whether offline execution is allowed after provisioning;
-- schema `2.2.0` only (0.12.0): `max_prepare_fuel`, required when and only
-  when `abi_version` is `3` (see "Guest ABI v3"), and optional
-  `accelerator_variants` (see "Native accelerator adapters").
+- schema `2.2.0` or later (0.12.0): `max_prepare_fuel`, required when and
+  only when `abi_version` is `3` (see "Guest ABI v3"), and optional
+  `accelerator_variants` (see "Native accelerator adapters"). Schema `2.3.0`
+  (0.15.0) adds only the variant `tolerance.score_transform`.
 
 Validation MUST reject missing rights, digest, ABI, schema refs, or
-resource limits, and any `schema_version` other than `2.0.0`, `2.1.0` or
-`2.2.0` (0.8.0; `2.2.0` since 0.12.0). `rights.derivation` in a `2.0.0`
+resource limits, and any `schema_version` other than `2.0.0`, `2.1.0`,
+`2.2.0` or `2.3.0` (0.8.0; `2.2.0` since 0.12.0; `2.3.0` since 0.15.0). `rights.derivation` in a `2.0.0`
 manifest is `manifest_invalid`. `abi_version: 3`, `max_prepare_fuel` or
 `accelerator_variants` in a `2.0.0` or `2.1.0` manifest is
 `manifest_invalid`. A model URL
@@ -661,7 +672,7 @@ at most one entry per adapter id. Each entry has these fields, all required:
 - `conformance_vector_path` and `conformance_vector_digest`: the variant's
   conformance vector. The vector's cases are inputs, each with the
   `wasm-cpu` reference output that the signed package produces;
-- `tolerance`: `{ max_abs_diff, top_k, f32_dtypes? }`.
+- `tolerance`: `{ max_abs_diff, top_k, f32_dtypes?, score_transform? }`.
   - `f32_dtypes` (0.13.2) lists the guest output dtype codes that hold
     little-endian `f32` values. It defaults to none, because frame dtype
     codes are guest-defined.
@@ -669,6 +680,11 @@ at most one entry per adapter id. Each entry has these fields, all required:
     element-wise on outputs whose dtype is in `f32_dtypes`.
   - `top_k` is an integer `≥ 0`. When it is above `0`, the indices of the
     `top_k` largest output values MUST be identical in the same order.
+  - `score_transform` (0.15.0, schema `2.3.0`) is `identity` (the
+    default) or `sigmoid`. Outputs whose dtype is in `f32_dtypes` are mapped
+    through it (`sigmoid` is `1 / (1 + e^-x)`) before `max_abs_diff` and
+    `top_k` are applied. A classifier that outputs logits declares
+    `sigmoid`, so it meets Decision 106's bar on its scores.
   - Outputs whose dtype is not in `f32_dtypes` MUST match byte-for-byte.
     Both frames MUST also agree on dtype and dims.
 - `peak_memory_bytes`: the declared peak memory for one execution.
@@ -938,7 +954,7 @@ Traverse MUST:
 - **FR-032**: Hosts MUST support guest ABI v1, v2 and v3 (v3 since 0.12.0),
   selected by the manifest `abi_version`, and MUST reject any other value as
   `manifest_invalid`. `abi_version: 3` is valid only in manifest schema
-  `2.2.0`.
+  `2.2.0` or `2.3.0`.
 - **FR-033**: For ABI v2, hosts MUST obtain both buffers from
   `model_alloc` and MUST reject non-positive, out-of-bounds, or overlapping
   regions, a missing `model_alloc`, or a trapping `model_alloc`, before
@@ -1066,7 +1082,9 @@ Traverse MUST:
   snapshot path. A v3 conformance fixture MUST prove this on wasmtime,
   `wasmi`, the browser, the Swift host, the Kotlin host, and the .NET host
   (0.13.0).
-- **FR-058**: Manifest schema `2.2.0` MUST validate `accelerator_variants`:
+- **FR-058**: Manifest schemas `2.2.0` and `2.3.0` MUST validate
+  `accelerator_variants`. A `tolerance.score_transform` other than
+  `identity` is `manifest_invalid` outside schema `2.3.0` (0.15.0):
   - at most one entry per known adapter id;
   - every field present;
   - `path` under `variants/<adapter>/`;
@@ -1088,7 +1106,8 @@ Traverse MUST:
   placement that ran and `placement_evidence` (`placement`,
   `compute_units`, `fuel_metering`).
 - **FR-062**: Before first use on a device, a host MUST check a variant
-  against its conformance vector under its declared `tolerance`. The result
+  against its conformance vector under its declared `tolerance`, including
+  its `score_transform` (0.15.0). The result
   MUST be kept per variant digest, adapter, OS version and compute units,
   and the check MUST run again when any of these change. A failed variant
   MUST be unavailable on that device.
@@ -1167,7 +1186,7 @@ Traverse MUST:
   `frame_mismatch` (0.14.0, Decision 115), so a placement change never
   changes how a bad frame fails (Decision 110).
 - **FR-072**: `traverse-cli model package-onnx` MUST preflight the package
-  it built before writing any file (0.14.1, Decision 115; multi-IO 0.14.3,
+  it built before writing any file (0.14.1, Decision 115; multi-IO 0.15.1,
   `#1661`). The preflight:
   - signs an in-memory copy of the manifest with a fixed, public,
     preflight-only key that only the preflight's own host trusts;
@@ -1185,7 +1204,7 @@ Traverse MUST:
   and the output frame's SHA-256.
 
 - **FR-073**: The ONNX runner model-blob tensor config MUST accept legacy
-  single-IO JSON and multi-IO `inputs`/`outputs` arrays (0.14.3, `#1661`).
+  single-IO JSON and multi-IO `inputs`/`outputs` arrays (0.15.1, `#1661`).
   Multi-IO I/O MUST be Spec 138 frame bundles (frames concatenated in
   config order). Manifest schema and guest ABI are unchanged (`2.2.0` /
   ABI 3). Legacy single-IO packages MUST keep verifying and running.

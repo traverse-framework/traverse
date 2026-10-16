@@ -9,7 +9,7 @@
   legacy single-IO JSON. Staged I/O is a concatenated Spec 138 frame bundle.
 - Package-time preflight builds a zero-valued input bundle and checks every
   output frame. Help text and `docs/model-packaging-guide.md` document both
-  forms. Spec 138 amended to 0.14.3 (FR-073).
+  forms. Spec 138 amended to 0.15.1 (FR-073; stacked on 0.15.0).
 - Hosts stage opaque bytes unchanged; web `concatGuestFrames`, native
   `concat_guest_frames`, and Swift/Kotlin/.NET `GuestFrame.concat` build
   bundles. Reference package `fixtures/models/hf-text-encoder-toy-1.0.0`
@@ -18,6 +18,21 @@
 - Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only). Audited
   `runner.wasm` digest
   `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
+
+### Logit outputs compared on their scores (Spec 138 0.15.0, Decision 116, #1630)
+
+- New optional variant `tolerance.score_transform` (`identity` | `sigmoid`)
+  in the new manifest schema `2.3.0`, a superset of `2.2.0`. The device
+  self-check maps declared `f32` outputs through it before `max_abs_diff`
+  and `top_k`.
+- `model add-variant --score-transform sigmoid` writes `2.3.0`.
+- Native and web hosts validate the same rules.
+
+### Fix: web embedder accepts variant `f32_dtypes` (#1703)
+
+- `ExactModelBrowserHost` no longer rejects packages whose variant declares
+  `tolerance.f32_dtypes`, for example the signed `digits-onnx-coreml`
+  fixture.
 
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 

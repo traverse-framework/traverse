@@ -7,11 +7,33 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - `model package-onnx` packages Hugging Face–style multi-input/multi-output
   ONNX graphs (and keeps legacy single-IO `package.json`). Token-id inputs
   use `element: "i64"`. I/O is a Spec 138 frame bundle.
-- Spec 138 → 0.14.3. Reference package
+- Spec 138 → 0.15.1 (FR-073 on top of 0.15.0). Reference package
   `fixtures/models/hf-text-encoder-toy-1.0.0` with signed cross-host
   conformance; digits-onnx packages rebuilt on the new runner.
 - Web `concatGuestFrames`, native `concat_guest_frames`, and Swift/Kotlin/.NET
   `GuestFrame` helpers for app-side bundle assembly; hosts still stage opaque bytes.
+
+## Logit outputs compared on their scores: `tolerance.score_transform` (Spec 138 0.15.0, Decision 116, `#1630`)
+
+- A variant's tolerance may declare `score_transform: sigmoid` (default
+  `identity`). Declared `f32` outputs are mapped through it before
+  `max_abs_diff` / `top_k`, so classifiers that output logits meet
+  Decision 106's score bar. Converted BirdNET differs by up to 3.4×10⁻² in
+  raw logits but only 4.8×10⁻³ in sigmoid scores.
+- New manifest schema `2.3.0`, a superset of `2.2.0`, carries it. A
+  non-identity transform in `2.2.0` is `manifest_invalid`.
+  `traverse-cli model add-variant --score-transform sigmoid` writes
+  `2.3.0`; without the flag it stays on `2.2.0`.
+- Native, web, Swift, Kotlin and .NET hosts accept `2.3.0`. Hosts at or
+  below 0.15.0 reject it.
+
+## Fix: web embedder accepts variants that declare `f32_dtypes` (`#1703`)
+
+- `traverse-embedder-web@0.15.0` rejected every package whose accelerator
+  variant declares `tolerance.f32_dtypes`, including the signed
+  `digits-onnx-coreml-1.0.0` fixture, with `manifest_invalid`. Native hosts
+  accept the same bytes. The web host now accepts the optional field
+  (unique integer dtype codes 0–255), matching native.
 
 ## Docs/packaging: CLI install path + ONNX runner distribution (`#1687`)
 

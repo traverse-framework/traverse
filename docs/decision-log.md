@@ -6895,3 +6895,62 @@ recommended option for each question: additive guest codes, fault-based
 public codes, preflight built into `package-onnx`, the `wasmi` timeout in
 scope with the root cause first, a generated CI-checked operator list, and
 the reject corpus on the digits package.
+
+## Decision 116: Logit Outputs Are Compared on Their Scores (`tolerance.score_transform`, Schema 2.3.0)
+
+- **Date**: 2026-10-15
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution` (amended to
+  0.15.0)
+- **Related issues**: `#1630` (the device evidence this unblocks), `#1629`;
+  Decision 106 (BirdNET tolerance bar)
+- **Origin**: preparing `#1630`
+
+### Context
+
+Spec 138 compares an accelerator variant's declared `f32` outputs with the
+`wasm-cpu` reference on raw values, under `max_abs_diff` (capped at 5×10⁻³)
+and `top_k`. Decision 106 set BirdNET's bar on **sigmoid scores**: top-5
+identical and |Δ sigmoid| ≤ 5×10⁻³. BirdNET outputs logits.
+
+On this Mac, the converted Core ML BirdNET against the signed `wasm-cpu`
+package gives:
+- top-5 identical on 21/21 clips;
+- worst |Δ sigmoid| 4.79×10⁻³, which meets Decision 106;
+- worst raw |Δ logit| 3.4×10⁻², which fails the raw bound.
+
+The device self-check would therefore fail. Core ML would never be
+selected, and every call would silently fall back to `wasm-cpu`.
+
+### Decision
+
+1. **A variant may declare `tolerance.score_transform`.** The values are
+   `identity` (the default) and `sigmoid`. Declared `f32` outputs are mapped
+   through it before `max_abs_diff` and `top_k` are applied.
+   - The rule is generic: any classifier with logit outputs declares
+     `sigmoid` and is held to its score bar.
+   - `top_k` is unchanged by a monotonic transform.
+2. **Manifest schema `2.3.0`**, a superset of `2.2.0`, carries it.
+   - A non-`identity` transform is `manifest_invalid` in `2.2.0`, so
+     released `2.2.0` hosts and packages keep their exact meaning.
+   - `identity` is omitted when serialized, so existing manifests keep
+     their bytes and signatures.
+3. **Tooling:** `traverse-cli model add-variant --score-transform sigmoid`
+   writes `2.3.0`. Without the flag it writes `2.2.0`, so packages stay
+   readable by 0.15.0 hosts.
+4. **Every host validates the same rules.** That covers native, the web
+   embedder, and the Swift, Kotlin and .NET hosts through the shared Rust
+   core.
+
+### Alternatives Considered
+
+- **Baking a Sigmoid node into the ONNX before packaging.** Rejected: the
+  evidence package would differ from the upstream model, and the edit sits
+  outside the pinned converter's provenance.
+- **Raising the raw bound to about 5×10⁻².** Rejected: it loosens Decision
+  106 instead of expressing it, and in practice it is model-specific.
+
+### Approval
+
+Approved by Enrico on 2026-10-15, choosing "Declare a score transform
+(Recommended)" while preparing `#1630`.

@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use traverse_runtime::exact_model::{
     ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
-    ModelEngine, ModelPackageManifest, ModelPackageSignature, ModelUsage, PLACEMENT_WASM_CPU,
-    PinRights, TrustedModelKeys, VariantConversion, VariantTolerance, sign_model_manifest,
+    MODEL_PACKAGE_SCHEMA_VERSION_SCORED, ModelEngine, ModelPackageManifest, ModelPackageSignature,
+    ModelUsage, PLACEMENT_WASM_CPU, PinRights, ScoreTransform, TrustedModelKeys, VariantConversion,
+    VariantTolerance, decode_guest_frame, encode_guest_frame, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -87,6 +88,7 @@ pub(crate) enum ModelCommand {
         tool: String,
         tool_version: String,
         f32_dtypes: Vec<u8>,
+        score_transform: ScoreTransform,
         json: bool,
     },
     /// Convert an ONNX file into a canonical `mlpackage-zip` Core ML variant
@@ -278,6 +280,7 @@ fn parse_add_variant(
     let mut tool = None;
     let mut tool_version = None;
     let mut f32_dtypes = Vec::new();
+    let mut score_transform = ScoreTransform::Identity;
     for pair in flags.chunks(2) {
         match pair {
             ["--file", value] => file = Some(PathBuf::from(value)),
@@ -298,6 +301,13 @@ fn parse_add_variant(
             ["--f32-dtype", value] => f32_dtypes.push(value.parse::<u8>().map_err(|_| {
                 format!("--f32-dtype must be an integer in 0..=255, got '{value}'")
             })?),
+            ["--score-transform", "identity"] => score_transform = ScoreTransform::Identity,
+            ["--score-transform", "sigmoid"] => score_transform = ScoreTransform::Sigmoid,
+            ["--score-transform", value] => {
+                return Err(format!(
+                    "--score-transform must be identity or sigmoid, got '{value}'"
+                ));
+            }
             _ => return Err(help(Some("add-variant"))),
         }
     }
@@ -328,6 +338,7 @@ fn parse_add_variant(
             tool,
             tool_version,
             f32_dtypes,
+            score_transform,
             json,
         }),
         _ => Err(help(Some("add-variant"))),
@@ -433,19 +444,22 @@ traverse-cli model conformance check <package-dir> <vector.json> --trusted-key <
   Example:
     traverse-cli model conformance generate out/my-model --trusted-key <public-key-hex> --input in.bin --out out/my-model/conformance.json"
             .to_string(),
-        Some("add-variant") => "traverse-cli model add-variant <package-dir> --file <model.mlpackage.zip> --conformance <vector.json> --peak-memory-bytes N --max-abs-diff N --top-k N --tool <name> --tool-version <version> [--f32-dtype N]... [--json]
+        Some("add-variant") => "traverse-cli model add-variant <package-dir> --file <model.mlpackage.zip> --conformance <vector.json> --peak-memory-bytes N --max-abs-diff N --top-k N --tool <name> --tool-version <version> [--f32-dtype N]... [--score-transform identity|sigmoid] [--json]
 
   Purpose:
     Copy a Core ML variant (mlpackage-zip) and its conformance vector into
     variants/coreml/, record their digests, and set
     conversion.source_digest from rights.derivation.source_digest.
     --f32-dtype names each output dtype code holding f32 values (compared
-    under the tolerance); other outputs must match byte-for-byte. Removes
+    under the tolerance); other outputs must match byte-for-byte.
+    --score-transform sigmoid compares sigmoid scores instead of raw values,
+    for classifiers that output logits (Decision 116). It writes manifest
+    schema 2.3.0, which hosts newer than 0.15.0 accept. Removes
     model.sig.json because the manifest bytes changed; sign again before
     verify.
 
   Example:
-    traverse-cli model add-variant out/birdnet --file birdnet.mlpackage.zip --conformance vector.json --peak-memory-bytes 180000000 --max-abs-diff 0.005 --top-k 5 --tool traverse-coreml --tool-version lock-sha256:<digest> --f32-dtype 3"
+    traverse-cli model add-variant out/birdnet --file birdnet.mlpackage.zip --conformance vector.json --peak-memory-bytes 180000000 --max-abs-diff 0.005 --top-k 5 --tool traverse-coreml --tool-version lock-sha256:<digest> --f32-dtype 3 --score-transform sigmoid"
             .to_string(),
         Some("convert-coreml") => "traverse-cli model convert-coreml <model.onnx> <out.mlpackage.zip> [--python <python>] [--converter <convert_variant.py>] [--json]
 
@@ -560,6 +574,7 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             tool,
             tool_version,
             f32_dtypes,
+            score_transform,
             json,
         } => add_variant(&AddVariantRequest {
             package_dir,
@@ -571,6 +586,7 @@ pub(crate) fn run(command: &ModelCommand) -> Result<String, CliError> {
             tool,
             tool_version,
             f32_dtypes,
+            score_transform: *score_transform,
             json: *json,
         }),
         ModelCommand::ConvertCoreml {
@@ -1284,6 +1300,7 @@ struct AddVariantRequest<'a> {
     tool: &'a str,
     tool_version: &'a str,
     f32_dtypes: &'a [u8],
+    score_transform: ScoreTransform,
     json: bool,
 }
 
@@ -1298,6 +1315,7 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
         tool,
         tool_version,
         f32_dtypes,
+        score_transform,
         json,
     } = request;
     let manifest_path = package_dir.join(MANIFEST_FILE);
@@ -1346,11 +1364,19 @@ fn add_variant(request: &AddVariantRequest<'_>) -> Result<String, CliError> {
             max_abs_diff,
             top_k,
             f32_dtypes: f32_dtypes.to_vec(),
+            score_transform,
         },
         peak_memory_bytes,
     });
     manifest.accelerator_variants = Some(variants);
-    manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+    // A score transform needs schema 2.3.0 (Decision 116); otherwise stay on
+    // 2.2.0 so packages remain readable by 0.15.0 hosts.
+    manifest.schema_version = if score_transform == ScoreTransform::Identity {
+        MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+    } else {
+        MODEL_PACKAGE_SCHEMA_VERSION_SCORED
+    }
+    .to_string();
     manifest
         .validate()
         .map_err(|error| CliError::ValidationFailed(error.message))?;
@@ -2223,6 +2249,7 @@ mod tests {
             vec!["conformance", "check", "dir", "v.json", "--bogus", "x"],
             vec!["convert-coreml", "a.onnx", "b.zip", "--bogus", "x"],
             vec!["add-variant", "pkg", "--f32-dtype", "256"],
+            vec!["add-variant", "pkg", "--score-transform", "tanh"],
         ] {
             assert!(parse(&args(&bad)).is_err(), "{bad:?}");
         }
@@ -2525,6 +2552,50 @@ mod tests {
             "--json",
         ]));
         assert_eq!(verified["ok"], json!(true), "{verified}");
+        assert_eq!(signed["schema_version"], json!("2.2.0"));
+
+        // A logit classifier declares a sigmoid score transform (Decision
+        // 115); that moves the manifest to schema 2.3.0, which still verifies.
+        let rescored = json_out(cli(&[
+            "add-variant",
+            path(&package),
+            "--file",
+            path(&mlpackage),
+            "--conformance",
+            path(&vector),
+            "--peak-memory-bytes",
+            "1048576",
+            "--max-abs-diff",
+            "0.005",
+            "--top-k",
+            "5",
+            "--tool",
+            COREML_CONVERT_TOOL,
+            "--tool-version",
+            &tool_version,
+            "--f32-dtype",
+            "3",
+            "--score-transform",
+            "sigmoid",
+            "--json",
+        ]));
+        assert_eq!(rescored["schema_version"], json!("2.3.0"), "{rescored}");
+        let scored: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+        assert_eq!(scored["schema_version"], json!("2.3.0"));
+        assert_eq!(
+            scored["accelerator_variants"][0]["tolerance"]["score_transform"],
+            json!("sigmoid")
+        );
+        cli(&["sign", path(&manifest_path), "--key", path(&key)]).expect("re-sign");
+        let reverified = json_out(cli(&[
+            "verify",
+            path(&package),
+            "--trusted-key",
+            &test_key("public_key_hex"),
+            "--json",
+        ]));
+        assert_eq!(reverified["ok"], json!(true), "{reverified}");
 
         let variant_path = package.join("variants/coreml/model.mlpackage.zip");
         let mut tampered = fs::read(&variant_path).expect("variant");

@@ -48,6 +48,10 @@ pub const MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION: &str = "2.1.0";
 /// Manifest schema version that adds `max_prepare_fuel` for guest ABI v3 and
 /// optional `accelerator_variants` (Spec 138 0.12.0, Decision 110).
 pub const MODEL_PACKAGE_SCHEMA_VERSION_PREPARED: &str = "2.2.0";
+/// Manifest schema version that adds an optional variant
+/// `tolerance.score_transform` (Spec 138 0.15.0, Decision 116). A superset of
+/// [`MODEL_PACKAGE_SCHEMA_VERSION_PREPARED`].
+pub const MODEL_PACKAGE_SCHEMA_VERSION_SCORED: &str = "2.3.0";
 /// First native accelerator adapter (Decision 110). Closed list: FR-066.
 pub const ADAPTER_COREML: &str = "coreml";
 /// Canonical, deterministic zip of a Core ML ML Program `.mlpackage`
@@ -176,6 +180,35 @@ pub struct VariantConversion {
     pub source_digest: String,
 }
 
+/// How declared `f32` outputs are mapped before they are compared
+/// (Spec 138 0.15.0, Decision 116). Decision 106's bar for a classifier that
+/// outputs logits is on its sigmoid scores, not on the raw logits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreTransform {
+    /// Compare the raw values (the default).
+    #[default]
+    Identity,
+    /// Compare `1 / (1 + e^-x)` of each value.
+    Sigmoid,
+}
+
+impl ScoreTransform {
+    /// Map one output value before comparison.
+    #[must_use]
+    pub fn apply(self, value: f32) -> f64 {
+        match self {
+            Self::Identity => f64::from(value),
+            Self::Sigmoid => 1.0 / (1.0 + (-f64::from(value)).exp()),
+        }
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes `&Self`
+    fn is_identity(&self) -> bool {
+        *self == Self::Identity
+    }
+}
+
 /// Conformance tolerance against the wasm-cpu reference (Decision 106).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -190,6 +223,10 @@ pub struct VariantTolerance {
     /// guest-defined, so the variant declares which are floats.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub f32_dtypes: Vec<u8>,
+    /// Mapping applied to declared `f32` outputs before `max_abs_diff` and
+    /// `top_k` (schema `2.3.0`; absent means `identity`).
+    #[serde(default, skip_serializing_if = "ScoreTransform::is_identity")]
+    pub score_transform: ScoreTransform,
 }
 
 /// One signed accelerator variant inside a schema `2.2.0` package (FR-058).
@@ -545,23 +582,25 @@ impl ModelPackageManifest {
     fn validate_schema_abi_and_limits(&self) -> Result<(), HostConnectorError> {
         let schema_supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
             || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
-            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_SCORED;
         if !schema_supported {
             return Err(with_detail(
                 incompatible(
                     ModelFailureReason::ManifestInvalid,
                     &format!(
-                        "unsupported schema_version {} (supported: {}, {}, {})",
+                        "unsupported schema_version {} (supported: {}, {}, {}, {})",
                         self.schema_version,
                         MODEL_PACKAGE_SCHEMA_VERSION,
                         MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION,
-                        MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+                        MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
+                        MODEL_PACKAGE_SCHEMA_VERSION_SCORED
                     ),
                 ),
                 denial(
                     "schema_version",
                     &format!(
-                        "{MODEL_PACKAGE_SCHEMA_VERSION}|{MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|{MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}"
+                        "{MODEL_PACKAGE_SCHEMA_VERSION}|{MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION}|{MODEL_PACKAGE_SCHEMA_VERSION_PREPARED}|{MODEL_PACKAGE_SCHEMA_VERSION_SCORED}"
                     ),
                     &self.schema_version,
                 ),
@@ -606,9 +645,10 @@ impl ModelPackageManifest {
     /// The schema version is supported and allows the fields present:
     /// `rights.derivation` needs `2.1.0`+, `abi_version` 3 needs `2.2.0`
     /// with a positive prepare budget, which no other ABI may carry, and
-    /// `accelerator_variants` need `2.2.0` (FR-032, FR-039, FR-056, FR-058).
+    /// `accelerator_variants` need `2.2.0`+ (FR-032, FR-039, FR-056, FR-058).
     fn schema_fields_valid(&self) -> bool {
-        let prepared_schema = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED;
+        let prepared_schema = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_PREPARED
+            || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_SCORED;
         let supported = self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION
             || self.schema_version == MODEL_PACKAGE_SCHEMA_VERSION_DERIVATION
             || prepared_schema;
@@ -671,6 +711,8 @@ impl ModelPackageManifest {
                 || variant.conversion.tool_version.trim().is_empty()
                 || !is_sha256_hex(&variant.conversion.source_digest)
                 || !tolerance_ok(variant.tolerance.max_abs_diff)
+                || (!variant.tolerance.score_transform.is_identity()
+                    && self.schema_version != MODEL_PACKAGE_SCHEMA_VERSION_SCORED)
                 || variant.peak_memory_bytes == 0
             {
                 return Err(incompatible(
@@ -5849,6 +5891,7 @@ mod tests {
                 max_abs_diff: MAX_VARIANT_ABS_DIFF,
                 top_k: 5,
                 f32_dtypes: Vec::new(),
+                score_transform: ScoreTransform::Identity,
             },
             peak_memory_bytes: 1024,
         }]);
@@ -5877,6 +5920,94 @@ mod tests {
             .collect();
         host.register_package_with_variants(&bytes, wasm, &signature, files)?;
         Ok(host)
+    }
+
+    #[test]
+    fn score_transform_needs_schema_2_3_0_and_serializes_only_when_set() {
+        let model = b"model";
+        let vector = b"{}";
+        let base = variant_package_manifest(model, vector);
+        assert!(base.validate().is_ok());
+        let identity_json = serde_json::to_value(&base).expect("json");
+        assert!(
+            identity_json["accelerator_variants"][0]["tolerance"]
+                .get("score_transform")
+                .is_none(),
+            "identity is omitted so 2.2.0 manifests keep their bytes"
+        );
+
+        let mut sigmoid_on_2_2 = base.clone();
+        if let Some(variants) = sigmoid_on_2_2.accelerator_variants.as_mut() {
+            variants[0].tolerance.score_transform = ScoreTransform::Sigmoid;
+        }
+        assert_eq!(
+            sigmoid_on_2_2.validate().expect_err("2.2.0").reason,
+            Some(ModelFailureReason::ManifestInvalid)
+        );
+
+        let mut sigmoid_on_2_3 = sigmoid_on_2_2.clone();
+        sigmoid_on_2_3.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_SCORED.to_string();
+        assert!(sigmoid_on_2_3.validate().is_ok());
+        let json = serde_json::to_value(&sigmoid_on_2_3).expect("json");
+        assert_eq!(
+            json["accelerator_variants"][0]["tolerance"]["score_transform"],
+            json!("sigmoid")
+        );
+        let round_trip: ModelPackageManifest = serde_json::from_value(json).expect("parse");
+        assert_eq!(round_trip, sigmoid_on_2_3);
+
+        // 2.3.0 is a superset of 2.2.0: an identity variant and a v3 guest
+        // are both valid on it.
+        let mut identity_on_2_3 = base.clone();
+        identity_on_2_3.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_SCORED.to_string();
+        assert!(identity_on_2_3.validate().is_ok());
+        let mut v3_on_2_3 = fixture_package().manifest;
+        v3_on_2_3.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_SCORED.to_string();
+        v3_on_2_3.abi_version = MODEL_GUEST_ABI_PREPARED;
+        v3_on_2_3.max_prepare_fuel = Some(1_000);
+        assert!(v3_on_2_3.validate().is_ok());
+
+        let mut unknown = fixture_package().manifest;
+        unknown.schema_version = "9.9.9".to_string();
+        let error = unknown.validate().expect_err("unknown");
+        assert!(error.message.contains("2.3.0"), "{}", error.message);
+        assert_eq!(
+            error.detail.as_ref().map(|detail| detail.expected.as_str()),
+            Some("2.0.0|2.1.0|2.2.0|2.3.0")
+        );
+    }
+
+    #[test]
+    fn manifest_schema_2_3_0_adds_only_score_transform() {
+        let load = |version: &str| -> Value {
+            serde_json::from_str(
+                &std::fs::read_to_string(format!(
+                    "{}/../../contracts/connectors/traverse.model-runtime/schemas/model-package-manifest-{version}.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .expect("schema"),
+            )
+            .expect("json")
+        };
+        let (old, new) = (load("2.2.0"), load("2.3.0"));
+        assert_eq!(
+            new["properties"]["schema_version"]["const"],
+            json!(MODEL_PACKAGE_SCHEMA_VERSION_SCORED)
+        );
+        assert_eq!(
+            new["properties"].as_object().map(serde_json::Map::len),
+            old["properties"].as_object().map(serde_json::Map::len)
+        );
+        let tolerance = |schema: &Value| {
+            schema["$defs"]["accelerator_variant"]["properties"]["tolerance"]["properties"].clone()
+        };
+        let mut expected = tolerance(&old);
+        expected["score_transform"] = tolerance(&new)["score_transform"].clone();
+        assert_eq!(tolerance(&new), expected);
+        assert_eq!(
+            tolerance(&new)["score_transform"]["enum"],
+            json!(["identity", "sigmoid"])
+        );
     }
 
     #[test]
