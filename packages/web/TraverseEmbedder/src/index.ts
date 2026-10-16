@@ -243,6 +243,7 @@ export {
   DEFAULT_MAX_SNAPSHOT_BYTES,
   TRAVERSE_MODEL_SIGNING_KEYS,
   encodeGuestFrame,
+  concatGuestFrames,
   modelSigningKeyId,
   variantsToFetch,
   ADAPTER_COREML,

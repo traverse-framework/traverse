@@ -2112,6 +2112,19 @@ pub fn encode_guest_frame(dtype: u8, dims: &[u32], payload: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Concatenate Spec 138 guest frames into one staged input / output bundle
+/// (ONNX runner multi-IO, Spec 138 / `#1661`). Hosts treat the result as
+/// opaque bytes; order must match the package tensor config.
+#[must_use]
+pub fn concat_guest_frames(frames: &[&[u8]]) -> Vec<u8> {
+    let total = frames.iter().map(|frame| frame.len()).sum();
+    let mut out = Vec::with_capacity(total);
+    for frame in frames {
+        out.extend_from_slice(frame);
+    }
+    out
+}
+
 /// Decode a guest frame; fail closed on truncation.
 ///
 /// # Errors
@@ -3685,6 +3698,17 @@ mod tests {
         );
         let huge = encode_guest_frame(1, &vec![1; 300], b"z");
         assert_eq!(huge[3], 0); // rank saturates via unwrap_or(0) for >255 dims
+    }
+
+    #[test]
+    fn concat_guest_frames_preserves_order_and_bytes() {
+        let a = encode_guest_frame(6, &[1, 4], &[1, 0, 0, 0, 0, 0, 0, 0]);
+        let b = encode_guest_frame(2, &[1, 2], &[0; 8]);
+        let bundled = concat_guest_frames(&[&a, &b]);
+        assert_eq!(bundled.len(), a.len() + b.len());
+        assert_eq!(&bundled[..a.len()], a.as_slice());
+        assert_eq!(&bundled[a.len()..], b.as_slice());
+        assert!(concat_guest_frames(&[]).is_empty());
     }
 
     #[test]

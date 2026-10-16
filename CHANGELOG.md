@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Feature: multi-IO ONNX packaging for HF-style encoders (`#1661`)
+
+- ONNX runner guest and `model package-onnx` accept N named inputs and M
+  named outputs (`inputs`/`outputs` with optional `element: f32|i64`), plus
+  legacy single-IO JSON. Staged I/O is a concatenated Spec 138 frame bundle.
+- Package-time preflight builds a zero-valued input bundle and checks every
+  output frame. Help text and `docs/model-packaging-guide.md` document both
+  forms. Spec 138 amended to 0.15.1 (FR-073; stacked on 0.15.0).
+- Hosts stage opaque bytes unchanged; web `concatGuestFrames`, native
+  `concat_guest_frames`, and Swift/Kotlin/.NET `GuestFrame.concat` build
+  bundles. Reference package `fixtures/models/hf-text-encoder-toy-1.0.0`
+  plus signed conformance vector; digits-onnx / digits-onnx-coreml
+  re-packaged on the rebuilt runner.
+- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only). Audited
+  `runner.wasm` digest
+  `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
+
 ### Logit outputs compared on their scores (Spec 138 0.15.0, Decision 116, #1630)
 
 - New optional variant `tolerance.score_transform` (`identity` | `sigmoid`)
@@ -22,7 +39,7 @@
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the
   crates.io `traverse-cli` name clash in the README and packaging guide.
 - Publish `fixtures/onnx/runner.wasm` on `onnx-runner-v*` artifact releases
-  with sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` and build provenance attestation.
+  with sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622` and build provenance attestation.
 - `traverse-cli model package-onnx` rejects a runner whose digest is not the
   audited guest. CI covers the published-style `.crate` install path.
 

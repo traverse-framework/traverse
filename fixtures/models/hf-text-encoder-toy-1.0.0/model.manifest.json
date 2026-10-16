@@ -1,0 +1,37 @@
+{
+  "schema_version": "2.2.0",
+  "model_id": "traverse.hf-text-encoder-toy",
+  "version": "1.0.0",
+  "wasm_digest": "7f606ab991168cd540f3c770d05c5899923267beed39cc89273c6d5cd092f768",
+  "registry_ref": "registry:traverse.hf-text-encoder-toy@1.0.0",
+  "executable_format": "traverse-model-wasm",
+  "abi_version": 3,
+  "input_schema_ref": "schema:traverse-hf-text-encoder-toy-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:traverse-hf-text-encoder-toy-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "Apache-2.0",
+    "attribution": "Synthetic Hugging Face–style text-encoder toy ONNX (input_ids + attention_mask → last_hidden_state + pooler_output) for Spec 138 multi-IO packaging (#1661); not a pretrained HF checkpoint",
+    "redistribution": "Redistribution permitted under Apache-2.0; signed with the test-only key (no production trust)",
+    "commercial_use": "allowed",
+    "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/hf-text-encoder-toy-1.0.0.onnx",
+    "derivation": {
+      "kind": "converted",
+      "source_digest": "ad3b4129e248b3b9d1aabd1af4fb4065e4200cb581a1ace5d071822359acf9fa",
+      "source_license_id": "Apache-2.0",
+      "source_commercial_use": "allowed",
+      "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/hf-text-encoder-toy-1.0.0.onnx"
+    }
+  },
+  "supported_profiles": [
+    "wasm-cpu"
+  ],
+  "max_memory_bytes": 4194304,
+  "max_fuel": 2000000000,
+  "max_input_bytes": 96,
+  "max_output_bytes": 196,
+  "max_execution_ms": 10000,
+  "offline_allowed": true,
+  "max_prepare_fuel": 2000000000
+}

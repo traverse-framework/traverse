@@ -5,7 +5,7 @@
   "pin": {
     "model_id": "traverse.digits-onnx",
     "version": "1.0.0",
-    "digest": "ecc32b909bd495c975e2c07a0f73ed85929026325bd8cf7865b9eec9293e03cb",
+    "digest": "7c68a542db85758bc1718d3d1fd8cc6939c6837312b767c7e2ef30fa15ee053c",
     "offline_allowed": true,
     "target": "wasm-cpu",
     "rights": {

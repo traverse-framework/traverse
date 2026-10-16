@@ -1,0 +1,39 @@
+{
+  "model_id": "traverse.hf-text-encoder-toy",
+  "version": "1.0.0",
+  "registry_ref": "registry:traverse.hf-text-encoder-toy@1.0.0",
+  "input_schema_ref": "schema:traverse-hf-text-encoder-toy-in",
+  "input_schema_version": "1.0.0",
+  "output_schema_ref": "schema:traverse-hf-text-encoder-toy-out",
+  "output_schema_version": "1.0.0",
+  "rights": {
+    "license_id": "Apache-2.0",
+    "attribution": "Synthetic Hugging Face–style text-encoder toy ONNX (input_ids + attention_mask → last_hidden_state + pooler_output) for Spec 138 multi-IO packaging (#1661); not a pretrained HF checkpoint",
+    "redistribution": "Redistribution permitted under Apache-2.0; signed with the test-only key (no production trust)",
+    "commercial_use": "allowed",
+    "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/hf-text-encoder-toy-1.0.0.onnx"
+  },
+  "supported_profiles": ["wasm-cpu"],
+  "max_memory_bytes": 4194304,
+  "max_fuel": 2000000000,
+  "max_input_bytes": 96,
+  "max_output_bytes": 196,
+  "max_execution_ms": 10000,
+  "max_prepare_fuel": 2000000000,
+  "offline_allowed": true,
+  "source": {
+    "license_id": "Apache-2.0",
+    "commercial_use": "allowed",
+    "url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/hf-text-encoder-toy-1.0.0.onnx"
+  },
+  "tensor": {
+    "inputs": [
+      {"name": "input_ids", "shape": [1, 4], "dtype": 6, "element": "i64"},
+      {"name": "attention_mask", "shape": [1, 4], "dtype": 6, "element": "i64"}
+    ],
+    "outputs": [
+      {"name": "last_hidden_state", "shape": [1, 4, 8], "dtype": 2, "element": "f32"},
+      {"name": "pooler_output", "shape": [1, 8], "dtype": 3, "element": "f32"}
+    ]
+  }
+}

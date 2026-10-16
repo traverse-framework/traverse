@@ -28,11 +28,11 @@ the `onnx-runner-v*` artifact release (never marked Latest; same pattern as
 VERSION=0.15.0
 curl -fsSL -o runner.wasm \
   "https://github.com/traverse-framework/traverse/releases/download/onnx-runner-v${VERSION}/runner.wasm"
-echo "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966  runner.wasm" | shasum -a 256 -c -
+echo "bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622  runner.wasm" | shasum -a 256 -c -
 ```
 
 Pinned digest for `onnx-runner-v0.15.0` / `fixtures/onnx/runner.wasm`:
-`f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`.
+`bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
 
 Digits fixture inputs (no git checkout required):
 
@@ -272,7 +272,7 @@ the three files, for example with `register_package` / `registerPackage`.
 
 ## ONNX models: `model package-onnx`
 
-For an ONNX model with exactly one input tensor and one output tensor, you
+For an ONNX model with fixed named inputs and outputs (one or many), you
 don't write a guest at all. `traverse-cli model package-onnx` patches a copy
 of the audited, prebuilt runner guest (`fixtures/onnx/runner.wasm`, built
 from `crates/traverse-onnx-runner-guest` on tract with `+simd128`):
@@ -288,13 +288,49 @@ traverse-cli model package-onnx runner.wasm my-model.onnx my-model.package.json 
 ```
 
 `package-onnx` fails closed if `<runner.wasm>` is not the audited guest
-(sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`).
+(sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`).
 
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;
-- the `tensor` config: input and output names, shapes, and dtypes, fixed at
-  package time and validated on every call. A mismatched frame returns `-2`,
-  which the host reports as `invalid_input` / `frame_mismatch`;
+- the `tensor` config, fixed at package time and validated on every call.
+  A mismatched input frame bundle returns `-2`, which the host reports as
+  `invalid_input` / `frame_mismatch`. Two shapes are accepted:
+
+  **Legacy single-IO** (still supported; digits-onnx uses this):
+
+  ```json
+  "tensor": {
+    "input_name": "x",
+    "output_name": "y",
+    "input_shape": [1, 64],
+    "output_shape": [1, 10],
+    "input_dtype": 2,
+    "output_dtype": 3
+  }
+  ```
+
+  **Multi-IO** (Hugging Face–style encoders; see
+  `fixtures/onnx/hf-text-encoder-toy.package.json`):
+
+  ```json
+  "tensor": {
+    "inputs": [
+      {"name": "input_ids", "shape": [1, 4], "dtype": 6, "element": "i64"},
+      {"name": "attention_mask", "shape": [1, 4], "dtype": 6, "element": "i64"}
+    ],
+    "outputs": [
+      {"name": "last_hidden_state", "shape": [1, 4, 8], "dtype": 2, "element": "f32"},
+      {"name": "pooler_output", "shape": [1, 8], "dtype": 3, "element": "f32"}
+    ]
+  }
+  ```
+
+  `element` defaults to `f32`. Use `i64` for token ids and masks. Each
+  tensor becomes one Spec 138 little-endian frame; the staged input and
+  returned output are the **concatenation** of those frames in `inputs` /
+  `outputs` order (a frame bundle). `max_input_bytes` / `max_output_bytes`
+  must cover the full bundle. Hosts stage and return opaque bytes — web
+  `concatGuestFrames` builds a bundle from per-tensor frames;
 - a required `source`: `{license_id, commercial_use, url}` of the ONNX
   model.
 
@@ -343,7 +379,9 @@ A listed operator is necessary but not sufficient:
 - tract checks each operator's opset version and attributes when it loads
   the graph;
 - shapes must be static after `tensor.symbols` is applied;
-- the graph must have exactly one input and one output, both `f32`.
+- every declared input/output name must match the graph; element types are
+  `f32` and/or `i64` as declared in `tensor` (up to 16 inputs and 16
+  outputs).
 
 `RandomNormal`, `RandomNormalLike`, `RandomUniform`, `RandomUniformLike` and
 `Multinomial` are registered but fail closed. The runner is deterministic
@@ -354,12 +392,12 @@ and has no entropy source.
 
 **Preflight.** Before it writes anything, the packager runs the package it
 just built (Spec 138 FR-072):
-- `model_prepare` plus one zero-valued input frame built from your `tensor`
-  config;
+- `model_prepare` plus one zero-valued input frame **bundle** built from
+  your `tensor` config (zeros in each tensor's declared element type);
 - on `wasmtime` and `wasmi`, through the same governed path and audited
   runner every host uses, under your manifest's limits and deadline;
-- the outputs must match byte for byte and carry the declared output dtype
-  and shape.
+- the outputs must match byte for byte and carry every declared output
+  dtype and shape in order.
 
 If it fails, nothing is written. The command exits non-zero and prints
 `{"stage":"preflight","engine":...,"error":{"code","reason","message"}}`.

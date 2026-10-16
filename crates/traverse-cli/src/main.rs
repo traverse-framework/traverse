@@ -1812,10 +1812,10 @@ fn help_model_package_onnx() -> String {
     prints a JSON report. Sign the manifest separately (traverse-cli model sign).
 
     Before writing, it preflights the package (Spec 138 FR-072): model_prepare
-    and one zero-valued input frame on wasmtime and wasmi under the manifest
-    limits. On failure nothing is written, the command exits non-zero, and it
-    prints a JSON object with stage preflight, the failing engine, and the
-    error's code, reason, and message.
+    and one zero-valued input frame bundle on wasmtime and wasmi under the
+    manifest limits. On failure nothing is written, the command exits non-zero,
+    and it prints a JSON object with stage preflight, the failing engine, and
+    the error's code, reason, and message.
 
     Packages from this packager need an embedder newer than 0.14.0 (see #1652);
     npm 0.14.0 rejects schema {schema} / ABI v{abi} with manifest_invalid.
@@ -1825,9 +1825,12 @@ fn help_model_package_onnx() -> String {
                     AUDITED_ONNX_RUNNER_SHA256 / fixtures/onnx/runner.wasm.sha256).
                     Download from the onnx-runner-v* GitHub Release when you
                     do not have a checkout.
-    <model.onnx>     ONNX model with exactly one input and one output tensor.
+    <model.onnx>     ONNX model with one or more named inputs and outputs
+                    (fixed shapes after symbols; f32 and/or i64 elements).
     <package.json>   Manifest fields (model_id, version, rights, limits, ...)
-                     plus `tensor`: input/output names, shapes, and dtypes.
+                     plus `tensor`: either legacy single-IO fields
+                     (input_name/output_name/…) or multi-IO `inputs`/`outputs`
+                     arrays (name, shape, dtype, optional element f32|i64).
     <out-dir>        Directory that receives the package files.
 
   Optional flags:
@@ -1836,7 +1839,8 @@ fn help_model_package_onnx() -> String {
     --help           Print this help text.
 
   Example:
-    traverse-cli model package-onnx fixtures/onnx/runner.wasm fixtures/onnx/digits-mlp-1.0.0.onnx fixtures/onnx/digits-onnx.package.json out/digits-onnx --json",
+    traverse-cli model package-onnx fixtures/onnx/runner.wasm fixtures/onnx/digits-mlp-1.0.0.onnx fixtures/onnx/digits-onnx.package.json out/digits-onnx --json
+    traverse-cli model package-onnx fixtures/onnx/runner.wasm fixtures/onnx/hf-text-encoder-toy-1.0.0.onnx fixtures/onnx/hf-text-encoder-toy.package.json out/hf-text-encoder-toy --json",
         abi = model_packaging::RUNNER_ABI_VERSION,
         schema = traverse_runtime::exact_model::MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     )
@@ -14205,17 +14209,19 @@ mod tests {
         let _build_lock = CAPABILITY_PACKAGE_BUILD_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("capability package build lock should not be poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let package_dir = manifest_path
             .parent()
             .expect("real capability package manifest must have a package directory");
-        let status = ProcessCommand::new("bash")
+        let output = ProcessCommand::new("bash")
             .arg(package_dir.join("build-fixture.sh"))
-            .status()
+            .output()
             .expect("real capability package fixture builder should start");
         assert!(
-            status.success(),
-            "real capability package fixture builder should succeed"
+            output.status.success(),
+            "real capability package fixture builder should succeed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

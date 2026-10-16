@@ -2,6 +2,17 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Feature: multi-IO ONNX packaging (`#1661`)
+
+- `model package-onnx` packages Hugging Face–style multi-input/multi-output
+  ONNX graphs (and keeps legacy single-IO `package.json`). Token-id inputs
+  use `element: "i64"`. I/O is a Spec 138 frame bundle.
+- Spec 138 → 0.15.1 (FR-073 on top of 0.15.0). Reference package
+  `fixtures/models/hf-text-encoder-toy-1.0.0` with signed cross-host
+  conformance; digits-onnx packages rebuilt on the new runner.
+- Web `concatGuestFrames`, native `concat_guest_frames`, and Swift/Kotlin/.NET
+  `GuestFrame` helpers for app-side bundle assembly; hosts still stage opaque bytes.
+
 ## Evidence: BirdNET in real time on iPhone on the governed path (`#1630`)
 
 - iPhone 14 Pro Max, Release build, policy `[coreml, wasm-cpu]`, default
@@ -40,7 +51,7 @@ Unreleased changes since `v0.15.0` will be recorded here.
   traverse-cli-rs` (rustc ≥ 1.94), and warn that crates.io `traverse-cli` is
   an unrelated Solidity tool.
 - Audited ONNX runner guest ships on `onnx-runner-v*` artifact releases with
-  sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` (matches `fixtures/onnx/runner.wasm`).
+  sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622` (matches `fixtures/onnx/runner.wasm`).
 - `model package-onnx` fails closed when the given runner digest is not the
   audited guest. CI installs the CLI from a packaged `.crate` and runs the
   digits-onnx package → verify → conformance path.

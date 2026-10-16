@@ -63,6 +63,51 @@ final class OnnxRunnerTests: XCTestCase {
         XCTAssertEqual(derivation.sourceDigest.count, 64)
     }
 
+    /// Multi-IO ONNX runner (#1661): HF-style text-encoder toy frame bundle.
+    func testHfTextEncoderToyVectorIsByteIdenticalOnSwiftWasmi() async throws {
+        let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: models("conformance/signed-hf-text-encoder-toy.json")) as? [String: Any])
+        let pin = try JSONDecoder().decode(ExactModelPin.self,
+                                           from: JSONSerialization.data(withJSONObject: try XCTUnwrap(vector["pin"])))
+        let host = try ExactModelHost(pins: [pin],
+                                      trustedPublicKeysHex: [try XCTUnwrap(vector["trusted_public_key_hex"] as? String)],
+                                      modelUsage: "commercial")
+        let digest = try await host.registerPackage(
+            manifest: try models("hf-text-encoder-toy-1.0.0/model.manifest.json"),
+            wasm: try models("hf-text-encoder-toy-1.0.0/model.wasm"),
+            signature: try models("hf-text-encoder-toy-1.0.0/model.sig.json"))
+        XCTAssertEqual(digest, pin.digest)
+
+        let request = try XCTUnwrap(vector["request"] as? [String: Any])
+        let maxOut = try XCTUnwrap(request["max_output_bytes"] as? Int)
+        for testCase in try XCTUnwrap(vector["cases"] as? [[String: Any]]) {
+            let inputRef = try host.stageModelInput(hexData(try XCTUnwrap(testCase["input_frame_hex"] as? String)), maxBytes: 4096)
+            let result = try await host.execute(
+                modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "policy-1",
+                dataClassification: "sensitive",
+                inputSchemaRef: try XCTUnwrap(request["input_schema_ref"] as? String),
+                inputSchemaVersion: "1.0.0", maxOutputBytes: maxOut, allowedClassifications: ["sensitive"])
+            let output = try host.readModelOutput(result.outputRef, maxBytes: maxOut)
+            XCTAssertEqual(output.map { String(format: "%02x", $0) }.joined(), testCase["output_frame_hex"] as? String)
+        }
+        let rejected = try XCTUnwrap(vector["rejected_cases"] as? [[String: Any]])
+        XCTAssertEqual(rejected.count, 3)
+        for testCase in rejected {
+            let name = try XCTUnwrap(testCase["name"] as? String)
+            let inputRef = try host.stageModelInput(hexData(try XCTUnwrap(testCase["input_frame_hex"] as? String)), maxBytes: 4096)
+            do {
+                _ = try await host.execute(
+                    modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "policy-1",
+                    dataClassification: "sensitive",
+                    inputSchemaRef: try XCTUnwrap(request["input_schema_ref"] as? String),
+                    inputSchemaVersion: "1.0.0", maxOutputBytes: maxOut, allowedClassifications: ["sensitive"])
+                XCTFail("\(name) must be rejected")
+            } catch let error as ExactModelError {
+                XCTAssertEqual(error.code, testCase["code"] as? String, name)
+                XCTAssertEqual(error.reason, testCase["reason"] as? String, name)
+            }
+        }
+    }
+
     /// Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with
     /// exactly its code and reason, as on every other host.
     func testOnnxRejectCorpusFailsWithItsCodeAndReason() async throws {
