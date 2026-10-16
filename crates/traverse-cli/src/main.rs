@@ -14209,17 +14209,19 @@ mod tests {
         let _build_lock = CAPABILITY_PACKAGE_BUILD_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("capability package build lock should not be poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let package_dir = manifest_path
             .parent()
             .expect("real capability package manifest must have a package directory");
-        let status = ProcessCommand::new("bash")
+        let output = ProcessCommand::new("bash")
             .arg(package_dir.join("build-fixture.sh"))
-            .status()
+            .output()
             .expect("real capability package fixture builder should start");
         assert!(
-            status.success(),
-            "real capability package fixture builder should succeed"
+            output.status.success(),
+            "real capability package fixture builder should succeed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
