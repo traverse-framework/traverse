@@ -1,0 +1,38 @@
+# #1630 device-evidence harness (XcodeGen). See README.md.
+name: TraverseEvidence1630
+options:
+  bundleIdPrefix: dev.traverse.evidence
+packages:
+  TraverseEmbedder:
+    # The Swift package, linked against a TraverseSwiftHost.xcframework built
+    # from the same commit (see README.md, step 3).
+    path: build/TraverseEmbedder-local
+targets:
+  TraverseEvidence1630:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Evidence
+      # Local only, never committed: the signed package (non-redistributable
+      # weights), the clip frames, and the trusted test public key.
+      - path: Resources/birdnet_pkg
+        type: folder
+        buildPhase: resources
+      - path: Resources/frames
+        type: folder
+        buildPhase: resources
+      - path: Resources/trusted_key.hex
+        buildPhase: resources
+    dependencies:
+      - package: TraverseEmbedder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.traverse.evidence.YOUR_NAME
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"

@@ -73,6 +73,18 @@ let result = try await host.execute(
 - **Compute units.** `all`, `cpu_only`, `cpu_and_gpu` or
   `cpu_and_neural_engine`; the default is `all`.
 
+**Measured on a device (#1630, [evidence](evidence/birdnet-iphone-governed-2026-10-15.md)).**
+On an iPhone 14 Pro Max (iOS 26.6, Release build), BirdNET v2.4 int8 runs on
+this governed path under `[coreml, wasm-cpu]` with the default `all`:
+- p95 is **141 ms per 3 s clip**, against the 1.5 s real-time bar;
+- top-5 is identical and |Δ sigmoid| is ≤ 4.8×10⁻³ against `wasm-cpu`;
+- on `wasm-cpu` alone it takes about 10 s per clip.
+
+The claim covers only that device, model and policy. On that device,
+`cpu_and_neural_engine` failed the self-check and fell back to `wasm-cpu`.
+Other models, devices and compute units need their own measurement. No host
+is Certified (Spec 529).
+
 ## Signed packages and exact-ref resolution (Spec 138 0.4.0, Decision 101)
 
 A package is three files:
