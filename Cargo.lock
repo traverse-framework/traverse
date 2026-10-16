@@ -2803,7 +2803,7 @@ dependencies = [
  "tungstenite",
  "uuid",
  "wasm-encoder 0.261.0",
- "wasmparser 0.259.0",
+ "wasmparser 0.261.0",
  "wat",
  "zeroize",
 ]
@@ -2938,7 +2938,7 @@ dependencies = [
  "traverse-registry",
  "uuid",
  "wasmi",
- "wasmparser 0.259.0",
+ "wasmparser 0.261.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
@@ -3301,26 +3301,15 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.259.0"
+version = "0.261.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f7c12eac7bb587801590f6a67ff0bc84d0748513864b71108e4b311cc3df694"
+checksum = "4f20f20e44f7e8aeb6744823ea9d869ede51e51be4fdaedede2852282e54d2d8"
 dependencies = [
  "bitflags",
  "hashbrown 0.17.0",
  "indexmap",
  "semver",
  "serde",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.261.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f20f20e44f7e8aeb6744823ea9d869ede51e51be4fdaedede2852282e54d2d8"
-dependencies = [
- "bitflags",
- "indexmap",
- "semver",
 ]
 
 [[package]]
