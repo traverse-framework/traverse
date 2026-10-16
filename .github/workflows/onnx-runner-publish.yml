@@ -93,7 +93,7 @@ jobs:
           echo "value=${actual}" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: runner.wasm
 
