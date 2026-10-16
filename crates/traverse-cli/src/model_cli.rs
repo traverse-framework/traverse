@@ -21,7 +21,7 @@ use traverse_runtime::exact_model::{
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     MODEL_PACKAGE_SCHEMA_VERSION_SCORED, ModelEngine, ModelPackageManifest, ModelPackageSignature,
     ModelUsage, PLACEMENT_WASM_CPU, PinRights, ScoreTransform, TrustedModelKeys, VariantConversion,
-    VariantTolerance, decode_guest_frame, encode_guest_frame, sign_model_manifest,
+    VariantTolerance, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
