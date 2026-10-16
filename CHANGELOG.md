@@ -12,16 +12,19 @@
   forms. Spec 138 amended to 0.14.3 (FR-073).
 - Hosts stage opaque bytes unchanged; web `concatGuestFrames`, native
   `concat_guest_frames`, and Swift/Kotlin/.NET `GuestFrame.concat` build
-  bundles. Reference ONNX + `package.json` live under `fixtures/onnx/hf-text-encoder-toy-*`.
-- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only). Linux CI
-  rebuilds `fixtures/onnx/runner.wasm` when guest source changes.
+  bundles. Reference package `fixtures/models/hf-text-encoder-toy-1.0.0`
+  plus signed conformance vector; digits-onnx / digits-onnx-coreml
+  re-packaged on the rebuilt runner.
+- Manifest schema stays `2.2.0` / guest ABI `3` (blob-config only). Audited
+  `runner.wasm` digest
+  `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
 
 ### Docs/packaging: CLI install + ONNX runner release (`#1687`)
 
 - Document `cargo +1.94.0 install traverse-cli-rs --locked` and the
   crates.io `traverse-cli` name clash in the README and packaging guide.
 - Publish `fixtures/onnx/runner.wasm` on `onnx-runner-v*` artifact releases
-  with sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` and build provenance attestation.
+  with sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622` and build provenance attestation.
 - `traverse-cli model package-onnx` rejects a runner whose digest is not the
   audited guest. CI covers the published-style `.crate` install path.
 

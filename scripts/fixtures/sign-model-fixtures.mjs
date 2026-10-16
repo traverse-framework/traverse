@@ -386,17 +386,20 @@ if (existsSync(textPackageWasm)) {
       };
     }),
     rejected_cases: (() => {
+      // Keep every reject case ≤ max_input_bytes (96) so the host stages it
+      // and the guest returns -2 (Decision 115), not host resource_exhausted.
       const good = textEncoderInput([1, 2, 3, 0], [1, 1, 1, 0]);
       const truncated = good.subarray(0, good.length - 8);
-      const extra = Buffer.concat([good, guestFrame(6, [1, 4], i64Bytes([0, 0, 0, 0]))]);
       const badDtype = Buffer.concat([
         guestFrame(6, [1, 4], i64Bytes([1, 2, 3, 0])),
         guestFrame(7, [1, 4], i64Bytes([1, 1, 1, 0])),
       ]);
+      const badVersion = Buffer.from(good);
+      badVersion.writeUInt16LE(9, 0);
       return [
         ["truncated_bundle", truncated],
-        ["extra_frame", extra],
         ["wrong_mask_dtype", badDtype],
+        ["frame_version", badVersion],
       ].map(([name, frame]) => {
         if (rejectCode(textRunner, frame, 196) !== -2) {
           throw new Error(`text-encoder runner does not reject ${name} as a frame mismatch`);

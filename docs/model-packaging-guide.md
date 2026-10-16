@@ -28,11 +28,11 @@ the `onnx-runner-v*` artifact release (never marked Latest; same pattern as
 VERSION=0.15.0
 curl -fsSL -o runner.wasm \
   "https://github.com/traverse-framework/traverse/releases/download/onnx-runner-v${VERSION}/runner.wasm"
-echo "f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966  runner.wasm" | shasum -a 256 -c -
+echo "bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622  runner.wasm" | shasum -a 256 -c -
 ```
 
 Pinned digest for `onnx-runner-v0.15.0` / `fixtures/onnx/runner.wasm`:
-`f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`.
+`bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
 
 Digits fixture inputs (no git checkout required):
 
@@ -288,7 +288,7 @@ traverse-cli model package-onnx runner.wasm my-model.onnx my-model.package.json 
 ```
 
 `package-onnx` fails closed if `<runner.wasm>` is not the audited guest
-(sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966`).
+(sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`).
 
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;

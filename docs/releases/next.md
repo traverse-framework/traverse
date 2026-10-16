@@ -7,8 +7,9 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - `model package-onnx` packages Hugging Face–style multi-input/multi-output
   ONNX graphs (and keeps legacy single-IO `package.json`). Token-id inputs
   use `element: "i64"`. I/O is a Spec 138 frame bundle.
-- Spec 138 → 0.14.3. Reference inputs under
-  `fixtures/onnx/hf-text-encoder-toy-*` with cross-host frame helpers.
+- Spec 138 → 0.14.3. Reference package
+  `fixtures/models/hf-text-encoder-toy-1.0.0` with signed cross-host
+  conformance; digits-onnx packages rebuilt on the new runner.
 - Web `concatGuestFrames`, native `concat_guest_frames`, and Swift/Kotlin/.NET
   `GuestFrame` helpers for app-side bundle assembly; hosts still stage opaque bytes.
 
@@ -18,7 +19,7 @@ Unreleased changes since `v0.15.0` will be recorded here.
   traverse-cli-rs` (rustc ≥ 1.94), and warn that crates.io `traverse-cli` is
   an unrelated Solidity tool.
 - Audited ONNX runner guest ships on `onnx-runner-v*` artifact releases with
-  sha256 `f3902703fe79cc161c13b87cf507dcb25cb53ea3c2a68bed6cc753f9df100966` (matches `fixtures/onnx/runner.wasm`).
+  sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622` (matches `fixtures/onnx/runner.wasm`).
 - `model package-onnx` fails closed when the given runner digest is not the
   audited guest. CI installs the CLI from a packaged `.crate` and runs the
   digits-onnx package → verify → conformance path.

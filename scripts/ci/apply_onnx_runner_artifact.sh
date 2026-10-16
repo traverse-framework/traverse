@@ -21,11 +21,12 @@ printf '%s\n' "${digest}" > fixtures/onnx/runner.wasm.sha256
 python3 - <<PIN
 from pathlib import Path
 import re
+import sys
 path = Path("crates/traverse-cli/src/model_packaging.rs")
 digest = "${digest}"
 text = path.read_text()
-pattern = r'pub const AUDITED_ONNX_RUNNER_SHA256: &str = "[0-9a-f]{64}";'
-replacement = f'pub const AUDITED_ONNX_RUNNER_SHA256: &str = "{digest}";'
+pattern = r'(pub const AUDITED_ONNX_RUNNER_SHA256: &str =\s*")[0-9a-f]{64}(";)'
+replacement = rf'\g<1>{digest}\2'
 updated, n = re.subn(pattern, replacement, text, count=1)
 if n != 1:
     raise SystemExit("failed to update AUDITED_ONNX_RUNNER_SHA256")
@@ -37,6 +38,7 @@ PIN
 python3 - <<'DOC'
 from pathlib import Path
 import re
+import sys
 path = Path("docs/model-packaging-guide.md")
 sha_file = Path("fixtures/onnx/runner.wasm.sha256").read_text().strip()
 text = path.read_text()
