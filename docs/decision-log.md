@@ -6954,3 +6954,49 @@ selected, and every call would silently fall back to `wasm-cpu`.
 
 Approved by Enrico on 2026-10-15, choosing "Declare a score transform
 (Recommended)" while preparing `#1630`.
+
+## Decision 117: Model-Backed Browser/Node Work Uses Direct WebAssembly (ADR-0083)
+
+- **Date**: 2026-10-27
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`,
+  `1402-runtime-wasm-orchestrator-convergence`
+- **Related issues**: `#1657`, epic `#1655`
+- **ADR**: `docs/adr/0083-model-backed-direct-wasm-path.md`
+- **Origin**: `#1657` nested wasmi latency + sync submit freeze
+
+### Context
+
+Nested `runtime.wasm` (wasmi-in-wasm) produced byte-identical HF prototype
+outputs but ran ~50–80× slower than native wasmtime for DistilBERT-NER and
+Silero VAD; Whisper transcription did not finish in 25 minutes on Node.
+`BundleEmbedder.submit` is synchronous, so long nested calls freeze the
+browser tab. Spec 138's `ExactModelBrowserHost` already instantiates model
+guests with native `WebAssembly` and meets interactive latency for ONNX-class
+packages.
+
+### Decision
+
+1. **Route model-backed product capabilities on Browser/Node to the Spec 138
+   direct WebAssembly path** (`ExactModelBrowserHost`), not nested wasmi.
+2. **Keep nested wasmi for non-model bundled capabilities** and Spec 1402
+   orchestration.
+3. **Ship `submitAsync` + `AbortSignal`** on `traverse-embedder-web` with
+   structured cancellation and Trace API `cancelled` outcome; keep sync
+   `submit` for small nested work.
+4. **Meet the `#1657` ≤10× native bound on the Spec 138 path**, documented in
+   `docs/perf/nested-vs-direct-wasm-1657.md` (lightweight fixture timings in
+   CI/harness; full HF benches as a gated procedure).
+
+### Alternatives Considered
+
+- Closing the 50–80× nested gap by wasmi tuning alone — rejected as the
+  primary fix (interpreter-in-interpreter math).
+- Replacing all nested execution with direct WebAssembly — rejected;
+  ordinary capabilities still need `runtime.wasm` governance.
+
+### Approval
+
+Accepted for `#1657` implementation (2026-10-27): prefer ADR routing to the
+existing Spec 138 path over attempting nested wasmi speedups as the product
+latency fix.

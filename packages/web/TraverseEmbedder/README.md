@@ -43,17 +43,42 @@ const embedder = await BundleEmbedder.init({
 });
 embedder.subscribe((event) => console.log(event));
 embedder.submit("my-app.process", { note: "hello" });
+
+// Long nested work: prefer submitAsync so the event loop can run, and pass
+// AbortSignal for structured cancellation (Trace API outcome `cancelled`).
+const ac = new AbortController();
+const pending = embedder.submitAsync("my-app.process", { note: "hello" }, {
+  signal: ac.signal,
+});
+// ac.abort() → { status: "cancelled", error: { code: "cancelled", … } }
 ```
 
 See `examples/react-integration/` for a working React page that loads the
 checked-in `traverse-starter` bundle straight from the repository and
 executes it with no `traverse-cli serve` process running.
 
+### Async submit and Workers (#1657 / ADR-0083)
+
+- Use sync `submit` for small nested capabilities.
+- Use `submitAsync(..., { signal })` when the call may take noticeable time:
+  it yields once before nested work and returns `status: "cancelled"` with a
+  cancelled Trace record when the signal aborts (before start, after invoke,
+  or between workflow nodes).
+- Nested wasmi cannot interrupt a single in-flight guest instruction from
+  JS. For hard mid-flight cancel of a long nested invoke, run the embedder
+  inside a **Web Worker** and terminate the Worker on abort (or prefer the
+  Spec 138 path below for model math).
+- **Model-backed** product capabilities (NER, VAD, transcription, ONNX
+  guests) must use `ExactModelBrowserHost` (native `WebAssembly`), not
+  nested `BundleEmbedder` wasmi — see ADR-0083 and
+  `docs/perf/nested-vs-direct-wasm-1657.md`.
+
 ## Operations
 
 | `embedder-api/1.1.0` | TypeScript surface |
 | --- | --- |
 | `runtime.submit` | `TraverseEmbedderApi.submit(targetId, input)` |
+| *(additive)* async submit | `TraverseEmbedderApi.submitAsync(targetId, input, { signal? })` |
 | `runtime.subscribe` | `TraverseEmbedderApi.subscribe(callback)` (ordered, replayed) |
 | `runtime.shutdown` | `TraverseEmbedderApi.shutdown()` |
 | `compatible.start` | `TraverseEmbedderApi.startCompatible(capabilityId, input)` |
@@ -131,12 +156,17 @@ not store private plaintext or provide maintenance archives.
 
 ## Exact-ref model host
 
-`ExactModelBrowserHost` runs Spec 138 packages in the browser. Pass app
-manifest `modelUsage` as exactly `"commercial"` or `"non_commercial"` when
-the app declares model pins. A missing value fails closed with
-`usage_undeclared` at registration; any other value (including `""`,
-`"Commercial"`, `"research"`, or a non-string) fails closed at construction
-with `usage_invalid` and structured `detail` (`field: model_usage`).
+`ExactModelBrowserHost` runs Spec 138 packages in the browser with the
+platform `WebAssembly` engine (Decision 117 / ADR-0083). This is the
+supported Browser/Node path for **model-backed** work; nested
+`runtime.wasm` wasmi remains for ordinary non-model capabilities.
+
+Pass app manifest `modelUsage` as exactly `"commercial"` or
+`"non_commercial"` when the app declares model pins. A missing value fails
+closed with `usage_undeclared` at registration; any other value (including
+`""`, `"Commercial"`, `"research"`, or a non-string) fails closed at
+construction with `usage_invalid` and structured `detail`
+(`field: model_usage`).
 
 ```ts
 import { ExactModelBrowserHost } from "traverse-embedder-web";

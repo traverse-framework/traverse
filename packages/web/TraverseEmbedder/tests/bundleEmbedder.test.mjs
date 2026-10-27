@@ -119,6 +119,44 @@ test("wasm-capability-submit: real WASI execution echoes input as output", async
   assert.deepEqual(events[1].data.output, { note: "hello", n: 3 });
 });
 
+test("submitAsync mirrors sync submit for a real WASI echo capability", async () => {
+  const echo = await compileWat(ECHO_WAT);
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{ capabilityId: "fixture.echo", wasmBytes: echo }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+
+  const outcome = await embedder.submitAsync("fixture.echo", { note: "async", n: 2 });
+  assert.equal(outcome.status, "accepted");
+  assert.equal(events[1].event_type, "capability_result");
+  assert.deepEqual(events[1].data.output, { note: "async", n: 2 });
+});
+
+test("submitAsync abort before nested work returns cancelled outcome + trace", async () => {
+  const echo = await compileWat(ECHO_WAT);
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{ capabilityId: "fixture.echo", wasmBytes: echo }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+  const ac = new AbortController();
+  ac.abort();
+
+  const outcome = await embedder.submitAsync("fixture.echo", { note: "nope" }, { signal: ac.signal });
+  assert.equal(outcome.status, "cancelled");
+  assert.equal(outcome.error?.code, "cancelled");
+  assert.equal(events.some((e) => e.data?.status === "cancelled"), true);
+
+  const page = embedder.traceList("1.0.0", 10);
+  assert.equal(page.summaries[0].outcome, "cancelled");
+  const detail = embedder.traceGet("1.0.0", page.summaries[0].traceId);
+  assert.deepEqual(detail.phases, [{ code: "cancelled" }]);
+  assert.equal(detail.failureCode, "cancelled");
+});
+
 test("capability submit surfaces invalid stdout via runtime.wasm capability_result", async () => {
   const invalid = await compileWat(INVALID_OUTPUT_WAT);
   const manifestPath = await writeBundleFixture({
