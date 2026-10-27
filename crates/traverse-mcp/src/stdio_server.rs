@@ -193,13 +193,9 @@ struct CanonicalExecutionContext {
 }
 
 impl McpDiscoveryCatalog {
-    /// Load the canonical discovery catalog used by the stdio server.
-    ///
-    /// # Errors
-    ///
-    /// Returns `catalog_load_failed` when the expedition registry bundle cannot be loaded.
-    pub fn load_canonical() -> Result<Self, StdioServerFailure> {
-        Self::load_from_manifest_path(&canonical_expedition_bundle_path())
+    #[cfg(test)]
+    fn load_canonical() -> Result<Self, StdioServerFailure> {
+        Self::load_from_manifest_path(&test_canonical_expedition_bundle_path())
     }
 
     fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
@@ -234,8 +230,9 @@ impl McpDiscoveryCatalog {
 }
 
 impl CanonicalExecutionContext {
+    #[cfg(test)]
     fn load_canonical() -> Result<Self, StdioServerFailure> {
-        Self::load_from_manifest_path(&canonical_expedition_bundle_path())
+        Self::load_from_manifest_path(&test_canonical_expedition_bundle_path())
     }
 
     fn load_from_manifest_path(manifest_path: &Path) -> Result<Self, StdioServerFailure> {
@@ -1490,15 +1487,72 @@ fn observation_message_summary(message: McpObservationMessage) -> Value {
     }
 }
 
+/// Starts the stdio server without a contributor bundle override.
+///
+/// When Mode A is not selected by `cache_root` or `TRAVERSE_MCP_REGISTRY_CACHE`,
+/// this returns `contributor_bundle_required`. Packaged binaries must receive an
+/// explicit contributor bundle instead of deriving a source checkout path.
+///
 /// # Errors
 ///
-/// Returns `catalog_load_failed` when the canonical expedition bundle cannot be loaded.
+/// Returns a stable startup failure envelope when Mode A state is invalid or a
+/// contributor bundle was not supplied.
 pub fn run_stdio_server(
     simulate_startup_failure: bool,
     cache_root: Option<PathBuf>,
 ) -> Result<(), StdioServerFailure> {
-    let canonical_execution = CanonicalExecutionContext::load_canonical()?;
-    let catalog = McpDiscoveryCatalog::load_canonical()?;
+    run_stdio_server_with_bundle(simulate_startup_failure, cache_root, None)
+}
+
+/// Starts the stdio server with an optional, explicit contributor bundle.
+///
+/// Mode A is selected before any contributor-only artifacts are loaded, so a
+/// packaged binary running against a verified cache has no dependency on the
+/// source checkout or its expedition example.
+///
+/// # Errors
+///
+/// Returns `contributor_bundle_required` when neither Mode A nor `bundle_path`
+/// is supplied, and `catalog_load_failed` when the selected contributor bundle
+/// cannot be loaded.
+pub fn run_stdio_server_with_bundle(
+    simulate_startup_failure: bool,
+    cache_root: Option<PathBuf>,
+    bundle_path: Option<PathBuf>,
+) -> Result<(), StdioServerFailure> {
+    let cache_root = cache_root.or_else(|| std::env::var_os(MODE_A_CACHE_ENV).map(PathBuf::from));
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+
+    let mut stdout = stdout.lock();
+    let mut stderr = stderr.lock();
+
+    let mode_a = match cache_root {
+        Some(cache_root) => match ModeAContext::load(cache_root) {
+            Ok(context) => Some(context),
+            Err(failure) => {
+                let _ = write_json_line(&mut stderr, &failure.envelope());
+                return Err(failure);
+            }
+        },
+        None => None,
+    };
+
+    let (canonical_execution, catalog) = if mode_a.is_some() {
+        (empty_execution_context(), empty_discovery_catalog())
+    } else {
+        let manifest_path = bundle_path.ok_or_else(|| {
+            StdioServerFailure::new(
+                "contributor_bundle_required",
+                "Contributor mode requires --bundle <manifest-path>; packaged binaries do not infer a source checkout bundle.",
+            )
+        })?;
+        (
+            CanonicalExecutionContext::load_from_manifest_path(&manifest_path)?,
+            McpDiscoveryCatalog::load_from_manifest_path(&manifest_path)?,
+        )
+    };
 
     let capability_registry = Box::leak(Box::new(CapabilityRegistry::new()));
     let event_registry = Box::leak(Box::new(canonical_execution.events));
@@ -1523,28 +1577,8 @@ pub fn run_stdio_server(
     let catalog = Box::leak(Box::new(catalog));
     let mut server = TraverseMcpStdioServer::new(mcp, catalog);
 
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let stderr = io::stderr();
-
-    let mut stdout = stdout.lock();
-    let mut stderr = stderr.lock();
-
-    // Spec 119: engage Mode A when the host names a verified registry cache.
-    // Loading fails closed — a missing or invalid prepared state stops startup
-    // with a stable error envelope rather than silently falling back to the
-    // expedition catalog (FR-003).
-    let cache_root = cache_root.or_else(|| std::env::var_os(MODE_A_CACHE_ENV).map(PathBuf::from));
-    if let Some(cache_root) = cache_root {
-        match ModeAContext::load(cache_root) {
-            Ok(context) => {
-                server = server.with_mode_a(Box::leak(Box::new(context)));
-            }
-            Err(failure) => {
-                let _ = write_json_line(&mut stderr, &failure.envelope());
-                return Err(failure);
-            }
-        }
+    if let Some(context) = mode_a {
+        server = server.with_mode_a(Box::leak(Box::new(context)));
     }
     server.run_stdio_with_auth(
         stdin.lock(),
@@ -1553,6 +1587,27 @@ pub fn run_stdio_server(
         simulate_startup_failure,
         &StdioAuthConfig::from_env(),
     )
+}
+
+fn empty_execution_context() -> CanonicalExecutionContext {
+    CanonicalExecutionContext {
+        capabilities: CapabilityRegistry::new(),
+        events: EventRegistry::new(),
+        workflows: WorkflowRegistry::new(),
+    }
+}
+
+fn empty_discovery_catalog() -> McpDiscoveryCatalog {
+    McpDiscoveryCatalog {
+        bundle: RegistryBundle {
+            bundle_id: "mode-a-no-contributor-bundle".to_string(),
+            version: "0.0.0".to_string(),
+            scope: RegistryScope::Public,
+            capabilities: Vec::new(),
+            events: Vec::new(),
+            workflows: Vec::new(),
+        },
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -2073,18 +2128,25 @@ fn read_text_file(path: &Path, artifact_kind: &str) -> Result<String, StdioServe
 fn resolve_relative_path(relative_path: &str) -> PathBuf {
     let candidate = PathBuf::from(relative_path);
     if candidate.is_absolute() {
-        candidate
-    } else {
-        repo_root().join(candidate)
+        return candidate;
     }
+
+    std::env::current_dir()
+        .ok()
+        .and_then(|current_dir| {
+            current_dir
+                .ancestors()
+                .find(|ancestor| ancestor.join(".git").exists())
+                .map(|workspace_root| workspace_root.join(&candidate))
+        })
+        .unwrap_or(candidate)
 }
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn canonical_expedition_bundle_path() -> PathBuf {
-    repo_root().join("examples/expedition/registry-bundle/manifest.json")
+#[cfg(test)]
+fn test_canonical_expedition_bundle_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("examples/expedition/registry-bundle/manifest.json")
 }
 
 fn not_found(kind: &str, id: &str, version: &str) -> StdioServerFailure {
@@ -3323,6 +3385,15 @@ mod tests {
             root: &Path,
         ) -> TraverseMcpStdioServer<'static, ExpeditionExampleExecutor> {
             build_test_server().with_mode_a(mode_a_context(root))
+        }
+
+        #[test]
+        fn mode_a_startup_does_not_require_a_contributor_bundle() {
+            let root = build_verified_cache("installed-stdio");
+            let result = run_stdio_server_with_bundle(true, Some(root.clone()), None);
+            let failure = result.expect_err("simulated startup failure must be returned");
+            assert_eq!(failure.code, "startup_failed");
+            let _ = fs::remove_dir_all(root);
         }
 
         /// Drive one command line through the server and return every stdout

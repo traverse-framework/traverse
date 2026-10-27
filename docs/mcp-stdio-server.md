@@ -9,7 +9,7 @@ For the first `youaskm3` release-facing client path, use [docs/youaskm3-canonica
 It is intentionally narrow:
 
 - it stays a façade over Traverse runtime authority
-- contributor `stdio` without a cache uses the canonical expedition registry bundle as its source of truth
+- contributor `stdio` uses an explicitly selected expedition-compatible registry bundle as its source of truth
 - Mode A / Mode B serve discover, description, validation, execution, and execution-report from a host-owned verified cache
 - it is documented and runnable locally
 
@@ -18,18 +18,30 @@ It is intentionally narrow:
 The supported developer bootstrap path for the dedicated MCP server is:
 
 ```bash
-cargo run -p traverse-mcp -- stdio
+cargo run -p traverse-mcp -- stdio \
+  --bundle examples/expedition/registry-bundle/manifest.json
 ```
 
 Supported host commands:
 
-- `stdio [--cache <dir>] [--simulate-startup-failure]` — serve MCP on stdio
+- `stdio [--cache <dir>] [--bundle <manifest-path>] [--simulate-startup-failure]` — serve MCP on stdio
 - `prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]` — Mode B Spec 520 cache prepare
 
 Unsupported bootstrap attempts fail loudly:
 
 - omitting the command prints the usage line and exits non-zero
 - using any command other than `stdio` or `prepare-cache` prints `Unsupported command: <command>` and exits non-zero
+
+Contributor mode requires an explicit bundle; it never infers a bundle from the
+binary's build checkout:
+
+```bash
+cargo run -p traverse-mcp -- stdio \
+  --bundle examples/expedition/registry-bundle/manifest.json
+```
+
+Without either `--cache`/`TRAVERSE_MCP_REGISTRY_CACHE` or `--bundle`, startup
+fails with `contributor_bundle_required` and names the required flag.
 
 Developers and agents should treat other bootstrap ideas as unsupported unless they are explicitly documented in this page or in the packaged artifact docs.
 
