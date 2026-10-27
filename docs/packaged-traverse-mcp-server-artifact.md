@@ -7,7 +7,11 @@ x86_64 and macOS arm64. Clients download the archive, verify `SHA256SUMS` and
 the GitHub build-provenance attestation, then launch `traverse-mcp stdio` —
 no Rust toolchain required.
 
-Source-run (`cargo run -p traverse-mcp -- stdio`) remains contributor-only.
+Source-run remains contributor-only and requires an explicit bundle, for
+example `cargo run -p traverse-mcp -- stdio --bundle
+examples/expedition/registry-bundle/manifest.json`. Packaged Mode A binaries
+need only their prepared verified cache; they never infer a source-checkout
+bundle.
 
 ## Release form
 

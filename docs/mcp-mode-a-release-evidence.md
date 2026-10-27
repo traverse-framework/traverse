@@ -6,7 +6,7 @@ Mode A is the product-facing local MCP host for LLM façades (Claude Desktop,
 Cursor, and compatible stdio clients). It ships as a **versioned, standalone
 `traverse-mcp` binary** that a client pins by version and verifies by checksum
 and provenance — without a Rust toolchain or source checkout. Source-run
-workflows (`cargo run -p traverse-mcp -- stdio`) remain contributor-only.
+workflows remain contributor-only and must pass `--bundle <manifest-path>`.
 
 ## Release form
 

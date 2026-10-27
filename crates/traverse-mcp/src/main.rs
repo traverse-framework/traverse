@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
-use traverse_mcp::{prepare_verified_cache, run_stdio_server};
+use traverse_mcp::{prepare_verified_cache, run_stdio_server_with_bundle};
 
 fn main() -> ExitCode {
     run(std::env::args().skip(1))
 }
 
-const USAGE: &str = "Usage: traverse-mcp [--version]\n       traverse-mcp stdio [--cache <dir>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]";
+const USAGE: &str = "Usage: traverse-mcp [--version]\n       traverse-mcp stdio [--cache <dir>] [--bundle <manifest-path>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]";
 
 /// Testable core of [`main`]: takes the argument iterator directly instead of
 /// reading `std::env::args()` so the CLI parsing branches can be exercised
@@ -28,7 +28,8 @@ fn run(args: impl Iterator<Item = String>) -> ExitCode {
         Ok(Command::Stdio {
             simulate_startup_failure,
             cache,
-        }) => match run_stdio_server(simulate_startup_failure, cache) {
+            bundle,
+        }) => match run_stdio_server_with_bundle(simulate_startup_failure, cache, bundle) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("traverse-mcp stdio server failed: {error:?}");
@@ -66,6 +67,7 @@ enum Command {
     Stdio {
         simulate_startup_failure: bool,
         cache: Option<PathBuf>,
+        bundle: Option<PathBuf>,
     },
     PrepareCache {
         synced_state: PathBuf,
@@ -95,6 +97,7 @@ fn parse_command(mut args: impl Iterator<Item = String>) -> Result<Command, Stri
 fn parse_stdio(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut simulate_startup_failure = false;
     let mut cache = None;
+    let mut bundle = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--simulate-startup-failure" => simulate_startup_failure = true,
@@ -104,12 +107,19 @@ fn parse_stdio(mut args: impl Iterator<Item = String>) -> Result<Command, String
                     .ok_or_else(|| "stdio --cache requires <dir>".to_string())?;
                 cache = Some(PathBuf::from(value));
             }
+            "--bundle" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "stdio --bundle requires <manifest-path>".to_string())?;
+                bundle = Some(PathBuf::from(value));
+            }
             other => return Err(format!("Unsupported stdio flag: {other}")),
         }
     }
     Ok(Command::Stdio {
         simulate_startup_failure,
         cache,
+        bundle,
     })
 }
 
@@ -280,12 +290,41 @@ mod tests {
             Command::Stdio {
                 simulate_startup_failure,
                 cache,
+                bundle,
             } => {
                 assert!(!simulate_startup_failure);
                 assert_eq!(cache, Some(PathBuf::from("/srv/cache")));
+                assert_eq!(bundle, None);
             }
             Command::PrepareCache { .. } | Command::Version => panic!("expected stdio"),
         }
+    }
+
+    #[test]
+    fn parse_stdio_accepts_explicit_contributor_bundle() {
+        let command = parse_command(
+            [
+                "stdio".to_string(),
+                "--bundle".to_string(),
+                "/opt/traverse/manifest.json".to_string(),
+            ]
+            .into_iter(),
+        )
+        .expect("parse");
+        match command {
+            Command::Stdio { bundle, .. } => {
+                assert_eq!(bundle, Some(PathBuf::from("/opt/traverse/manifest.json")));
+            }
+            Command::PrepareCache { .. } | Command::Version => panic!("expected stdio"),
+        }
+    }
+
+    #[test]
+    fn stdio_bundle_requires_a_manifest_path() {
+        assert_eq!(
+            run(["stdio".to_string(), "--bundle".to_string()].into_iter()),
+            ExitCode::from(1)
+        );
     }
 
     #[test]
