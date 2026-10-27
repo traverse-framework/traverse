@@ -173,7 +173,7 @@ jobs:
           ls -la
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
