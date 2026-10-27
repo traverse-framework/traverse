@@ -7000,3 +7000,66 @@ packages.
 Accepted for `#1657` implementation (2026-10-27): prefer ADR routing to the
 existing Spec 138 path over attempting nested wasmi speedups as the product
 latency fix.
+
+## Decision 118: Guests Receive RFC 8785 Canonical JSON Input on Every Host
+
+- **Date**: 2026-10-27
+- **Status**: Accepted
+- **Governing specs**: `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1722`, `#1010`
+- **Origin**: 2026-10-23 weekly demo. The same `core.authorize@1.2.0` bytes
+  and the same logical input returned `policy_hash`
+  `fnv1a64:2a126b867e19f379` on the web embedder but
+  `fnv1a64:51a64653e94300c3` on `traverse-mcp`.
+
+### Context
+
+The native runtime takes input as a `serde_json::Value`, built without
+`preserve_order`, and serializes it with keys sorted before writing the
+guest's stdin. That covers the CLI, `traverse-mcp`, and the hosts built on
+the runtime. `traverse-embedder-web` forwards the caller's bytes. A
+capability that hashes, signs or echoes its input therefore depends on the
+host.
+
+### Decision
+
+1. **Input bytes:** every guest-bound JSON input is RFC 8785 (JCS)
+   canonical JSON, on every host.
+   - Alternatives considered:
+     - byte-preserving pass-through: keeps caller key order, but needs a raw
+       path through the `Value`-typed runtime, and the same logical input
+       still hashes differently;
+     - sorted keys without full JCS: number and escape formatting would
+       still diverge between Rust and JS.
+2. **Non-representable input is rejected:** with `input_not_canonicalizable`
+   before invoke. This covers integers beyond ±(2^53 − 1), duplicate keys,
+   and invalid Unicode.
+   - Lossy rounding was rejected: silent value changes.
+   - Passing these inputs through was rejected: it reintroduces divergence.
+3. **Scope is every guest-bound input:** the top-level invoke, workflow
+   steps, nested `runtime.wasm` calls, and Spec 098 event payloads.
+   - Outputs are never rewritten: canonicalizing them would break
+     signatures over output and hide guest nondeterminism.
+   - Top-level only was rejected: the bug would reappear one level down.
+4. **Rollout:** always on in the next minor, v0.16.0, with release and
+   upgrade notes and no opt-in flag.
+   - A flag would ship the divergence this fixes.
+   - A patch release would break the 0.x versioning convention.
+5. **Governance:** a new cross-host spec, `1722-canonical-guest-input-bytes`,
+   rather than amending executor-only Spec 025. It owns a
+   sha256(stdin) conformance fixture that runs on every shipped host.
+
+### Consequences
+
+- The ticket's acceptance criterion "identical with the caller's original key
+  order" is superseded. Hosts agree on the canonical bytes, not on the
+  caller's order.
+- Browser and Node callers whose capabilities hash their input see new
+  values after upgrading.
+- `core.authorize` needs no registry change for cross-host agreement. Its
+  move from FNV to SHA-256 stays with `#1010`.
+
+### Approval
+
+Accepted in a `#1722` brainstorm (2026-10-27): every decision took the
+recommended option.
