@@ -1539,20 +1539,19 @@ pub fn run_stdio_server_with_bundle(
         None => None,
     };
 
-    let (canonical_execution, catalog) = match mode_a.as_ref() {
-        Some(_) => (empty_execution_context(), empty_discovery_catalog()),
-        None => {
-            let manifest_path = bundle_path.ok_or_else(|| {
-                StdioServerFailure::new(
-                    "contributor_bundle_required",
-                    "Contributor mode requires --bundle <manifest-path>; packaged binaries do not infer a source checkout bundle.",
-                )
-            })?;
-            (
-                CanonicalExecutionContext::load_from_manifest_path(&manifest_path)?,
-                McpDiscoveryCatalog::load_from_manifest_path(&manifest_path)?,
+    let (canonical_execution, catalog) = if mode_a.is_some() {
+        (empty_execution_context(), empty_discovery_catalog())
+    } else {
+        let manifest_path = bundle_path.ok_or_else(|| {
+            StdioServerFailure::new(
+                "contributor_bundle_required",
+                "Contributor mode requires --bundle <manifest-path>; packaged binaries do not infer a source checkout bundle.",
             )
-        }
+        })?;
+        (
+            CanonicalExecutionContext::load_from_manifest_path(&manifest_path)?,
+            McpDiscoveryCatalog::load_from_manifest_path(&manifest_path)?,
+        )
     };
 
     let capability_registry = Box::leak(Box::new(CapabilityRegistry::new()));
