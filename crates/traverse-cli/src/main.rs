@@ -61,6 +61,7 @@ use traverse_registry::{
     resolve_executable_artifact, validate_connector_activation, write_synced_public_registry_state,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
+use traverse_runtime::registry_rights_policy::{ModelRightsPolicy, check_registry_record_rights};
 use traverse_runtime::{
     ArtifactRouter, LocalExecutionFailure, LocalExecutionFailureCode, LocalExecutionOutput,
     LocalExecutor, Runtime, RuntimeExecutionOutcome, RuntimeRequest, RuntimeResultStatus,
@@ -95,6 +96,7 @@ enum Command {
         manifest_path: PathBuf,
         workspace_id: Option<String>,
         json_output: bool,
+        allow_conditional_model_rights: bool,
     },
     AppPrepare {
         manifest_path: PathBuf,
@@ -105,12 +107,14 @@ enum Command {
         manifest_path: PathBuf,
         workspace_id: String,
         json_output: bool,
+        allow_conditional_model_rights: bool,
     },
     AppActivate {
         manifest_path: PathBuf,
         workspace_id: String,
         host_activation_path: PathBuf,
         json_output: bool,
+        allow_conditional_model_rights: bool,
     },
     RegistrySync {
         workspace_id: String,
@@ -423,7 +427,13 @@ fn run_command(command: Command) -> Result<String, CliError> {
             manifest_path,
             workspace_id,
             json_output,
-        } => app_validate(&manifest_path, workspace_id.as_deref(), json_output),
+            allow_conditional_model_rights,
+        } => app_validate(
+            &manifest_path,
+            workspace_id.as_deref(),
+            json_output,
+            rights_policy(allow_conditional_model_rights),
+        ),
         Command::AppPrepare {
             manifest_path,
             workspace_id,
@@ -433,17 +443,25 @@ fn run_command(command: Command) -> Result<String, CliError> {
             manifest_path,
             workspace_id,
             json_output,
-        } => app_register(&manifest_path, &workspace_id, json_output),
+            allow_conditional_model_rights,
+        } => app_register(
+            &manifest_path,
+            &workspace_id,
+            json_output,
+            rights_policy(allow_conditional_model_rights),
+        ),
         Command::AppActivate {
             manifest_path,
             workspace_id,
             host_activation_path,
             json_output,
+            allow_conditional_model_rights,
         } => app_activate(
             &manifest_path,
             &workspace_id,
             &host_activation_path,
             json_output,
+            rights_policy(allow_conditional_model_rights),
         ),
         command @ (Command::RegistrySync { .. }
         | Command::RegistryList { .. }
@@ -798,7 +816,7 @@ fn prepare_public_registry_bundle(
         for record in state
             .capabilities
             .iter()
-            .filter(|record| !record.deprecated)
+            .filter(|record| record.is_active())
         {
             validate_registry_path_segment(&record.id, "capability id").map_err(|_| {
                 CliError::ValidationFailed(format!(
@@ -957,7 +975,7 @@ fn prepare_public_registry_bundle(
             state
                 .capabilities
                 .iter()
-                .filter(|record| !record.deprecated)
+                .filter(|record| record.is_active())
                 .count(),
             events.len(),
         ))
@@ -1418,6 +1436,10 @@ fn help_app_validate() -> String {
 
   Optional flags:
     --workspace <id>    Resolve registry-ref components from this locally synced workspace.
+    --allow-conditional-model-rights
+                        Host opt-in: accept registry models whose spec 026
+                        rights are `conditional` (denied by default).
+                        Revoked versions and `unknown` rights always fail.
     --help              Print this help text.
 
   Example:
@@ -1447,6 +1469,10 @@ fn help_app_register() -> String {
     --json              Emit machine-readable registration evidence.
 
   Optional flags:
+    --allow-conditional-model-rights
+                        Host opt-in: accept registry models whose spec 026
+                        rights are `conditional` (denied by default).
+                        Revoked versions and `unknown` rights always fail.
     --help              Print this help text.
 
   Example:
@@ -1471,6 +1497,12 @@ fn help_app_activate() -> String {
     --workspace <id>           Local workspace id.
     --host-activation <path>   Host-private activation input JSON file.
     --json                     Emit machine-readable activation evidence.
+
+  Optional flags:
+    --allow-conditional-model-rights
+                        Host opt-in: accept registry models whose spec 026
+                        rights are `conditional` (denied by default).
+                        Revoked versions and `unknown` rights always fail.
 
   Example:
     traverse-cli app activate \\
@@ -2297,6 +2329,9 @@ fn parse_app_validate_command(args: &[String]) -> Result<Command, String> {
         manifest_path: PathBuf::from(manifest_path),
         workspace_id,
         json_output: true,
+        allow_conditional_model_rights: args
+            .iter()
+            .any(|arg| arg == "--allow-conditional-model-rights"),
     })
 }
 
@@ -2327,6 +2362,9 @@ fn parse_app_register_command(args: &[String]) -> Result<Command, String> {
         manifest_path: PathBuf::from(manifest_path),
         workspace_id,
         json_output: true,
+        allow_conditional_model_rights: args
+            .iter()
+            .any(|arg| arg == "--allow-conditional-model-rights"),
     })
 }
 
@@ -2345,6 +2383,9 @@ fn parse_app_activate_command(args: &[String]) -> Result<Command, String> {
         workspace_id,
         host_activation_path: PathBuf::from(host_activation_path),
         json_output: true,
+        allow_conditional_model_rights: args
+            .iter()
+            .any(|arg| arg == "--allow-conditional-model-rights"),
     })
 }
 
@@ -3476,15 +3517,24 @@ fn register_generated_app_bundle(
     ))
 }
 
+/// Spec 045 FR-023: the CLI's host rights policy, opted into per command
+/// with `--allow-conditional-model-rights`.
+fn rights_policy(allow_conditional_model_rights: bool) -> ModelRightsPolicy {
+    ModelRightsPolicy {
+        allow_conditional: allow_conditional_model_rights,
+    }
+}
+
 fn app_validate(
     manifest_path: &Path,
     workspace_id: Option<&str>,
     json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     let base_dir = std::env::current_dir().map_err(|error| {
         CliError::IoError(format!("failed to resolve current directory: {error}"))
     })?;
-    app_validate_at(&base_dir, manifest_path, workspace_id, json_output)
+    app_validate_with_policy_at(&base_dir, manifest_path, workspace_id, json_output, policy)
 }
 
 fn app_prepare(
@@ -3525,11 +3575,28 @@ fn app_prepare(
     serde_json::to_string_pretty(&outcome).map_err(|error| CliError::IoError(error.to_string()))
 }
 
+#[cfg(test)]
 fn app_validate_at(
     base_dir: &Path,
     manifest_path: &Path,
     workspace_id: Option<&str>,
     json_output: bool,
+) -> Result<String, CliError> {
+    app_validate_with_policy_at(
+        base_dir,
+        manifest_path,
+        workspace_id,
+        json_output,
+        ModelRightsPolicy::default(),
+    )
+}
+
+fn app_validate_with_policy_at(
+    base_dir: &Path,
+    manifest_path: &Path,
+    workspace_id: Option<&str>,
+    json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     if !json_output {
         return Err(CliError::UsageError(
@@ -3562,6 +3629,7 @@ fn app_validate_at(
         let resolver = SyncedRegistryComponentResolver {
             workspace_root: base_dir,
             workspace_id,
+            policy,
         };
         load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver))
     } else {
@@ -3584,15 +3652,17 @@ fn app_register(
     manifest_path: &Path,
     workspace_id: &str,
     json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     let base_dir = std::env::current_dir()
         .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
-    app_register_at(&base_dir, manifest_path, workspace_id, json_output)
+    app_register_with_policy_at(&base_dir, manifest_path, workspace_id, json_output, policy)
 }
 
 struct SyncedRegistryComponentResolver<'a> {
     workspace_root: &'a Path,
     workspace_id: &'a str,
+    policy: ModelRightsPolicy,
 }
 
 impl RegistryComponentResolver for SyncedRegistryComponentResolver<'_> {
@@ -3608,10 +3678,18 @@ impl RegistryComponentResolver for SyncedRegistryComponentResolver<'_> {
             &reference.version_range,
         )
         .map_err(|failure| {
+            // Spec 045 FR-022: an exact pin to a revoked version resolves to
+            // the record, then fails closed with its revocation record.
+            if let Some(denial) = revoked_exact_pin_denial(self, reference) {
+                return registry_resolution_failure(denial);
+            }
             registry_resolution_failure(failure.errors.first().map_or_else(
                 || "public registry resolution failed".to_string(),
                 |error| error.message.clone(),
             ))
+        })?;
+        check_registry_record_rights(&record, self.policy).map_err(|denial| {
+            registry_resolution_failure(format!("{}: {}", denial.code.as_str(), denial.message))
         })?;
         let contract_path =
             load_prepared_registry_asset(self.workspace_root, &record.contract_digest)?;
@@ -3632,6 +3710,25 @@ impl RegistryComponentResolver for SyncedRegistryComponentResolver<'_> {
             wasm_digest: record.digest,
         })
     }
+}
+
+fn revoked_exact_pin_denial(
+    resolver: &SyncedRegistryComponentResolver<'_>,
+    reference: &RegistryReference,
+) -> Option<String> {
+    let version = reference.version_range.trim().strip_prefix('=')?.trim();
+    let record = traverse_registry::resolve_synced_public_registry_record(
+        resolver.workspace_root,
+        resolver.workspace_id,
+        &reference.namespace,
+        &reference.id,
+        version,
+    )
+    .ok()
+    .flatten()?;
+    check_registry_record_rights(&record, resolver.policy)
+        .err()
+        .map(|denial| format!("{}: {}", denial.code.as_str(), denial.message))
 }
 
 fn registry_resolution_failure(message: String) -> ApplicationManifestFailure {
@@ -3829,11 +3926,28 @@ fn load_prepared_registry_asset(
     })
 }
 
+#[cfg(test)]
 fn app_register_at(
     base_dir: &Path,
     manifest_path: &Path,
     workspace_id: &str,
     json_output: bool,
+) -> Result<String, CliError> {
+    app_register_with_policy_at(
+        base_dir,
+        manifest_path,
+        workspace_id,
+        json_output,
+        ModelRightsPolicy::default(),
+    )
+}
+
+fn app_register_with_policy_at(
+    base_dir: &Path,
+    manifest_path: &Path,
+    workspace_id: &str,
+    json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     if !json_output {
         return Err(CliError::UsageError(
@@ -3852,6 +3966,7 @@ fn app_register_at(
     let resolver = SyncedRegistryComponentResolver {
         workspace_root: base_dir,
         workspace_id,
+        policy,
     };
     let manifest =
         match load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver)) {
@@ -3957,26 +4072,47 @@ fn app_activate(
     workspace_id: &str,
     host_activation_path: &Path,
     json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     let base_dir = std::env::current_dir().map_err(|error| {
         CliError::IoError(format!("failed to resolve current directory: {error}"))
     })?;
-    app_activate_at(
+    app_activate_with_policy_at(
         &base_dir,
         manifest_path,
         workspace_id,
         host_activation_path,
         json_output,
+        policy,
     )
 }
 
-#[allow(clippy::too_many_lines)]
+#[cfg(test)]
 fn app_activate_at(
     state_root: &Path,
     manifest_path: &Path,
     workspace_id: &str,
     host_activation_path: &Path,
     json_output: bool,
+) -> Result<String, CliError> {
+    app_activate_with_policy_at(
+        state_root,
+        manifest_path,
+        workspace_id,
+        host_activation_path,
+        json_output,
+        ModelRightsPolicy::default(),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn app_activate_with_policy_at(
+    state_root: &Path,
+    manifest_path: &Path,
+    workspace_id: &str,
+    host_activation_path: &Path,
+    json_output: bool,
+    policy: ModelRightsPolicy,
 ) -> Result<String, CliError> {
     if !json_output {
         return Err(CliError::UsageError(
@@ -3990,6 +4126,7 @@ fn app_activate_at(
     let resolver = SyncedRegistryComponentResolver {
         workspace_root: state_root,
         workspace_id,
+        policy,
     };
     let manifest =
         match load_application_bundle_manifest_with_resolver(manifest_path, Some(&resolver)) {
@@ -8773,18 +8910,21 @@ mod tests {
 
     use ed25519_dalek::{Signer, SigningKey};
 
+    use traverse_runtime::registry_rights_policy::ModelRightsPolicy;
+
     use super::{
         AppValidationError, ArtifactRouter, CapabilityPublishRequest, CapabilityRegistry, CliError,
         Command, DEFAULT_PUBLIC_REGISTRY_SOURCE, DEFAULT_REGISTRY_REPO, ExpeditionExampleExecutor,
         FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RealPublishProcessRunner,
         RegistryIndexFetcher, RegistryRightsFilters, RegistrySyncError, Runtime,
         RuntimeResultStatus, SUPPORTED_HOST_ABI_VERSION, app_activate_at,
-        app_activation_state_path, app_new_at, app_register_at, app_registration_state_path,
-        app_validate, app_validate_at, canonical_expedition_bundle_path, capability_new_at,
-        capability_publish_at, capability_publish_plan, component_new, curl_bytes, curl_text,
-        discover_capabilities, encode_hex, enforce_contract_surface_coverage,
-        enforce_persona_refs_resolve, ensure_clean_registry_checkout, execute_capability_package,
-        execute_expedition, execute_traverse_starter_process, execute_traverse_starter_summarize,
+        app_activate_with_policy_at, app_activation_state_path, app_new_at, app_register_at,
+        app_register_with_policy_at, app_registration_state_path, app_validate, app_validate_at,
+        canonical_expedition_bundle_path, capability_new_at, capability_publish_at,
+        capability_publish_plan, component_new, curl_bytes, curl_text, discover_capabilities,
+        encode_hex, enforce_contract_surface_coverage, enforce_persona_refs_resolve,
+        ensure_clean_registry_checkout, execute_capability_package, execute_expedition,
+        execute_traverse_starter_process, execute_traverse_starter_summarize,
         execute_traverse_starter_validate, fetch_signature_with_head_fallback,
         format_capability_package_execution_summary, help_expedition_execute, help_registry,
         help_registry_inspect, help_serve, inspect_bundle, inspect_capability,
@@ -9033,6 +9173,7 @@ mod tests {
                 manifest_path,
                 workspace_id,
                 json_output,
+                ..
             } => {
                 assert_eq!(
                     manifest_path,
@@ -9088,6 +9229,7 @@ mod tests {
                 workspace_id,
                 host_activation_path,
                 json_output: true,
+                ..
             } if manifest_path == Path::new("app.manifest.json")
                 && workspace_id == "local"
                 && host_activation_path == Path::new("host-activation.json")
@@ -10608,8 +10750,8 @@ mod tests {
         let manifest_path =
             repo_root().join("examples/applications/expedition-readiness/app.manifest.json");
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("app validation should succeed");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("app validation should succeed");
         let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
 
         assert_eq!(json["status"], "validated");
@@ -10639,8 +10781,8 @@ mod tests {
             None,
         );
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -10668,8 +10810,8 @@ mod tests {
         )
         .expect("manifest must write");
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -10699,8 +10841,8 @@ mod tests {
         )
         .expect("manifest must write");
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -10735,8 +10877,8 @@ mod tests {
         )
         .expect("manifest must write");
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("validation failure is JSON evidence");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("validation failure is JSON evidence");
         let json: Value = serde_json::from_str(&output).expect("failure output must be JSON");
 
         assert_eq!(json["status"], "failed");
@@ -10763,8 +10905,8 @@ mod tests {
             })),
         );
 
-        let output =
-            app_validate(&manifest_path, None, true).expect("app validation should succeed");
+        let output = app_validate(&manifest_path, None, true, ModelRightsPolicy::default())
+            .expect("app validation should succeed");
         let json: Value = serde_json::from_str(&output).expect("validation output must be JSON");
 
         assert_eq!(json["status"], "validated");
@@ -11372,6 +11514,165 @@ mod tests {
                 .is_some_and(|message| message
                     == "workspace local has no synced public registry state; run traverse-cli registry sync")
         );
+    }
+
+    fn registry_rights_fixture(
+        state_root: &Path,
+        fixture_root: &Path,
+        status: Option<traverse_registry::PublicRecordStatus>,
+        derivatives: &str,
+    ) -> PathBuf {
+        let digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let manifest_path = write_registry_ref_app_fixture(fixture_root, digest, "=1.0.1");
+        let mut record = registry_record_fixture(
+            "fixture",
+            "expedition.planning.validate-team-readiness",
+            "1.0.1",
+        );
+        record.digest = digest.to_string();
+        record.status = status;
+        record.revocation = status.map(|_| traverse_registry::PublicRevocation {
+            reason: "license withdrawn".to_string(),
+            evidence_url: "https://example.test/evidence".to_string(),
+            revoked_at: "2026-10-01T00:00:00Z".to_string(),
+        });
+        record.ai = Some(
+            serde_json::from_value(serde_json::json!({
+                "model_backed": true,
+                "models": [{
+                    "id": "audio.yamnet",
+                    "spdx_expression": "Apache-2.0",
+                    "attribution_required": true,
+                    "source_url": "https://example.test/commit/abc",
+                    "commercial_use": "allowed",
+                    "redistribution": "allowed",
+                    "derivatives": derivatives
+                }]
+            }))
+            .expect("ai fixture"),
+        );
+        write_synced_public_registry_state(
+            state_root,
+            "local",
+            "fixture-registry",
+            "fixture-v1",
+            "2026-10-27T00:00:00Z",
+            PublicRegistryIndex {
+                index_version: 1,
+                generated_at: "2026-10-27T00:00:00Z".to_string(),
+                source_commit: None,
+                capabilities: vec![record],
+                events: Vec::new(),
+            },
+        )
+        .expect("synced fixture state should persist");
+        manifest_path
+    }
+
+    fn registration_error_message(output: &str) -> String {
+        let json: Value = serde_json::from_str(output).expect("registration output must be JSON");
+        assert_eq!(json["status"], "failed");
+        json["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn exact_pin_to_revoked_registry_version_fails_closed_with_revocation_record() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path = registry_rights_fixture(
+            &state_root,
+            &fixture_root,
+            Some(traverse_registry::PublicRecordStatus::Revoked),
+            "allowed",
+        );
+        let output = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("revoked pin should render stable JSON evidence");
+        let message = registration_error_message(&output);
+        assert!(message.starts_with(
+            "registry_dependency_revoked: fixture:expedition.planning.validate-team-readiness@1.0.1 is revoked and must not run: license withdrawn"
+        ));
+        let again = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("revoked pin should render stable JSON evidence");
+        assert_eq!(output, again);
+    }
+
+    #[test]
+    fn conditional_model_rights_are_denied_unless_host_opts_in() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path =
+            registry_rights_fixture(&state_root, &fixture_root, None, "conditional");
+        let denied = app_validate_at(&state_root, &manifest_path, Some("local"), true)
+            .expect("denial should render stable JSON evidence");
+        assert!(denied.contains("model_rights_conditional_denied"));
+
+        let opted_in = app_register_with_policy_at(
+            &state_root,
+            &manifest_path,
+            "local",
+            true,
+            ModelRightsPolicy {
+                allow_conditional: true,
+            },
+        )
+        .expect("opt-in should render stable JSON evidence");
+        assert!(!opted_in.contains("model_rights_conditional_denied"));
+
+        let unknown_root = unique_temp_dir();
+        let unknown_manifest =
+            registry_rights_fixture(&unknown_root, &fixture_root, None, "unknown");
+        let unknown = app_activate_with_policy_at(
+            &unknown_root,
+            &unknown_manifest,
+            "local",
+            &unknown_root.join("missing-host.json"),
+            true,
+            ModelRightsPolicy {
+                allow_conditional: true,
+            },
+        )
+        .expect("unknown denial should render stable JSON evidence");
+        assert!(unknown.contains("model_rights_unknown_denied"));
+    }
+
+    #[test]
+    fn parse_app_commands_accept_conditional_model_rights_opt_in() {
+        for (verb, extra) in [
+            ("validate", vec![]),
+            ("register", vec!["--workspace", "w"]),
+            (
+                "activate",
+                vec!["--workspace", "w", "--host-activation", "h.json"],
+            ),
+        ] {
+            let mut args = vec![
+                "traverse-cli",
+                "app",
+                verb,
+                "--manifest",
+                "m.json",
+                "--json",
+            ];
+            args.extend(extra);
+            args.push("--allow-conditional-model-rights");
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(matches!(
+                parse_command(&args),
+                Ok(Command::AppValidate {
+                    allow_conditional_model_rights: true,
+                    ..
+                } | Command::AppRegister {
+                    allow_conditional_model_rights: true,
+                    ..
+                } | Command::AppActivate {
+                    allow_conditional_model_rights: true,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
@@ -14945,6 +15246,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn run_command_fails_cleanly_on_missing_inputs() {
         let missing = unique_temp_dir().join("missing");
         let commands = vec![
@@ -14960,11 +15262,13 @@ mod tests {
                 manifest_path: missing.clone(),
                 workspace_id: None,
                 json_output: false,
+                allow_conditional_model_rights: false,
             },
             Command::AppRegister {
                 manifest_path: missing.clone(),
                 workspace_id: "ws".to_string(),
                 json_output: true,
+                allow_conditional_model_rights: false,
             },
             Command::CapabilityPackageInspect {
                 manifest_path: missing.clone(),
@@ -15030,6 +15334,7 @@ mod tests {
             workspace_id: "ws".to_string(),
             host_activation_path: missing.clone(),
             json_output: true,
+            allow_conditional_model_rights: false,
         })
         .expect("activation failures should return structured JSON evidence");
         assert!(activation.contains("activation_failed"));

@@ -310,7 +310,7 @@ fn bind_verified_dependencies(
                     ),
                 )
             })?;
-        if record.deprecated || record.lifecycle != "active" {
+        if !record.is_active() || record.lifecycle != "active" {
             return Err(BrowserPlanError::new(
                 BrowserPlanErrorCode::VerifiedDependencyNotInSnapshot,
                 format!(

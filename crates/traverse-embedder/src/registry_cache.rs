@@ -13,8 +13,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use traverse_contracts::parse_contract;
 use traverse_registry::{
-    PublicRegistryCapabilityRecord, RegistryReference, ResolvedRegistryComponent,
-    SyncedPublicRegistryState,
+    PublicRecordStatus, PublicRegistryCapabilityRecord, RegistryReference,
+    ResolvedRegistryComponent, SyncedPublicRegistryState,
+};
+use traverse_runtime::registry_rights_policy::{
+    ModelRightsPolicy, RegistryRightsDenialCode, check_registry_record_rights,
 };
 
 /// Stable, secret-free registry-cache failure codes (Spec 080 FR-007).
@@ -34,6 +37,13 @@ pub enum RegistryCacheErrorCode {
     RegistryCacheEntryMissing,
     /// Public metadata generation is missing, malformed, incompatible, or unverified.
     RegistryMetadataCacheInvalid,
+    /// The selected version is revoked (Spec 045 FR-022).
+    RegistryDependencyRevoked,
+    /// A model declares `conditional` rights and the host did not opt in
+    /// (Spec 045 FR-023).
+    ModelRightsConditionalDenied,
+    /// A model declares `unknown` rights (Spec 045 FR-023).
+    ModelRightsUnknownDenied,
 }
 
 impl RegistryCacheErrorCode {
@@ -48,6 +58,9 @@ impl RegistryCacheErrorCode {
             Self::RegistryArtifactDigestMismatch => "registry_artifact_digest_mismatch",
             Self::RegistryCacheEntryMissing => "registry_cache_entry_missing",
             Self::RegistryMetadataCacheInvalid => "registry_metadata_cache_invalid",
+            Self::RegistryDependencyRevoked => "registry_dependency_revoked",
+            Self::ModelRightsConditionalDenied => "model_rights_conditional_denied",
+            Self::ModelRightsUnknownDenied => "model_rights_unknown_denied",
         }
     }
 }
@@ -399,12 +412,35 @@ pub struct VerifiedRegistryDependency {
 /// # Errors
 ///
 /// Returns a Spec 080 FR-007 code when the snapshot is empty, version
-/// selection fails, fetch fails, or digest verification fails.
+/// selection fails, fetch fails, or digest verification fails, and a Spec
+/// 045 FR-022/FR-023 code when the selected record is revoked or its model
+/// rights are denied under the default [`ModelRightsPolicy`].
 pub fn prepare(
     cache: &HostRegistryCache,
     snapshot: &SyncedPublicRegistryState,
     reference: &RegistryReference,
     fetcher: &dyn RegistryArtifactFetcher,
+) -> Result<RegistryPrepareEvidence, RegistryCacheError> {
+    prepare_with_policy(
+        cache,
+        snapshot,
+        reference,
+        fetcher,
+        ModelRightsPolicy::default(),
+    )
+}
+
+/// [`prepare`] under an explicit host-owned [`ModelRightsPolicy`].
+///
+/// # Errors
+///
+/// Same as [`prepare`].
+pub fn prepare_with_policy(
+    cache: &HostRegistryCache,
+    snapshot: &SyncedPublicRegistryState,
+    reference: &RegistryReference,
+    fetcher: &dyn RegistryArtifactFetcher,
+    policy: ModelRightsPolicy,
 ) -> Result<RegistryPrepareEvidence, RegistryCacheError> {
     if snapshot.capabilities.is_empty() {
         return Err(RegistryCacheError::new(
@@ -413,6 +449,18 @@ pub fn prepare(
         ));
     }
     let record = select_highest_active(snapshot, reference)?;
+    check_registry_record_rights(&record, policy).map_err(|denial| {
+        let code = match denial.code {
+            RegistryRightsDenialCode::Revoked => RegistryCacheErrorCode::RegistryDependencyRevoked,
+            RegistryRightsDenialCode::ConditionalRightsDenied => {
+                RegistryCacheErrorCode::ModelRightsConditionalDenied
+            }
+            RegistryRightsDenialCode::UnknownRightsDenied => {
+                RegistryCacheErrorCode::ModelRightsUnknownDenied
+            }
+        };
+        RegistryCacheError::new(code, denial.message)
+    })?;
     let index_digest = index_snapshot_digest(snapshot);
     let artifact_bytes = fetcher.fetch(&record.artifact_url).map_err(|message| {
         RegistryCacheError::new(
@@ -618,12 +666,39 @@ fn select_highest_active(
         .collect::<Vec<_>>();
     let mut active = matching
         .iter()
-        .filter(|(_, record)| !record.deprecated)
+        .filter(|(_, record)| record.is_active())
         .cloned()
         .collect::<Vec<_>>();
     active.sort_by(|left, right| right.0.cmp(&left.0));
     if let Some((_, record)) = active.into_iter().next() {
         return Ok(record);
+    }
+    // Spec 045 FR-022: an exact pin resolves a revoked record so the caller
+    // can fail closed with its revocation record; a range never selects it.
+    if is_exact_pin(&reference.version_range)
+        && let Some((_, record)) = matching
+            .iter()
+            .find(|(_, record)| record.lifecycle_status() == PublicRecordStatus::Revoked)
+    {
+        return Ok(record.clone());
+    }
+    if !matching.is_empty()
+        && matching
+            .iter()
+            .all(|(_, record)| record.lifecycle_status() == PublicRecordStatus::Revoked)
+    {
+        let versions = matching
+            .iter()
+            .map(|(_, record)| record.version.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(RegistryCacheError::new(
+            RegistryCacheErrorCode::RegistryDependencyRevoked,
+            format!(
+                "only revoked public registry versions for {}:{} satisfy {} (revoked: {versions})",
+                reference.namespace, reference.id, reference.version_range
+            ),
+        ));
     }
     if matching.is_empty() {
         Err(RegistryCacheError::new(
@@ -642,6 +717,13 @@ fn select_highest_active(
             ),
         ))
     }
+}
+
+fn is_exact_pin(version_range: &str) -> bool {
+    version_range
+        .trim()
+        .strip_prefix('=')
+        .is_some_and(|version| semver::Version::parse(version.trim()).is_ok())
 }
 
 pub(crate) fn index_snapshot_digest(snapshot: &SyncedPublicRegistryState) -> String {
@@ -963,6 +1045,129 @@ mod tests {
                 .ok()
                 .is_none_or(|mut d| d.next().is_none())
         );
+    }
+
+    fn revoke(snapshot: &mut SyncedPublicRegistryState, version: &str) {
+        for record in &mut snapshot.capabilities {
+            if record.version == version {
+                record.status = Some(PublicRecordStatus::Revoked);
+                record.revocation = Some(traverse_registry::PublicRevocation {
+                    reason: "license withdrawn".to_string(),
+                    evidence_url: "https://example.test/evidence".to_string(),
+                    revoked_at: "2026-10-01T00:00:00Z".to_string(),
+                });
+            }
+        }
+    }
+
+    fn with_model_rights(snapshot: &mut SyncedPublicRegistryState, derivatives: &str) {
+        for record in &mut snapshot.capabilities {
+            record.ai = Some(
+                serde_json::from_value(json!({
+                    "model_backed": true,
+                    "models": [{
+                        "id": "audio.yamnet",
+                        "spdx_expression": "Apache-2.0",
+                        "attribution_required": true,
+                        "source_url": "https://example.test/commit/abc",
+                        "commercial_use": "allowed",
+                        "redistribution": "allowed",
+                        "derivatives": derivatives
+                    }]
+                }))
+                .expect("ai fixture"),
+            );
+        }
+    }
+
+    #[test]
+    fn range_skips_revoked_versions() {
+        let cache = unique_cache();
+        let (mut snapshot, mut fetcher, reference) = sample_snapshot(false);
+        revoke(&mut snapshot, "1.2.0");
+        fetcher.assets.insert(
+            "https://example.test/older.wasm".to_string(),
+            b"older".to_vec(),
+        );
+        fetcher.assets.insert(
+            "https://example.test/older.json".to_string(),
+            b"older-contract".to_vec(),
+        );
+        let evidence = prepare(&cache, &snapshot, &reference, &fetcher).expect("prepare");
+        assert_eq!(evidence.selected_version, "1.0.0");
+    }
+
+    #[test]
+    fn exact_pin_to_revoked_version_fails_closed_with_revocation_record() {
+        let cache = unique_cache();
+        let (mut snapshot, fetcher, mut reference) = sample_snapshot(false);
+        revoke(&mut snapshot, "1.2.0");
+        reference.version_range = "=1.2.0".to_string();
+        let failure = prepare(&cache, &snapshot, &reference, &fetcher).expect_err("revoked");
+        assert_eq!(
+            failure.code,
+            RegistryCacheErrorCode::RegistryDependencyRevoked
+        );
+        assert_eq!(failure.code.as_str(), "registry_dependency_revoked");
+        assert!(failure.message.contains("demo:greet@1.2.0 is revoked"));
+        assert!(failure.message.contains("license withdrawn"));
+        assert!(cache.root.join("sha256").read_dir().is_err());
+    }
+
+    #[test]
+    fn only_revoked_versions_in_range_fail_with_their_versions() {
+        let cache = unique_cache();
+        let (mut snapshot, fetcher, mut reference) = sample_snapshot(false);
+        revoke(&mut snapshot, "1.2.0");
+        revoke(&mut snapshot, "1.0.0");
+        reference.version_range = "=1".to_string();
+        let failure = prepare(&cache, &snapshot, &reference, &fetcher).expect_err("revoked");
+        assert_eq!(
+            failure.code,
+            RegistryCacheErrorCode::RegistryDependencyRevoked
+        );
+        assert!(failure.message.contains("(revoked: 1.0.0, 1.2.0)"));
+    }
+
+    #[test]
+    fn conditional_rights_need_host_opt_in_and_unknown_is_denied() {
+        let (mut snapshot, fetcher, reference) = sample_snapshot(false);
+        with_model_rights(&mut snapshot, "conditional");
+        let failure = prepare(&unique_cache(), &snapshot, &reference, &fetcher)
+            .expect_err("conditional denied by default");
+        assert_eq!(
+            failure.code,
+            RegistryCacheErrorCode::ModelRightsConditionalDenied
+        );
+        assert_eq!(failure.code.as_str(), "model_rights_conditional_denied");
+        let evidence = prepare_with_policy(
+            &unique_cache(),
+            &snapshot,
+            &reference,
+            &fetcher,
+            ModelRightsPolicy {
+                allow_conditional: true,
+            },
+        )
+        .expect("host opt-in allows conditional");
+        assert_eq!(evidence.selected_version, "1.2.0");
+
+        with_model_rights(&mut snapshot, "unknown");
+        let failure = prepare_with_policy(
+            &unique_cache(),
+            &snapshot,
+            &reference,
+            &fetcher,
+            ModelRightsPolicy {
+                allow_conditional: true,
+            },
+        )
+        .expect_err("unknown denied");
+        assert_eq!(
+            failure.code,
+            RegistryCacheErrorCode::ModelRightsUnknownDenied
+        );
+        assert_eq!(failure.code.as_str(), "model_rights_unknown_denied");
     }
 
     #[test]

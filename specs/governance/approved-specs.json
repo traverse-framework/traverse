@@ -479,7 +479,7 @@
     },
     {
       "id": "045-governed-model-dependency-resolution",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/045-governed-model-dependency-resolution/spec.md",
