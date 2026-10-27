@@ -157,7 +157,7 @@ jobs:
           echo "MCP_RELEASE_TAG=${mcp_tag}" >> "$GITHUB_ENV"
 
       - name: Download archives
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: mcp-*
