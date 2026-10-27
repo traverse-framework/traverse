@@ -66,12 +66,21 @@ traverse-cli registry sync   --workspace local-default --json   # pull the index
 traverse-cli registry search price --workspace local-default --json
 traverse-cli registry search price --workspace local-default --commercial-use allowed --json
 traverse-cli registry list   --workspace local-default --json
+traverse-cli registry inspect audio-event-gate --workspace local-default --json   # model rights + status
+traverse-cli registry search audio --workspace local-default --status active --model-commercial-use allowed --json
 ```
 
 Licensing filters (`--commercial-use`, `--redistribution`) project Registry
 spec [`025-capability-licensing-metadata`](https://github.com/traverse-framework/registry/blob/main/specs/025-capability-licensing-metadata/spec.md)
 fields from the synced index. Declarative only — `unknown` / `conditional` /
 `forbidden` are never treated as permission.
+
+`registry inspect` shows each version's lifecycle status (`active` /
+`deprecated` / `revoked`, with the revocation record) and the full model
+rights record from Registry spec
+[`026-model-rights-compliance`](https://github.com/traverse-framework/registry/blob/main/specs/026-model-rights-compliance/spec.md).
+Undeclared fields print as `not stated`. `--status` and
+`--model-commercial-use` filter search on the same fields.
 
 Find `core.calculate-price@1.1.0`, compose it into a workflow, done. What you
 *don't* spend tokens or review cycles on:

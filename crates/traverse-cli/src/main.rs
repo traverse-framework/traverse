@@ -14,6 +14,7 @@ mod model_cli;
 mod model_packaging;
 #[cfg(test)]
 mod registry_resolution_diagnostics;
+mod registry_rights;
 mod supply_chain;
 mod telemetry;
 mod workflow_authoring;
@@ -128,6 +129,15 @@ enum Command {
         namespace: Option<String>,
         commercial_use: Option<String>,
         redistribution: Option<String>,
+        status: Option<String>,
+        model_commercial_use: Option<String>,
+        json_output: bool,
+    },
+    RegistryInspect {
+        capability_id: String,
+        workspace_id: String,
+        namespace: Option<String>,
+        version: Option<String>,
         json_output: bool,
     },
     RegistryMaterialize {
@@ -438,6 +448,7 @@ fn run_command(command: Command) -> Result<String, CliError> {
         command @ (Command::RegistrySync { .. }
         | Command::RegistryList { .. }
         | Command::RegistrySearch { .. }
+        | Command::RegistryInspect { .. }
         | Command::RegistryMaterialize { .. }
         | Command::RegistryPreparePublicBundle { .. }) => run_registry_command(command),
         Command::CapabilityPublish {
@@ -596,13 +607,32 @@ fn run_registry_command(command: Command) -> Result<String, CliError> {
             namespace,
             commercial_use,
             redistribution,
+            status,
+            model_commercial_use,
             json_output,
         } => registry_search(
             &query,
             &workspace_id,
             namespace.as_deref(),
-            commercial_use.as_deref(),
-            redistribution.as_deref(),
+            &RegistryRightsFilters {
+                commercial_use: commercial_use.as_deref(),
+                redistribution: redistribution.as_deref(),
+                status: status.as_deref(),
+                model_commercial_use: model_commercial_use.as_deref(),
+            },
+            json_output,
+        ),
+        Command::RegistryInspect {
+            capability_id,
+            workspace_id,
+            namespace,
+            version,
+            json_output,
+        } => registry_inspect(
+            &capability_id,
+            &workspace_id,
+            namespace.as_deref(),
+            version.as_deref(),
             json_output,
         ),
         Command::RegistryMaterialize {
@@ -1217,6 +1247,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         (Some("registry"), Some("sync")) => parse_registry_sync_command(args),
         (Some("registry"), Some("list")) => parse_registry_list_command(args),
         (Some("registry"), Some("search")) => parse_registry_search_command(args),
+        (Some("registry"), Some("inspect")) => parse_registry_inspect_command(args),
         (Some("registry"), Some("materialize")) => parse_registry_materialize_command(args),
         (Some("registry"), Some("prepare-public-bundle")) => {
             parse_registry_prepare_public_bundle_command(args)
@@ -1259,6 +1290,7 @@ fn subcommand_help(family: Option<&str>, subcommand: Option<&str>) -> String {
         (Some("registry"), Some("sync")) => help_registry_sync(),
         (Some("registry"), Some("list")) => help_registry_list(),
         (Some("registry"), Some("search")) => help_registry_search(),
+        (Some("registry"), Some("inspect")) => help_registry_inspect(),
         (Some("registry"), _) => help_registry(),
         (Some("component"), Some("new")) => help_component_new(),
         (Some("component"), _) => help_component(),
@@ -1516,7 +1548,7 @@ fn help_registry_list() -> String {
 }
 
 fn help_registry_search() -> String {
-    "traverse-cli registry search <query> --workspace <workspace-id> [--namespace <value>] [--commercial-use <value>] [--redistribution <value>] [--json]
+    "traverse-cli registry search <query> --workspace <workspace-id> [--namespace <value>] [--commercial-use <value>] [--redistribution <value>] [--status <value>] [--model-commercial-use <value>] [--json]
 
   Purpose:
     Search capability namespace and ID fields in the locally synced public
@@ -1536,10 +1568,44 @@ fn help_registry_search() -> String {
                        Filter by capability commercial-use rights.
     --redistribution <allowed|forbidden|conditional|unknown>
                        Filter by capability redistribution rights.
+    --status <active|deprecated|revoked>
+                       Filter by lifecycle status (registry spec 026).
+    --model-commercial-use <allowed|forbidden|conditional|unknown>
+                       Keep capabilities with at least one ai.models entry
+                       declaring this commercial_use (registry spec 026).
+                       Legacy and undeclared models never match.
     --json             Emit machine-readable discovery evidence.
 
   Example:
     traverse-cli registry search process --workspace local-default --commercial-use allowed --json"
+        .to_string()
+}
+
+fn help_registry_inspect() -> String {
+    "traverse-cli registry inspect <capability-id> --workspace <workspace-id> [--namespace <value>] [--version <value>] [--json]
+
+  Purpose:
+    Show the lifecycle status (active|deprecated|revoked, with the revocation
+    record when revoked) and the full model rights record of every synced
+    version of one capability (registry spec 026): SPDX expression,
+    commercial_use/redistribution/derivatives, derived usage_class, pinned
+    LICENSE and NOTICE files, derivation, data_obligations and verification
+    status. Fields the publisher did not declare print as `not stated`;
+    legacy string[] models print as `not recorded (legacy shape)`. This is
+    declared metadata, never a permission decision. Reads local synced state
+    only.
+
+  Required arguments and flags:
+    <capability-id>    Exact capability ID.
+    --workspace <id>   Local workspace containing synced registry state.
+
+  Optional flags:
+    --namespace <id>   Restrict to one namespace.
+    --version <value>  Restrict to one exact version.
+    --json             Emit machine-readable output.
+
+  Example:
+    traverse-cli registry inspect audio-event-gate --workspace local-default --json"
         .to_string()
 }
 
@@ -1550,6 +1616,7 @@ fn help_registry() -> String {
     sync --workspace <id> --json   Sync the public registry index locally.
     list --workspace <id>           List locally synced capability pointers.
     search <query> --workspace <id> Search locally synced capability pointers.
+    inspect <id> --workspace <id>   Show lifecycle status and model rights.
 
   Run `traverse-cli registry <subcommand> --help` for subcommand-specific help."
         .to_string()
@@ -2315,9 +2382,19 @@ fn parse_registry_search_command(args: &[String]) -> Result<Command, String> {
         .ok_or_else(|| "registry search requires --workspace <workspace-id>".to_string())?;
     let commercial_use = parse_string_flag(args, "--commercial-use");
     let redistribution = parse_string_flag(args, "--redistribution");
+    let model_commercial_use = parse_string_flag(args, "--model-commercial-use");
+    let status = parse_string_flag(args, "--status");
+    if let Some(v) = status.as_deref()
+        && !registry_rights::STATUS_VALUES.contains(&v)
+    {
+        return Err(format!(
+            "--status must be one of active|deprecated|revoked, got {v:?}"
+        ));
+    }
     for (name, value) in [
         ("--commercial-use", commercial_use.as_deref()),
         ("--redistribution", redistribution.as_deref()),
+        ("--model-commercial-use", model_commercial_use.as_deref()),
     ] {
         if let Some(v) = value {
             match v {
@@ -2336,6 +2413,25 @@ fn parse_registry_search_command(args: &[String]) -> Result<Command, String> {
         namespace: parse_string_flag(args, "--namespace"),
         commercial_use,
         redistribution,
+        status,
+        model_commercial_use,
+        json_output: args.iter().any(|arg| arg == "--json"),
+    })
+}
+
+fn parse_registry_inspect_command(args: &[String]) -> Result<Command, String> {
+    let capability_id = args
+        .get(3)
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+        .ok_or_else(|| "registry inspect requires <capability-id>".to_string())?;
+    let workspace_id = parse_string_flag(args, "--workspace")
+        .ok_or_else(|| "registry inspect requires --workspace <workspace-id>".to_string())?;
+    Ok(Command::RegistryInspect {
+        capability_id,
+        workspace_id,
+        namespace: parse_string_flag(args, "--namespace"),
+        version: parse_string_flag(args, "--version"),
         json_output: args.iter().any(|arg| arg == "--json"),
     })
 }
@@ -4386,18 +4482,27 @@ fn registry_list(
         namespace,
         id_prefix,
         None,
-        None,
-        None,
+        &RegistryRightsFilters::default(),
         json_output,
     )
+}
+
+/// Optional `registry search` filters over the synced rights projection:
+/// Spec 025 capability rights plus Spec 055 FR-017 lifecycle status and
+/// model commercial-use rights.
+#[derive(Default)]
+struct RegistryRightsFilters<'a> {
+    commercial_use: Option<&'a str>,
+    redistribution: Option<&'a str>,
+    status: Option<&'a str>,
+    model_commercial_use: Option<&'a str>,
 }
 
 fn registry_search(
     query: &str,
     workspace_id: &str,
     namespace: Option<&str>,
-    commercial_use: Option<&str>,
-    redistribution: Option<&str>,
+    filters: &RegistryRightsFilters<'_>,
     json_output: bool,
 ) -> Result<String, CliError> {
     registry_discover(
@@ -4405,10 +4510,19 @@ fn registry_search(
         namespace,
         None,
         Some(query),
-        commercial_use,
-        redistribution,
+        filters,
         json_output,
     )
+}
+
+fn load_synced_registry_state(
+    workspace_id: &str,
+) -> Result<traverse_registry::SyncedPublicRegistryState, CliError> {
+    let base_dir = env::current_dir().map_err(|error| {
+        CliError::IoError(format!("failed to resolve current directory: {error}"))
+    })?;
+    traverse_registry::load_synced_public_registry_state(&base_dir, workspace_id)
+        .map_err(|failure| registry_discovery_state_error(&failure))
 }
 
 fn registry_discover(
@@ -4416,15 +4530,10 @@ fn registry_discover(
     namespace: Option<&str>,
     id_prefix: Option<&str>,
     query: Option<&str>,
-    commercial_use: Option<&str>,
-    redistribution: Option<&str>,
+    filters: &RegistryRightsFilters<'_>,
     json_output: bool,
 ) -> Result<String, CliError> {
-    let base_dir = env::current_dir().map_err(|error| {
-        CliError::IoError(format!("failed to resolve current directory: {error}"))
-    })?;
-    let state = traverse_registry::load_synced_public_registry_state(&base_dir, workspace_id)
-        .map_err(|failure| registry_discovery_state_error(&failure))?;
+    let state = load_synced_registry_state(workspace_id)?;
     let query = query.map(str::to_lowercase);
     let mut records = state
         .capabilities
@@ -4437,8 +4546,26 @@ fn registry_discover(
                     || record.id.to_lowercase().contains(value)
             })
         })
-        .filter(|record| commercial_use.is_none_or(|value| record.commercial_use == value))
-        .filter(|record| redistribution.is_none_or(|value| record.redistribution == value))
+        .filter(|record| {
+            filters
+                .commercial_use
+                .is_none_or(|value| record.commercial_use == value)
+        })
+        .filter(|record| {
+            filters
+                .redistribution
+                .is_none_or(|value| record.redistribution == value)
+        })
+        .filter(|record| {
+            filters
+                .status
+                .is_none_or(|value| registry_rights::matches_status(record, value))
+        })
+        .filter(|record| {
+            filters
+                .model_commercial_use
+                .is_none_or(|value| registry_rights::matches_model_commercial_use(record, value))
+        })
         .collect::<Vec<_>>();
     records.sort_by(registry_record_order);
 
@@ -4458,6 +4585,7 @@ fn registry_discover(
                 "digest": record.digest,
                 "yanked": false,
                 "deprecated": record.deprecated,
+                "status": registry_rights::status_label(record.lifecycle_status()),
                 "license_expression": record.license_expression,
                 "commercial_use": record.commercial_use,
                 "redistribution": record.redistribution,
@@ -4488,6 +4616,69 @@ fn registry_discover(
             CliError::IoError(format!(
                 "failed to render registry discovery output: {error}"
             ))
+        })?;
+    }
+    Ok(output)
+}
+
+fn registry_inspect(
+    capability_id: &str,
+    workspace_id: &str,
+    namespace: Option<&str>,
+    version: Option<&str>,
+    json_output: bool,
+) -> Result<String, CliError> {
+    let state = load_synced_registry_state(workspace_id)?;
+    let mut records = state
+        .capabilities
+        .into_iter()
+        .filter(|record| record.id == capability_id)
+        .filter(|record| namespace.is_none_or(|value| record.namespace == value))
+        .filter(|record| version.is_none_or(|value| record.version == value))
+        .collect::<Vec<_>>();
+    if records.is_empty() {
+        return Err(CliError::ValidationFailed(format!(
+            "registry_capability_not_found: no synced record for {capability_id}{}{}",
+            namespace.map_or(String::new(), |value| format!(" in namespace {value}")),
+            version.map_or(String::new(), |value| format!(" at version {value}")),
+        )));
+    }
+    records.sort_by(registry_record_order);
+
+    if json_output {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "status": "ok",
+            "workspace": state.workspace_id,
+            "source_release": state.release_tag,
+            "index_version": state.index_version,
+            "records": records.iter().map(|record| {
+                let mut entry = serde_json::json!({
+                    "namespace": record.namespace,
+                    "id": record.id,
+                    "version": record.version,
+                    "digest": record.digest,
+                    "contract_url": record.contract_url,
+                });
+                if let (Some(entry), Value::Object(rights)) = (
+                    entry.as_object_mut(),
+                    registry_rights::record_rights_json(record),
+                ) {
+                    entry.extend(rights);
+                }
+                entry
+            }).collect::<Vec<_>>(),
+        }))
+        .map_err(|error| {
+            CliError::IoError(format!(
+                "failed to serialize registry inspect output: {error}"
+            ))
+        });
+    }
+
+    let mut output = String::new();
+    for record in &records {
+        registry_rights::render_record_rights(record, &mut output).map_err(|error| {
+            CliError::IoError(format!("failed to render registry inspect output: {error}"))
         })?;
     }
     Ok(output)
@@ -8586,24 +8777,24 @@ mod tests {
         AppValidationError, ArtifactRouter, CapabilityPublishRequest, CapabilityRegistry, CliError,
         Command, DEFAULT_PUBLIC_REGISTRY_SOURCE, DEFAULT_REGISTRY_REPO, ExpeditionExampleExecutor,
         FetchedRegistryIndex, PublishCommandOutput, PublishProcessRunner, RealPublishProcessRunner,
-        RegistryIndexFetcher, RegistrySyncError, Runtime, RuntimeResultStatus,
-        SUPPORTED_HOST_ABI_VERSION, app_activate_at, app_activation_state_path, app_new_at,
-        app_register_at, app_registration_state_path, app_validate, app_validate_at,
-        canonical_expedition_bundle_path, capability_new_at, capability_publish_at,
-        capability_publish_plan, component_new, curl_bytes, curl_text, discover_capabilities,
-        encode_hex, enforce_contract_surface_coverage, enforce_persona_refs_resolve,
-        ensure_clean_registry_checkout, execute_capability_package, execute_expedition,
-        execute_traverse_starter_process, execute_traverse_starter_summarize,
+        RegistryIndexFetcher, RegistryRightsFilters, RegistrySyncError, Runtime,
+        RuntimeResultStatus, SUPPORTED_HOST_ABI_VERSION, app_activate_at,
+        app_activation_state_path, app_new_at, app_register_at, app_registration_state_path,
+        app_validate, app_validate_at, canonical_expedition_bundle_path, capability_new_at,
+        capability_publish_at, capability_publish_plan, component_new, curl_bytes, curl_text,
+        discover_capabilities, encode_hex, enforce_contract_surface_coverage,
+        enforce_persona_refs_resolve, ensure_clean_registry_checkout, execute_capability_package,
+        execute_expedition, execute_traverse_starter_process, execute_traverse_starter_summarize,
         execute_traverse_starter_validate, fetch_signature_with_head_fallback,
-        format_capability_package_execution_summary, help_expedition_execute, help_serve,
-        inspect_bundle, inspect_capability, inspect_capability_package, inspect_event,
-        inspect_trace, latest_index_release_asset, load_artifact_state, load_capability_package,
-        load_governed_public_bundle_with_artifacts, load_registered_bundle,
-        load_registered_bundle_with_public_records, load_runtime_request,
+        format_capability_package_execution_summary, help_expedition_execute, help_registry,
+        help_registry_inspect, help_serve, inspect_bundle, inspect_capability,
+        inspect_capability_package, inspect_event, inspect_trace, latest_index_release_asset,
+        load_artifact_state, load_capability_package, load_governed_public_bundle_with_artifacts,
+        load_registered_bundle, load_registered_bundle_with_public_records, load_runtime_request,
         materialize_ed25519_signature, materialize_registry_artifacts, parse_command,
         prepare_public_registry_bundle, publish_file_sha256_digest, register_bundle,
-        register_generated_app_bundle, registry_record_order, registry_search, registry_sync_at,
-        registry_sync_default_or_override, registry_sync_failure_json,
+        register_generated_app_bundle, registry_inspect, registry_record_order, registry_search,
+        registry_sync_at, registry_sync_default_or_override, registry_sync_failure_json,
         reject_private_contract_scope, replace_prepared_bundle, run_command, run_serve,
         safe_artifact_path_component, sha256_hex, signature_sibling_url,
         surface_coverage_gap_messages, telemetry, uncovered_action_enum_values,
@@ -9098,8 +9289,11 @@ mod tests {
             "price",
             "local-default",
             None,
-            Some("allowed"),
-            Some("allowed"),
+            &RegistryRightsFilters {
+                commercial_use: Some("allowed"),
+                redistribution: Some("allowed"),
+                ..RegistryRightsFilters::default()
+            },
             true,
         );
         env::set_current_dir(&previous).expect("restore cwd");
@@ -9118,8 +9312,10 @@ mod tests {
             "price",
             "local-default",
             None,
-            Some("forbidden"),
-            None,
+            &RegistryRightsFilters {
+                commercial_use: Some("forbidden"),
+                ..RegistryRightsFilters::default()
+            },
             false,
         );
         env::set_current_dir(&previous).expect("restore cwd");
@@ -9128,6 +9324,254 @@ mod tests {
         assert!(!human.contains("price-allowed"));
         assert!(!human.contains("price-unknown"));
         assert!(!human.contains("price-conditional"));
+    }
+
+    fn model_rights_fixture_record(
+        version: &str,
+        commercial_use: &str,
+    ) -> PublicRegistryCapabilityRecord {
+        let mut record = registry_record_fixture("demo", "audio-gate", version);
+        record.ai = Some(
+            serde_json::from_value(serde_json::json!({
+                "model_backed": true,
+                "models": [{
+                    "id": "audio.yamnet",
+                    "spdx_expression": "Apache-2.0",
+                    "attribution_required": true,
+                    "source_url": "https://example.test/commit/0123456789abcdef",
+                    "commercial_use": commercial_use,
+                    "redistribution": "allowed",
+                    "derivatives": "allowed",
+                    "license_files": [{"url": "https://example.test/LICENSE", "sha256": "aa"}],
+                    "derivation": null,
+                    "verification": {"status": "maintainer-declared"}
+                }]
+            }))
+            .expect("ai fixture"),
+        );
+        record
+    }
+
+    fn write_model_rights_fixture_state(state_root: &Path) {
+        let active = model_rights_fixture_record("1.1.0", "allowed");
+        let mut revoked = model_rights_fixture_record("1.0.0", "allowed");
+        revoked.status = Some(traverse_registry::PublicRecordStatus::Revoked);
+        revoked.revocation = Some(traverse_registry::PublicRevocation {
+            reason: "license withdrawn".to_string(),
+            evidence_url: "https://example.test/evidence".to_string(),
+            revoked_at: "2026-10-01T00:00:00Z".to_string(),
+        });
+        let conditional = model_rights_fixture_record("1.2.0", "conditional");
+        let mut legacy = registry_record_fixture("demo", "legacy-agent", "1.0.0");
+        legacy.ai = Some(
+            serde_json::from_value(serde_json::json!({
+                "model_backed": true,
+                "models": ["old-model"]
+            }))
+            .expect("legacy ai fixture"),
+        );
+        write_synced_public_registry_state(
+            state_root,
+            "local-default",
+            "fixture-registry",
+            "fixture-v1",
+            "2026-10-27T00:00:00Z",
+            PublicRegistryIndex {
+                index_version: 1,
+                generated_at: "2026-10-27T00:00:00Z".to_string(),
+                source_commit: None,
+                capabilities: vec![active, revoked, conditional, legacy],
+                events: Vec::new(),
+            },
+        )
+        .expect("synced model rights fixture should persist");
+    }
+
+    #[test]
+    fn registry_inspect_round_trips_spec_026_rights_through_synced_state() {
+        let state_root = unique_temp_dir();
+        write_model_rights_fixture_state(&state_root);
+        let previous = env::current_dir().expect("current dir");
+        env::set_current_dir(&state_root).expect("chdir into fixture root");
+        let json_output = registry_inspect("audio-gate", "local-default", None, None, true);
+        let json_again = registry_inspect("audio-gate", "local-default", None, None, true);
+        let human = registry_inspect(
+            "audio-gate",
+            "local-default",
+            Some("demo"),
+            Some("1.0.0"),
+            false,
+        );
+        let legacy = registry_inspect("legacy-agent", "local-default", None, None, false);
+        let missing = registry_inspect("audio-gate", "local-default", None, Some("9.9.9"), true);
+        env::set_current_dir(&previous).expect("restore cwd");
+
+        let json_output = json_output.expect("inspect json");
+        assert_eq!(json_output, json_again.expect("inspect json again"));
+        let json: Value = serde_json::from_str(&json_output).expect("json inspect output");
+        let records = json["records"].as_array().expect("records");
+        let versions = records
+            .iter()
+            .map(|record| record["version"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(versions, vec!["1.2.0", "1.1.0", "1.0.0"]);
+        assert_eq!(records[0]["models"][0]["usage_class"], "conditional");
+        assert_eq!(records[1]["status"], "active");
+        assert_eq!(records[1]["models"][0]["usage_class"], "unrestricted");
+        assert_eq!(records[1]["models"][0]["license_files"][0]["sha256"], "aa");
+        assert_eq!(records[1]["models"][0]["data_obligations"], "not stated");
+        assert_eq!(records[2]["status"], "revoked");
+        assert_eq!(records[2]["revocation"]["reason"], "license withdrawn");
+
+        let human = human.expect("inspect human");
+        assert!(human.starts_with("demo:audio-gate@1.0.0\n  status: revoked\n"));
+        assert!(human.contains("derivation: verbatim"));
+        assert!(!human.contains("1.1.0"));
+        assert!(
+            legacy
+                .expect("legacy inspect")
+                .contains("rights: not recorded (legacy shape)")
+        );
+        let missing = missing.expect_err("unknown version must fail");
+        assert!(format!("{missing:?}").contains("registry_capability_not_found"));
+    }
+
+    #[test]
+    fn registry_search_filters_by_status_and_model_commercial_use() {
+        let state_root = unique_temp_dir();
+        write_model_rights_fixture_state(&state_root);
+        let previous = env::current_dir().expect("current dir");
+        env::set_current_dir(&state_root).expect("chdir into fixture root");
+        let revoked = registry_search(
+            "demo",
+            "local-default",
+            None,
+            &RegistryRightsFilters {
+                status: Some("revoked"),
+                ..RegistryRightsFilters::default()
+            },
+            true,
+        );
+        let conditional = registry_search(
+            "audio",
+            "local-default",
+            None,
+            &RegistryRightsFilters {
+                model_commercial_use: Some("conditional"),
+                status: Some("active"),
+                commercial_use: Some("unknown"),
+                ..RegistryRightsFilters::default()
+            },
+            true,
+        );
+        let allowed_models = registry_search(
+            "demo",
+            "local-default",
+            None,
+            &RegistryRightsFilters {
+                model_commercial_use: Some("allowed"),
+                ..RegistryRightsFilters::default()
+            },
+            false,
+        );
+        env::set_current_dir(&previous).expect("restore cwd");
+
+        let revoked: Value = serde_json::from_str(&revoked.expect("status filter")).expect("json");
+        let revoked = revoked["records"].as_array().expect("records");
+        assert_eq!(revoked.len(), 1);
+        assert_eq!(revoked[0]["version"], "1.0.0");
+        assert_eq!(revoked[0]["status"], "revoked");
+
+        let conditional: Value =
+            serde_json::from_str(&conditional.expect("model filter")).expect("json");
+        let conditional = conditional["records"].as_array().expect("records");
+        assert_eq!(conditional.len(), 1);
+        assert_eq!(conditional[0]["version"], "1.2.0");
+
+        let allowed_models = allowed_models.expect("allowed model filter");
+        assert!(allowed_models.contains("audio-gate\t1.1.0"));
+        assert!(allowed_models.contains("audio-gate\t1.0.0"));
+        assert!(!allowed_models.contains("legacy-agent"));
+        assert!(!allowed_models.contains("1.2.0"));
+    }
+
+    #[test]
+    fn parse_registry_inspect_and_rights_filters() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(matches!(
+            parse_command(&args(&[
+                "traverse-cli", "registry", "inspect", "audio-gate", "--workspace", "w",
+                "--namespace", "demo", "--version", "1.0.0", "--json",
+            ])),
+            Ok(Command::RegistryInspect { capability_id, namespace: Some(_), version: Some(_), json_output: true, .. })
+                if capability_id == "audio-gate"
+        ));
+        assert!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "inspect",
+                "--workspace",
+                "w"
+            ]))
+            .is_err_and(|err| err.contains("requires <capability-id>"))
+        );
+        assert!(
+            parse_command(&args(&["traverse-cli", "registry", "inspect", "x"]))
+                .is_err_and(|err| err.contains("requires --workspace"))
+        );
+        assert!(matches!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "search",
+                "q",
+                "--workspace",
+                "w",
+                "--status",
+                "revoked",
+                "--model-commercial-use",
+                "conditional",
+            ])),
+            Ok(Command::RegistrySearch {
+                status: Some(_),
+                model_commercial_use: Some(_),
+                ..
+            })
+        ));
+        assert!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "search",
+                "q",
+                "--workspace",
+                "w",
+                "--status",
+                "gone",
+            ]))
+            .is_err_and(|err| err.contains("--status must be one of"))
+        );
+        assert!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "search",
+                "q",
+                "--workspace",
+                "w",
+                "--model-commercial-use",
+                "maybe",
+            ]))
+            .is_err_and(|err| err.contains("--model-commercial-use must be one of"))
+        );
+        assert!(help_registry_inspect().contains("not recorded (legacy shape)"));
+        assert!(help_registry().contains("inspect <id>"));
     }
 
     #[test]

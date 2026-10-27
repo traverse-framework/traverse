@@ -2,7 +2,7 @@
 
 **Feature Branch**: `055-registry-sync`
 **Created**: 2026-07-06
-**Status**: Approved
+**Status**: Approved — v1.1.0 model-rights inspection amend (#1727, registry spec 026) approved 2026-10-27
 **Input**: GitHub issue #542, registry decision log entries 6-7, registry specs `001-registry-foundation` and `003-index-release-pipeline`, and Traverse spec `054-public-scope-registry-ref`.
 
 ## Purpose
@@ -24,6 +24,11 @@ Traverse MUST provide `traverse-cli registry sync` so a workspace can consume th
 - **FR-011**: Sync MUST fetch the index only. It MUST NOT download all WASM artifacts eagerly.
 - **FR-012**: Artifact download for `registry_ref` dependencies happens at app-registration time under `054-public-scope-registry-ref`.
 - **FR-013**: The command MUST support a JSON output mode suitable for CI and downstream automation.
+- **FR-014** *(v1.1.0, #1727)*: Sync MUST keep, unchanged in the synced state, the registry spec 026 (`026-model-rights-compliance`) fields that the index carries: each record's `ai` declaration (including every `ai.models` rights record), `status`, `model_usage`, and `revocation`. Index rows that predate spec 026 MUST still sync.
+- **FR-015** *(v1.1.0, #1727)*: `traverse-cli registry inspect <capability-id> --workspace <id> [--namespace] [--version] [--json]` MUST show, for every matching synced version (newest first), the lifecycle status (`active|deprecated|revoked`, taken from the index `status` or else the legacy `deprecated` flag), the revocation record when one exists, and for each object-shaped `ai.models` entry: `spdx_expression`, `attribution_required`, `commercial_use`, `redistribution`, `derivatives`, the derived `usage_class`, the pinned LICENSE and NOTICE files with their sha256, `derivation`, `data_obligations`, and `verification.status`. A field the publisher did not declare MUST print as `not stated`; it MUST NOT print as `none` or as a permission value. When no synced record matches, the command MUST fail with `registry_capability_not_found`.
+- **FR-016** *(v1.1.0, #1727)*: A legacy `string[]` `ai.models` entry MUST be shown as `not recorded (legacy shape)` and MUST NOT cause an error.
+- **FR-017** *(v1.1.0, #1727)*: `traverse-cli registry search` MUST accept `--status <active|deprecated|revoked>` and `--model-commercial-use <allowed|forbidden|conditional|unknown>`. The second keeps capabilities with at least one object-shaped model declaring that value; legacy and undeclared models never match. These combine with the spec 025 `--commercial-use`/`--redistribution` capability filters, which keep their meaning. Search JSON records MUST include `status`. Inspect and search output is declared metadata only: no value is turned into a permission decision here, which stays with runtime policy.
+- **FR-018** *(v1.1.0, #1727)*: Inspect and search output MUST be deterministic: the same synced state gives byte-identical output.
 
 ## Command Shape
 
@@ -51,6 +56,9 @@ Successful JSON output MUST include at least:
 3. **Given** sync has completed, **When** runtime resolution of a public capability runs, **Then** no live network call is made.
 4. **Given** sync has never completed, **When** public-tier resolution is requested, **Then** the error code and message tell the operator to run `traverse-cli registry sync`.
 5. **Given** an app manifest uses `registry_ref`, **When** registration starts after sync, **Then** it resolves against the local public tier produced by sync.
+6. **Given** a synced index with a revoked version carrying a revocation record, **When** `registry inspect` runs, **Then** that version shows `status: revoked` and its revocation record, and every model rights field is shown.
+7. **Given** a model reference without `data_obligations`, **When** it is inspected, **Then** `data_obligations` shows `not stated`.
+8. **Given** synced versions with `allowed` and `conditional` model commercial-use rights, **When** `registry search --model-commercial-use conditional` runs, **Then** only the `conditional` version is returned.
 
 ## Out of Scope
 
@@ -58,3 +66,4 @@ Successful JSON output MUST include at least:
 - Team-shared private registry sources.
 - Eager artifact mirroring during sync.
 - Publication of new capabilities; that is governed by `056-capability-publish`.
+- Runtime enforcement of revoked versions or `conditional` rights, and contract-signature verification of the rights fields (tracked in #1728 and #1729).
