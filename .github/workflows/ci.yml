@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload rebuilt runtime.wasm on mismatch
         if: failure() && steps.rebuild.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runtime-wasm-linux-rebuild
           path: target/runtime-wasm-rebuild/
@@ -506,7 +506,7 @@ jobs:
 
       - name: Cache the emulator image and snapshot
         id: avd-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.android/avd/*

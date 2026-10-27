@@ -139,7 +139,7 @@ jobs:
         run: dotnet test TraverseEmbedder.Tests/TraverseEmbedder.Tests.csproj --configuration Release
 
       - name: Download the Windows native libraries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: dotnet-native-windows
           path: packages/dotnet/TraverseEmbedder/TraverseEmbedder/runtimes/

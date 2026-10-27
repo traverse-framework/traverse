@@ -157,7 +157,7 @@ jobs:
           echo "MCP_RELEASE_TAG=${mcp_tag}" >> "$GITHUB_ENV"
 
       - name: Download archives
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: mcp-*
@@ -173,7 +173,7 @@ jobs:
           ls -la
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
