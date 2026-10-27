@@ -37,6 +37,15 @@ Native (`ExactModelHostConnector`) and browser (`ExactModelBrowserHost`)
 run the same signed package and produce byte-identical output for the
 checked-in conformance vector.
 
+### Product path for model math (ADR-0083 / Decision 117, `#1657`)
+
+On Browser and Node, **model-backed** capabilities (ONNX guests, HF-scale
+NER/VAD/transcription packaged as Spec 138) must run on this direct
+WebAssembly path. Nested wasmi inside `runtime.wasm` via
+`BundleEmbedder.submit` remains for non-model bundled capabilities only —
+it is ~50–80× slower for dense model math. See
+[`docs/perf/nested-vs-direct-wasm-1657.md`](perf/nested-vs-direct-wasm-1657.md).
+
 ### Core ML on Apple hosts (Spec 138 0.13.4, ADR-0082)
 
 A package can also carry a signed `coreml` variant (see

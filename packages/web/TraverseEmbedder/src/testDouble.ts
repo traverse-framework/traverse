@@ -6,7 +6,13 @@
  * no business logic.
  */
 import { EmbedderCore } from "./core.js";
-import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
+import {
+  EMBEDDED_TRACE_API_VERSION,
+  cancelledSubmitError,
+  embedderError,
+  runtimeStoppedError,
+  yieldToEventLoop,
+} from "./types.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
@@ -18,6 +24,7 @@ import type {
   AppCommandEnvelope,
   JsonValue,
   ShutdownOutcome,
+  SubmitAsyncOptions,
   SubmitOutcome,
   TraverseEmbedderApi,
 } from "./types.js";
@@ -153,6 +160,69 @@ export class EmbedderTestDouble implements TraverseEmbedderApi, EmbeddedTraceApi
       });
     }
     return { sessionId, status: "accepted", error: null };
+  }
+
+  submitAsync(
+    targetId: string,
+    input: JsonValue,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  submitAsync(
+    envelope: AppCommandEnvelope,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  async submitAsync(
+    targetIdOrEnvelope: string | AppCommandEnvelope,
+    inputOrOptions?: JsonValue | SubmitAsyncOptions,
+    maybeOptions?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome> {
+    const isEnvelope = typeof targetIdOrEnvelope !== "string";
+    const options = isEnvelope
+      ? (inputOrOptions as SubmitAsyncOptions | undefined)
+      : maybeOptions;
+    const signal = options?.signal;
+    const targetLabel = isEnvelope ? "app_command" : targetIdOrEnvelope;
+
+    await yieldToEventLoop();
+    if (signal?.aborted) {
+      return this.cancelledSubmit(targetLabel);
+    }
+
+    const outcome = isEnvelope
+      ? this.submit(targetIdOrEnvelope)
+      : this.submit(targetIdOrEnvelope, inputOrOptions as JsonValue);
+
+    if (signal?.aborted && outcome.status === "accepted") {
+      return this.cancelledSubmit(targetLabel, outcome.sessionId);
+    }
+    return outcome;
+  }
+
+  private cancelledSubmit(
+    targetId: string,
+    existingSessionId: string | null = null,
+  ): SubmitOutcome {
+    const sessionId = existingSessionId ?? this.core.nextSessionId();
+    const requestId = this.core.nextRequestId();
+    const executionId = `exec_${requestId}`;
+    const error = cancelledSubmitError();
+    this.core.recordTrace({
+      executionId,
+      targetId,
+      outcome: "cancelled",
+      phases: [{ code: "cancelled" }],
+      selectedTarget: { targetId, targetVersion: null },
+      placement: null,
+      failureCode: "cancelled",
+      stateMachineValid: true,
+    });
+    this.core.emit("error", sessionId, {
+      execution_id: executionId,
+      capability_id: targetId,
+      status: "cancelled",
+      error: { code: error.code, message: error.message, details: {} },
+    });
+    return { sessionId, status: "cancelled", error };
   }
 
   subscribe(callback: EventCallback): void {

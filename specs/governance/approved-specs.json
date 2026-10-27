@@ -1971,7 +1971,10 @@
         "tools/coreml/",
         "scripts/ci/coreml_variant_reconvert_check.sh",
         "crates/traverse-coreml-adapter/",
-        "docs/adr/0082-coreml-adapter-objc2-boundary.md"
+        "docs/adr/0082-coreml-adapter-objc2-boundary.md",
+        "docs/adr/0083-model-backed-direct-wasm-path.md",
+        "docs/perf/nested-vs-direct-wasm-1657.md",
+        "scripts/perf/direct-wasm-model-bench.mjs"
       ]
     },
     {
@@ -2054,7 +2057,9 @@
         "crates/traverse-runtime-wasm/",
         "docs/adr/0073-runtime-wasm-nested-executor-unsafe-boundary.md",
         "specs/139-embedder-app-state-machine-execution/",
-        "docs/adr/0075-embedder-app-state-machine-saga.md"
+        "docs/adr/0075-embedder-app-state-machine-saga.md",
+        "docs/adr/0083-model-backed-direct-wasm-path.md",
+        "docs/perf/nested-vs-direct-wasm-1657.md"
       ]
     }
   ]

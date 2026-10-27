@@ -2,6 +2,20 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Perf / API: model path routing + async cancellable submit (`#1657`)
+
+- ADR-0083 / Decision 117: model-backed Browser/Node work uses Spec 138
+  `ExactModelBrowserHost` (direct `WebAssembly`), not nested wasmi. Nested
+  `runtime.wasm` stays for non-model capabilities. Perf report:
+  `docs/perf/nested-vs-direct-wasm-1657.md`; harness
+  `scripts/perf/direct-wasm-model-bench.mjs` (lightweight fixtures by
+  default; HF packages via `TRAVERSE_PERF_FULL=1`).
+- `traverse-embedder-web`: `submitAsync` on `BundleEmbedder`,
+  `EmbedderTestDouble`, and `TraverseEmbedderApi` with optional
+  `AbortSignal`. Cancel returns `status: "cancelled"` and Trace API
+  phase/outcome `cancelled`. Sync `submit` unchanged for small work.
+- README: async API, Worker guidance, Spec 138 routing for model math.
+
 ## Feature: multi-IO ONNX packaging (`#1661`)
 
 - `model package-onnx` packages Hugging Face–style multi-input/multi-output

@@ -502,3 +502,31 @@ test("embedder-api 1.1.0: test double accepts app_command envelopes", () => {
   assert.equal(events.some((e) => e.event_type === "state_changed"), true);
   assert.equal(EMBEDDER_API_VERSION, "1.1.0");
 });
+
+test("submitAsync succeeds like submit for scripted targets", async () => {
+  const embedder = new EmbedderTestDouble().withTargetOutput("fixture.process", { ok: true });
+  const events = collectEvents(embedder);
+  const outcome = await embedder.submitAsync("fixture.process", { n: 1 });
+  assert.equal(outcome.status, "accepted");
+  assert.equal(outcome.error, null);
+  assert.equal(events.some((e) => e.event_type === "capability_result"), true);
+});
+
+test("submitAsync cancel before start returns structured cancellation + cancelled trace", async () => {
+  const embedder = new EmbedderTestDouble().withTargetOutput("fixture.process", { ok: true });
+  const events = collectEvents(embedder);
+  const ac = new AbortController();
+  ac.abort();
+  const outcome = await embedder.submitAsync("fixture.process", { n: 1 }, { signal: ac.signal });
+  assert.equal(outcome.status, "cancelled");
+  assert.equal(outcome.error?.code, "cancelled");
+  assert.ok(outcome.sessionId);
+  assert.equal(events.some((e) => e.event_type === "error" && e.data.status === "cancelled"), true);
+
+  const page = embedder.traceList(EMBEDDED_TRACE_API_VERSION, 10);
+  assert.equal(page.summaries[0].outcome, "cancelled");
+  const detail = embedder.traceGet(EMBEDDED_TRACE_API_VERSION, page.summaries[0].traceId);
+  assert.equal(detail.summary.outcome, "cancelled");
+  assert.deepEqual(detail.phases, [{ code: "cancelled" }]);
+  assert.equal(detail.failureCode, "cancelled");
+});

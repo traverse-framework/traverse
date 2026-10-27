@@ -36,7 +36,13 @@ import type {
 } from "./runtimeWasmHost.js";
 import { attestStatefulBrowserActivation } from "./statefulBrowserActivation.js";
 import { validatePayloadAgainstContract } from "./schemaValidate.js";
-import { EMBEDDED_TRACE_API_VERSION, embedderError, runtimeStoppedError } from "./types.js";
+import {
+  EMBEDDED_TRACE_API_VERSION,
+  cancelledSubmitError,
+  embedderError,
+  runtimeStoppedError,
+  yieldToEventLoop,
+} from "./types.js";
 import { wasmInitialMemoryBytes } from "./wasmMemory.js";
 import type {
   CompatibleLifecycleOutcome,
@@ -50,6 +56,7 @@ import type {
   ShutdownOutcome,
   AppCommandEnvelope,
   EmbedderEvent,
+  SubmitAsyncOptions,
   SubmitOutcome,
   TraverseEmbedderApi,
 } from "./types.js";
@@ -762,6 +769,111 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     );
   }
 
+  /**
+   * Async, cancellable submit (#1657). Yields once so `AbortSignal` can cancel
+   * before nested wasmi work starts. Prefer Spec 138 `ExactModelBrowserHost`
+   * (ADR-0083) for model-backed capabilities; keep sync `submit` for small
+   * nested capabilities. Long nested runs that must stay cancellable mid-flight
+   * should run this call inside a Worker (see README).
+   */
+  submitAsync(
+    targetId: string,
+    input: JsonValue,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  submitAsync(
+    envelope: AppCommandEnvelope,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  async submitAsync(
+    targetIdOrEnvelope: string | AppCommandEnvelope,
+    inputOrOptions?: JsonValue | SubmitAsyncOptions,
+    maybeOptions?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome> {
+    const isEnvelope = typeof targetIdOrEnvelope !== "string";
+    const options = isEnvelope
+      ? (inputOrOptions as SubmitAsyncOptions | undefined)
+      : maybeOptions;
+    const signal = options?.signal;
+    const targetLabel = isEnvelope ? "app_command" : targetIdOrEnvelope;
+
+    await yieldToEventLoop();
+    if (signal?.aborted) {
+      return this.cancelledSubmit(targetLabel);
+    }
+
+    if (isEnvelope) {
+      const outcome = this.submitAppCommand(targetIdOrEnvelope);
+      if (signal?.aborted && outcome.status === "accepted") {
+        return this.cancelledSubmit(targetLabel, outcome.sessionId);
+      }
+      return outcome;
+    }
+
+    const targetId = targetIdOrEnvelope;
+    const input = inputOrOptions as JsonValue;
+    if (input === undefined) {
+      return this.core.rejectedSubmit(
+        targetId,
+        embedderError("invalid_app_command", "workflow/capability submit requires an input object"),
+      );
+    }
+    if (this.core.stopped) {
+      return this.core.rejectedSubmit(targetId, runtimeStoppedError());
+    }
+    if (this.workflowTargets.has(targetId)) {
+      return this.submitWorkflow(targetId, input, signal);
+    }
+    if (this.wasmTargets.has(targetId)) {
+      return this.submitCapability(targetId, input, signal);
+    }
+    if (this.core.compatibleTargets.has(targetId)) {
+      return this.core.rejectedSubmit(
+        targetId,
+        embedderError(
+          "compatible_lifecycle_required",
+          `capability '${targetId}' is a compatible-mode capability; use compatible.start/stop/kill`,
+        ),
+      );
+    }
+    return this.core.rejectedSubmit(
+      targetId,
+      embedderError(
+        "target_not_found",
+        `'${targetId}' is neither a bundled workflow nor a bundled capability`,
+      ),
+    );
+  }
+
+  private cancelledSubmit(
+    targetId: string,
+    existingSessionId: string | null = null,
+    executionId: string | null = null,
+    targetVersion: string | null = null,
+  ): SubmitOutcome {
+    const sessionId = existingSessionId ?? this.core.nextSessionId();
+    const resolvedExecutionId =
+      executionId ?? `exec_${this.core.nextRequestId()}`;
+    const error = cancelledSubmitError();
+    this.core.recordTrace({
+      executionId: resolvedExecutionId,
+      targetId,
+      outcome: "cancelled",
+      phases: [{ code: "cancelled" }],
+      selectedTarget: { targetId, targetVersion },
+      placement: { target: "browser" },
+      failureCode: "cancelled",
+      stateMachineValid: null,
+    });
+    this.core.emit("error", sessionId, {
+      execution_id: resolvedExecutionId,
+      capability_id: targetId,
+      status: "cancelled",
+      error: { code: error.code, message: error.message, details: {} },
+    });
+    return { sessionId, status: "cancelled", error };
+  }
+
   private submitAppCommand(envelope: AppCommandEnvelope): SubmitOutcome {
     if (this.core.stopped) {
       return this.core.rejectedSubmit("app_command", runtimeStoppedError());
@@ -1002,8 +1114,11 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     return host;
   }
 
-  private submitCapability(targetId: string, input: JsonValue): SubmitOutcome {
-
+  private submitCapability(
+    targetId: string,
+    input: JsonValue,
+    signal?: AbortSignal,
+  ): SubmitOutcome {
     const target = this.wasmTargets.get(targetId);
     if (target === undefined) {
       return this.core.rejectedSubmit(
@@ -1019,6 +1134,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       capability_id: targetId,
       capability_version: target.capabilityVersion,
     });
+
+    if (signal?.aborted) {
+      return this.cancelledSubmit(
+        targetId,
+        sessionId,
+        executionId,
+        target.capabilityVersion,
+      );
+    }
 
     if (target.serviceType === "stateful") {
       const attestation = attestStatefulBrowserActivation(this.indexedDbDataStore);
@@ -1100,6 +1224,16 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       },
       this.runtimeLimitsHeader(),
     );
+
+    if (signal?.aborted) {
+      return this.cancelledSubmit(
+        targetId,
+        sessionId,
+        executionId,
+        target.capabilityVersion,
+      );
+    }
+
     this.core.recordTrace({
       executionId,
       targetId,
@@ -1128,7 +1262,11 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     return { sessionId, status: "accepted", error: null };
   }
 
-  private submitWorkflow(targetId: string, input: JsonValue): SubmitOutcome {
+  private submitWorkflow(
+    targetId: string,
+    input: JsonValue,
+    signal?: AbortSignal,
+  ): SubmitOutcome {
     const workflow = this.workflowTargets.get(targetId);
     if (workflow === undefined) {
       return this.core.rejectedSubmit(
@@ -1142,10 +1280,16 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     const state = initialWorkflowState(input);
     const steps: WorkflowStepRecord[] = [];
     let failure: { code: string; message: string } | null = null;
+    let cancelled = false;
     let stepIndex = 0;
     let currentNodeId: string | undefined = workflow.startNode;
+    const executionId = `workflow-${requestId}`;
 
     while (currentNodeId !== undefined) {
+      if (signal?.aborted) {
+        cancelled = true;
+        break;
+      }
       const node = workflow.nodes.get(currentNodeId);
       if (node === undefined) {
         failure = {
@@ -1221,6 +1365,10 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         },
         this.runtimeLimitsHeader(),
       );
+      if (signal?.aborted) {
+        cancelled = true;
+        break;
+      }
       if (!result.ok) {
         steps.push({
           stepIndex,
@@ -1244,8 +1392,33 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       currentNodeId = workflow.nextByFrom.get(node.nodeId);
     }
 
+    if (cancelled) {
+      this.core.recordTrace({
+        executionId,
+        targetId,
+        outcome: "cancelled",
+        phases: [
+          ...steps.map((step) => ({ code: `workflow_${step.status}` })),
+          { code: "cancelled" },
+        ],
+        selectedTarget: { targetId, targetVersion: workflow.version },
+        placement: { target: "browser" },
+        failureCode: "cancelled",
+        stateMachineValid: null,
+      });
+      const error = cancelledSubmitError();
+      this.core.emit("error", sessionId, {
+        request_id: requestId,
+        workflow_id: targetId,
+        workflow_version: workflow.version,
+        status: "cancelled",
+        error: { code: error.code, message: error.message, details: {} },
+      });
+      return { sessionId, status: "cancelled", error };
+    }
+
     this.core.recordTrace({
-      executionId: `workflow-${requestId}`,
+      executionId,
       targetId,
       outcome: failure === null ? "completed" : "error",
       phases: steps.map((step) => ({ code: `workflow_${step.status}` })),

@@ -42,7 +42,8 @@ export type EmbedderErrorCode =
   | "app_state_machine_unavailable"
   | "ambiguous_submit"
   | "invalid_app_command"
-  | "resource_requirements_exceed_host";
+  | "resource_requirements_exceed_host"
+  | "cancelled";
 
 /** A structured embedder-boundary error. */
 export interface EmbedderError {
@@ -50,10 +51,16 @@ export interface EmbedderError {
   readonly message: string;
 }
 
-/** `runtime.submit` output. */
+/** Options for `TraverseEmbedderApi.submitAsync` (#1657). */
+export interface SubmitAsyncOptions {
+  /** When aborted, `submitAsync` returns a structured cancellation outcome. */
+  readonly signal?: AbortSignal;
+}
+
+/** `runtime.submit` / `submitAsync` output. */
 export interface SubmitOutcome {
   readonly sessionId: string | null;
-  readonly status: "accepted" | "rejected";
+  readonly status: "accepted" | "rejected" | "cancelled";
   readonly error: EmbedderError | null;
 }
 
@@ -100,7 +107,7 @@ export interface EmbeddedTraceApiError {
 }
 
 /** Safe terminal outcome exposed through the public Trace API. */
-export type EmbeddedTraceOutcome = "completed" | "error";
+export type EmbeddedTraceOutcome = "completed" | "error" | "cancelled";
 
 /** A safe phase classification with no event payload or telemetry attributes. */
 export interface EmbeddedTracePhase {
@@ -206,6 +213,22 @@ export interface TraverseEmbedderApi {
    */
   submit(envelope: AppCommandEnvelope): SubmitOutcome;
   /**
+   * Async, cancellable submit (#1657). Yields once so an `AbortSignal` can
+   * cancel before nested work starts; after work, a still-aborted signal
+   * returns `status: "cancelled"` with a cancelled Trace API record.
+   * Prefer this (or a Worker) for long-running nested capabilities so the
+   * UI thread stays responsive. Sync `submit` remains for small capabilities.
+   */
+  submitAsync(
+    targetId: string,
+    input: JsonValue,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  submitAsync(
+    envelope: AppCommandEnvelope,
+    options?: SubmitAsyncOptions,
+  ): Promise<SubmitOutcome>;
+  /**
    * `runtime.subscribe`: register an ordered event callback. Previously
    * emitted events are replayed to the new subscriber first, so late
    * subscribers observe the identical ordered stream.
@@ -283,4 +306,18 @@ export function runtimeStoppedError(): EmbedderError {
     "runtime_stopped",
     "the embedded runtime was shut down and accepts no further operations",
   );
+}
+
+/** Structured cancel error for `submitAsync` when `AbortSignal` aborts. */
+export function cancelledSubmitError(
+  message = "submitAsync was cancelled",
+): EmbedderError {
+  return embedderError("cancelled", message);
+}
+
+/** Yield once so an AbortSignal listener can run before sync nested work. */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }

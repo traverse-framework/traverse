@@ -34,6 +34,11 @@ export {
   validateValueAgainstSchema,
 } from "./schemaValidate.js";
 export type { SchemaViolation } from "./schemaValidate.js";
+export {
+  cancelledSubmitError,
+  embedderError,
+  yieldToEventLoop,
+} from "./types.js";
 export type {
   AppCommandEnvelope,
   CompatibleLifecycleOutcome,
@@ -54,6 +59,7 @@ export type {
   EventCallback,
   JsonValue,
   ShutdownOutcome,
+  SubmitAsyncOptions,
   SubmitOutcome,
   TraverseEmbedderApi,
 } from "./types.js";
