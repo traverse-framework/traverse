@@ -17,6 +17,13 @@ Unreleased changes since `v0.15.0` will be recorded here.
   re-packaged and re-signed. All conformance output frames are byte-identical
   to the 0.21 runner.
 
+## Security: wasmtime / wasmtime-wasi 44 → 45.0.3 (`#1734`)
+
+- Fixes the wasmtime-wasi advisory where WASI hard links bypass `FilePerms`
+  for the destination path. Affects the default `wasmtime-executor` feature
+  of `traverse-runtime`. No API, contract, limit, or trace change.
+
+
 ## Perf / API: model path routing + async cancellable submit (`#1657`)
 
 - ADR-0083 / Decision 117: model-backed Browser/Node work uses Spec 138

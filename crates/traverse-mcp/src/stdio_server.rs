@@ -2108,6 +2108,13 @@ fn write_json_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
 }
 
 fn parse_command(raw: &str) -> Result<StdioCommandEnvelope, StdioServerFailure> {
+    // Spec 1722 FR-003: a repeated member name or invalid Unicode would be
+    // silently collapsed or misreported by a plain parse.
+    if let Err(error) = traverse_contracts::parse_canonicalizable(raw.as_bytes())
+        && error != traverse_contracts::CanonicalJsonError::InvalidJson
+    {
+        return Err(StdioServerFailure::new(error.code(), error.to_string()));
+    }
     serde_json::from_str(raw).map_err(|error| {
         StdioServerFailure::new(
             "invalid_request",
@@ -2785,6 +2792,19 @@ mod tests {
             .expect_err("neither request nor request_path must fail");
         assert_eq!(error.code, "invalid_request");
         assert!(error.message.contains("request or request_path"));
+    }
+
+    #[test]
+    fn parse_command_rejects_input_jcs_cannot_represent() {
+        for raw in [
+            r#"{"command":"execute","request":{"input":{"a":1,"a":2}}}"#,
+            r#"{"command":"execute","request":{"input":{"s":"\ud800"}}}"#,
+        ] {
+            let error = parse_command(raw).expect_err("must be rejected");
+            assert_eq!(error.code, "input_not_canonicalizable", "{raw}");
+        }
+        let error = parse_command("not json").expect_err("must be rejected");
+        assert_eq!(error.code, "invalid_request");
     }
 
     fn plan_expedition_inline_request() -> String {
