@@ -184,7 +184,7 @@ fn snapshot_exact_refs(
     let refs = snapshot
         .capabilities
         .iter()
-        .filter(|record| !record.deprecated)
+        .filter(|record| record.is_active())
         .map(|record| RegistryReference {
             namespace: record.namespace.clone(),
             id: record.id.clone(),

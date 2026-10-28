@@ -97,11 +97,13 @@ pub use composed_workflow::{
 pub use registry_cache::{
     HostRegistryCache, PublicCapabilityMetadata, PublicMetadataRead, RegistryArtifactFetcher,
     RegistryCacheError, RegistryCacheErrorCode, RegistryPrepareEvidence,
-    VerifiedRegistryDependency, prepare as prepare_registry_dependency, publish_public_metadata,
+    VerifiedRegistryDependency, prepare as prepare_registry_dependency,
+    prepare_with_policy as prepare_registry_dependency_with_policy, publish_public_metadata,
     read_public_metadata, resolve_component as resolve_registry_component,
     resolve_offline as resolve_registry_dependency_offline,
 };
 pub use test_double::EmbedderTestDouble;
+pub use traverse_runtime::registry_rights_policy::ModelRightsPolicy;
 
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `045-governed-model-dependency-resolution`
 **Created**: 2026-06-12
-**Status**: Approved — `exact-ref.wasm-cpu` candidate kind amend approved 2026-09-17
+**Status**: Approved — `exact-ref.wasm-cpu` candidate kind amend approved 2026-09-17; v1.1.0 registry rights and revocation policy amend (#1728, registry spec 026) approved 2026-10-27
 **Input**: Downstream knowledge-app MVP requirements and Traverse team approval decisions from 2026-06-12. Model inference must be real, not placeholder behavior. Model dependencies are selectable candidates declared by the app manifest, resolved by Traverse using availability, basic model fit, and app priority.
 
 ## Purpose
@@ -113,6 +113,10 @@ As a UI or auditor, I want public trace evidence to show which model/provider wa
 - **FR-018**: Model dependency resolution MUST not require downstream app code changes when a new compatible provider implementation is added to the candidate set and app policy permits it.
 - **FR-019**: Inference provider HTTP requests to an operator-configured (and possibly untrusted or remote) endpoint MUST bound the **entire** exchange, not only the TCP connect: read and write timeouts MUST be applied for the connected socket so that a peer which accepts and then stalls cannot block the calling thread past the configured request timeout. A timed-out read or write MUST surface as `model_provider_unavailable`.
 - **FR-020**: The provider response read MUST be bounded by a configurable maximum size with a safe default; a response exceeding the limit MUST fail with a stable error code rather than buffering unbounded data into memory.
+- **FR-021** *(v1.1.0, #1728)*: Range or `selection_policy` resolution of a public registry dependency MUST skip any version whose lifecycle status is `revoked` (the index `status` from registry spec 026, read through `PublicRegistryCapabilityRecord::lifecycle_status`), the same way it skips deprecated versions. If every version matching the range is revoked, resolution MUST fail with `registry_dependency_revoked`, and the message MUST list the revoked versions.
+- **FR-022** *(v1.1.0, #1728)*: An exact pin (`=X.Y.Z`) to a revoked version MUST still resolve to that record (registry decision-log entry 127 Q11; registry spec 005 SC-005, pins never break). Before the record is prepared, registered, or activated, the consumer MUST then refuse it with the do-not-run code `registry_dependency_revoked`, carrying the revocation record (reason, `revoked_at`, evidence URL). The default policy is fail closed, and no host option re-enables a revoked version.
+- **FR-023** *(v1.1.0, #1728)*: If any object-shaped `ai.models` entry on the resolved record declares `conditional` for `commercial_use`, `redistribution`, or `derivatives`, the consumer MUST deny the record by default with `model_rights_conditional_denied`. A host MAY allow such records only through an explicit, host-owned policy opt-in: `ModelRightsPolicy { allow_conditional: true }` in the embedder and runtime API, or `--allow-conditional-model-rights` on `traverse-cli app validate|register|activate`. There is no implicit default and no network lookup. A declared `unknown` right MUST always be denied with `model_rights_unknown_denied`. `allowed` and `forbidden` values are not denied by this policy, because their use limits are the app's responsibility. Model references that predate spec 026 (legacy strings, or objects without rights fields) are grandfathered and pass.
+- **FR-024** *(v1.1.0, #1728)*: Deprecated versions keep their existing behavior. The policy decision MUST be deterministic: the same record and policy give the same code and message. Checks run in a fixed order: revocation first, then each model in declaration order, checking `commercial_use`, `redistribution`, then `derivatives`. The decision is reported through the existing structured error evidence of the surface that applied it: the CLI app JSON errors, `RegistryCacheError` in the embedder, and MCP prepare.
 
 ### Non-Functional Requirements
 
@@ -168,6 +172,7 @@ As a UI or auditor, I want public trace evidence to show which model/provider wa
 - [#453](https://github.com/enricopiovesan/Traverse/issues/453) - Expose model selection evidence in traces and MCP reports.
 - [#454](https://github.com/enricopiovesan/Traverse/issues/454) - Add downstream app MVP conformance suite across specs 044 and 045.
 - [#1454](https://github.com/traverse-framework/traverse/issues/1454) - Bridge Spec 045↔138: `exact-ref.wasm-cpu` candidate kind, `trust_class` evidence, platform-aware resolution (Decision 95 amend).
+- [#1728](https://github.com/traverse-framework/traverse/issues/1728) - Fail closed on revoked registry versions; deny `conditional` model rights by default (FR-021–FR-024).
 - [#1455](https://github.com/traverse-framework/traverse/issues/1455) - Text-generating exact-ref fixture proving the bridge end-to-end.
 
 ## Out of Scope

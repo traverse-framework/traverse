@@ -36,6 +36,8 @@ pub mod inference;
 pub mod parallel_proposal;
 pub mod placement;
 pub mod proposal;
+/// Spec `045` v1.1.0 host rights policy over resolved registry records.
+pub mod registry_rights_policy;
 pub mod router;
 /// Production host driver for `runtime.wasm` (spec `1402` FR-003, Decision
 /// 89): loads a real bridge artifact, drives its ABI, and publishes the
