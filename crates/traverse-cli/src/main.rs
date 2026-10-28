@@ -9390,6 +9390,16 @@ mod tests {
         assert!(err.contains("--commercial-use must be one of"));
     }
 
+    /// Serializes the tests that change the process working directory, so
+    /// that parallel tests never observe each other's fixture roots.
+    fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
+        static CWD_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        CWD_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn registry_search_filters_by_licensing_rights_without_treating_unknown_as_allowed() {
         let state_root = unique_temp_dir();
@@ -9425,6 +9435,7 @@ mod tests {
         )
         .expect("synced licensing fixture should persist");
 
+        let _cwd = cwd_lock();
         let previous = env::current_dir().expect("current dir");
         env::set_current_dir(&state_root).expect("chdir into fixture root");
         let output = registry_search(
@@ -9533,6 +9544,7 @@ mod tests {
     fn registry_inspect_round_trips_spec_026_rights_through_synced_state() {
         let state_root = unique_temp_dir();
         write_model_rights_fixture_state(&state_root);
+        let _cwd = cwd_lock();
         let previous = env::current_dir().expect("current dir");
         env::set_current_dir(&state_root).expect("chdir into fixture root");
         let json_output = registry_inspect("audio-gate", "local-default", None, None, true);
@@ -9582,6 +9594,7 @@ mod tests {
     fn registry_search_filters_by_status_and_model_commercial_use() {
         let state_root = unique_temp_dir();
         write_model_rights_fixture_state(&state_root);
+        let _cwd = cwd_lock();
         let previous = env::current_dir().expect("current dir");
         env::set_current_dir(&state_root).expect("chdir into fixture root");
         let revoked = registry_search(
