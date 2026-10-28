@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-android-host"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "jni",
  "serde_json",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-cli-rs"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -2672,7 +2672,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "traverse-contracts",
+ "traverse-contracts 0.16.0",
  "traverse-mcp",
  "traverse-registry",
  "traverse-registry-sync",
@@ -2688,6 +2688,18 @@ dependencies = [
 [[package]]
 name = "traverse-contracts"
 version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97bb4ead3aa8345dcbb8f2be9aa2bc75931eb3ba79d73dfb2eb7a8c644690049"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "traverse-contracts"
+version = "0.16.0"
 dependencies = [
  "semver",
  "serde",
@@ -2697,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-coreml-adapter"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "block2",
  "objc2",
@@ -2709,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-dotnet-host"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "traverse-model-host-frame",
@@ -2717,13 +2729,13 @@ dependencies = [
 
 [[package]]
 name = "traverse-embedder"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts",
+ "traverse-contracts 0.16.0",
  "traverse-registry",
  "traverse-runtime",
  "wat",
@@ -2731,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-expedition-wasm"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2739,14 +2751,14 @@ dependencies = [
 
 [[package]]
 name = "traverse-mcp"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "ed25519-dalek",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts",
+ "traverse-contracts 0.16.0",
  "traverse-embedder",
  "traverse-registry",
  "traverse-registry-sync",
@@ -2755,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-model-host-frame"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "traverse-runtime",
@@ -2764,14 +2776,14 @@ dependencies = [
 
 [[package]]
 name = "traverse-model-trainer"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "sha2 0.11.1",
 ]
 
 [[package]]
 name = "traverse-native-bridge"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2781,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-nested-wasm-spike"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "wasmi",
  "wat",
@@ -2797,7 +2809,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts",
+ "traverse-contracts 0.15.0",
 ]
 
 [[package]]
@@ -2811,7 +2823,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-runtime"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "aes-gcm",
  "chrono",
@@ -2821,7 +2833,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts",
+ "traverse-contracts 0.16.0",
  "traverse-registry",
  "uuid",
  "wasmi",
@@ -2835,17 +2847,17 @@ dependencies = [
 
 [[package]]
 name = "traverse-runtime-wasm"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde_json",
- "traverse-contracts",
+ "traverse-contracts 0.16.0",
  "wasmi",
  "wat",
 ]
 
 [[package]]
 name = "traverse-swift-host"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "sha2 0.11.1",
