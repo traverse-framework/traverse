@@ -16,8 +16,8 @@ serde_json = "1.0.145"
 sha2 = "0.11"
 ed25519-dalek = "3.0.0"
 zeroize = "1.8"
-wasmtime = { version = "44", features = ["cranelift", "component-model"], optional = true }
-wasmtime-wasi = { version = "44", optional = true }
+wasmtime = { version = "45", features = ["cranelift", "component-model"], optional = true }
+wasmtime-wasi = { version = "45", optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "auto-dispatch", "simd"], optional = true }
 # Guest ABI v3 registration checks (Spec 138 FR-053). Same version and
 # features wasmi already uses, so native hosts gain no new code.
