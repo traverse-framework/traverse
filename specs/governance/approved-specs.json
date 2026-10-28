@@ -2061,6 +2061,17 @@
         "docs/adr/0083-model-backed-direct-wasm-path.md",
         "docs/perf/nested-vs-direct-wasm-1657.md"
       ]
+    },
+    {
+      "id": "1722-canonical-guest-input-bytes",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1722-canonical-guest-input-bytes/spec.md",
+      "governs": [
+        "specs/1722-canonical-guest-input-bytes/",
+        "docs/decision-log.md"
+      ]
     }
   ]
 }
