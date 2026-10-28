@@ -2,7 +2,10 @@
 
 **Status**: Approved (2026-10-27)
 **Canonical governing ID**: `1722-canonical-guest-input-bytes`
-**Version**: 1.0.0
+**Version**: 1.0.1
+**Amended**: 2026-10-28 (#1722 implementation): FR-006 probe returns its
+stdin verbatim; FR-003 number bound stated as magnitude; FR-004 notes where
+limits exist.
 **Extends**: `025-wasm-executor-adapter`, `098-capability-event-host-abi`,
 `1402-runtime-wasm-orchestrator-convergence`, and
 `119-verified-registry-mcp-mode-a`.
@@ -37,20 +40,24 @@ and hosts MUST NOT rewrite them.
 - **FR-003**: A host MUST reject input that JCS cannot represent exactly,
   before any guest is invoked, with the stable error code
   `input_not_canonicalizable`. Such input is any of:
-  - an integer whose magnitude exceeds 2^53 − 1;
+  - a number whose magnitude exceeds 2^53 − 1. Every such double is an
+    integer, so this covers integer literals and doubles such as `1e21`
+    alike, and hosts in every language apply the same bound;
   - an object with duplicate member names, when the host receives the input
     as bytes;
   - a string that is not valid Unicode (for example a lone surrogate).
 
   The error MUST NOT echo the input value.
 - **FR-004**: Canonicalization MUST happen after input-schema validation and
-  before the input-size limit is checked, so that the limit applies to the
-  bytes the guest actually receives.
+  before any input-size limit on guest input is checked, so that such a limit
+  applies to the bytes the guest actually receives. Limits on a whole
+  transport request (an HTTP body, a bridge call) are outside this rule.
 - **FR-005**: Hosts MUST NOT canonicalize, reorder or re-serialize guest
   output bytes. Outputs that flow on as a later step's input are
   canonicalized under FR-001 at that step.
 - **FR-006**: The repository MUST ship a conformance fixture: a capability
-  that returns the SHA-256 of its stdin. It MUST be run, in CI, on every host
+  that returns its stdin bytes verbatim as a JSON string, whose SHA-256 each
+  host compares. It MUST be run, in CI, on every host
   shipped in a release, against shared vectors. The vectors MUST cover
   non-sorted key order, whitespace, escaped strings, floats, integers at
   ±(2^53 − 1), and each FR-003 rejection. All hosts MUST produce identical

@@ -10,7 +10,7 @@ description = "Contract definitions and validation for the Traverse capability r
 [dependencies]
 semver = "1.0.27"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
 sha2 = "0.11"
 
 [lints]

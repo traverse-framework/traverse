@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Breaking: guests receive canonical JSON input on every host (Spec 1722, Decision 118, `#1722`)
+
+- Every host now feeds a capability guest the RFC 8785 (JCS) canonical
+  bytes of its JSON input, so the same WASM given the same logical input
+  produces the same output on every host. Before, native hosts sorted keys
+  while the web embedder forwarded the caller's bytes; a capability that
+  hashed its input (such as `core.authorize`'s `policy_hash`) differed by
+  host.
+- This covers the native wasmtime executor (runtime, CLI, MCP, workflow
+  steps, proposals) and the nested executor in `runtime.wasm` (browser,
+  Node, Swift, Kotlin, .NET). Guest outputs are unchanged.
+- **Byte change:** browser and Node guests now receive sorted keys and
+  ECMAScript number formatting instead of the caller's bytes.
+- **New rejection:** input JCS cannot represent fails before any guest
+  runs, with `input_not_canonicalizable`:
+  - any number with magnitude above 2^53 − 1, including doubles such as
+    `1e21`;
+  - duplicate member names, where a host parses bytes;
+  - invalid Unicode, including lone surrogates.
+
+  `Runtime::execute` reports it as `request_invalid` with
+  `details.reason_code`; `parse_runtime_request` and the MCP stdio server
+  reject duplicate names and invalid Unicode.
+- **Rust API:**
+  - `traverse_contracts::canonical_json` is new;
+  - `ExecutorError` gains `InputNotCanonicalizable`;
+  - `serde_json` is built with `float_roundtrip`, so float parsing is
+    correctly rounded workspace-wide.
+- Conformance: `fixtures/cross-host/canonical-input-v1` (stdin-echo guest
+  and shared vectors) runs on native, `runtime.wasm` and Node.
+
 ### Feature: multi-IO ONNX packaging for HF-style encoders (`#1661`)
 
 - ONNX runner guest and `model package-onnx` accept N named inputs and M

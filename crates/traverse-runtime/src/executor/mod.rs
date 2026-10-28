@@ -120,6 +120,9 @@ pub enum ExecutorError {
     ResourceRequirementsExceedHost(String),
     /// The executor produced output that could not be parsed as JSON.
     OutputDeserializationFailed(String),
+    /// The input cannot be fed to a guest as RFC 8785 canonical JSON
+    /// (Spec 1722 FR-003); the message starts with its stable code.
+    InputNotCanonicalizable(String),
     /// The executor type does not support the requested capability.
     UnsupportedArtifactType,
 }
@@ -155,7 +158,9 @@ impl std::fmt::Display for ExecutorError {
             Self::ExecutionFailed(msg) => write!(f, "execution failed: {msg}"),
             Self::Timeout(msg) => write!(f, "execution timed out: {msg}"),
             Self::ResourceExhausted(msg) => write!(f, "resource exhausted: {msg}"),
-            Self::ResourceRequirementsExceedHost(msg) => write!(f, "{msg}"),
+            Self::ResourceRequirementsExceedHost(msg) | Self::InputNotCanonicalizable(msg) => {
+                write!(f, "{msg}")
+            }
             Self::OutputDeserializationFailed(msg) => {
                 write!(f, "output deserialization failed: {msg}")
             }

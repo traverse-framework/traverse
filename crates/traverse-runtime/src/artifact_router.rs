@@ -131,7 +131,8 @@ fn map_executor_error(error: &ExecutorError) -> LocalExecutionFailure {
         | ExecutorError::UnauthorizedHostImport { .. }
         | ExecutorError::BinaryLoadFailed(_)
         | ExecutorError::RuntimeSetupFailed(_) => LocalExecutionFailureCode::ConstraintViolated,
-        ExecutorError::OutputDeserializationFailed(_) => LocalExecutionFailureCode::InvalidInput,
+        ExecutorError::OutputDeserializationFailed(_)
+        | ExecutorError::InputNotCanonicalizable(_) => LocalExecutionFailureCode::InvalidInput,
         ExecutorError::ExecutionFailed(_) | ExecutorError::UnsupportedArtifactType => {
             LocalExecutionFailureCode::ExecutionFailed
         }
@@ -385,6 +386,10 @@ mod tests {
             ),
             (
                 ExecutorError::OutputDeserializationFailed("x".to_string()),
+                LocalExecutionFailureCode::InvalidInput,
+            ),
+            (
+                ExecutorError::InputNotCanonicalizable("x".to_string()),
                 LocalExecutionFailureCode::InvalidInput,
             ),
             (

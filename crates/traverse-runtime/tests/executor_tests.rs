@@ -1857,6 +1857,13 @@ fn executor_error_display_covers_all_variants() {
             "output deserialization failed: not json",
         ),
         (
+            ExecutorError::InputNotCanonicalizable(
+                "input_not_canonicalizable: input contains an object with a duplicate member name"
+                    .to_string(),
+            ),
+            "input_not_canonicalizable: input contains an object with a duplicate member name",
+        ),
+        (
             ExecutorError::UnsupportedArtifactType,
             "unsupported artifact type for this executor",
         ),

@@ -5,11 +5,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
+pub mod canonical_json;
 pub mod emit_event;
 pub mod placement;
 pub mod proposal;
 pub mod usage_telemetry;
 pub mod violations;
+pub use canonical_json::{
+    CanonicalJsonError, INPUT_NOT_CANONICALIZABLE, MAX_SAFE_INTEGER, canonicalize_json_bytes,
+    parse_canonicalizable, to_canonical_json,
+};
 pub use emit_event::{
     EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,
     EMIT_EVENT_ERR_UNDECLARED_EVENT, EMIT_EVENT_OK, EmitEventError, MAX_EVENT_EMIT_PAYLOAD_BYTES,
