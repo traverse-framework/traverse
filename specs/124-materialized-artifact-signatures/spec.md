@@ -1,6 +1,6 @@
 # Feature Specification: Materialized Artifact Signatures
 
-**Status**: Approved
+**Status**: Approved — v0.2.0 registry contract-signature amend (#1729, registry spec 026 v1.1.0) approved 2026-10-27
 **Canonical governing ID**: `124-materialized-artifact-signatures`
 **Extends**: `030-security-identity-model`, `120-host-owned-artifact-preparation`, and ADR-0051
 **Tracks**: #1203; depends on `traverse-framework/registry` #333, #334, and #335.
@@ -62,6 +62,35 @@ to the runtime's existing verification boundary.
 - **FR-006**: `serve` and runtime execution MUST perform no network fetch for
   artifact signature evidence. Key rotation, Sigstore, detached provenance,
   and workflow-level artifacts are out of scope.
+- **FR-007** *(v0.2.0, #1729)*: When `signature.json` carries the registry
+  spec 026 v1.1.0 fields `contract_sha256` and `contract_signature_hex`,
+  `registry materialize` and `registry prepare-public-bundle` MUST hash the
+  exact `contract.json` bytes they read (the committed file for materialize,
+  the bytes fetched from `contract_url` for prepare). They MUST NOT
+  re-serialize or canonicalize those bytes. The lowercase-hex SHA-256 MUST
+  equal `contract_sha256`, and `contract_signature_hex` MUST verify as an
+  Ed25519 signature over the 32 raw digest bytes, using the same
+  `public_key_hex` that verifies the artifact signature.
+- **FR-008** *(v0.2.0, #1729)*: Each failure MUST fail closed with a stable,
+  capability-qualified code, distinct from the artifact-signature codes and
+  prefixed by the surface (`artifact_materialize_` or `registry_prepare_`):
+  - `contract_digest_mismatch`
+  - `contract_signature_invalid`: not 128 hex characters
+  - `contract_signature_mismatch`
+  - `contract_signature_incomplete`: only one of the two fields is present
+  - `contract_signature_missing`: strict mode only
+- **FR-009** *(v0.2.0, #1729)*: A `signature.json` without either contract
+  field predates the registry signing change. It stays valid, and the outcome
+  is `absent`. Each materialized artifact-state signature records
+  `contract_signature: "verified" | "absent"` as an optional additive field,
+  so the artifact-state schema version stays `1.1.0` and older states load
+  unchanged.
+- **FR-010** *(v0.2.0, #1729)*: Strict mode is a host opt-in:
+  `--require-contract-signature` on `registry materialize` and
+  `registry prepare-public-bundle`. Under strict mode an `absent` contract
+  signature MUST fail with `contract_signature_missing`. Making strict mode
+  the default is deferred to a later minor version, once the published index
+  carries contract signatures on every record.
 
 ## Compatibility
 
@@ -69,8 +98,11 @@ This is an additive artifact-state schema successor. Existing `1.0.0`
 manifests remain loadable with their established behavior. A `1.1.0` manifest
 is rejected by an older loader rather than silently dropping required security
 metadata. Registry `contract.json` files remain byte-for-byte unchanged: the
-signature travels in the sibling `signature.json`, read only by
-materialization.
+signatures travel in the sibling `signature.json`, which only materialization
+and public-bundle preparation read. Since v0.2.0 the contract itself is
+authenticated as well when the registry has signed it (registry spec 026
+v1.1.0, FR-007 to FR-010). This also authenticates the spec 026 model rights
+fields that `045-governed-model-dependency-resolution` FR-023 enforces.
 
 ## Acceptance scenarios
 
@@ -86,6 +118,12 @@ materialization.
    documented behavior, and an unsupported schema version remains rejected.
 5. Altering a materialized binary after preparation causes the existing
    startup digest check to fail before runtime signature verification.
+6. A `signature.json` with a valid contract signature materializes with
+   `contract_signature: "verified"`. Re-serializing the same JSON (identical
+   meaning, different bytes) fails with `contract_digest_mismatch`.
+7. A legacy `signature.json` without contract fields materializes with
+   `contract_signature: "absent"`. Under `--require-contract-signature` it
+   fails with `contract_signature_missing`.
 
 ## Quality gates
 
