@@ -74,8 +74,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use trace::TraceStore;
 use traverse_contracts::{
-    EventReference, ExecutionTarget, HostApiAccess, Lifecycle, NetworkAccess,
+    CanonicalJsonError, EventReference, ExecutionTarget, HostApiAccess, Lifecycle, NetworkAccess,
     NoOpUsageTelemetrySink, ServiceType, UsageTelemetrySink, ViolationRecord,
+    parse_canonicalizable, to_canonical_json,
 };
 use traverse_registry::{
     CapabilityRegistration, CapabilityRegistry, DiscoveryQuery, ImplementationKind, LookupScope,
@@ -1190,8 +1191,18 @@ impl std::error::Error for RequestParseFailure {}
 /// # Errors
 ///
 /// Returns [`RequestParseFailure`] when the JSON payload cannot be
-/// deserialized into the runtime request model.
+/// deserialized into the runtime request model, or, with an
+/// `input_not_canonicalizable: ` message, when it repeats a member name or
+/// carries invalid Unicode, which a plain parse would accept or misreport
+/// (Spec 1722 FR-003).
 pub fn parse_runtime_request(json: &str) -> Result<RuntimeRequest, RequestParseFailure> {
+    if let Err(error) = parse_canonicalizable(json.as_bytes())
+        && error != CanonicalJsonError::InvalidJson
+    {
+        return Err(RequestParseFailure {
+            message: error.to_string(),
+        });
+    }
     serde_json::from_str::<RuntimeRequest>(json).map_err(|error| RequestParseFailure {
         message: error.to_string(),
     })
@@ -1799,7 +1810,9 @@ where
             &selected.contract.inputs.schema,
             RuntimeErrorCode::RequestInvalid,
             "runtime request input does not satisfy the selected capability input contract",
-        ) {
+        )
+        .and_then(|()| canonical_input_check(&context.attempt.request.input))
+        {
             let artifact_verification = context.attempt.artifact_verification.clone();
             return pre_execution_failure_outcome(
                 context,
@@ -2466,6 +2479,18 @@ fn hydration_failure_outcome(
         error: runtime_error,
         emitted_events: Vec::new(),
         workflow_evidence: None,
+    })
+}
+
+/// Spec 1722 FR-003/FR-004: after schema validation, input JCS cannot
+/// represent fails before any executor runs, with a stable reason code.
+fn canonical_input_check(input: &Value) -> Result<(), RuntimeError> {
+    to_canonical_json(input).map(|_| ()).map_err(|error| {
+        runtime_error(
+            RuntimeErrorCode::RequestInvalid,
+            "runtime request input cannot be fed to a guest as canonical JSON",
+            json!({"reason_code": error.code(), "detail": error.to_string()}),
+        )
     })
 }
 
@@ -4453,6 +4478,24 @@ mod tests {
             None,
             Some("not-a-range"),
         ));
+    }
+
+    #[test]
+    fn canonical_input_check_rejects_unsafe_numbers_with_a_reason_code() {
+        let error = super::canonical_input_check(&json!({"id": u64::MAX}))
+            .expect_err("unsafe integer must be rejected");
+        assert_eq!(error.code, super::RuntimeErrorCode::RequestInvalid);
+        assert_eq!(error.details["reason_code"], "input_not_canonicalizable");
+        assert!(super::canonical_input_check(&json!({"b": 1, "a": [2.5]})).is_ok());
+    }
+
+    #[test]
+    fn parse_runtime_request_rejects_duplicate_names_before_deserializing() {
+        let failure = super::parse_runtime_request(r#"{"kind":"a","kind":"b"}"#)
+            .expect_err("duplicate member names must be rejected");
+        assert!(failure.message.starts_with("input_not_canonicalizable: "));
+        let failure = super::parse_runtime_request("{").expect_err("non-JSON must still fail");
+        assert!(!failure.message.starts_with("input_not_canonicalizable"));
     }
 
     #[test]

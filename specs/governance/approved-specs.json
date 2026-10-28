@@ -2064,13 +2064,20 @@
     },
     {
       "id": "1722-canonical-guest-input-bytes",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "status": "approved",
       "immutable": true,
       "path": "specs/1722-canonical-guest-input-bytes/spec.md",
       "governs": [
         "specs/1722-canonical-guest-input-bytes/",
-        "docs/decision-log.md"
+        "docs/decision-log.md",
+        "CHANGELOG.md",
+        "crates/traverse-contracts/",
+        "crates/traverse-runtime/",
+        "crates/traverse-runtime-wasm/",
+        "crates/traverse-mcp/",
+        "packages/web/TraverseEmbedder/",
+        "fixtures/cross-host/canonical-input-v1/"
       ]
     }
   ]

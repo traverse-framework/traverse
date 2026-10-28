@@ -1,0 +1,73 @@
+{
+  "artifact": "stdin-echo.wasm",
+  "fixture_version": "1.0.0",
+  "governing_specs": [
+    "1722-canonical-guest-input-bytes"
+  ],
+  "kind": "canonical_input_conformance_fixture",
+  "vectors": [
+    {
+      "expected_sha256": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772",
+      "expected_stdin": "{\"a\":2,\"b\":1}",
+      "input": "{ \"b\" : 1,\n  \"a\" : 2 }",
+      "name": "key_order_and_whitespace"
+    },
+    {
+      "expected_sha256": "522aa38baf8c102a9d22d1df1719bac66b5ed867154ab54a0a77d76da4663912",
+      "expected_stdin": "{\"a\":{\"c\":{},\"d\":[]},\"z\":[true,{\"a\":\"x\",\"b\":null}]}",
+      "input": "{\"z\":[true,{\"b\":null,\"a\":\"x\"}],\"a\":{\"d\":[],\"c\":{}}}",
+      "name": "nested_objects_and_arrays"
+    },
+    {
+      "expected_sha256": "0a00e5c15ee7a05ddf9be06a23dcf10630ea2b6dad61a5ca741867d1b8d733d6",
+      "expected_stdin": "{\"n\":[1,100,-12.5,0.5,0.0000015,1e-7,333333333.3333333,0.002,0,1e-27]}",
+      "input": "{\"n\": [1.0, 1e2, -12.5, 0.5, 1.5e-6, 1e-7, 333333333.33333329, 2e-3, -0.0, 0.000000000000000000000000001]}",
+      "name": "number_formatting"
+    },
+    {
+      "expected_sha256": "1616066bd82e17ade044ca9cac363810de516bf66b81c01e285e6abb4d5b3b77",
+      "expected_stdin": "{\"n\":[9007199254740991,-9007199254740991,0]}",
+      "input": "{\"n\": [9007199254740991, -9007199254740991, 0]}",
+      "name": "safe_integer_bounds"
+    },
+    {
+      "expected_sha256": "c573d1a28a929e0f63b99bcc0be0229c03d65f5f381bf1e10d2c192d303beaef",
+      "expected_stdin": "{\"emoji\":\"😀\",\"s\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\",\"tab\":\"\\t\"}",
+      "input": "{\"s\":\"\\u20ac$\\u000F\\u000aA'\\u0042\\u0022\\u005c\\\\\\\"\\/\",\"emoji\":\"\\ud83d\\ude00\",\"tab\":\"\\t\"}",
+      "name": "string_escapes"
+    },
+    {
+      "expected_sha256": "8337b8c296d35e6d8150335c84cd1fad6e077bfd7766dcf7c39365f74a011c44",
+      "expected_stdin": "{\"\\r\":\"CR\",\"1\":\"One\",\"\":\"Ctl\",\"ö\":\"Latin\",\"€\":\"Euro\",\"😀\":\"Smiley\",\"דּ\":\"Hebrew\"}",
+      "input": "{\"\\u20ac\":\"Euro\",\"\\r\":\"CR\",\"\\ufb33\":\"Hebrew\",\"1\":\"One\",\"\\ud83d\\ude00\":\"Smiley\",\"\\u0080\":\"Ctl\",\"\\u00f6\":\"Latin\"}",
+      "name": "utf16_member_order"
+    },
+    {
+      "expected_sha256": "74d3a528311122d66e14ecea9a726e34b062cbf4bd6684c0862c435a62c854b4",
+      "expected_stdin": "{\"context\":{\"time\":\"2026-10-23T10:00:00Z\"},\"policy\":{\"action\":\"read\",\"resource\":\"doc-1\",\"subject\":\"alice\"}}",
+      "input": "{\"policy\":{\"subject\":\"alice\",\"action\":\"read\",\"resource\":\"doc-1\"},\"context\":{\"time\":\"2026-10-23T10:00:00Z\"}}",
+      "name": "authorize_policy_insertion_order"
+    },
+    {
+      "expected_error": "input_not_canonicalizable",
+      "input": "{\"id\":9007199254740993}",
+      "name": "unsafe_integer"
+    },
+    {
+      "expected_error": "input_not_canonicalizable",
+      "input": "{\"n\": [1e21]}",
+      "name": "unsafe_number_magnitude"
+    },
+    {
+      "expected_error": "input_not_canonicalizable",
+      "input": "{\"s\":\"\\ud800\"}",
+      "name": "lone_surrogate"
+    },
+    {
+      "bytes_only": true,
+      "expected_error": "input_not_canonicalizable",
+      "input": "{\"a\":1,\"a\":2}",
+      "name": "duplicate_member_name"
+    }
+  ]
+}

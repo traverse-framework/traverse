@@ -11,7 +11,9 @@
 //! (`traverse_contracts::validate_emit_event`) the native executor calls —
 //! not a second implementation of that logic (spec `1402` FR-005).
 
-use traverse_contracts::{EventReference, ServiceType, validate_emit_event};
+use traverse_contracts::{
+    EventReference, ServiceType, canonicalize_json_bytes, validate_emit_event,
+};
 use wasmi::{
     Caller, Config, Engine, Error as WasmiError, Extern, Linker, Module, Store, StoreLimitsBuilder,
 };
@@ -234,8 +236,9 @@ fn host_emit_event(mut caller: Caller<'_, NestedStoreState>, ptr: i32, len: i32)
     }
 }
 
-/// Executes `artifact` as a WASI-command-shaped capability with `input` as
-/// stdin JSON bytes, inside a nested `wasmi` engine — the same engine and
+/// Executes `artifact` as a WASI-command-shaped capability with the RFC 8785
+/// canonical form of the JSON `input` as stdin (Spec 1722, Decision 118),
+/// inside a nested `wasmi` engine — the same engine and
 /// feature matrix Decision 87's spike proved compiles for `wasm32-unknown-
 /// unknown` and hosts a Traverse capability's stdin/stdout convention.
 ///
@@ -262,8 +265,9 @@ pub fn execute_nested_capability(
 ///
 /// # Errors
 ///
-/// Returns a stable, secret-free error string when module validation,
-/// linking, fuel setup, or execution fails.
+/// Returns a stable, secret-free error string when the input is not
+/// canonicalizable JSON (`input_not_canonicalizable: …` or `invalid_json: …`)
+/// or when module validation, linking, fuel setup, or execution fails.
 pub fn execute_nested_capability_with_limits(
     artifact: &[u8],
     input: &[u8],
@@ -271,6 +275,9 @@ pub fn execute_nested_capability_with_limits(
     declared_emits: &[EventReference],
     host_limits: NestedExecutionLimits,
 ) -> Result<NestedExecutionOutcome, String> {
+    // Spec 1722 FR-001/FR-003: every host's guest reads the same canonical
+    // bytes, and input JCS cannot represent fails before any guest runs.
+    let input = canonicalize_json_bytes(input).map_err(|error| error.to_string())?;
     let host_limits = host_limits.clamped();
     let mut config = Config::default();
     config.consume_fuel(true);
@@ -281,7 +288,7 @@ pub fn execute_nested_capability_with_limits(
         .trap_on_grow_failure(true)
         .build();
     let state = NestedStoreState {
-        stdin: input.to_vec(),
+        stdin: input.into_bytes(),
         stdin_offset: 0,
         stdout: Vec::new(),
         limits,
@@ -391,6 +398,42 @@ mod tests {
                 "emitted events mismatch: {:?} != {expected:?}",
                 outcome.emitted_events
             ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_capability_reads_the_canonical_form_of_its_input() -> Result<(), String> {
+        let artifact =
+            wat::parse_str(ECHO_AND_EMIT_WAT).map_err(|error| format!("wat: {error}"))?;
+        let input = br#"{ "b" : [1.0, 2e-3], "a" : "x" }"#;
+        let outcome = execute_nested_capability(&artifact, input, &ServiceType::Stateless, &[])?;
+        if outcome.stdout != br#"{"a":"x","b":[1,0.002]}"# {
+            return Err(format!(
+                "stdout was not canonical: {}",
+                String::from_utf8_lossy(&outcome.stdout)
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn non_canonicalizable_input_fails_before_the_guest_runs() -> Result<(), String> {
+        let artifact =
+            wat::parse_str(ECHO_AND_EMIT_WAT).map_err(|error| format!("wat: {error}"))?;
+        for (input, expected) in [
+            (
+                &br#"{"id":9007199254740993}"#[..],
+                "input_not_canonicalizable: ",
+            ),
+            (&br#"{"a":1,"a":2}"#[..], "input_not_canonicalizable: "),
+            (&br#""\ud800""#[..], "input_not_canonicalizable: "),
+            (&b"not json"[..], "invalid_json: "),
+        ] {
+            match execute_nested_capability(&artifact, input, &ServiceType::Stateless, &[]) {
+                Err(error) if error.starts_with(expected) => {}
+                other => return Err(format!("unexpected outcome: {other:?}")),
+            }
         }
         Ok(())
     }

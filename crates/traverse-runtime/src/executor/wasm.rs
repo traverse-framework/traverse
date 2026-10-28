@@ -1,7 +1,8 @@
 //! Wasmtime-backed WASM executor.
 //!
 //! Executes `wasm32-wasi` capability binaries inside a sandboxed Wasmtime engine.
-//! Input is fed via WASI stdin; output is captured from WASI stdout.
+//! Input is fed via WASI stdin as RFC 8785 canonical JSON (Spec 1722); output
+//! is captured from WASI stdout.
 //! No ambient WASI authority is granted — all capabilities are deny-by-default.
 
 use chrono::Utc;
@@ -33,7 +34,7 @@ use crate::events::types::{LifecycleStatus, TraverseEvent};
 // drift on their values.
 use traverse_contracts::{
     ConnectorRequirement, EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_OK, EventReference,
-    ExecutionResources, ServiceType, host_meets_execution_resources,
+    ExecutionResources, ServiceType, host_meets_execution_resources, to_canonical_json,
 };
 
 /// Traverse Host ABI v1 is independently versioned from the runtime crate.
@@ -845,8 +846,10 @@ impl WasmExecutor {
     ) -> Result<ExecutorOutput, ExecutorError> {
         self.ensure_meets_wasm_initial_memory(capability_id, wasm_bytes)?;
 
-        let input_json = serde_json::to_string(input)
-            .map_err(|e| ExecutorError::ExecutionFailed(format!("input serialization: {e}")))?;
+        // Spec 1722 FR-001/FR-003: the guest reads the RFC 8785 canonical form
+        // of its input, byte-identical to what every other host feeds it.
+        let input_json = to_canonical_json(input)
+            .map_err(|error| ExecutorError::InputNotCanonicalizable(error.to_string()))?;
 
         let checksum = checksum.map_or_else(|| sha256_hex(wasm_bytes), str::to_string);
         let cached_module = self.compiled_module(wasm_bytes, &checksum, abi_version)?;
@@ -855,7 +858,7 @@ impl WasmExecutor {
         let stdout_pipe = MemoryOutputPipe::new(65536);
         let stdout_ref = stdout_pipe.clone();
 
-        // Build a WASI context: stdin = input JSON, stdout = captured buffer
+        // Build a WASI context: stdin = canonical input JSON, stdout = captured buffer
         // No filesystem, no network, no env vars — deny-by-default
         let wasi_ctx: WasiP1Ctx = WasiCtxBuilder::new()
             .stdin(MemoryInputPipe::new(input_json.into_bytes()))
