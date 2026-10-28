@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use tract_onnx::prelude::*;
 
 /// Model blob magic (8 bytes) written by `model package-onnx`.
@@ -279,7 +279,7 @@ pub fn parse_blob(bytes: &[u8]) -> Option<Blob<'_>> {
 
 /// Runnable model plus its config.
 pub struct Model {
-    plan: TypedRunnableModel<TypedModel>,
+    plan: Arc<TypedRunnableModel>,
     config: TensorConfig,
 }
 
@@ -310,12 +310,14 @@ impl Model {
                 return None;
             }
         }
-        let mut values = SymbolValues::default();
-        for (name, value) in &blob.config.symbols {
-            values = values.with(&typed.symbols.sym(name), *value);
-        }
+        let values: HashMap<Symbol, TDim> = blob
+            .config
+            .symbols
+            .iter()
+            .map(|(name, value)| (typed.symbols.sym(name), TDim::Val(*value)))
+            .collect();
         let plan = typed
-            .concretize_dims(&values)
+            .set_symbols(&values)
             .ok()?
             .into_optimized()
             .ok()?
@@ -395,7 +397,10 @@ fn array_from_values(tensor: &NamedTensor, values: Decoded) -> Result<Tensor, ()
 fn encode_tensor_frame(tensor: &NamedTensor, value: &Tensor) -> Result<Vec<u8>, Reject> {
     match tensor.element {
         ElementType::F32 => {
-            let scores = value.as_slice::<f32>().map_err(|_| Reject::Output)?;
+            let scores = value
+                .try_as_plain_ram()
+                .and_then(|view| view.as_slice::<f32>())
+                .map_err(|_| Reject::Output)?;
             if !scores.iter().all(|v| v.is_finite()) {
                 return Err(Reject::Output);
             }
@@ -412,7 +417,10 @@ fn encode_tensor_frame(tensor: &NamedTensor, value: &Tensor) -> Result<Vec<u8>, 
             ))
         }
         ElementType::I64 => {
-            let values = value.as_slice::<i64>().map_err(|_| Reject::Output)?;
+            let values = value
+                .try_as_plain_ram()
+                .and_then(|view| view.as_slice::<i64>())
+                .map_err(|_| Reject::Output)?;
             Ok(write_frame(
                 tensor.dtype,
                 &tensor.shape,

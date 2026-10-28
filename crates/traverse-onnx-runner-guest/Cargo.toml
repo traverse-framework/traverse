@@ -18,11 +18,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tract-onnx = { version = "0.21", default-features = false }
+tract-onnx = { version = "0.23", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Import-free randomness stub: only tract's Random* ops use it.
-getrandom = { version = "0.2", features = ["custom"] }
 
 [profile.release]
 opt-level = 3
