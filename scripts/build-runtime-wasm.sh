@@ -90,7 +90,9 @@ if [[ "${install}" -eq 1 ]]; then
 else
   # Print path then digest on stdout for the reproducibility check.
   # Copy out of the temp dir before trap removes it.
-  keep="$(mktemp "${TMPDIR:-/tmp}/traverse-runtime-wasm-keep.XXXXXX.wasm")"
+  # BSD mktemp only randomizes trailing Xs, so keep the .wasm name inside a
+  # fresh directory instead of in the template (#1736).
+  keep="$(mktemp -d "${TMPDIR:-/tmp}/traverse-runtime-wasm-keep.XXXXXX")/runtime.wasm"
   cp "${out_dir}/runtime.wasm" "${keep}"
   echo "${keep}"
   echo "${digest}"
