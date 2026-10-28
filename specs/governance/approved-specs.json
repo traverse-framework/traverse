@@ -1664,7 +1664,7 @@
     },
     {
       "id": "124-materialized-artifact-signatures",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/124-materialized-artifact-signatures/spec.md",

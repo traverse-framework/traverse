@@ -7,6 +7,7 @@ mod app_runtime_events;
 mod app_state_machine_validate;
 pub mod authoring_telemetry;
 mod capability_packages;
+mod contract_signature;
 mod federation_operator;
 mod grpc_event_transport;
 mod http_api;
@@ -143,10 +144,12 @@ enum Command {
     RegistryMaterialize {
         registry_state_path: PathBuf,
         output_dir: PathBuf,
+        require_contract_signature: bool,
     },
     RegistryPreparePublicBundle {
         synced_state_path: PathBuf,
         output_dir: PathBuf,
+        require_contract_signature: bool,
     },
     CapabilityPublish {
         contract_path: PathBuf,
@@ -287,6 +290,10 @@ struct ArtifactStateSignature {
     scheme: String,
     public_key_hex: String,
     signature_hex: String,
+    /// Spec 124 v0.2.0 FR-009: `verified` or `absent` (registry spec 026
+    /// contract signature). Not present on states written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contract_signature: Option<String>,
 }
 
 #[derive(Debug)]
@@ -638,21 +645,40 @@ fn run_registry_command(command: Command) -> Result<String, CliError> {
         Command::RegistryMaterialize {
             registry_state_path,
             output_dir,
-        } => materialize_registry_artifacts(&registry_state_path, &output_dir),
+            require_contract_signature,
+        } => materialize_registry_artifacts_with_options(
+            &registry_state_path,
+            &output_dir,
+            require_contract_signature,
+        ),
         Command::RegistryPreparePublicBundle {
             synced_state_path,
             output_dir,
-        } => prepare_public_registry_bundle(&synced_state_path, &output_dir),
+            require_contract_signature,
+        } => prepare_public_registry_bundle_with_options(
+            &synced_state_path,
+            &output_dir,
+            require_contract_signature,
+        ),
         _ => Err(CliError::UsageError(
             "expected registry command".to_string(),
         )),
     }
 }
 
-#[allow(clippy::too_many_lines)] // Coordinates the fail-closed, per-artifact preparation boundary.
+#[cfg(test)]
 fn materialize_registry_artifacts(
     registry_state_path: &Path,
     output_dir: &Path,
+) -> Result<String, CliError> {
+    materialize_registry_artifacts_with_options(registry_state_path, output_dir, false)
+}
+
+#[allow(clippy::too_many_lines)] // Coordinates the fail-closed, per-artifact preparation boundary.
+fn materialize_registry_artifacts_with_options(
+    registry_state_path: &Path,
+    output_dir: &Path,
+    require_contract_signature: bool,
 ) -> Result<String, CliError> {
     let bundle = load_registry_bundle(registry_state_path)
         .map_err(|failure| CliError::ValidationFailed(failure.errors[0].message.clone()))?;
@@ -709,11 +735,13 @@ fn materialize_registry_artifacts(
                 capability.contract.id, capability.contract.version
             )));
         }
-        let signature = materialize_ed25519_signature(
+        let signature = materialize_ed25519_signature_with_options(
             &capability.path,
             &bytes,
             &capability.contract.id,
             &capability.contract.version,
+            raw.as_bytes(),
+            require_contract_signature,
         )?;
         let relative = PathBuf::from("artifacts")
             .join(safe_artifact_path_component(&capability.contract.id))
@@ -762,10 +790,19 @@ fn materialize_registry_artifacts(
 
 /// Prepares the explicitly synced public index as an offline registry bundle.
 /// Network access is confined to this host-invoked preparation boundary.
-#[allow(clippy::too_many_lines)] // Coordinates the fail-closed per-capability preparation boundary.
+#[cfg(test)]
 fn prepare_public_registry_bundle(
     synced_state_path: &Path,
     output_dir: &Path,
+) -> Result<String, CliError> {
+    prepare_public_registry_bundle_with_options(synced_state_path, output_dir, false)
+}
+
+#[allow(clippy::too_many_lines)] // Coordinates the fail-closed per-capability preparation boundary.
+fn prepare_public_registry_bundle_with_options(
+    synced_state_path: &Path,
+    output_dir: &Path,
+    require_contract_signature: bool,
 ) -> Result<String, CliError> {
     let raw = fs::read(synced_state_path).map_err(|_| {
         CliError::ValidationFailed("registry_prepare_synced_state_read_failed".to_string())
@@ -867,7 +904,13 @@ fn prepare_public_registry_bundle(
                         record.id, record.version
                     ))
                 })?;
-            validate_signature_evidence(&signature_bytes, &record.id, &record.version)?;
+            validate_signature_evidence_with_options(
+                &signature_bytes,
+                &record.id,
+                &record.version,
+                &contract_bytes,
+                require_contract_signature,
+            )?;
             let relative_dir = PathBuf::from("capabilities")
                 .join(&record.id)
                 .join(&record.version);
@@ -1005,7 +1048,18 @@ fn fetch_signature_with_head_fallback(url: &str) -> Result<Vec<u8>, String> {
     })
 }
 
+#[cfg(test)]
 fn validate_signature_evidence(bytes: &[u8], id: &str, version: &str) -> Result<(), CliError> {
+    validate_signature_evidence_with_options(bytes, id, version, &[], false)
+}
+
+fn validate_signature_evidence_with_options(
+    bytes: &[u8],
+    id: &str,
+    version: &str,
+    contract_bytes: &[u8],
+    require_contract_signature: bool,
+) -> Result<(), CliError> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| {
         CliError::ValidationFailed(format!(
             "registry_prepare_signature_invalid: {id}@{version}"
@@ -1044,9 +1098,21 @@ fn validate_signature_evidence(bytes: &[u8], id: &str, version: &str) -> Result<
             "registry_prepare_signature_invalid: {id}@{version}"
         ))
     })?;
-    VerifyingKey::from_bytes(&key).map_err(|_| {
+    let key = VerifyingKey::from_bytes(&key).map_err(|_| {
         CliError::ValidationFailed(format!(
             "registry_prepare_signature_public_key_invalid: {id}@{version}"
+        ))
+    })?;
+    contract_signature::verify_contract_signature(
+        &value,
+        contract_bytes,
+        &key,
+        require_contract_signature,
+    )
+    .map_err(|error| {
+        CliError::ValidationFailed(format!(
+            "registry_prepare_{}: {id}@{version}",
+            error.as_str()
         ))
     })?;
     Ok(())
@@ -1078,11 +1144,23 @@ fn replace_prepared_bundle(staging: &Path, output: &Path) -> Result<(), CliError
     Ok(())
 }
 
+#[cfg(test)]
 fn materialize_ed25519_signature(
     contract_path: &Path,
     bytes: &[u8],
     id: &str,
     version: &str,
+) -> Result<ArtifactStateSignature, CliError> {
+    materialize_ed25519_signature_with_options(contract_path, bytes, id, version, &[], false)
+}
+
+fn materialize_ed25519_signature_with_options(
+    contract_path: &Path,
+    bytes: &[u8],
+    id: &str,
+    version: &str,
+    contract_bytes: &[u8],
+    require_contract_signature: bool,
 ) -> Result<ArtifactStateSignature, CliError> {
     // Spec 124 FR-001/FR-002: the signature is an additive sibling file next to
     // contract.json, carrying inline hex (never a URL, never inside the
@@ -1168,10 +1246,23 @@ fn materialize_ed25519_signature(
             "artifact_materialize_signature_mismatch: {id}@{version}"
         ))
     })?;
+    let contract_signature = contract_signature::verify_contract_signature(
+        &signature,
+        contract_bytes,
+        &key,
+        require_contract_signature,
+    )
+    .map_err(|error| {
+        CliError::ValidationFailed(format!(
+            "artifact_materialize_{}: {id}@{version}",
+            error.as_str()
+        ))
+    })?;
     Ok(ArtifactStateSignature {
         scheme: scheme.to_string(),
         public_key_hex,
         signature_hex,
+        contract_signature: Some(contract_signature.as_str().to_string()),
     })
 }
 
@@ -1617,6 +1708,10 @@ fn help_registry() -> String {
     list --workspace <id>           List locally synced capability pointers.
     search <query> --workspace <id> Search locally synced capability pointers.
     inspect <id> --workspace <id>   Show lifecycle status and model rights.
+    materialize --registry-state <path> --out <dir> [--require-contract-signature]
+                                    Verify and materialize registry artifacts.
+    prepare-public-bundle --synced-state <path> --out <dir> [--require-contract-signature]
+                                    Prepare the synced index as an offline bundle.
 
   Run `traverse-cli registry <subcommand> --help` for subcommand-specific help."
         .to_string()
@@ -2444,6 +2539,7 @@ fn parse_registry_materialize_command(args: &[String]) -> Result<Command, String
     Ok(Command::RegistryMaterialize {
         registry_state_path: PathBuf::from(registry_state_path),
         output_dir: PathBuf::from(output_dir),
+        require_contract_signature: args.iter().any(|arg| arg == "--require-contract-signature"),
     })
 }
 
@@ -2456,6 +2552,7 @@ fn parse_registry_prepare_public_bundle_command(args: &[String]) -> Result<Comma
     Ok(Command::RegistryPreparePublicBundle {
         synced_state_path: PathBuf::from(synced_state_path),
         output_dir: PathBuf::from(output_dir),
+        require_contract_signature: args.iter().any(|arg| arg == "--require-contract-signature"),
     })
 }
 
@@ -8791,10 +8888,11 @@ mod tests {
         inspect_capability_package, inspect_event, inspect_trace, latest_index_release_asset,
         load_artifact_state, load_capability_package, load_governed_public_bundle_with_artifacts,
         load_registered_bundle, load_registered_bundle_with_public_records, load_runtime_request,
-        materialize_ed25519_signature, materialize_registry_artifacts, parse_command,
-        prepare_public_registry_bundle, publish_file_sha256_digest, register_bundle,
-        register_generated_app_bundle, registry_inspect, registry_record_order, registry_search,
-        registry_sync_at, registry_sync_default_or_override, registry_sync_failure_json,
+        materialize_ed25519_signature, materialize_ed25519_signature_with_options,
+        materialize_registry_artifacts, parse_command, prepare_public_registry_bundle,
+        publish_file_sha256_digest, register_bundle, register_generated_app_bundle,
+        registry_inspect, registry_record_order, registry_search, registry_sync_at,
+        registry_sync_default_or_override, registry_sync_failure_json,
         reject_private_contract_scope, replace_prepared_bundle, run_command, run_serve,
         safe_artifact_path_component, sha256_hex, signature_sibling_url,
         surface_coverage_gap_messages, telemetry, uncovered_action_enum_values,
@@ -8802,6 +8900,7 @@ mod tests {
         use_case_smoke_coverage_gaps_for_package, validate_authoring_outcome_telemetry_for_cli,
         validate_component_risk_policy_for_cli, validate_publish_ai_model_metadata,
         validate_registry_path_segment, validate_signature_evidence,
+        validate_signature_evidence_with_options,
     };
     use crate::capability_packages::fnv1a64;
     use serde_json::Value;
@@ -15913,6 +16012,142 @@ mod tests {
         let mismatch = materialize_ed25519_signature(&contract_path, b"bytes", "demo", "1.0.0")
             .expect_err("mismatched signature must fail");
         assert!(mismatch.message().contains("signature_mismatch"));
+    }
+
+    #[test]
+    fn materialization_verifies_registry_contract_signature_over_exact_bytes() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("fixture directory");
+        let contract = br#"{"id": "demo", "version": "1.0.0"}"#;
+        let contract_path = dir.join("contract.json");
+        fs::write(&contract_path, contract).expect("contract fixture");
+        let signing_key = SigningKey::from_bytes(&[11; 32]);
+        let artifact = b"artifact-bytes";
+        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(contract).into();
+        let write_signature = |contract_fields: bool| {
+            let mut value = serde_json::json!({
+                "scheme": "ed25519",
+                "public_key_hex": encode_hex(signing_key.verifying_key().as_bytes()),
+                "signature_hex": encode_hex(&signing_key.sign(artifact).to_bytes()),
+            });
+            if contract_fields {
+                value["contract_sha256"] = serde_json::json!(encode_hex(&digest));
+                value["contract_signature_hex"] =
+                    serde_json::json!(encode_hex(&signing_key.sign(&digest).to_bytes()));
+            }
+            fs::write(dir.join("signature.json"), value.to_string()).expect("signature fixture");
+        };
+
+        write_signature(true);
+        let verified = materialize_ed25519_signature_with_options(
+            &contract_path,
+            artifact,
+            "demo",
+            "1.0.0",
+            contract,
+            true,
+        )
+        .expect("signed contract verifies");
+        assert_eq!(verified.contract_signature.as_deref(), Some("verified"));
+
+        let tampered = materialize_ed25519_signature_with_options(
+            &contract_path,
+            artifact,
+            "demo",
+            "1.0.0",
+            br#"{"id":"demo","version":"1.0.0"}"#,
+            false,
+        )
+        .expect_err("reformatted contract bytes must fail");
+        assert_eq!(
+            tampered.message(),
+            "artifact_materialize_contract_digest_mismatch: demo@1.0.0"
+        );
+
+        write_signature(false);
+        let legacy = materialize_ed25519_signature_with_options(
+            &contract_path,
+            artifact,
+            "demo",
+            "1.0.0",
+            contract,
+            false,
+        )
+        .expect("legacy signature.json stays valid");
+        assert_eq!(legacy.contract_signature.as_deref(), Some("absent"));
+        let strict = materialize_ed25519_signature_with_options(
+            &contract_path,
+            artifact,
+            "demo",
+            "1.0.0",
+            contract,
+            true,
+        )
+        .expect_err("strict mode requires a contract signature");
+        assert_eq!(
+            strict.message(),
+            "artifact_materialize_contract_signature_missing: demo@1.0.0"
+        );
+
+        let mut signature: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join("signature.json")).expect("signature"),
+        )
+        .expect("signature json");
+        signature["contract_sha256"] = serde_json::json!(encode_hex(&digest));
+        signature["contract_signature_hex"] = serde_json::json!("00".repeat(64));
+        let prepare = validate_signature_evidence_with_options(
+            signature.to_string().as_bytes(),
+            "demo",
+            "1.0.0",
+            contract,
+            false,
+        )
+        .expect_err("prepare verifies the contract signature too");
+        assert_eq!(
+            prepare.message(),
+            "registry_prepare_contract_signature_mismatch: demo@1.0.0"
+        );
+    }
+
+    #[test]
+    fn registry_materialize_and_prepare_parse_strict_contract_signature_flag() {
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(matches!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "materialize",
+                "--registry-state",
+                "b.json",
+                "--out",
+                "o",
+                "--require-contract-signature",
+            ])),
+            Ok(Command::RegistryMaterialize {
+                require_contract_signature: true,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_command(&args(&[
+                "traverse-cli",
+                "registry",
+                "prepare-public-bundle",
+                "--synced-state",
+                "s.json",
+                "--out",
+                "o",
+            ])),
+            Ok(Command::RegistryPreparePublicBundle {
+                require_contract_signature: false,
+                ..
+            })
+        ));
     }
 
     #[test]
