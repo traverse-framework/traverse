@@ -39,7 +39,8 @@ bash scripts/validate-setup.sh
 From the repository root:
 
 ```bash
-cargo run -p traverse-cli-rs -- serve --bind 127.0.0.1:8787
+cargo run -p traverse-cli-rs -- serve --bind 127.0.0.1:8787 \
+  --registry-state examples/expedition/registry-bundle/manifest.json
 ```
 
 Keep this terminal open. The React demo proxies browser-subscription traffic through this server's WebSocket endpoint.
@@ -141,7 +142,7 @@ cargo run -p traverse-cli-rs -- app register \
 `app_registration_requires_refresh`; do not expect a source-manifest fallback.
 
 The development/CI HTTP server discovery file remains backward-compatible with the
-`v0.3.0` schema. `cargo run -p traverse-cli-rs -- serve` writes
+`v0.3.0` schema. `cargo run -p traverse-cli-rs -- serve --registry-state <path>` writes
 `.traverse/server.json` with `schema_version: "1.0.0"`, `base_url`,
 `health_url`, `workspace_default`, `pid`, `started_at`, `auth_mode`, and an
 optional `local_dev_token` for loopback development.

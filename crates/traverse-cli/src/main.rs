@@ -2641,7 +2641,7 @@ fn parse_capability_new_command(args: &[String]) -> Result<Command, String> {
 }
 
 fn help_serve() -> String {
-    "traverse-cli serve [--bind <address>] [--port <port>] [--auth <mode>] [--allow-unauthenticated] [--qr] [--grpc-bind <address> --grpc-tls-cert <path> --grpc-tls-key <path>]
+    "traverse-cli serve --registry-state <path> [--bind <address>] [--port <port>] [--auth <mode>] [--allow-unauthenticated] [--qr] [--grpc-bind <address> --grpc-tls-cert <path> --grpc-tls-key <path>]
 
   Purpose:
     Start a development and CI HTTP/JSON API on 127.0.0.1:8787 by default.
@@ -2656,6 +2656,10 @@ fn help_serve() -> String {
     Loopback callers (127.0.0.1 / ::1) are allowed without authentication. All
     other callers must supply an Authorization: Bearer <token> header unless
     --allow-unauthenticated is set.
+
+  Required flags:
+    --registry-state <path>    Host-supplied verified public registry-state manifest.
+                               Without it serve exits with registry_sync_missing.
 
   Optional flags:
     --bind <address>           Address and port to listen on (default: 127.0.0.1:8787,
@@ -2673,14 +2677,13 @@ fn help_serve() -> String {
                                Requires --grpc-tls-cert and --grpc-tls-key.
     --grpc-tls-cert <path>     PEM certificate chain for the gRPC listener.
     --grpc-tls-key <path>      PEM private key for the gRPC listener.
-    --registry-state <path>    Host-supplied verified public registry-state manifest.
     --help                     Print this help text.
 
   Example:
-    traverse-cli serve
+    traverse-cli serve --registry-state examples/expedition/registry-bundle/manifest.json
     traverse-cli serve --registry-state /srv/traverse/verified-registry.json
-    traverse-cli serve --bind 127.0.0.1:9090
-    traverse-cli serve --port 9090 --allow-unauthenticated"
+    traverse-cli serve --registry-state examples/expedition/registry-bundle/manifest.json --bind 127.0.0.1:9090
+    traverse-cli serve --registry-state examples/expedition/registry-bundle/manifest.json --port 9090 --allow-unauthenticated"
         .to_string()
 }
 
@@ -7743,7 +7746,7 @@ fn render_trace_summary(trace_path: &Path, trace: &RuntimeTrace) -> String {
 }
 
 fn usage() -> String {
-    "usage: traverse-cli app <new|validate|register> [options] | traverse-cli registry sync --workspace <id> --json | traverse-cli component new <component-id> | traverse-cli <bundle|capability-package|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli serve [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
+    "usage: traverse-cli app <new|validate|register> [options] | traverse-cli registry sync --workspace <id> --json | traverse-cli component new <component-id> | traverse-cli <bundle|capability-package|event|trace|workflow|expedition|federation> <inspect|register|execute|peers|sync|status> <artifact-path> [request-path] [--trace-out <trace-path>] | traverse-cli serve --registry-state <path> [--bind <address>] [--port <N>] [--allow-unauthenticated]".to_string()
 }
 
 fn write_trace_artifact(path: &Path, trace: &RuntimeTrace) -> Result<(), CliError> {
@@ -9036,7 +9039,7 @@ mod tests {
         reject_private_contract_scope, replace_prepared_bundle, run_command, run_serve,
         safe_artifact_path_component, sha256_hex, signature_sibling_url,
         surface_coverage_gap_messages, telemetry, uncovered_action_enum_values,
-        unresolved_persona_refs, use_case_smoke_coverage_gaps,
+        unresolved_persona_refs, usage, use_case_smoke_coverage_gaps,
         use_case_smoke_coverage_gaps_for_package, validate_authoring_outcome_telemetry_for_cli,
         validate_component_risk_policy_for_cli, validate_publish_ai_model_metadata,
         validate_registry_path_segment, validate_signature_evidence,
@@ -13401,6 +13404,24 @@ mod tests {
         assert!(text.contains("not the production app topology"));
         assert!(text.contains("neither a loopback sidecar"));
         assert!(text.contains(".traverse/server.json discovery"));
+    }
+
+    #[test]
+    fn serve_help_examples_pass_mandatory_registry_state() {
+        let text = help_serve();
+        let examples: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("traverse-cli serve"))
+            .collect();
+        assert!(examples.len() > 1);
+        for example in examples {
+            assert!(
+                example.contains("--registry-state "),
+                "serve help line must pass --registry-state: {example}"
+            );
+        }
+        assert!(usage().contains("traverse-cli serve --registry-state <path>"));
     }
 
     #[test]

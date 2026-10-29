@@ -29,7 +29,7 @@ manifest or re-resolve `registry_ref` at startup. After register, prepare, and
 optional activate:
 
 ```bash
-cargo run -p traverse-cli-rs -- serve
+cargo run -p traverse-cli-rs -- serve --registry-state examples/expedition/registry-bundle/manifest.json
 ```
 
 If a command returns `app_registration_requires_refresh`, the workspace has a
