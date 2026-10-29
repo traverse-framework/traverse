@@ -21,7 +21,9 @@ if [[ "${actual_digest}" != "${expected_digest}" ]]; then
   exit 1
 fi
 echo "==> cargo package -p traverse-cli-rs"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo package -p traverse-cli-rs --no-verify --allow-dirty --target-dir "${workdir}/pkg-target"
+# traverse-registry-sync is packaged alongside so Cargo resolves it locally
+# until its first crates.io release (#1751).
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo package -p traverse-registry-sync -p traverse-cli-rs --no-verify --allow-dirty --target-dir "${workdir}/pkg-target"
 crate_path="$(find "${workdir}/pkg-target" -name 'traverse-cli-rs-*.crate' | head -n 1)"
 test -n "${crate_path}"
 mkdir -p "${workdir}/crate"
@@ -41,6 +43,7 @@ cat >"${crate_dir}/.cargo/config.toml" <<EOF
 [patch.crates-io]
 traverse-contracts = { path = "${repo_root}/crates/traverse-contracts" }
 traverse-mcp = { path = "${repo_root}/crates/traverse-mcp" }
+traverse-registry-sync = { path = "${repo_root}/crates/traverse-registry-sync" }
 traverse-runtime = { path = "${repo_root}/crates/traverse-runtime" }
 EOF
 # Packaged crates omit Cargo.lock; copy the workspace lock so --locked works.
