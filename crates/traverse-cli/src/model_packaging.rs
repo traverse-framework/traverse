@@ -37,7 +37,7 @@ pub const RUNNER_ABI_VERSION: u16 = 3;
 /// Kept in lockstep with `fixtures/onnx/runner.wasm.sha256` by
 /// `scripts/ci/onnx_runner_guest_check.sh`.
 pub const AUDITED_ONNX_RUNNER_SHA256: &str =
-    "bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622";
+    "7a20f87befcb8792b2f321a488145954ca9f1e000442d5984f1c03c8163353b8";
 const PAGE: u64 = 65_536;
 const REQUIRED_EXPORTS: [&str; 4] = ["model_alloc", "model_prepare", "model_execute", "memory"];
 

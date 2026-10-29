@@ -288,7 +288,7 @@ traverse-cli model package-onnx runner.wasm my-model.onnx my-model.package.json 
 ```
 
 `package-onnx` fails closed if `<runner.wasm>` is not the audited guest
-(sha256 `bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`).
+(sha256 `7a20f87befcb8792b2f321a488145954ca9f1e000442d5984f1c03c8163353b8`).
 
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;
@@ -342,34 +342,40 @@ always matches what ships.
 
 <!-- onnx-operators:begin (generated; see crates/traverse-onnx-runner-guest/tests/supported_operators.rs) -->
 
-The runner registers these 160 ONNX operators (`tract-onnx` 0.21.18, as pinned in
+The runner registers these 180 ONNX operators (`tract-onnx` 0.23.9, as pinned in
 `crates/traverse-onnx-runner-guest/Cargo.lock`):
 
 `Abs`, `Acos`, `Acosh`, `Add`, `And`, `ArgMax`, `ArgMin`,
 `ArrayFeatureExtractor`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AveragePool`,
-`BatchNormalization`, `BitShift`, `BitwiseAnd`, `BitwiseNot`, `BitwiseOr`,
-`BitwiseXor`, `BlackmanWindow`, `Cast`, `CastLike`, `CategoryMapper`, `Ceil`,
-`Celu`, `Clip`, `Compress`, `Concat`, `Constant`, `ConstantLike`,
-`ConstantOfShape`, `Conv`, `ConvInteger`, `ConvTranspose`, `Cos`, `Cosh`,
-`CumSum`, `DFT`, `DepthToSpace`, `DequantizeLinear`, `Div`, `Dropout`,
-`DynamicQuantizeLinear`, `Einsum`, `Elu`, `Equal`, `Erf`, `Exp`, `Expand`,
-`EyeLike`, `Flatten`, `Floor`, `GRU`, `Gather`, `GatherElements`, `GatherND`,
-`Gemm`, `GlobalAveragePool`, `GlobalLpPool`, `GlobalMaxPool`, `Greater`,
-`GreaterOrEqual`, `HammingWindow`, `HannWindow`, `HardSigmoid`, `HardSwish`,
-`Hardmax`, `Identity`, `If`, `InstanceNormalization`, `IsInf`, `IsNaN`,
-`LRN`, `LSTM`, `LayerNormalization`, `LeakyRelu`, `Less`, `LessOrEqual`,
-`Log`, `LogSoftmax`, `MatMul`, `MatMulInteger`, `Max`, `MaxPool`, `Mean`,
-`MelWeightMatrix`, `Min`, `Mod`, `Mul`, `Multinomial`, `Neg`,
-`NonMaxSuppression`, `NonZero`, `Not`, `OneHot`, `Or`, `PRelu`, `Pad`,
-`ParametricSoftplus`, `Pow`, `QLinearConv`, `QLinearMatMul`,
-`QuantizeLinear`, `RNN`, `RandomNormal`, `RandomNormalLike`, `RandomUniform`,
-`RandomUniformLike`, `Range`, `Reciprocal`, `ReduceL1`, `ReduceL2`,
-`ReduceLogSum`, `ReduceLogSumExp`, `ReduceMax`, `ReduceMean`, `ReduceMin`,
-`ReduceProd`, `ReduceSum`, `ReduceSumSquare`, `Relu`, `Reshape`, `Resize`,
-`Round`, `Rsqrt`, `STFT`, `ScaledTanh`, `Scan`, `Scatter`, `ScatterElements`,
-`ScatterND`, `Selu`, `Shape`, `Shrink`, `Sigmoid`, `Sign`, `Sin`, `Sinh`,
-`Size`, `Slice`, `Softmax`, `Softplus`, `Softsign`, `SpaceToDepth`, `Split`,
-`Sqrt`, `Squeeze`, `Sub`, `Sum`, `Tan`, `Tanh`, `ThresholdedRelu`, `Tile`,
+`BatchNormalization`, `BiasGelu`, `BitShift`, `BitwiseAnd`, `BitwiseNot`,
+`BitwiseOr`, `BitwiseXor`, `BlackmanWindow`, `Cast`, `CastLike`,
+`CategoryMapper`, `Ceil`, `Celu`, `Clip`, `Compress`, `Concat`, `Constant`,
+`ConstantLike`, `ConstantOfShape`, `Conv`, `ConvInteger`, `ConvTranspose`,
+`Cos`, `Cosh`, `CumSum`, `DFT`, `DepthToSpace`, `DequantizeLinear`, `Div`,
+`Dropout`, `DynamicQuantizeLinear`, `Einsum`, `Elu`, `Equal`, `Erf`, `Exp`,
+`Expand`, `EyeLike`, `FastGelu`, `Flatten`, `Floor`, `GRU`, `Gather`,
+`GatherBlockQuantized`, `GatherElements`, `GatherND`, `Gelu`, `Gemm`,
+`GlobalAveragePool`, `GlobalLpPool`, `GlobalMaxPool`, `Greater`,
+`GreaterOrEqual`, `GridSample`, `GroupNormalization`, `HammingWindow`,
+`HannWindow`, `HardSigmoid`, `HardSwish`, `Hardmax`, `Identity`, `If`,
+`InstanceNormalization`, `IsInf`, `IsNaN`, `LRN`, `LSTM`,
+`LayerNormalization`, `LeakyRelu`, `Less`, `LessOrEqual`, `LinearClassifier`,
+`LinearRegressor`, `Log`, `LogSoftmax`, `LpNormalization`, `MatMul`,
+`MatMulInteger`, `MatMulNBits`, `Max`, `MaxPool`, `Mean`,
+`MeanVarianceNormalization`, `MelWeightMatrix`, `Min`, `Mish`, `Mod`, `Mul`,
+`Multinomial`, `Neg`, `NonMaxSuppression`, `NonZero`, `Normalizer`, `Not`,
+`OneHot`, `Or`, `PRelu`, `Pad`, `ParametricSoftplus`, `Pow`, `QLinearConv`,
+`QLinearMatMul`, `QuantizeLinear`, `QuickGelu`, `RMSNormalization`, `RNN`,
+`RandomNormal`, `RandomNormalLike`, `RandomUniform`, `RandomUniformLike`,
+`Range`, `Reciprocal`, `ReduceL1`, `ReduceL2`, `ReduceLogSum`,
+`ReduceLogSumExp`, `ReduceMax`, `ReduceMean`, `ReduceMin`, `ReduceProd`,
+`ReduceSum`, `ReduceSumSquare`, `Relu`, `Reshape`, `Resize`,
+`RotaryEmbedding`, `Round`, `Rsqrt`, `STFT`, `ScaledTanh`, `Scan`, `Scatter`,
+`ScatterElements`, `ScatterND`, `Selu`, `Shape`, `Shrink`, `Sigmoid`, `Sign`,
+`SimplifiedLayerNormalization`, `Sin`, `Sinh`, `Size`,
+`SkipLayerNormalization`, `SkipSimplifiedLayerNormalization`, `Slice`,
+`Softmax`, `Softplus`, `Softsign`, `SpaceToDepth`, `Split`, `Sqrt`,
+`Squeeze`, `Sub`, `Sum`, `Swish`, `Tan`, `Tanh`, `ThresholdedRelu`, `Tile`,
 `TopK`, `Transpose`, `TreeEnsembleClassifier`, `Trilu`, `Unsqueeze`, `Where`,
 `Xor`
 

@@ -2,7 +2,7 @@
   "schema_version": "2.2.0",
   "model_id": "traverse.hf-text-encoder-toy",
   "version": "1.0.0",
-  "wasm_digest": "7f606ab991168cd540f3c770d05c5899923267beed39cc89273c6d5cd092f768",
+  "wasm_digest": "a8b7b268a442dffeb236919df88a59746d7c0233e2ab63aa69724c320f616e00",
   "registry_ref": "registry:traverse.hf-text-encoder-toy@1.0.0",
   "executable_format": "traverse-model-wasm",
   "abi_version": 3,

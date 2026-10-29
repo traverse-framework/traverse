@@ -2,11 +2,27 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Security: ONNX runner guest on tract-onnx 0.23.9 (`#1735`)
+
+- The runner guest moves from `tract-onnx` 0.21 to 0.23.9. This drops the
+  vulnerable `time` crate (Dependabot alert #20) and `getrandom` 0.2. The
+  guest still imports nothing; `getrandom` 0.3 uses the `unsupported` backend.
+- New audited runner sha256
+  `7a20f87befcb8792b2f321a488145954ca9f1e000442d5984f1c03c8163353b8`
+  (Linux CI build, 15.7 MB, was 11.5 MB). `model package-onnx` from this
+  source accepts only this runner; the `onnx-runner-v0.15.0` release runner
+  pairs with the 0.15.0 CLI until the next `onnx-runner-v*` release.
+- Supported ONNX operators grow from 160 to 180 (strict superset).
+- `digits-onnx`, `digits-onnx-coreml` and `hf-text-encoder-toy` are
+  re-packaged and re-signed. All conformance output frames are byte-identical
+  to the 0.21 runner.
+
 ## Security: wasmtime / wasmtime-wasi 44 → 45.0.3 (`#1734`)
 
 - Fixes the wasmtime-wasi advisory where WASI hard links bypass `FilePerms`
   for the destination path. Affects the default `wasmtime-executor` feature
   of `traverse-runtime`. No API, contract, limit, or trace change.
+
 
 ## Perf / API: model path routing + async cancellable submit (`#1657`)
 

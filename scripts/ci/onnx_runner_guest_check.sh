@@ -39,10 +39,11 @@ cd "${guest_dir}"
 cargo fmt --check
 CARGO_TARGET_DIR="${target_dir}" cargo test --locked --quiet
 CARGO_TARGET_DIR="${target_dir}" cargo clippy --locked --all-targets -- -D warnings
-# RUSTFLAGS replaces .cargo/config.toml's rustflags, so it repeats +simd128.
+# RUSTFLAGS replaces .cargo/config.toml's rustflags, so it repeats +simd128
+# and the import-free getrandom backend.
 # Panic locations embed dependency source paths; remap them so the bytes do
 # not depend on where CARGO_HOME or the checkout lives.
-export RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--export=__stack_pointer --remap-path-prefix=${cargo_home}/registry/src=/cargo/registry/src --remap-path-prefix=${guest_dir}=/traverse-onnx-runner-guest"
+export RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--export=__stack_pointer --cfg getrandom_backend=\"unsupported\" --remap-path-prefix=${cargo_home}/registry/src=/cargo/registry/src --remap-path-prefix=${guest_dir}=/traverse-onnx-runner-guest"
 CARGO_TARGET_DIR="${target_dir}" cargo clippy --locked --release --target wasm32-unknown-unknown -- -D warnings
 CARGO_TARGET_DIR="${target_dir}" cargo build --locked --release --target wasm32-unknown-unknown
 

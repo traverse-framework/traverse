@@ -16,13 +16,3 @@ pub mod runner;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)]
 mod abi;
-
-#[cfg(target_arch = "wasm32")]
-fn no_entropy(_: &mut [u8]) -> Result<(), getrandom::Error> {
-    // Deterministic and import-free: randomness requests fail instead of
-    // importing a host entropy source (BirdNET-style models never ask).
-    Err(getrandom::Error::UNSUPPORTED)
-}
-
-#[cfg(target_arch = "wasm32")]
-getrandom::register_custom_getrandom!(no_entropy);
