@@ -2826,6 +2826,8 @@ dependencies = [
 name = "traverse-runtime-wasm"
 version = "0.15.0"
 dependencies = [
+ "semver",
+ "serde",
  "serde_json",
  "traverse-contracts",
  "wasmi",
