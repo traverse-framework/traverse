@@ -7106,3 +7106,150 @@ executes third-party guests.
 
 Chosen by the maintainer on `#1744` (2026-10-29): the recommended option,
 48.0.7 with Rust 1.95, over 36.0.19 LTS.
+
+## Decision 120: One-Time Placement Preparation Runs at Registration, Never in a Call
+
+- **Date**: 2026-10-29
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1706`, `#1630`
+- **Origin**: `#1630` device evidence. With `computeUnits: "cpu_only"`, the
+  first governed BirdNET call on an iPhone 14 Pro Max failed with `timeout`
+  at the 60 s call deadline.
+
+### Context
+
+Registration is followed by the first call, and that call does three
+one-time jobs inside its own deadline:
+- compiling the variant on the device;
+- the 21-case device self-check (FR-062);
+- `model_prepare` for `wasm-cpu` when the policy falls back (about 9 s for
+  BirdNET).
+
+Spec 138 already says a self-check "is not a public call, so its cost is not
+charged to any call's ceilings". The host broke that rule. Spec 138 0.12.1
+also says the call's wall-clock deadline includes prepare time.
+
+### Decision
+
+1. **Registration prepares the selected placement.** Registration walks the
+   policy's placement list and, for the first placement that qualifies:
+   - compiles the adapter variant;
+   - runs or reuses the stored device self-check (FR-062 key unchanged);
+   - runs `model_prepare` when the placement is `wasm-cpu`.
+
+   Registration returns only when that placement is ready. The placement is
+   then fixed, so every call uses the same placement (determinism).
+   - Rejected: pausing the first call's deadline (the first call's wall time
+     becomes unbounded).
+   - Rejected: background preparation with fallback placements meanwhile
+     (placement, and so results within tolerance, would depend on timing).
+   - Rejected: a separate self-check budget inside the first call (the first
+     call stays slow, and there is a second timeout to explain).
+2. **No call is charged for one-time preparation.** The 0.12.1 rule that the
+   call deadline includes prepare time is replaced. A call's deadline,
+   `max_fuel`, and ceilings cover only that call's execution. One exception:
+   if a host evicts a snapshot (snapshots are never persisted), the
+   re-prepare on a later call stays charged to that call, as in 0.12.1.
+3. **A host budget bounds registration.**
+   - The registration preparation budget is host-owned and configurable,
+     with a generous default.
+   - A placement whose preparation exceeds the budget is unavailable on that
+     device, like a failed self-check. The trace records it and registration
+     moves to the next listed placement.
+   - Registration fails with `model_unavailable` / `placement_unavailable`
+     only when no placement qualifies. Cancellation stops registration
+     (`cancelled`), and no partial state is kept.
+4. **Spec home.** Spec 138 `0.16.0` amends the self-check, prepare-budget,
+   and FR-062/FR-063 text. There is no new spec.
+5. **Closing bar.** `#1706` closes on:
+   - host tests with a fake adapter on every host, proving preparation runs
+     at registration, the first call's deadline excludes it, and an
+     over-budget placement falls through;
+   - one physical iPhone run with `cpu_only` where the first call succeeds
+     and the registration time is recorded.
+
+### Consequences
+
+- Registration on a phone can take tens of seconds the first time on a
+  device. Later registrations reuse the stored self-check.
+- A slow device may land on `wasm-cpu`. That is visible in the trace and in
+  `placement_evidence`.
+
+### Approval
+
+Chosen by the maintainer on `#1706` (2026-10-29): the recommended option on
+each question (eager preparation at registration, including `model_prepare`,
+a host budget that falls through, and tests plus one iPhone run).
+
+## Decision 121: Self-Contained Mode A — Shared Sync, Shared Validator, Four Binary Targets
+
+- **Date**: 2026-10-29
+- **Status**: Accepted
+- **Governing specs**: `119-verified-registry-mcp-mode-a`, `055-registry-sync`
+- **Related issues**: `#1721`, `#1653`
+- **Origin**: the 2026-10-23 weekly demo. Running a Mode A agent needed a
+  source build of `traverse-mcp` and a hand-written Spec 055 synced state.
+  The server then refused to start with `registry_metadata_cache_invalid`,
+  without naming the record or field.
+
+### Context
+
+- `mcp-server-publish.yml` (Spec 119 FR-006, `#1653`) already builds Linux
+  x64 and macOS arm64 binaries on every product tag as `traverse-mcp-vX.Y.Z`.
+  It was added after `v0.15.0`, so no binary has been published yet.
+- `traverse-cli registry sync` already discovers the highest `index-v*`
+  release with an `index.json` asset and supports `--source-repo`. It writes
+  only into a CLI workspace, and no `traverse-cli` binary ships.
+- `prepare-cache` accepts metadata that server startup then rejects.
+
+### Decision
+
+1. **One sync implementation for both binaries.**
+   - The registry-sync logic moves into a shared crate, and
+     `traverse-cli registry sync` uses it.
+   - `traverse-mcp sync --out <path> [--release index-vN] [--source-repo
+     <owner/repo>]` writes a Spec 055 synced-state file.
+   - By default it takes the highest `index-v*`, like the CLI. `--release`
+     pins one release, and the output records the tag it used.
+   - Rejected: shipping `traverse-cli` for this (two downloads for one
+     setup).
+   - Rejected: letting `prepare-cache` fetch the index itself (that step
+     stops being offline, and the synced state is no longer a file you can
+     inspect).
+2. **One metadata validator.**
+   - `prepare-cache` and server startup run the same verification-binding
+     validator, so a cache that prepares is a cache that serves.
+   - Failures keep the code `registry_metadata_cache_invalid` and add
+     structured `record` (`namespace/id@version`) and `field` details.
+   - Rejected: new per-failure codes (more public error surface, and the
+     server's existing code would change meaning).
+   - Rejected: details in the message text only (not machine-readable).
+3. **Four binary targets.** `mcp-server-publish.yml` adds
+   `aarch64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` (a `.zip`
+   archive), next to the existing two. Each target gets a checksum and build
+   provenance, and the binary is smoke-run.
+4. **Release ownership is unchanged.** Binaries follow product tags in
+   lockstep, as Spec 119 FR-006 says.
+5. **Spec home.** Spec 119 is amended for `sync`, the shared validator, and
+   the target matrix. Spec 055 is amended for the shared crate and the
+   file-output mode. There is no new spec.
+6. **Tracking.** `#1721` is the umbrella, with one ticket per slice:
+   - shared sync crate plus `traverse-mcp sync`;
+   - the shared validator with `record`/`field` details;
+   - the four-target release matrix;
+   - docs: a Mode A quickstart of at most three commands, and the weekly
+     demo moves to the release binary.
+
+### Consequences
+
+- Mode A becomes three commands with no Rust toolchain: download, `sync`,
+  `prepare-cache`.
+- Callers that match `registry_metadata_cache_invalid` keep working. New
+  callers branch on `field`.
+
+### Approval
+
+Chosen by the maintainer on `#1721` (2026-10-29): the recommended option on
+each question (shared sync crate in both binaries, same code with structured
+details, and all four targets).
