@@ -177,6 +177,18 @@ const host = new ExactModelBrowserHost(pins, {
 });
 ```
 
+### Spec 104 guest `connector_invoke` (#1719)
+
+Nested `runtime.wasm` now links `traverse_host.connector_invoke` (same
+fail-closed mediation as native Wasmtime). A public
+`BundleEmbedder.activateMediatedConnector` API and a first-party browser
+`traverse.model-runtime` Spec 104 binding are **not yet** shipped: Spec 104
+is a synchronous ABI while `ExactModelBrowserHost.execute` is async, so the
+binding needs JSPI, a Worker + `Atomics.wait`, or a documented replay
+strategy before it can land. Until then, use Spec 137
+`ExactModelBrowserHost` / `registerHostConnectorAdapter` for app-command
+`model.execute`, not catalog guest `connector_invoke`.
+
 ## Error mapping
 
 Boundary failures use stable `EmbedderErrorCode` values —
