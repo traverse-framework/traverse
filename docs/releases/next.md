@@ -14,7 +14,8 @@ Unreleased changes since `v0.15.0` will be recorded here.
 - Committed wasm rebuilt on 1.95.0: `runtime.wasm`, the ONNX runner guest
   and the digits-mlp guest. Model fixtures are re-packaged and re-signed;
   conformance outputs are unchanged.
-  - `runtime.wasm` sha256 `ec49cb7674b362004b3c395a817f1d764893e1c98d973255b3953ed3c8532226`.
+  - `runtime.wasm` sha256 `a99230d5b77c5afac3ba5ffc550ac63aee181d15fd26266589c668e82dda5c61`
+    (refreshed in `#1719` / `#1755` after nested `connector_invoke` landed).
   - Audited ONNX runner sha256
     `ac5591fac5f37435667169e969f9117cc6f81dc66b73cd74d1aef9000f5d3a0a`,
     replacing the `#1735` digest above; `model package-onnx` from this
