@@ -710,8 +710,8 @@ pub fn execute_nested_capability_with_connectors(
 mod tests {
     use super::{
         ActivatedConnector, ConnectorInvokeRequest, ConnectorInvokeResponse, EmittedEvent,
-        MediatedConnector, MediatedConnectorContext, NestedExecutionLimits,
-        NestedExecutionOutcome, SUPPORTED_HOST_ABI_VERSION, execute_nested_capability,
+        MediatedConnector, MediatedConnectorContext, NestedExecutionLimits, NestedExecutionOutcome,
+        SUPPORTED_HOST_ABI_VERSION, execute_nested_capability,
         execute_nested_capability_with_connectors, execute_nested_capability_with_limits,
     };
     use std::sync::Arc;
@@ -1193,7 +1193,9 @@ mod tests {
         let unbound = run_with_context(&wasm, &declared_only_context())?;
         assert_eq!(unbound.connector_invocation_evidence.len(), 1);
         assert_eq!(
-            unbound.connector_invocation_evidence[0].failure_class.as_deref(),
+            unbound.connector_invocation_evidence[0]
+                .failure_class
+                .as_deref(),
             Some("unbound")
         );
 
@@ -1223,7 +1225,11 @@ mod tests {
             outcome.connector_invocation_evidence[0].result_class,
             "success"
         );
-        assert!(outcome.connector_invocation_evidence[0].failure_class.is_none());
+        assert!(
+            outcome.connector_invocation_evidence[0]
+                .failure_class
+                .is_none()
+        );
         Ok(())
     }
 
@@ -1249,11 +1255,7 @@ mod tests {
                 "failure",
                 Some("bounded_io"),
             ),
-            (
-                Arc::new(TestConnector),
-                "failure",
-                Some("incompatible"),
-            ),
+            (Arc::new(TestConnector), "failure", Some("incompatible")),
         ];
         let versions = ["1.0.0", "1.0.0", "1.0.0", "2.0.0"];
         for ((implementation, result_class, failure_class), version) in
@@ -1331,7 +1333,8 @@ mod tests {
             (VALID_CONNECTOR_REQUEST, 65_535, 10, 256, 64),
             (VALID_CONNECTOR_REQUEST, 32, valid_len, 256, 65_537),
         ];
-        for (request, request_ptr, request_len, response_ptr, response_capacity) in invalid_requests {
+        for (request, request_ptr, request_len, response_ptr, response_capacity) in invalid_requests
+        {
             let request_len = if request_len == 0 {
                 i32::try_from(request.len()).map_err(|error| format!("len: {error}"))?
             } else {
