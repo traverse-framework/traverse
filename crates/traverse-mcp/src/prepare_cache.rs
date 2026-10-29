@@ -9,7 +9,8 @@ use std::path::Path;
 use std::process::Command;
 use traverse_embedder::{
     HostRegistryCache, RegistryArtifactFetcher, RegistryCacheError, RegistryCacheErrorCode,
-    RegistryPrepareEvidence, prepare_registry_dependency, publish_public_metadata,
+    RegistryCacheErrorDetails, RegistryPrepareEvidence, prepare_registry_dependency,
+    publish_public_metadata, validate_public_metadata,
 };
 use traverse_registry::{RegistryReference, SyncedPublicRegistryState};
 
@@ -22,6 +23,8 @@ pub struct PrepareCacheError {
     pub code: String,
     /// Human-readable explanation without paths, credentials, or bytes.
     pub message: String,
+    /// Failing `record` and `field` for `registry_metadata_cache_invalid`.
+    pub details: Option<RegistryCacheErrorDetails>,
 }
 
 impl PrepareCacheError {
@@ -29,6 +32,7 @@ impl PrepareCacheError {
         Self {
             code: code.into(),
             message: message.into(),
+            details: None,
         }
     }
 
@@ -36,18 +40,32 @@ impl PrepareCacheError {
         Self {
             code: error.code.as_str().to_string(),
             message: error.message,
+            details: error.details,
         }
     }
 
     /// Machine-readable error envelope for `--json` callers.
     #[must_use]
     pub fn envelope(&self) -> Value {
-        json!({
+        let mut envelope = json!({
             "kind": "mcp_mode_b_prepare_cache_error",
             "governing_spec": GOVERNING_SPEC,
             "code": self.code,
             "message": self.message,
-        })
+        });
+        insert_binding_details(&mut envelope, self.details.as_ref());
+        envelope
+    }
+}
+
+/// Add Spec 119 0.3.0 `record` / `field` details to an error envelope.
+pub(crate) fn insert_binding_details(
+    envelope: &mut Value,
+    details: Option<&RegistryCacheErrorDetails>,
+) {
+    if let (Some(details), Some(object)) = (details, envelope.as_object_mut()) {
+        object.insert("record".to_string(), json!(details.record));
+        object.insert("field".to_string(), json!(details.field));
     }
 }
 
@@ -205,6 +223,8 @@ fn prepare_refs(
     cache_root: &Path,
     references: &[RegistryReference],
 ) -> Result<PrepareCacheEvidence, PrepareCacheError> {
+    // Same validator as server startup: fail before writing anything.
+    validate_public_metadata(snapshot).map_err(PrepareCacheError::from_cache)?;
     let cache = HostRegistryCache::new(cache_root);
     let fetcher = HostCliFetcher;
     let mut entries = Vec::with_capacity(references.len());
@@ -403,6 +423,61 @@ mod tests {
         let rendered = evidence.render();
         assert!(rendered.contains(KIT_ID));
         assert!(!rendered.contains(cache.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn prepared_cache_is_a_cache_that_serves() {
+        let root = fresh_root("round-trip");
+        let state = write_snapshot(&root);
+        let cache = root.join("cache");
+        prepare_verified_cache(&state, &cache, &[]).expect("prepare");
+        crate::stdio_server::ModeAContext::load(&cache).expect("serve loads the prepared cache");
+    }
+
+    #[test]
+    fn prepare_names_the_invalid_binding_and_writes_nothing() {
+        for field in ["service_type", "lifecycle"] {
+            let root = fresh_root(field);
+            let state = write_snapshot(&root);
+            let mut snapshot: Value =
+                serde_json::from_slice(&fs::read(&state).expect("read")).expect("parse");
+            snapshot["capabilities"][0][field] = json!("");
+            fs::write(&state, serde_json::to_vec(&snapshot).expect("json")).expect("write");
+            let cache = root.join("cache");
+            let error = prepare_verified_cache(&state, &cache, &[]).expect_err(field);
+            assert_eq!(error.code, "registry_metadata_cache_invalid");
+            let record = format!("{KIT_NAMESPACE}/{KIT_ID}@{KIT_VERSION}");
+            let envelope = error.envelope();
+            assert_eq!(envelope["record"], json!(record));
+            assert_eq!(envelope["field"], json!(field));
+            let text = error.to_string();
+            assert!(text.starts_with("registry_metadata_cache_invalid: "));
+            assert!(text.contains(&format!("record `{record}` field `{field}`")));
+            assert!(!cache.exists(), "prepare-cache must fail before writing");
+        }
+    }
+
+    #[test]
+    fn prepare_keeps_an_existing_cache_when_validation_fails() {
+        let root = fresh_root("keep");
+        let state = write_snapshot(&root);
+        let cache = root.join("cache");
+        prepare_verified_cache(&state, &cache, &[]).expect("prepare");
+        let generation = cache.join("public-metadata").join("current.json");
+        let before = fs::read(&generation).expect("generation");
+        let mut snapshot: Value =
+            serde_json::from_slice(&fs::read(&state).expect("read")).expect("parse");
+        snapshot["capabilities"][0]["lifecycle"] = json!("");
+        fs::write(&state, serde_json::to_vec(&snapshot).expect("json")).expect("write");
+        prepare_verified_cache(&state, &cache, &[]).expect_err("invalid lifecycle");
+        assert_eq!(fs::read(&generation).expect("kept"), before);
+    }
+
+    #[test]
+    fn error_envelope_omits_details_for_other_failures() {
+        let envelope = PrepareCacheError::new("registry_sync_missing", "x").envelope();
+        assert!(envelope.get("record").is_none());
+        assert!(envelope.get("field").is_none());
     }
 
     #[test]

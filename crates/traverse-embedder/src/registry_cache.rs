@@ -72,6 +72,19 @@ pub struct RegistryCacheError {
     pub code: RegistryCacheErrorCode,
     /// Human-readable explanation without paths, credentials, or bytes.
     pub message: String,
+    /// Failing record and field for an invalid verification binding
+    /// (Spec 119 0.3.0); `None` for every other failure.
+    pub details: Option<RegistryCacheErrorDetails>,
+}
+
+/// Which metadata binding failed validation (Spec 119 0.3.0, Decision 121).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryCacheErrorDetails {
+    /// `namespace/id@version` of the failing record; `None` when the failing
+    /// field belongs to the generation itself.
+    pub record: Option<String>,
+    /// The failing field name.
+    pub field: &'static str,
 }
 
 impl RegistryCacheError {
@@ -79,6 +92,21 @@ impl RegistryCacheError {
         Self {
             code,
             message: message.into(),
+            details: None,
+        }
+    }
+
+    fn invalid_binding(record: Option<String>, field: &'static str) -> Self {
+        let location = match &record {
+            Some(record) => format!("record `{record}` field `{field}`"),
+            None => format!("field `{field}`"),
+        };
+        Self {
+            code: RegistryCacheErrorCode::RegistryMetadataCacheInvalid,
+            message: format!(
+                "public metadata cache generation has invalid verification bindings: {location}"
+            ),
+            details: Some(RegistryCacheErrorDetails { record, field }),
         }
     }
 }
@@ -245,6 +273,32 @@ pub fn publish_public_metadata(
     snapshot: &SyncedPublicRegistryState,
     stale: bool,
 ) -> Result<(), RegistryCacheError> {
+    let generation = public_metadata_generation(snapshot, stale)?;
+    write_json_atomic(&cache.public_metadata_path(), &generation)
+}
+
+/// Check that a synced state projects to a metadata generation that
+/// [`read_public_metadata`] accepts, without writing anything.
+///
+/// [`publish_public_metadata`] and [`read_public_metadata`] run the same
+/// validator, so a cache that prepares is a cache that serves (Spec 119
+/// 0.3.0, Decision 121).
+///
+/// # Errors
+///
+/// Returns `registry_sync_missing` for an empty snapshot, or
+/// `registry_metadata_cache_invalid` with [`RegistryCacheErrorDetails`] for
+/// the first invalid verification binding.
+pub fn validate_public_metadata(
+    snapshot: &SyncedPublicRegistryState,
+) -> Result<(), RegistryCacheError> {
+    public_metadata_generation(snapshot, false).map(|_| ())
+}
+
+fn public_metadata_generation(
+    snapshot: &SyncedPublicRegistryState,
+    stale: bool,
+) -> Result<PublicMetadataGeneration, RegistryCacheError> {
     if snapshot.capabilities.is_empty() {
         return Err(RegistryCacheError::new(
             RegistryCacheErrorCode::RegistrySyncMissing,
@@ -275,16 +329,61 @@ pub fn publish_public_metadata(
             provenance: record.provenance.clone(),
         })
         .collect();
-    write_json_atomic(
-        &cache.public_metadata_path(),
-        &PublicMetadataGeneration {
-            schema_version: 1,
-            stale,
-            source_release: snapshot.release_tag.clone(),
-            index_digest,
-            records,
-        },
-    )
+    let generation = PublicMetadataGeneration {
+        schema_version: 1,
+        stale,
+        source_release: snapshot.release_tag.clone(),
+        index_digest,
+        records,
+    };
+    validate_generation(&generation)?;
+    Ok(generation)
+}
+
+/// The one verification-binding validator for metadata generations.
+fn validate_generation(generation: &PublicMetadataGeneration) -> Result<(), RegistryCacheError> {
+    let generation_checks = [
+        ("schema_version", generation.schema_version == 1),
+        ("source_release", !generation.source_release.is_empty()),
+        (
+            "index_digest",
+            normalize_digest(&generation.index_digest).is_some(),
+        ),
+    ];
+    if let Some((field, _)) = generation_checks.iter().find(|(_, valid)| !valid) {
+        return Err(RegistryCacheError::invalid_binding(None, field));
+    }
+    for record in &generation.records {
+        let record_checks = [
+            ("namespace", !record.namespace.is_empty()),
+            ("id", !record.id.is_empty()),
+            ("version", !record.version.is_empty()),
+            (
+                "artifact_digest",
+                normalize_digest(&record.artifact_digest).is_some(),
+            ),
+            (
+                "source_release",
+                record.source_release == generation.source_release,
+            ),
+            (
+                "index_digest",
+                record.index_digest == generation.index_digest,
+            ),
+            ("service_type", !record.service_type.is_empty()),
+            ("lifecycle", !record.lifecycle.is_empty()),
+        ];
+        if let Some((field, _)) = record_checks.iter().find(|(_, valid)| !valid) {
+            return Err(RegistryCacheError::invalid_binding(
+                Some(format!(
+                    "{}/{}@{}",
+                    record.namespace, record.id, record.version
+                )),
+                field,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Read one complete verified metadata generation without network access.
@@ -308,25 +407,7 @@ pub fn read_public_metadata(
             "public metadata cache generation is malformed",
         )
     })?;
-    if generation.schema_version != 1
-        || generation.source_release.is_empty()
-        || normalize_digest(&generation.index_digest).is_none()
-        || generation.records.iter().any(|record| {
-            record.namespace.is_empty()
-                || record.id.is_empty()
-                || record.version.is_empty()
-                || normalize_digest(&record.artifact_digest).is_none()
-                || record.source_release != generation.source_release
-                || record.index_digest != generation.index_digest
-                || record.service_type.is_empty()
-                || record.lifecycle.is_empty()
-        })
-    {
-        return Err(RegistryCacheError::new(
-            RegistryCacheErrorCode::RegistryMetadataCacheInvalid,
-            "public metadata cache generation has invalid verification bindings",
-        ));
-    }
+    validate_generation(&generation)?;
     Ok(PublicMetadataRead {
         records: generation.records,
         stale: generation.stale,
@@ -1847,6 +1928,132 @@ mod tests {
         assert_eq!(
             read_public_metadata(&cache).expect_err("invalid").code,
             RegistryCacheErrorCode::RegistryMetadataCacheInvalid
+        );
+    }
+
+    #[test]
+    fn public_metadata_read_names_the_failing_record_and_field() {
+        let cache = unique_cache();
+        let (snapshot, _, _) = sample_snapshot(false);
+        publish_public_metadata(&cache, &snapshot, false).expect("publish");
+        let path = cache.public_metadata_path();
+        let original: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read")).expect("json");
+        let other_digest =
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        let cases: [(&str, &str, Value, Option<&str>); 11] = [
+            ("", "schema_version", json!(2), None),
+            ("", "source_release", json!(""), None),
+            ("", "index_digest", json!("sha256:short"), None),
+            ("namespace", "namespace", json!(""), Some("/greet@1.0.0")),
+            ("id", "id", json!(""), Some("demo/@1.0.0")),
+            ("version", "version", json!(""), Some("demo/greet@")),
+            (
+                "artifact_digest",
+                "artifact_digest",
+                json!("md5:x"),
+                Some("demo/greet@1.0.0"),
+            ),
+            (
+                "source_release",
+                "source_release",
+                json!("index-v-tampered"),
+                Some("demo/greet@1.0.0"),
+            ),
+            (
+                "index_digest",
+                "index_digest",
+                other_digest,
+                Some("demo/greet@1.0.0"),
+            ),
+            (
+                "service_type",
+                "service_type",
+                json!(""),
+                Some("demo/greet@1.0.0"),
+            ),
+            (
+                "lifecycle",
+                "lifecycle",
+                json!(""),
+                Some("demo/greet@1.0.0"),
+            ),
+        ];
+        for (record_key, field, value, record) in cases {
+            let mut generation = original.clone();
+            if record_key.is_empty() {
+                generation[field] = value;
+            } else {
+                generation["records"][0][record_key] = value;
+            }
+            write_json_atomic(&path, &generation).expect("tamper");
+            let error = read_public_metadata(&cache).expect_err("invalid binding");
+            assert_eq!(
+                error.code,
+                RegistryCacheErrorCode::RegistryMetadataCacheInvalid
+            );
+            let details = error.details.expect("details");
+            assert_eq!(details.field, field);
+            assert_eq!(details.record.as_deref(), record);
+            assert!(
+                error.message.contains(&format!("field `{field}`")),
+                "{}",
+                error.message
+            );
+            if let Some(record) = record {
+                assert!(error.message.contains(&format!("record `{record}`")));
+            }
+        }
+    }
+
+    #[test]
+    fn publish_and_validate_reject_what_read_would_reject_without_writing() {
+        let cache = unique_cache();
+        let (snapshot, _, _) = sample_snapshot(false);
+        publish_public_metadata(&cache, &snapshot, false).expect("publish");
+        let before = fs::read(cache.public_metadata_path()).expect("generation");
+        for field in ["service_type", "lifecycle"] {
+            let mut bad = snapshot.clone();
+            if field == "service_type" {
+                bad.capabilities[0].service_type.clear();
+            } else {
+                bad.capabilities[0].lifecycle.clear();
+            }
+            let error = validate_public_metadata(&bad).expect_err("invalid snapshot");
+            assert_eq!(
+                error.code,
+                RegistryCacheErrorCode::RegistryMetadataCacheInvalid
+            );
+            assert_eq!(
+                error.details,
+                Some(RegistryCacheErrorDetails {
+                    record: Some("demo/greet@1.0.0".to_string()),
+                    field,
+                })
+            );
+            assert_eq!(
+                publish_public_metadata(&cache, &bad, false).expect_err("publish"),
+                error
+            );
+            assert_eq!(
+                fs::read(cache.public_metadata_path()).expect("kept"),
+                before
+            );
+        }
+        let mut no_release = snapshot.clone();
+        no_release.release_tag.clear();
+        let error = validate_public_metadata(&no_release).expect_err("no release");
+        assert_eq!(
+            error.details,
+            Some(RegistryCacheErrorDetails {
+                record: None,
+                field: "source_release",
+            })
+        );
+        assert!(validate_public_metadata(&snapshot).is_ok());
+        assert_eq!(
+            RegistryCacheError::new(RegistryCacheErrorCode::RegistryPrepareFailed, "x").details,
+            None
         );
     }
 

@@ -2,6 +2,20 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## `traverse-mcp` names the invalid metadata binding (`#1752`, Decision 121)
+
+- `prepare-cache` and server startup now run one shared verification-binding
+  validator. A synced state that `prepare-cache` accepts is one the server
+  starts on. Before, an empty `service_type` or `lifecycle` passed
+  `prepare-cache` and then stopped the server.
+- The error code stays `registry_metadata_cache_invalid`. The `--json`
+  envelope adds `record` (`namespace/id@version`) and `field`, and the
+  message names both.
+- `prepare-cache` validates before it writes, so a failure keeps any
+  existing cache.
+- `traverse-embedder` adds `validate_public_metadata` and
+  `RegistryCacheError::details`.
+
 ## `traverse-mcp` binaries for four targets (`#1753`, Decision 121)
 
 - The `traverse-mcp-vX.Y.Z` release now carries Linux arm64

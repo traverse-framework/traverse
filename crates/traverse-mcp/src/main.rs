@@ -425,7 +425,9 @@ mod tests {
                 "artifact_url": format!("file://{}", wasm.display()),
                 "contract_digest": digest(&contract_bytes),
                 "contract_url": format!("file://{}", contract.display()),
-                "deprecated": false
+                "deprecated": false,
+                "service_type": "stateless",
+                "lifecycle": "active"
             }],
             "events": []
         });
