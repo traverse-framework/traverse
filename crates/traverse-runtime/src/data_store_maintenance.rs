@@ -1044,6 +1044,19 @@ fn materialize_archive_to_root(archive: &Path, root: &Path) -> Result<(), Mainte
     Ok(())
 }
 
+fn map_zip_member_read_error(error: std::io::Error) -> std::io::Error {
+    // zip 9+ can reject a lying uncompressed-size field itself; normalize to
+    // the stable member_too_large code the rest of maintenance expects.
+    if error
+        .to_string()
+        .contains("larger than its declared uncompressed size")
+    {
+        std::io::Error::other("member_too_large")
+    } else {
+        error
+    }
+}
+
 fn read_zip_member_bounded(
     member: &mut zip::read::ZipFile<'_, File>,
     maximum_bytes: u64,
@@ -1052,11 +1065,12 @@ fn read_zip_member_bounded(
     if member.size() > maximum_bytes {
         return Err(std::io::Error::other("member_too_large"));
     }
-    let mut limited = member.take(maximum_bytes.saturating_add(1));
-    limited.read_to_end(output)?;
-    if output.len() as u64 > maximum_bytes {
-        return Err(std::io::Error::other("member_too_large"));
-    }
+    // zip 9+ fails closed on a lying uncompressed-size field (mapped below).
+    // Bound the reader to maximum_bytes so an honest member cannot overrun.
+    let mut limited = member.take(maximum_bytes);
+    limited
+        .read_to_end(output)
+        .map_err(map_zip_member_read_error)?;
     Ok(())
 }
 
@@ -2041,6 +2055,20 @@ mod tests {
         let failure = verify_backup_archive(&archive).expect_err("oversized member");
         assert_eq!(failure.code, MaintenanceErrorCode::BackupVerifyFailed);
         assert_eq!(failure.details["reason"], "member_too_large");
+    }
+
+    #[test]
+    fn map_zip_member_read_error_normalizes_zip9_lying_size_messages() {
+        let mapped = super::map_zip_member_read_error(std::io::Error::other(
+            "File is larger than its declared uncompressed size",
+        ));
+        assert_eq!(mapped.to_string(), "member_too_large");
+    }
+
+    #[test]
+    fn map_zip_member_read_error_preserves_unrelated_io_errors() {
+        let mapped = super::map_zip_member_read_error(std::io::Error::other("connection reset"));
+        assert_eq!(mapped.to_string(), "connection reset");
     }
 
     #[test]
