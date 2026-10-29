@@ -221,7 +221,8 @@ What to check first:
 1. Confirm the server command still works:
 
 ```bash
-cargo run -p traverse-cli-rs -- serve --bind 127.0.0.1:8787
+cargo run -p traverse-cli-rs -- serve --bind 127.0.0.1:8787 \
+  --registry-state examples/expedition/registry-bundle/manifest.json
 ```
 
 2. Confirm the React demo command still works:

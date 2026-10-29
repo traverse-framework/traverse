@@ -402,6 +402,7 @@ grep -q "docs/app-consumable-package-release-pointer.md" docs/app-consumable-con
 grep -q "youaskm3 integration validation" README.md
 grep -q "## Prerequisites" quickstart.md
 grep -q "traverse-cli-rs -- serve --bind 127.0.0.1:8787" quickstart.md
+grep -q -- "--registry-state examples/expedition/registry-bundle/manifest.json" quickstart.md
 grep -q "git checkout v0.3.0" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" docs/v0.3.0-public-surface-compatibility.md
 grep -q "docs/youaskm3-canonical-mcp-client-path.md" docs/v0.3.0-public-surface-compatibility.md
@@ -468,7 +469,7 @@ grep -q "traverse-cli-rs" docs/releases/v0.8.1.md
 grep -q "CARGO_REGISTRY_TOKEN" docs/releases/v0.8.1.md
 grep -q "coverage-gate" docs/releases/v0.8.1.md
 grep -q "cargo build" docs/v0.3.0-source-build-consumer-packaging.md
-grep -q "cargo run -p traverse-cli-rs -- serve" docs/v0.3.0-source-build-consumer-packaging.md
+grep -q "cargo run -p traverse-cli-rs -- serve --registry-state examples/expedition/registry-bundle/manifest.json" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "cargo run -p traverse-mcp -- stdio" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "traverse-sbom.cdx.json" docs/v0.3.0-source-build-consumer-packaging.md
 grep -q "No package-manager distribution" docs/v0.3.0-source-build-consumer-packaging.md
@@ -509,7 +510,7 @@ grep -q "docs/v0.3.0-public-surface-compatibility.md" docs/compatibility-policy.
 grep -q "docs/youaskm3-canonical-app-http-path.md" README.md
 grep -q "docs/youaskm3-canonical-app-http-path.md" docs/app-consumable-entry-path.md
 grep -q "Supported Traverse baseline: \`v0.3.0\`" docs/youaskm3-canonical-app-http-path.md
-grep -q "cargo run -p traverse-cli-rs -- serve" docs/youaskm3-canonical-app-http-path.md
+grep -q "cargo run -p traverse-cli-rs -- serve --registry-state examples/expedition/registry-bundle/manifest.json" docs/youaskm3-canonical-app-http-path.md
 grep -q ".traverse/server.json" docs/youaskm3-canonical-app-http-path.md
 grep -q "POST /v1/workspaces/{workspace_id}/capabilities" docs/youaskm3-canonical-app-http-path.md
 grep -q "POST /v1/workspaces/{workspace_id}/execute" docs/youaskm3-canonical-app-http-path.md

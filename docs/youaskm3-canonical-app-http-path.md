@@ -10,8 +10,10 @@ Supported Traverse baseline: `v0.3.0`
 Use a local source-build HTTP/JSON server for development, diagnosis, and CI:
 
 ```bash
-cargo run -p traverse-cli-rs -- serve
+cargo run -p traverse-cli-rs -- serve --registry-state examples/expedition/registry-bundle/manifest.json
 ```
+
+`--registry-state` is mandatory since `v0.10.0`: `serve` loads the verified registry-state manifest at that path and exits with `registry_sync_missing` without it.
 
 This starts the governed app-consumable API on `127.0.0.1:8787` by default and writes a local discovery file at:
 
@@ -83,6 +85,8 @@ cd Traverse
 git checkout v0.3.0
 cargo run -p traverse-cli-rs -- serve
 ```
+
+The `v0.3.0` tag predates the mandatory `--registry-state <path>` flag; on `v0.10.0` and later, start the server with the `--registry-state` command shown above.
 
 Requirements:
 
