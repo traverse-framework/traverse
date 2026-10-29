@@ -2,6 +2,17 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## `traverse-mcp` binaries for four targets (`#1753`, Decision 121)
+
+- The `traverse-mcp-vX.Y.Z` release now carries Linux arm64
+  (`aarch64-unknown-linux-gnu`) and Windows x64 (`x86_64-pc-windows-msvc`,
+  `.zip`) next to Linux x64 and macOS arm64.
+- Every target has a SHA-256 checksum and build provenance, and is
+  smoke-run (`--version`) before upload. The release notes list each
+  asset's SHA-256.
+- `workflow_dispatch` takes `dry_run: true` to build, smoke-run, and
+  checksum all four targets without attesting or releasing.
+
 ## Security: wasmtime 48.0.7 and Rust 1.95 (`#1744`, Decision 119)
 
 - `wasmtime` / `wasmtime-wasi` move from 45.0.3 to 48.0.7 (LTS). This fixes

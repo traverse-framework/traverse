@@ -2,8 +2,11 @@
 
 **Status**: Approved (2026-08-25)
 **Canonical governing ID**: `119-verified-registry-mcp-mode-a`
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Input**: Traverse #865 and #1144.
+**Amendment (2026-10-29, version 0.1.0 -> 0.2.0)**: Decision 121 / `#1753`.
+FR-006 names the four release targets, the Windows `.zip` archive, and the
+per-target smoke run and SHA-256 evidence.
 
 ## Purpose
 
@@ -39,6 +42,16 @@ refresh during discovery or execution.
 - **FR-006**: Mode A MUST ship as a versioned standalone `traverse-mcp`
   binary release with published checksum and provenance evidence. Source-run
   workflows remain contributor-only.
+  - (0.2.0) The release MUST carry four targets: `x86_64-unknown-linux-gnu`,
+    `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin` as `.tar.gz`, and
+    `x86_64-pc-windows-msvc` as `.zip`.
+  - Each target MUST have a SHA-256 checksum, a `SHA256SUMS` line, and build
+    provenance. The release evidence MUST list the SHA-256 of each asset.
+  - Each target's built binary MUST be smoke-run (`traverse-mcp --version`
+    reports the tag version and commit) before upload.
+  - Binaries follow product `v*` tags in lockstep as `traverse-mcp-vX.Y.Z`.
+    A `workflow_dispatch` dry run builds, smoke-runs, and checksums every
+    target without attesting or releasing.
 - **FR-007**: The first release MUST expose verified public discovery without
   hard-coded or inferred content groups. Registry-governed grouping metadata
   is required before content groups become a product surface.
