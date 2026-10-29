@@ -23,7 +23,7 @@
   "binary": {
     "path": "./artifacts/process-agent.wasm",
     "format": "wasm",
-    "expected_digest": "fnv1a64:12fe8caa6cdcd6d3",
+    "expected_digest": "fnv1a64:c37235dfc8b1d5a2",
     "abi_version": "1.0.0"
   },
   "constraints": {

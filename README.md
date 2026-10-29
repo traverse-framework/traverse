@@ -6,7 +6,7 @@
 [![CI](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml/badge.svg)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/coverage-core%20100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange)](https://www.rust-lang.org/)
 [![Version](https://img.shields.io/badge/version-v0.15.0-blue)](https://github.com/traverse-framework/traverse/releases)
 [![Registry](https://img.shields.io/badge/registry-live%20catalog-6f42c1)](https://registry.traverse-framework.com/)
 
@@ -109,7 +109,7 @@ the Rust yourself. Under the hood the implementation is still Rust→WASM
 (determinism, sandboxing, portability). That is the LLM-assisted authoring
 on-ramp.
 
-**Build / run from this repo (manual path):** Rust 1.94+
+**Build / run from this repo (manual path):** Rust 1.95+
 
 ```bash
 git clone https://github.com/traverse-framework/traverse.git

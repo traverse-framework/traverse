@@ -48,7 +48,7 @@ other tests' processes.
 ## Running it locally
 
 You need a JDK 17+, the Android SDK with an `x86_64` system image, the NDK
-(`ANDROID_NDK_HOME`), Rust 1.94.0 with the `aarch64-linux-android` and
+(`ANDROID_NDK_HOME`), Rust 1.95.0 with the `aarch64-linux-android` and
 `x86_64-linux-android` targets, and `cargo-ndk` 4.1.2.
 
 ```bash

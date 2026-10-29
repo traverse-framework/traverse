@@ -46,8 +46,8 @@ gh project item-edit --project-id PVT_kwDOEbiBt84Bbyp1 \
 Status option IDs for reference: Ready `f75ad846`, In Progress `47fc9ee4`, Done `98236657`, Blocked `294b89f5`.
 
 ## Active Technologies
-- Rust 1.94+; host packages in TypeScript, Swift, Kotlin, and .NET + Cargo workspace, serde, semver, existing registry and embedder packages (524-production-app-readiness)
+- Rust 1.95+; host packages in TypeScript, Swift, Kotlin, and .NET + Cargo workspace, serde, semver, existing registry and embedder packages (524-production-app-readiness)
 - host-owned verified artifact cache, append-only trace journal, host-owned file-backed DataStore v2 (524-production-app-readiness)
 
 ## Recent Changes
-- 524-production-app-readiness: Added Rust 1.94+; host packages in TypeScript, Swift, Kotlin, and .NET + Cargo workspace, serde, semver, existing registry and embedder packages
+- 524-production-app-readiness: Added Rust 1.95+; host packages in TypeScript, Swift, Kotlin, and .NET + Cargo workspace, serde, semver, existing registry and embedder packages

@@ -5,7 +5,7 @@
   "pin": {
     "model_id": "traverse.hf-text-encoder-toy",
     "version": "1.0.0",
-    "digest": "67089e649a3e0524c0da6b8a6d5546facf674f05ba74fc5d25152cb82d2ec4aa",
+    "digest": "cee8f3d10dbae6f4aed729f4da3d96c88abb5544b0fd26fc0c27444c394d93e4",
     "offline_allowed": true,
     "target": "wasm-cpu",
     "rights": {

@@ -7063,3 +7063,46 @@ host.
 
 Accepted in a `#1722` brainstorm (2026-10-27): every decision took the
 recommended option.
+
+## Decision 119: Rust 1.95 Toolchain and MSRV for the wasmtime 48 LTS
+
+- **Date**: 2026-10-29
+- **Status**: Accepted
+- **Governing specs**: `025-wasm-executor-adapter`, `038-wasi-host-insulation`,
+  `138-governed-exact-model-execution`
+- **Related issues**: `#1744`, `#1734`
+- **Origin**: Dependabot alerts #30 and #32, critical GHSA-mghf-wjfp-p5xm
+  (Cranelift on aarch64 can jump to an incorrect target on a large
+  `br_table`, a sandbox escape).
+
+### Context
+
+`main` ran wasmtime 45.0.3 on Rust 1.94.0. The advisory is patched only in
+36.0.19, 48.0.7 and 49.0.4. wasmtime 48 needs rustc 1.95; 49 needs 1.96.
+Traverse runs wasmtime on aarch64 (Apple Silicon hosts, macOS CI) and
+executes third-party guests.
+
+### Decision
+
+1. **wasmtime 48.0.7:** move `wasmtime` and `wasmtime-wasi` to 48, a
+   wasmtime LTS line.
+   - 36.0.19 LTS was rejected: a back-port across nine major versions, with
+     support ending sooner, so the jump would come later anyway.
+   - 49.0.4 was rejected: it needs rustc 1.96 for no extra fix.
+2. **Toolchain and MSRV 1.95:** `rust-toolchain.toml`, the workspace and
+   guest `rust-version`, every CI pin, and the build docs move to 1.95.0.
+3. **Re-pin committed wasm:** every artifact whose bytes depend on the
+   toolchain is rebuilt on 1.95.0 and the model fixtures are re-signed.
+   `runtime.wasm` and the ONNX runner come from the Linux CI rebuild;
+   the no_std digits-mlp guest reproduces on every host.
+
+### Consequences
+
+- Building from source, and `cargo install` of the next release, need
+  rustc ≥ 1.95. The released 0.15.0 crates still install on 1.94.
+- Immutable specs that say "Rust 1.94+" stay as written; 1.95 satisfies them.
+
+### Approval
+
+Chosen by the maintainer on `#1744` (2026-10-29): the recommended option,
+48.0.7 with Rust 1.95, over 36.0.19 LTS.

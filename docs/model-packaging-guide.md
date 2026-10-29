@@ -288,7 +288,7 @@ traverse-cli model package-onnx runner.wasm my-model.onnx my-model.package.json 
 ```
 
 `package-onnx` fails closed if `<runner.wasm>` is not the audited guest
-(sha256 `7a20f87befcb8792b2f321a488145954ca9f1e000442d5984f1c03c8163353b8`).
+(sha256 `ac5591fac5f37435667169e969f9117cc6f81dc66b73cd74d1aef9000f5d3a0a`).
 
 `my-model.package.json` holds:
 - the manifest fields you own: identity, schemas, `rights`, limits;

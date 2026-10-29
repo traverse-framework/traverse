@@ -26,7 +26,7 @@ commit explicitly:
 BASE_SHA=origin/main bash scripts/ci/local_preflight.sh --pr-body /path/to/pr-body.md
 ```
 
-The command uses the CI Rust toolchain (currently 1.94.0) and requires its
+The command uses the CI Rust toolchain (currently 1.95.0) and requires its
 `wasm32-unknown-unknown` target plus `cargo-llvm-cov`; it fails with the exact
 install command when either is missing. On a Mac with Java and .NET installed
 it also runs native artifact certification. It clearly reports the checks that

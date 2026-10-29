@@ -13,7 +13,7 @@ This is intentionally narrower than [quickstart.md](../quickstart.md). `quicksta
 
 ## Prerequisites
 
-- Rust 1.94 or later
+- Rust 1.95 or later
 - the repository checked out locally
 - a shell that can run the checked-in validation scripts
 

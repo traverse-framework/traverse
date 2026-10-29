@@ -13,7 +13,7 @@ It follows the governed event model in Traverse: events are catalog-registered, 
 
 ## Prerequisites
 
-- Rust 1.94 or later
+- Rust 1.95 or later
 - the repository checked out locally
 - a shell that can run the CI validation scripts
 

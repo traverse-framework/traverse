@@ -2,6 +2,24 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Security: wasmtime 48.0.7 and Rust 1.95 (`#1744`, Decision 119)
+
+- `wasmtime` / `wasmtime-wasi` move from 45.0.3 to 48.0.7 (LTS). This fixes
+  critical GHSA-mghf-wjfp-p5xm: on aarch64, Cranelift could compile a large
+  `br_table` to a wrong branch target, letting a guest escape the sandbox.
+  No API, contract, limit, or trace change.
+- **Breaking for source builds:** the toolchain and MSRV move from 1.94 to
+  1.95 (wasmtime 48 needs it). Building or `cargo install`ing this release
+  needs rustc ≥ 1.95.
+- Committed wasm rebuilt on 1.95.0: `runtime.wasm`, the ONNX runner guest
+  and the digits-mlp guest. Model fixtures are re-packaged and re-signed;
+  conformance outputs are unchanged.
+  - `runtime.wasm` sha256 `ec49cb7674b362004b3c395a817f1d764893e1c98d973255b3953ed3c8532226`.
+  - Audited ONNX runner sha256
+    `ac5591fac5f37435667169e969f9117cc6f81dc66b73cd74d1aef9000f5d3a0a`,
+    replacing the `#1735` digest above; `model package-onnx` from this
+    source accepts only this runner.
+
 ## Security: ONNX runner guest on tract-onnx 0.23.9 (`#1735`)
 
 - The runner guest moves from `tract-onnx` 0.21 to 0.23.9. This drops the

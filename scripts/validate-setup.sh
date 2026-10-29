@@ -39,13 +39,13 @@ check_rust_toolchain() {
 
   if ! command -v rustc >/dev/null 2>&1; then
     printf '[missing] rustc\n'
-    note_failure "rustc: install Rust 1.94 or later from https://rustup.rs"
+    note_failure "rustc: install Rust 1.95 or later from https://rustup.rs"
     return
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
     printf '[missing] cargo\n'
-    note_failure "cargo: install Rust 1.94 or later from https://rustup.rs"
+    note_failure "cargo: install Rust 1.95 or later from https://rustup.rs"
     return
   fi
 
@@ -54,18 +54,18 @@ check_rust_toolchain() {
   rustc_semver="$(printf '%s\n' "${rustc_version}" | awk '{print $2}')"
   cargo_semver="$(printf '%s\n' "${cargo_version}" | awk '{print $2}')"
 
-  if version_at_least "${rustc_semver}" "1.94.0"; then
+  if version_at_least "${rustc_semver}" "1.95.0"; then
     printf '[ok] rustc %s\n' "${rustc_semver}"
   else
     printf '[unsupported] rustc %s\n' "${rustc_semver}"
-    note_failure "rustc: expected 1.94.0 or later, found ${rustc_semver}"
+    note_failure "rustc: expected 1.95.0 or later, found ${rustc_semver}"
   fi
 
-  if version_at_least "${cargo_semver}" "1.94.0"; then
+  if version_at_least "${cargo_semver}" "1.95.0"; then
     printf '[ok] cargo %s\n' "${cargo_semver}"
   else
     printf '[unsupported] cargo %s\n' "${cargo_semver}"
-    note_failure "cargo: expected 1.94.0 or later, found ${cargo_semver}"
+    note_failure "cargo: expected 1.95.0 or later, found ${cargo_semver}"
   fi
 }
 

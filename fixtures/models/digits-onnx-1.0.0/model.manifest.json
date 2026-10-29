@@ -2,7 +2,7 @@
   "schema_version": "2.2.0",
   "model_id": "traverse.digits-onnx",
   "version": "1.0.0",
-  "wasm_digest": "fdfbe62956e0a1713ad8b35ec05f639338518b014e8ae3542f488d1bc1973385",
+  "wasm_digest": "954ca59b005699efcd126cde69446c7a935bfccd9561dd248ddd844246ea10a9",
   "registry_ref": "registry:traverse.digits-onnx@1.0.0",
   "executable_format": "traverse-model-wasm",
   "abi_version": 3,

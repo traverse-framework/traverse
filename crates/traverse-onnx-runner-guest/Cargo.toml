@@ -3,7 +3,7 @@ name = "traverse-onnx-runner-guest"
 version = "1.0.0"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Generic Spec 138 ONNX runner guest (guest ABI v2, simd128, tract) — Decision 105/106, #1591."
 publish = false
 

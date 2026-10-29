@@ -51,7 +51,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
 
       - name: Build traverse-dotnet-host (win-x64, win-arm64)
@@ -97,7 +97,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Resolve the package version
         working-directory: .

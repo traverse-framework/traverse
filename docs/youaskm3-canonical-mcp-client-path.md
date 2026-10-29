@@ -29,7 +29,7 @@ cargo run -p traverse-mcp -- stdio
 
 Requirements:
 
-- Rust 1.94+
+- Rust 1.95+
 - local source checkout of Traverse `v0.3.0`
 - an MCP client that supports stdio server commands
 

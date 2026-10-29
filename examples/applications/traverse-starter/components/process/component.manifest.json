@@ -6,7 +6,7 @@
   "capability_version": "1.0.0",
   "contract_path": "../../../../../contracts/examples/traverse-starter/capabilities/process/contract.json",
   "wasm_binary_path": "../../../../../examples/traverse-starter/process-agent/artifacts/process-agent.wasm",
-  "wasm_digest": "sha256:2c6690fd00432f8bff4366d4852395af22a3c766517020532590bab1fba1ab34",
+  "wasm_digest": "sha256:b49aa807acc2422345ed1a23d528d301e34030c94d50710c71713848da9f3631",
   "runtime_constraints": {
     "host_api_access": "none",
     "network_access": "forbidden",
