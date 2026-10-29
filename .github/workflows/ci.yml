@@ -89,7 +89,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -120,7 +120,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
@@ -240,7 +240,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -280,7 +280,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
@@ -311,7 +311,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           # native_artifact_certification rebuilds TraverseSwiftHost from this
           # checkout (scripts/build_swift_host_xcframework.sh) so framed-host
           # changes are covered before the next swift-host-v* publish.
@@ -354,7 +354,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Set up Java
@@ -406,7 +406,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
@@ -458,7 +458,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Test the Core ML adapter and the framed host protocol
         run: cargo test --locked -p traverse-coreml-adapter -p traverse-model-host-frame -p traverse-swift-host
@@ -489,7 +489,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Set up Java
@@ -556,7 +556,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           components: llvm-tools-preview
 
       - name: Cache cargo
@@ -599,7 +599,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: wasm32-wasip1
 
       - name: Cache cargo
@@ -624,7 +624,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -649,7 +649,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

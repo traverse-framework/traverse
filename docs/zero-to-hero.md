@@ -16,7 +16,7 @@ This guide is intentionally narrow. If you want more context, start with:
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - Node.js 20+
 
 From the repository root:

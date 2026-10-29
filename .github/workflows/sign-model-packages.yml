@@ -28,7 +28,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
 
       - name: Sign and verify the listed packages
         env:

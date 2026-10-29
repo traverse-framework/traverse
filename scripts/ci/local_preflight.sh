@@ -57,7 +57,7 @@ case "$#:${1:-}" in
 esac
 
 target=wasm32-unknown-unknown
-ci_toolchain=1.94.0
+ci_toolchain=1.95.0
 if ! rustup toolchain list | awk '{print $1}' | grep -q "^${ci_toolchain}"; then
   echo "local-preflight: missing CI Rust toolchain $ci_toolchain" >&2
   echo "local-preflight: remediation: rustup toolchain install $ci_toolchain" >&2

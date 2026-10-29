@@ -12,7 +12,7 @@ if [[ -z "${artifact_wasm}" || ! -f "${artifact_wasm}" ]]; then
   exit 2
 fi
 
-export PATH="$(dirname "$(rustup which --toolchain 1.94.0 cargo 2>/dev/null || which cargo)"):${PATH}"
+export PATH="$(dirname "$(rustup which --toolchain 1.95.0 cargo 2>/dev/null || which cargo)"):${PATH}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/traverse-1661-target}"
 
 cp "${artifact_wasm}" fixtures/onnx/runner.wasm

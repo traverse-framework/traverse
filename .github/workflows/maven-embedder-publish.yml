@@ -41,7 +41,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.95.0
           targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Resolve release tag

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-toolchain="1.94.0-aarch64-apple-darwin"
+toolchain="1.95.0-aarch64-apple-darwin"
 # `rustup run` only sets env vars (RUSTUP_TOOLCHAIN); it does not put the
 # toolchain's bin dir ahead of PATH. On a machine with a non-rustup cargo/rustc
 # earlier on PATH (e.g. a Homebrew Rust install), that leaves the wrong

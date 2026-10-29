@@ -86,7 +86,7 @@ cargo run -p traverse-cli-rs -- serve
 
 Requirements:
 
-- Rust 1.94+
+- Rust 1.95+
 - local source checkout of Traverse `v0.3.0`
 - an HTTP client such as `curl`
 - `jq` for the copy/pasteable shell examples below

@@ -19,7 +19,7 @@ After completing it you will be able to:
 
 ## Prerequisites
 
-- Rust 1.94 or later
+- Rust 1.95 or later
 - the repository checked out locally
 - the workspace builds cleanly:
 

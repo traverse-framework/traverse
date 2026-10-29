@@ -2,7 +2,7 @@
 # Build the governed runtime.wasm artifact and companion metadata.
 #
 # Recipe (Spec 1402 / #1659):
-#   - Toolchain: rust-toolchain.toml (currently 1.94.0)
+#   - Toolchain: rust-toolchain.toml (currently 1.95.0)
 #   - Package: traverse-runtime-wasm via cargo run -p traverse-native-bridge
 #   - Target: wasm32-unknown-unknown (release)
 #   - Builder sets CARGO_INCREMENTAL=0, SOURCE_DATE_EPOCH, and
