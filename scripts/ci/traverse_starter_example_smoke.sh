@@ -44,7 +44,7 @@ grep -Eq '"status": "(registered|already_registered)"' <<<"$register_output"
 grep -q '"state_scope": "workspace_persisted"' <<<"$register_output"
 
 rm -f .traverse/server.json
-cargo run -q -p traverse-cli-rs -- serve --port 0 --allow-unauthenticated >/tmp/traverse-starter-serve.out 2>&1 &
+cargo run -q -p traverse-cli-rs -- serve --port 0 --allow-unauthenticated --registry-state examples/traverse-starter/registry-bundle/manifest.json >/tmp/traverse-starter-serve.out 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
