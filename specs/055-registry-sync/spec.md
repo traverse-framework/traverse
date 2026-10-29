@@ -2,7 +2,7 @@
 
 **Feature Branch**: `055-registry-sync`
 **Created**: 2026-07-06
-**Status**: Approved — v1.1.0 model-rights inspection amend (#1727, registry spec 026) approved 2026-10-27
+**Status**: Approved — v1.1.0 model-rights inspection amend (#1727, registry spec 026) approved 2026-10-27; v1.2.0 shared sync crate and file-output mode (#1751, Decision 121) approved 2026-10-29
 **Input**: GitHub issue #542, registry decision log entries 6-7, registry specs `001-registry-foundation` and `003-index-release-pipeline`, and Traverse spec `054-public-scope-registry-ref`.
 
 ## Purpose
@@ -29,6 +29,10 @@ Traverse MUST provide `traverse-cli registry sync` so a workspace can consume th
 - **FR-016** *(v1.1.0, #1727)*: A legacy `string[]` `ai.models` entry MUST be shown as `not recorded (legacy shape)` and MUST NOT cause an error.
 - **FR-017** *(v1.1.0, #1727)*: `traverse-cli registry search` MUST accept `--status <active|deprecated|revoked>` and `--model-commercial-use <allowed|forbidden|conditional|unknown>`. The second keeps capabilities with at least one object-shaped model declaring that value; legacy and undeclared models never match. These combine with the spec 025 `--commercial-use`/`--redistribution` capability filters, which keep their meaning. Search JSON records MUST include `status`. Inspect and search output is declared metadata only: no value is turned into a permission decision here, which stays with runtime policy.
 - **FR-018** *(v1.1.0, #1727)*: Inspect and search output MUST be deterministic: the same synced state gives byte-identical output.
+- **FR-019** *(v1.2.0, #1751, Decision 121)*: The sync logic MUST live in one shared crate, `traverse-registry-sync`, used by both `traverse-cli registry sync` and `traverse-mcp sync`. It covers index-release discovery, the `index.json` fetch, `--source-repo`, and `TRAVERSE_REGISTRY_TOKEN` (read only for a non-default source). `traverse-cli registry sync` behavior and JSON output stay unchanged.
+- **FR-020** *(v1.2.0)*: The shared crate MUST support a file-output mode. It writes one synced-state file (the same document and FR-008 metadata as the workspace state, with `workspace_id` `traverse-mcp`) to a caller-chosen path. The write MUST be atomic per FR-007: on any failure no partial file is left and an existing file is kept.
+- **FR-021** *(v1.2.0)*: A caller MAY pin one `index-vN` release instead of the highest one. A malformed pin fails with `registry_release_invalid` before any network access. A pin with no such release fails with `registry_index_release_missing`, and a release without an `index.json` asset fails with `registry_index_asset_missing`. The written state records the release tag it used.
+- **FR-022** *(v1.2.0)*: When the GitHub release asset reports a `sha256:` digest, the fetched `index.json` bytes MUST match it, or sync fails with `registry_index_digest_mismatch` and writes nothing.
 
 ## Command Shape
 

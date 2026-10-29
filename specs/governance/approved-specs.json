@@ -624,7 +624,7 @@
     },
     {
       "id": "055-registry-sync",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/055-registry-sync/spec.md",
@@ -632,7 +632,8 @@
         "crates/traverse-cli/",
         "crates/traverse-registry/",
         "specs/055-registry-sync/",
-        "specs/governance/"
+        "specs/governance/",
+        "crates/traverse-registry-sync/"
       ]
     },
     {
@@ -1594,7 +1595,7 @@
     },
     {
       "id": "119-verified-registry-mcp-mode-a",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/119-verified-registry-mcp-mode-a/spec.md",
@@ -1602,7 +1603,8 @@
         "crates/traverse-mcp/",
         "specs/119-verified-registry-mcp-mode-a/",
         ".github/workflows/mcp-server-publish.yml",
-        "crates/traverse-embedder/src/registry_cache.rs"
+        "crates/traverse-embedder/src/registry_cache.rs",
+        "crates/traverse-registry-sync/"
       ]
     },
     {

@@ -6,6 +6,7 @@ crates=(
   "traverse-contracts"
   "traverse-runtime"
   "traverse-embedder"
+  "traverse-registry-sync"
   "traverse-mcp"
   "traverse-cli-rs"
   "traverse-expedition-wasm"

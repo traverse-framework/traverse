@@ -27,6 +27,7 @@ wasm-encoder = "0.261"
 wasmparser = "0.261"
 traverse-contracts = { workspace = true }
 traverse-registry = { workspace = true }
+traverse-registry-sync = { workspace = true }
 traverse-runtime = { workspace = true }
 traverse-mcp = { workspace = true }
 tonic = { version = "0.14.6", default-features = false, features = ["transport", "tls-ring", "codegen", "router"] }

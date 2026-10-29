@@ -2,7 +2,7 @@
 
 **Status**: Approved (2026-08-25)
 **Canonical governing ID**: `119-verified-registry-mcp-mode-a`
-**Version**: 0.3.0
+**Version**: 0.4.0
 **Input**: Traverse #865 and #1144.
 **Amendment (2026-10-29, version 0.1.0 -> 0.2.0)**: Decision 121 / `#1753`.
 FR-006 names the four release targets, the Windows `.zip` archive, and the
@@ -10,6 +10,9 @@ per-target smoke run and SHA-256 evidence.
 **Amendment (2026-10-29, version 0.2.0 -> 0.3.0)**: Decision 121 / `#1752`.
 FR-009 adds one verification-binding validator shared by `prepare-cache` and
 server startup, with structured `record` / `field` error details.
+**Amendment (2026-10-29, version 0.3.0 -> 0.4.0)**: Decision 121 / `#1751`.
+FR-010 adds `traverse-mcp sync`, which writes the Spec 055 synced-state file
+that `prepare-cache` reads.
 
 ## Purpose
 
@@ -73,6 +76,18 @@ refresh during discovery or execution.
     message names both.
   - `prepare-cache` validates before writing anything, so a failure keeps
     any existing cache.
+- **FR-010** (0.4.0): `traverse-mcp sync --out <path> [--release index-vN]
+  [--source-repo <owner/repo>] [--json]` MUST write a Spec 055 synced-state
+  file through the shared `traverse-registry-sync` crate (Spec 055 FR-019 to
+  FR-022).
+  - By default it takes the highest `index-v*` release with an `index.json`
+    asset; `--release` pins one. The output records the release tag used.
+  - The write is atomic: on failure no partial file is left and an existing
+    file is kept.
+  - Failures use the stable Spec 055 registry-sync codes, in a
+    `mcp_registry_sync_error` envelope with `--json`.
+  - `sync` is the only network step of Mode A. `prepare-cache` and the stdio
+    host stay offline.
 
 ## Acceptance scenarios
 

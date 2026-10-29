@@ -2,6 +2,21 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## `traverse-mcp sync` and a shared registry-sync crate (`#1751`, Decision 121)
+
+- New `traverse-mcp sync --out <path> [--release index-vN] [--source-repo
+  <owner/repo>] [--json]`. It writes the Spec 055 synced-state file that
+  `prepare-cache --synced-state` reads, so Mode A no longer needs a
+  hand-written state file or `traverse-cli`.
+- The write is atomic: on failure no partial file is left and an existing
+  file is kept. The output records the `index-vN` tag it used.
+- Registry sync moves into the new `traverse-registry-sync` crate, used by
+  both `traverse-cli registry sync` (unchanged behavior and output) and
+  `traverse-mcp sync`.
+- When GitHub reports a `sha256:` digest for the `index.json` asset, sync
+  now checks it and fails with `registry_index_digest_mismatch` on a
+  mismatch.
+
 ## `traverse-mcp` names the invalid metadata binding (`#1752`, Decision 121)
 
 - `prepare-cache` and server startup now run one shared verification-binding

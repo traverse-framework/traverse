@@ -52,14 +52,22 @@ use traverse_registry::{
     ConnectorRegistration, ContractRetrievalAdapter, DiscoveryQuery, EventProductDescriptor,
     EventRegistration, EventRegistry, ExecutableArtifactCandidate, HostPolicyDecision,
     ImplementationKind, InstalledConnector, LookupScope, PublicRegistryCapabilityRecord,
-    PublicRegistryIndex, RegistryBundle, RegistryComponentResolver, RegistryProvenance,
-    RegistryReference, RegistryScope, ResolvedRegistryComponent, RetrievalUnavailable,
-    SelectedComponentReference, SelectedRecordRef, SignatureVerifier, SourceKind, SourceReference,
-    SyncedPublicRegistryState, VerifiedCacheWriter, WorkflowReference, WorkflowRegistration,
-    WorkflowRegistry, cache_verified_public_registry_bytes, load_application_bundle_manifest,
+    RegistryBundle, RegistryComponentResolver, RegistryProvenance, RegistryReference,
+    RegistryScope, ResolvedRegistryComponent, RetrievalUnavailable, SelectedComponentReference,
+    SelectedRecordRef, SignatureVerifier, SourceKind, SourceReference, SyncedPublicRegistryState,
+    VerifiedCacheWriter, WorkflowReference, WorkflowRegistration, WorkflowRegistry,
+    cache_verified_public_registry_bytes, load_application_bundle_manifest,
     load_application_bundle_manifest_with_resolver, load_registry_bundle,
     prepare_application_selected_references, public_registry_cache_path,
     resolve_executable_artifact, validate_connector_activation, write_synced_public_registry_state,
+};
+use traverse_registry_sync::{CurlGitHubRegistryIndexFetcher, RegistryIndexFetcher};
+// Spec 055 1.2.0: registry sync lives in the shared crate; the tests still
+// reach these names through `super::`.
+#[cfg(test)]
+use traverse_registry_sync::{
+    DEFAULT_PUBLIC_REGISTRY_SOURCE, FetchedRegistryIndex, RegistrySyncError, curl_text,
+    latest_index_release_asset, registry_sync_default_or_override,
 };
 use traverse_runtime::executor::{SUPPORTED_HOST_ABI_VERSION, verify_wasm_host_abi_bytes};
 use traverse_runtime::registry_rights_policy::{ModelRightsPolicy, check_registry_record_rights};
@@ -4533,75 +4541,6 @@ fn render_app_activation_failure(
     .map_err(|error| CliError::IoError(format!("failed to serialize activation failure: {error}")))
 }
 
-const DEFAULT_PUBLIC_REGISTRY_SOURCE: &str = "traverse-framework/registry";
-
-#[derive(Debug, Clone)]
-struct FetchedRegistryIndex {
-    source_repo: String,
-    release_tag: String,
-    index: PublicRegistryIndex,
-}
-
-trait RegistryIndexFetcher {
-    fn fetch_latest_index(&self) -> Result<FetchedRegistryIndex, RegistrySyncError>;
-}
-
-#[derive(Debug, Clone)]
-struct CurlGitHubRegistryIndexFetcher {
-    source_repo: String,
-    /// Bearer token for a private source repo's Releases API. `None` for the
-    /// default public source, which is unauthenticated.
-    token: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RegistrySyncError {
-    code: &'static str,
-    message: String,
-}
-
-impl RegistryIndexFetcher for CurlGitHubRegistryIndexFetcher {
-    fn fetch_latest_index(&self) -> Result<FetchedRegistryIndex, RegistrySyncError> {
-        let releases_url = format!(
-            "https://api.github.com/repos/{}/releases?per_page=100",
-            self.source_repo
-        );
-        let releases = curl_text(&releases_url, self.token.as_deref())?;
-        let releases_json: Value = serde_json::from_str(&releases).map_err(|error| {
-            RegistrySyncError::new(
-                "registry_release_parse_failed",
-                format!("failed to parse GitHub Releases response: {error}"),
-            )
-        })?;
-        let (release_tag, index_asset_url) = latest_index_release_asset(&releases_json)?;
-        let index_json = curl_text(&index_asset_url, self.token.as_deref())?;
-        let index: PublicRegistryIndex = serde_json::from_str(&index_json).map_err(|error| {
-            RegistrySyncError::new(
-                "registry_index_parse_failed",
-                format!("failed to parse registry index.json: {error}"),
-            )
-        })?;
-
-        Ok(FetchedRegistryIndex {
-            source_repo: self.source_repo.clone(),
-            release_tag,
-            index,
-        })
-    }
-}
-
-impl RegistrySyncError {
-    fn new(code: &'static str, message: String) -> Self {
-        Self { code, message }
-    }
-}
-
-/// Resolves the effective registry source repo: the explicit override when
-/// supplied, otherwise the default public registry.
-fn registry_sync_default_or_override(source_repo_override: Option<String>) -> String {
-    source_repo_override.unwrap_or_else(|| DEFAULT_PUBLIC_REGISTRY_SOURCE.to_string())
-}
-
 fn registry_sync(
     workspace_id: &str,
     json_output: bool,
@@ -4609,22 +4548,13 @@ fn registry_sync(
 ) -> Result<String, CliError> {
     let base_dir = std::env::current_dir()
         .map_err(|e| CliError::IoError(format!("failed to resolve current directory: {e}")))?;
-    let is_default_source = source_repo_override.is_none();
-    let source_repo = registry_sync_default_or_override(source_repo_override);
-    // Only read/attach the token for a non-default source. The default
-    // public registry stays unauthenticated -- wire-identical to today --
-    // regardless of whether TRAVERSE_REGISTRY_TOKEN happens to be set in
-    // the caller's environment for an unrelated reason.
-    let token = if is_default_source {
-        None
-    } else {
-        std::env::var("TRAVERSE_REGISTRY_TOKEN").ok()
-    };
+    // The shared fetcher reads TRAVERSE_REGISTRY_TOKEN only for a
+    // non-default source; the default public registry stays unauthenticated.
     registry_sync_at(
         &base_dir,
         workspace_id,
         json_output,
-        &CurlGitHubRegistryIndexFetcher { source_repo, token },
+        &CurlGitHubRegistryIndexFetcher::for_source(source_repo_override, None),
     )
 }
 
@@ -6057,106 +5987,6 @@ fn sanitize_branch_component(value: &str) -> String {
         }
     }
     output.trim_matches('-').to_string()
-}
-
-fn latest_index_release_asset(
-    releases_json: &Value,
-) -> Result<(String, String), RegistrySyncError> {
-    let releases = releases_json.as_array().ok_or_else(|| {
-        RegistrySyncError::new(
-            "registry_release_parse_failed",
-            "GitHub Releases response must be an array".to_string(),
-        )
-    })?;
-
-    let mut selected: Option<(u64, String, String)> = None;
-    for release in releases {
-        let Some(tag) = release.get("tag_name").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(index_version) = tag.strip_prefix("index-v").and_then(parse_u64) else {
-            continue;
-        };
-        let Some(asset_url) = release
-            .get("assets")
-            .and_then(Value::as_array)
-            .and_then(|assets| index_asset_download_url(assets))
-        else {
-            continue;
-        };
-        match &selected {
-            Some((selected_version, _, _)) if *selected_version >= index_version => {}
-            _ => selected = Some((index_version, tag.to_string(), asset_url)),
-        }
-    }
-
-    selected
-        .map(|(_, tag, asset_url)| (tag, asset_url))
-        .ok_or_else(|| {
-            RegistrySyncError::new(
-                "registry_index_release_missing",
-                "no index-v* release with an index.json asset was found".to_string(),
-            )
-        })
-}
-
-fn index_asset_download_url(assets: &[Value]) -> Option<String> {
-    assets.iter().find_map(|asset| {
-        let name = asset.get("name").and_then(Value::as_str)?;
-        if name != "index.json" {
-            return None;
-        }
-        asset
-            .get("browser_download_url")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-    })
-}
-
-fn parse_u64(value: &str) -> Option<u64> {
-    value.parse::<u64>().ok()
-}
-
-fn curl_text(url: &str, token: Option<&str>) -> Result<String, RegistrySyncError> {
-    let mut args = vec![
-        "-fsSL".to_string(),
-        "-H".to_string(),
-        "Accept: application/vnd.github+json".to_string(),
-        "-H".to_string(),
-        "User-Agent: traverse-cli-registry-sync".to_string(),
-    ];
-    if let Some(token) = token {
-        args.push("-H".to_string());
-        args.push(format!("Authorization: Bearer {token}"));
-    }
-    args.push(url.to_string());
-    let output = std::process::Command::new("curl")
-        .args(&args)
-        .output()
-        .map_err(|error| {
-            RegistrySyncError::new(
-                "registry_fetch_failed",
-                format!("failed to execute curl for {url}: {error}"),
-            )
-        })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let detail = if stderr.is_empty() {
-            format!("curl exited with status {}", output.status)
-        } else {
-            stderr
-        };
-        return Err(RegistrySyncError::new(
-            "registry_fetch_failed",
-            format!("failed to fetch {url}: {detail}"),
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|error| {
-        RegistrySyncError::new(
-            "registry_fetch_failed",
-            format!("response from {url} was not valid UTF-8: {error}"),
-        )
-    })
 }
 
 fn current_unix_timestamp_string() -> Result<String, CliError> {
