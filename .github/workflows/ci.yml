@@ -193,6 +193,12 @@ jobs:
       - name: Run capability new E2E smoke
         run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/capability_new_e2e_smoke.sh
 
+      - name: Run traverse-starter example smoke
+        run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/traverse_starter_example_smoke.sh
+
+      - name: Run meeting-notes example smoke
+        run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/meeting_notes_example_smoke.sh
+
       - name: Run repository checks
         run: bash scripts/ci/repository_checks.sh
 
