@@ -1,12 +1,29 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
-use traverse_mcp::{prepare_verified_cache, run_stdio_server_with_bundle};
+use traverse_mcp::{prepare_verified_cache, run_stdio_server_with_bundle, sync_registry_state};
 
 fn main() -> ExitCode {
     run(std::env::args().skip(1))
 }
 
-const USAGE: &str = "Usage: traverse-mcp [--version]\n       traverse-mcp stdio [--cache <dir>] [--bundle <manifest-path>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]";
+const USAGE: &str = "Usage: traverse-mcp [--version]\n       traverse-mcp stdio [--cache <dir>] [--bundle <manifest-path>] [--simulate-startup-failure]\n       traverse-mcp prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]\n       traverse-mcp sync --out <path> [--release index-vN] [--source-repo <owner/repo>] [--json]";
+
+const SYNC_HELP: &str = "Usage: traverse-mcp sync --out <path> [--release index-vN] [--source-repo <owner/repo>] [--json]
+
+  Fetch the registry index and write it to <path> as a Spec 055 synced-state
+  file for `traverse-mcp prepare-cache --synced-state <path>`.
+
+  --out <path>                 File to write. It is written atomically: on
+                               failure no partial file is left and an existing
+                               file is kept.
+  --release index-vN           Use this release. Default: the highest index-v*
+                               release with an index.json asset.
+  --source-repo <owner/repo>   Sync from this GitHub repo instead of
+                               traverse-framework/registry. For a private repo,
+                               set TRAVERSE_REGISTRY_TOKEN to a read token.
+  --json                       Emit machine-readable evidence.
+
+  The output records the release tag it used.";
 
 /// Testable core of [`main`]: takes the argument iterator directly instead of
 /// reading `std::env::args()` so the CLI parsing branches can be exercised
@@ -59,6 +76,33 @@ fn run(args: impl Iterator<Item = String>) -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Ok(Command::SyncHelp) => {
+            println!("{SYNC_HELP}");
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Sync {
+            out,
+            release,
+            source_repo,
+            json_output,
+        }) => match sync_registry_state(&out, release, source_repo) {
+            Ok(evidence) => {
+                if json_output {
+                    println!("{}", evidence.envelope());
+                } else {
+                    println!("{}", evidence.render());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                if json_output {
+                    println!("{}", error.envelope());
+                } else {
+                    eprintln!("{error}");
+                }
+                ExitCode::from(1)
+            }
+        },
     }
 }
 
@@ -73,6 +117,13 @@ enum Command {
         synced_state: PathBuf,
         cache: PathBuf,
         refs: Vec<String>,
+        json_output: bool,
+    },
+    SyncHelp,
+    Sync {
+        out: PathBuf,
+        release: Option<String>,
+        source_repo: Option<String>,
         json_output: bool,
     },
 }
@@ -90,6 +141,7 @@ fn parse_command(mut args: impl Iterator<Item = String>) -> Result<Command, Stri
         }
         "stdio" => parse_stdio(args),
         "prepare-cache" => parse_prepare_cache(args),
+        "sync" => parse_sync(args),
         other => Err(format!("Unsupported command: {other}")),
     }
 }
@@ -161,11 +213,150 @@ fn parse_prepare_cache(mut args: impl Iterator<Item = String>) -> Result<Command
     })
 }
 
+fn parse_sync(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
+    let mut out = None;
+    let mut release = None;
+    let mut source_repo = None;
+    let mut json_output = false;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--help" | "-h" => return Ok(Command::SyncHelp),
+            "--out" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "sync --out requires <path>".to_string())?;
+                out = Some(PathBuf::from(value));
+            }
+            "--release" => {
+                release = Some(
+                    args.next()
+                        .ok_or_else(|| "sync --release requires index-vN".to_string())?,
+                );
+            }
+            "--source-repo" => {
+                source_repo = Some(
+                    args.next()
+                        .ok_or_else(|| "sync --source-repo requires <owner/repo>".to_string())?,
+                );
+            }
+            "--json" => json_output = true,
+            other => return Err(format!("Unsupported sync flag: {other}\n{SYNC_HELP}")),
+        }
+    }
+    Ok(Command::Sync {
+        out: out.ok_or_else(|| format!("sync requires --out <path>\n{SYNC_HELP}"))?,
+        release,
+        source_repo,
+        json_output,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    fn args(values: &[&str]) -> impl Iterator<Item = String> {
+        values
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn parse_sync_accepts_out_release_source_and_json() {
+        match parse_command(args(&[
+            "sync",
+            "--out",
+            "state.json",
+            "--release",
+            "index-v7",
+            "--source-repo",
+            "acme/registry",
+            "--json",
+        ])) {
+            Ok(Command::Sync {
+                out,
+                release,
+                source_repo,
+                json_output,
+            }) => {
+                assert_eq!(out, PathBuf::from("state.json"));
+                assert_eq!(release.as_deref(), Some("index-v7"));
+                assert_eq!(source_repo.as_deref(), Some("acme/registry"));
+                assert!(json_output);
+            }
+            _ => panic!("expected sync"),
+        }
+        match parse_command(args(&["sync", "--out", "state.json"])) {
+            Ok(Command::Sync {
+                release,
+                source_repo,
+                json_output,
+                ..
+            }) => {
+                assert_eq!(release, None);
+                assert_eq!(source_repo, None);
+                assert!(!json_output);
+            }
+            _ => panic!("expected sync"),
+        }
+    }
+
+    #[test]
+    fn parse_sync_rejects_missing_values_and_unknown_flags() {
+        for (values, expected) in [
+            (&["sync"][..], "sync requires --out <path>"),
+            (&["sync", "--out"][..], "sync --out requires <path>"),
+            (
+                &["sync", "--out", "s", "--release"][..],
+                "requires index-vN",
+            ),
+            (
+                &["sync", "--out", "s", "--source-repo"][..],
+                "requires <owner/repo>",
+            ),
+            (&["sync", "--bogus"][..], "Unsupported sync flag: --bogus"),
+        ] {
+            match parse_command(args(values)) {
+                Err(message) => assert!(message.contains(expected), "{message}"),
+                Ok(_) => panic!("expected an error for {values:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn sync_help_and_failures_exit_cleanly() {
+        assert_eq!(run(args(&["sync", "--help"])), ExitCode::SUCCESS);
+        assert_eq!(run(args(&["sync", "-h"])), ExitCode::SUCCESS);
+        assert_eq!(run(args(&["sync"])), ExitCode::from(1));
+        assert!(SYNC_HELP.contains("--release index-vN"));
+        assert!(USAGE.contains("traverse-mcp sync --out <path>"));
+        // An invalid pinned release fails before any network access.
+        assert_eq!(
+            run(args(&[
+                "sync",
+                "--out",
+                "unused.json",
+                "--release",
+                "latest"
+            ])),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            run(args(&[
+                "sync",
+                "--out",
+                "unused.json",
+                "--release",
+                "latest",
+                "--json"
+            ])),
+            ExitCode::from(1)
+        );
+    }
 
     #[test]
     fn no_command_prints_usage_and_exits_with_failure() {
@@ -296,7 +487,7 @@ mod tests {
                 assert_eq!(cache, Some(PathBuf::from("/srv/cache")));
                 assert_eq!(bundle, None);
             }
-            Command::PrepareCache { .. } | Command::Version => panic!("expected stdio"),
+            _ => panic!("expected stdio"),
         }
     }
 
@@ -315,7 +506,7 @@ mod tests {
             Command::Stdio { bundle, .. } => {
                 assert_eq!(bundle, Some(PathBuf::from("/opt/traverse/manifest.json")));
             }
-            Command::PrepareCache { .. } | Command::Version => panic!("expected stdio"),
+            _ => panic!("expected stdio"),
         }
     }
 
@@ -488,7 +679,7 @@ mod tests {
                 assert_eq!(refs, vec!["core/core.normalize-participants@=1.1.0"]);
                 assert!(json_output);
             }
-            Command::Stdio { .. } | Command::Version => panic!("expected prepare-cache"),
+            _ => panic!("expected prepare-cache"),
         }
     }
 }

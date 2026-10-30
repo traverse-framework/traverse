@@ -2675,6 +2675,7 @@ dependencies = [
  "traverse-contracts",
  "traverse-mcp",
  "traverse-registry",
+ "traverse-registry-sync",
  "traverse-runtime",
  "tungstenite",
  "uuid",
@@ -2748,6 +2749,7 @@ dependencies = [
  "traverse-contracts",
  "traverse-embedder",
  "traverse-registry",
+ "traverse-registry-sync",
  "traverse-runtime",
 ]
 
@@ -2796,6 +2798,15 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "traverse-contracts",
+]
+
+[[package]]
+name = "traverse-registry-sync"
+version = "0.15.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.11.1",
+ "traverse-registry",
 ]
 
 [[package]]

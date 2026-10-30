@@ -1,0 +1,16 @@
+[package]
+name = "traverse-registry-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared public-registry index sync for the Traverse CLI and MCP host."
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.11"
+traverse-registry = { workspace = true }
+
+[lints]
+workspace = true

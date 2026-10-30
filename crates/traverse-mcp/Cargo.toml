@@ -18,6 +18,7 @@ serde_json = "1"
 semver = "1"
 traverse-contracts = { workspace = true }
 traverse-registry = { workspace = true }
+traverse-registry-sync = { workspace = true }
 traverse-embedder = { workspace = true }
 traverse-runtime = { workspace = true }
 

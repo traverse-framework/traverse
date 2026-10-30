@@ -10,6 +10,8 @@ traverse-runtime 100
 traverse-cli-rs 87
 traverse-embedder 100
 traverse-mcp 98
+# Shared registry sync for traverse-cli and traverse-mcp (Spec 055 FR-019).
+traverse-registry-sync 100
 # Audited production C-ABI boundary; ADR-0018 records the measured ratchet.
 traverse-swift-host 78
 # Safe framed Spec 138 model host shared by the Apple and Android shims

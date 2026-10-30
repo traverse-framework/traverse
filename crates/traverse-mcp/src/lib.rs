@@ -3,6 +3,7 @@
 //! Governed by spec 015-capability-discovery-mcp and spec 042-mcp-library-surface
 
 mod prepare_cache;
+mod registry_sync;
 mod stdio_server;
 
 pub mod context;
@@ -13,6 +14,7 @@ pub use context::McpContext;
 pub use prepare_cache::{
     PrepareCacheError, PrepareCacheEvidence, parse_registry_ref, prepare_verified_cache,
 };
+pub use registry_sync::{McpSyncError, McpSyncEvidence, sync_registry_state};
 pub use stdio_server::*;
 
 use std::collections::HashMap;

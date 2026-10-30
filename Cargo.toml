@@ -5,6 +5,7 @@ members = [
   "crates/traverse-embedder",
   "crates/traverse-expedition-wasm",
   "crates/traverse-mcp",
+  "crates/traverse-registry-sync",
   "crates/traverse-model-trainer",
   "crates/traverse-native-bridge",
   "crates/traverse-runtime",
@@ -31,6 +32,7 @@ traverse-registry = { version = "=0.28.0" }
 traverse-runtime = { path = "crates/traverse-runtime", version = "0.15.0" }
 traverse-embedder = { path = "crates/traverse-embedder", version = "0.15.0" }
 traverse-mcp = { path = "crates/traverse-mcp", version = "0.15.0" }
+traverse-registry-sync = { path = "crates/traverse-registry-sync", version = "0.15.0" }
 
 # The published registry crate pins the current contracts release.  During
 # Traverse development, resolve that transitive dependency to this workspace's
