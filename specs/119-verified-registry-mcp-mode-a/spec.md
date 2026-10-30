@@ -2,11 +2,14 @@
 
 **Status**: Approved (2026-08-25)
 **Canonical governing ID**: `119-verified-registry-mcp-mode-a`
-**Version**: 0.2.0
+**Version**: 0.3.0
 **Input**: Traverse #865 and #1144.
 **Amendment (2026-10-29, version 0.1.0 -> 0.2.0)**: Decision 121 / `#1753`.
 FR-006 names the four release targets, the Windows `.zip` archive, and the
 per-target smoke run and SHA-256 evidence.
+**Amendment (2026-10-29, version 0.2.0 -> 0.3.0)**: Decision 121 / `#1752`.
+FR-009 adds one verification-binding validator shared by `prepare-cache` and
+server startup, with structured `record` / `field` error details.
 
 ## Purpose
 
@@ -57,6 +60,19 @@ refresh during discovery or execution.
   is required before content groups become a product surface.
 - **FR-008**: Existing stdio authentication behavior remains unchanged. This
   spec adds no hosted authentication, tenancy, browser transport, or gateway.
+- **FR-009** (0.3.0): `prepare-cache` and server startup MUST run the same
+  verification-binding validator, so a cache that prepares is a cache that
+  serves.
+  - The checked bindings are the generation's `schema_version`,
+    `source_release`, and `index_digest`, and each record's `namespace`, `id`,
+    `version`, `artifact_digest`, `source_release`, `index_digest`,
+    `service_type`, and `lifecycle`.
+  - A failure keeps the code `registry_metadata_cache_invalid` and adds
+    `field` (the failing field) and `record` (`namespace/id@version`, or
+    `null` for a generation-level field) to the JSON error envelope. The
+    message names both.
+  - `prepare-cache` validates before writing anything, so a failure keeps
+    any existing cache.
 
 ## Acceptance scenarios
 

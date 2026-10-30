@@ -1,5 +1,6 @@
 //! Dedicated Traverse MCP stdio server package entrypoint.
 
+use crate::prepare_cache::insert_binding_details;
 use crate::{
     McpLifecycleStatus, McpObservationMessage, TraverseMcp,
     youaskm3_mcp_consumption_validation_path,
@@ -12,7 +13,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use traverse_embedder::{
     HostRegistryCache, PublicCapabilityMetadata, PublicMetadataRead, RegistryCacheError,
-    read_public_metadata, resolve_registry_component,
+    RegistryCacheErrorDetails, read_public_metadata, resolve_registry_component,
 };
 use traverse_registry::{
     ArtifactDigests, BinaryFormat as RegistryBinaryFormat, BinaryReference,
@@ -358,7 +359,11 @@ impl ModeAContext {
 
 /// Map a verified-registry-cache failure to a stable, secret-free stdio failure.
 fn mode_a_cache_failure(error: RegistryCacheError) -> StdioServerFailure {
-    StdioServerFailure::new(error.code.as_str(), error.message)
+    StdioServerFailure {
+        code: error.code.as_str().to_string(),
+        message: error.message,
+        details: error.details,
+    }
 }
 
 #[derive(Debug)]
@@ -2468,6 +2473,7 @@ fn slug(value: &str) -> String {
 pub struct StdioServerFailure {
     code: String,
     message: String,
+    details: Option<RegistryCacheErrorDetails>,
 }
 
 impl StdioServerFailure {
@@ -2476,19 +2482,22 @@ impl StdioServerFailure {
         Self {
             code: code.into(),
             message: message.into(),
+            details: None,
         }
     }
 
     #[must_use]
     pub fn envelope(&self) -> Value {
-        json!({
+        let mut envelope = json!({
             "kind": "mcp_stdio_server_error",
             "server_name": SERVER_NAME,
             "host_mode": HOST_MODE,
             "governing_spec": GOVERNING_SPEC,
             "code": self.code,
             "message": self.message,
-        })
+        });
+        insert_binding_details(&mut envelope, self.details.as_ref());
+        envelope
     }
 }
 
@@ -3638,6 +3647,32 @@ mod tests {
             fs::write(&generation, b"{ not valid json").expect("overwrite generation");
             let failure = ModeAContext::load(&root).expect_err("malformed state must fail closed");
             assert_eq!(failure.code, "registry_metadata_cache_invalid");
+        }
+
+        #[test]
+        fn invalid_binding_failure_names_record_and_field_in_the_envelope() {
+            let root = build_verified_cache("binding");
+            let generation_path = root.join("public-metadata").join("current.json");
+            let mut generation: Value =
+                serde_json::from_slice(&fs::read(&generation_path).expect("read"))
+                    .expect("generation json");
+            generation["records"][0]["service_type"] = json!("");
+            fs::write(
+                &generation_path,
+                serde_json::to_vec(&generation).expect("json"),
+            )
+            .expect("tamper");
+            let failure = ModeAContext::load(&root).expect_err("invalid binding");
+            let envelope = failure.envelope();
+            assert_eq!(envelope["code"], json!("registry_metadata_cache_invalid"));
+            assert_eq!(envelope["field"], json!("service_type"));
+            let record = envelope["record"].as_str().expect("record");
+            assert!(record.ends_with(
+                &format!("@{}", generation["records"][0]["version"].as_str().expect("version"))
+            ));
+            assert!(failure.to_string().contains("field `service_type`"));
+            let other = StdioServerFailure::new("registry_sync_missing", "x").envelope();
+            assert!(other.get("field").is_none());
         }
 
         #[test]
