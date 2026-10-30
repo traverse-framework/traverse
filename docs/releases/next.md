@@ -2,6 +2,41 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Breaking: model registration takes the execution policy and prepares its placement (`#1706`, Decision 120, Spec 138 0.16.0)
+
+- Registration now does the one-time placement work, which first calls used
+  to do inside their own deadline. It takes the policy calls will name,
+  `{policy_ref, placements, require_fuel_metering}`, plus an optional
+  `preparation_budget_ms`, and fixes one placement per (package,
+  `policy_ref`). The Core ML compile and device self-check, or `wasm-cpu`'s
+  `model_prepare`, run there. On the iPhone, a `cpu_only` first call no
+  longer pays them inside its 60 s deadline.
+- **Breaking for every host.** The registration call needs the policy:
+  - Rust `register_package` / `register_package_with_variants` take a
+    `PlacementPolicy`;
+  - Swift `registerPackage(..., policy:)`, Kotlin
+    `registerPackage(..., policy)` and .NET `RegisterPackageAsync(...,
+    policy)` take an `ExactModelPlacementPolicy`;
+  - web `registerPackage(..., policy, options?)` takes an
+    `ExactModelPlacementPolicy`;
+  - the framed protocol's `register` takes `policy`.
+
+  `registerPackageWithPreparation` (Swift, Kotlin) and
+  `RegisterPackageWithPreparationAsync` (.NET) also return the fixed
+  placement and the preparation time.
+- A call naming a `policy_ref` the package was not registered under fails
+  with `model_unavailable` / `placement_unavailable`. The call's
+  `placements` / `require_fuel_metering` are now optional and deprecated:
+  when present they must equal the registered policy. They are removed in
+  the next major version.
+- Each listed placement gets the budget, capped by the new host limit
+  `max_preparation_ms` (default five minutes). A placement over it is
+  skipped. Registration is cancellable, and a failed or cancelled
+  registration keeps nothing. A failing `model_prepare` now fails
+  registration with `execution_failed` instead of failing the first call.
+- No call is charged for one-time preparation. The re-prepare after a
+  snapshot eviction is the only exception.
+
 ## `traverse-mcp sync` and a shared registry-sync crate (`#1751`, Decision 121)
 
 - New `traverse-mcp sync --out <path> [--release index-vN] [--source-repo

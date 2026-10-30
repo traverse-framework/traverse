@@ -21,7 +21,7 @@ it through `TRAVERSE_MODEL_SIGNING_KEYS`.
 | `stage_artifact` / `read_artifact` | Generic bounded artifacts (Spec 140): opaque, multi-read until drop or shutdown; runtime `ModelIoStore`, web `ModelIoStore`, Swift `ArtifactStagingStore` |
 | `model.execute` | Command port; must-match `model_ref`, `policy_ref`, `data_classification` |
 | `ExactModelHostConnector` | Native wasm-cpu adapter (`traverse_runtime::exact_model`) |
-| `register_package` / `registerPackage` | Signed package admission into the host cache (Decision 101) |
+| `register_package` / `registerPackage` | Signed package admission into the host cache (Decision 101). Takes the execution policy `{policy_ref, placements, require_fuel_metering}` and fixes one placement per (package, `policy_ref`) (Spec 138 0.16.0, Decision 120) |
 | Versioned schemas | `contracts/connectors/traverse.model-runtime/schemas/`: `exact-model-pin-2.0.0`, `model-package-manifest-2.0.0` / `2.1.0`, `model-package-signature-1.0.0`, `model-rights-record-1.0.0`, `model-rights-denial-detail-1.0.0` |
 | `model_rights` / `modelRights` | Signed rights, read-only, for host/UI display |
 | App `model_usage` | `commercial` or `non_commercial`; required when pins exist (Spec 138 0.8.0) |
@@ -33,6 +33,35 @@ it through `TRAVERSE_MODEL_SIGNING_KEYS`.
 ## Placement
 
 First conformance profile: `wasm-cpu` (import-denied guest, LE frames).
+
+### Placement is fixed at registration (Spec 138 0.16.0, Decision 120)
+
+Registration takes the execution policy calls will name:
+`register_package(..., policy: {policy_ref, placements, require_fuel_metering}, preparation_budget_ms?)`.
+It walks `placements` in order and fixes the first one that qualifies:
+- an adapter placement compiles its variant and runs (or reuses) the device
+  self-check;
+- `wasm-cpu` compiles the guest and, for guest ABI v3, runs `model_prepare`
+  and stores the snapshot.
+
+No call is charged for this one-time work. A call's deadline, `max_fuel`
+and ceilings cover only its own execution. The one exception: when the host
+has evicted a snapshot, the re-prepare stays charged to that call.
+
+- **Budget.** Each listed placement gets `preparation_budget_ms`, capped by
+  the host ceiling `max_preparation_ms` (default five minutes). A placement
+  over it is skipped, like a failed self-check.
+- **Failure.** If no listed placement qualifies, registration fails with
+  `model_unavailable` / `placement_unavailable`. Cancellation stops
+  registration with `cancelled`. Nothing is kept either way. A failing
+  `model_prepare` fails registration with `execution_failed`.
+- **Calls.** A call naming a `policy_ref` the package was not registered
+  under fails with `placement_unavailable`. The call fields `placements` /
+  `require_fuel_metering` are deprecated: when present they must equal the
+  registered policy, or the call fails with `placement_unavailable`. They
+  are removed in the next major version.
+- **Several policies.** Register the same package once per policy. Each
+  registration fixes its own placement and reuses the stored self-check.
 Native (`ExactModelHostConnector`) and browser (`ExactModelBrowserHost`)
 run the same signed package and produce byte-identical output for the
 checked-in conformance vector.
@@ -51,34 +80,35 @@ it is ~50–80× slower for dense model math. See
 A package can also carry a signed `coreml` variant (see
 `docs/model-packaging-guide.md`). On iOS and macOS, the Swift host runs it
 through the Rust `traverse-coreml-adapter` when the host enables Core ML and
-the call's policy lists `coreml`:
+the policy the package is registered under lists `coreml`:
 
 ```swift
 let host = try ExactModelHost(
     pins: pins, trustedPublicKeysHex: keys, modelUsage: "commercial",
     coreML: CoreMLAcceleratorConfig(computeUnits: "all", cacheDirectory: cachesURL))
-_ = try await host.registerPackage(
+let registered = try await host.registerPackageWithPreparation(
     manifest: manifest, wasm: wasm, signature: signature,
     variantFiles: ["variants/coreml/model.mlpackage.zip": zip,
-                   "variants/coreml/conformance.json": vector])
+                   "variants/coreml/conformance.json": vector],
+    policy: ExactModelPlacementPolicy(policyRef: "policy-1", placements: ["coreml", "wasm-cpu"]))
+// registered.placement: "coreml" once the self-check passed during registration
 let result = try await host.execute(
     modelRef: ref, inputRef: inputRef, policyRef: "policy-1",
     dataClassification: "sensitive", inputSchemaRef: schema, inputSchemaVersion: "1.0.0",
-    maxOutputBytes: 4096, allowedClassifications: ["sensitive"],
-    placements: ["coreml", "wasm-cpu"])
+    maxOutputBytes: 4096, allowedClassifications: ["sensitive"])
 // result.placementEvidence: placement "coreml", computeUnits "all", fuelMetering "not_applicable"
 ```
 
-- **Self-check.** Before Core ML's first call on a device, the host runs
-  the variant's whole conformance vector under the variant's tolerance. The
-  result is cached per variant digest, OS version and compute units. If the
-  check fails, the variant is unavailable and the next listed placement
-  runs.
+- **Self-check.** At registration, the host runs the variant's whole
+  conformance vector under the variant's tolerance (Decision 120). This
+  also compiles the variant. The result is cached per variant digest, OS
+  version and compute units. If the check fails, the variant is unavailable
+  and registration moves to the next listed placement.
 - **Frames.** The conformance vector also fixes the frame dtype codes
   (Decision 114). The adapter accepts only the vector's input dtype and
   writes the vector's output dtype.
-- **Fuel.** Core ML cannot meter fuel. `requireFuelMetering: true` keeps a
-  call on `wasm-cpu`.
+- **Fuel.** Core ML cannot meter fuel. A policy with
+  `requireFuelMetering: true` is registered on `wasm-cpu`.
 - **Compute units.** `all`, `cpu_only`, `cpu_and_gpu` or
   `cpu_and_neural_engine`; the default is `all`.
 

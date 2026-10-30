@@ -21,7 +21,8 @@ use traverse_registry::{
 use traverse_runtime::exact_model::{
     CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, FIXTURE_ECHO_WAT,
     MODEL_PACKAGE_SCHEMA_VERSION, ModelPackageManifest, ModelRights, ModelUsage,
-    PLACEMENT_WASM_CPU, PinRights, TrustedModelKeys, digest_hex, sign_model_manifest,
+    PLACEMENT_WASM_CPU, PinRights, PlacementPolicy, TrustedModelKeys, digest_hex,
+    sign_model_manifest,
 };
 use traverse_runtime::inference::{
     GovernedModelExecutionError, GovernedModelExecutionErrorCode, GovernedModelExecutionRequest,
@@ -1155,8 +1156,16 @@ fn signed_host(
         .expect("trust test key");
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
     host.model_usage = Some(ModelUsage::Commercial);
-    host.register_package(manifest_bytes, wasm, signature)
-        .expect("package should verify");
+    host.register_package(
+        manifest_bytes,
+        wasm,
+        signature,
+        &PlacementPolicy {
+            policy_ref: "policy-1".to_string(),
+            ..PlacementPolicy::default()
+        },
+    )
+    .expect("package should verify");
     host.policies.insert(
         "policy-1".to_string(),
         ExecutionPolicy {

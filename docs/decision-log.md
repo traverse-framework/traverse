@@ -7182,6 +7182,35 @@ Chosen by the maintainer on `#1706` (2026-10-29): the recommended option on
 each question (eager preparation at registration, including `model_prepare`,
 a host budget that falls through, and tests plus one iPhone run).
 
+**API-shape addendum (2026-10-30, approved by the maintainer during `#1706`):**
+Implementation found that registration did not receive the policy: the
+execution policy (placements, `require_fuel_metering`) reached the
+connector per call, and the frame hosts inserted it on every `execute`.
+Two choices close that gap:
+1. **Registration takes the policy.** `register_package(..., policy:
+   {policy_ref, placements, require_fuel_metering},
+   preparation_budget_ms?)` prepares and fixes one placement per
+   (package, `policy_ref`). An execute whose `policy_ref` was not prepared
+   at registration fails closed with `placement_unavailable`.
+   - Rejected: a separate `prepare_placement(model_digest, policy)` call
+     before the first execute (a second step every host must remember, and
+     an unprepared first call would still be possible).
+   - Rejected: preparing at registration for every policy already
+     activated (policies arrived per call, so the result would depend on
+     call order).
+2. **The execute fields stay, optional and deprecated.** `placements` and
+   `require_fuel_metering` on an execute may be omitted. When present they
+   must equal the registered policy, or the call fails closed with
+   `placement_unavailable`. They are removed in the next major version.
+
+Two implementation details follow from these choices and are recorded in
+Spec 138 0.16.0 (FR-074, FR-075):
+- The preparation budget applies to each listed placement, so a placement
+  that overruns it can still fall through to the next one.
+- A failing `model_prepare` fails registration with `execution_failed`
+  rather than falling through, because it is a package defect, not a slow
+  device.
+
 ## Decision 121: Self-Contained Mode A — Shared Sync, Shared Validator, Four Binary Targets
 
 - **Date**: 2026-10-29

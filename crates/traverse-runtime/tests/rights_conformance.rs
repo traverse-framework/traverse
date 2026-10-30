@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use std::fs;
 use traverse_runtime::exact_model::{
     ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelUsage, PackageStatusEntry,
-    TrustedModelKeys,
+    PlacementPolicy, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -125,7 +125,14 @@ fn register(suite: &Value, host: &mut ExactModelHostConnector, step: &Value) -> 
         Some(other) => panic!("unknown tamper {other}"),
         None => {}
     }
-    match host.register_package(&manifest, wasm, &signature) {
+    let policy = PlacementPolicy {
+        policy_ref: suite["execute"]["policy_ref"]
+            .as_str()
+            .expect("policy_ref")
+            .to_string(),
+        ..PlacementPolicy::default()
+    };
+    match host.register_package(&manifest, wasm, &signature, &policy) {
         Ok(digest) => json!({ "ok": true, "digest": digest }),
         Err(error) => error_json(&error),
     }

@@ -56,6 +56,7 @@ class ExactModelHostTest {
                 repoFile("$dir/model.manifest.json").readBytes(),
                 repoFile("$dir/model.wasm").readBytes(),
                 repoFile("$dir/model.sig.json").readBytes(),
+                ExactModelPlacementPolicy("policy-1"),
             )
             assertEquals(pin.digest, digest)
             val request = vector["request"]!!.jsonObject
@@ -73,6 +74,37 @@ class ExactModelHostTest {
                 assertEquals("wasm-cpu", result.placement)
                 assertEquals(case.s("output_frame_hex"), host.readModelOutput(result.outputRef, maxOutput).toHex())
                 assertEquals("active", result.modelEvidence?.status)
+            }
+        }
+    }
+
+    /** Spec 138 0.16.0 (Decision 120): registration fixes the placement for its policy only. */
+    @Test
+    fun registrationFixesThePlacementForItsPolicyOnly() = runBlocking {
+        val vector = json("fixtures/models/conformance/signed-digits-mlp.json")
+        val pin = pin(vector["pin"]!!)
+        ExactModelHost(listOf(pin), listOf(vector.s("trusted_public_key_hex")), "commercial").use { host ->
+            val dir = "fixtures/models/${vector.s("package_dir")}"
+            val registered = host.registerPackageWithPreparation(
+                repoFile("$dir/model.manifest.json").readBytes(),
+                repoFile("$dir/model.wasm").readBytes(),
+                repoFile("$dir/model.sig.json").readBytes(),
+                ExactModelPlacementPolicy("policy-1", listOf("wasm-cpu")),
+                preparationBudgetMs = 60_000,
+            )
+            assertEquals(pin.digest, registered.digest)
+            assertEquals("wasm-cpu", registered.placement)
+            assertTrue(registered.preparationMs >= 0)
+            val request = vector["request"]!!.jsonObject
+            val input = hex(vector["cases"]!!.jsonArray[0].jsonObject.s("input_frame_hex"))
+            try {
+                host.execute(
+                    pin.modelId, pin.version, pin.digest, host.stageModelInput(input, 4096), "unregistered",
+                    "sensitive", request.s("input_schema_ref"), "1.0.0", 64, listOf("sensitive"),
+                )
+                fail("a policy the package was not registered under ran")
+            } catch (error: ExactModelError) {
+                assertEquals("placement_unavailable", error.reason)
             }
         }
     }
@@ -105,6 +137,7 @@ class ExactModelHostTest {
                 repoFile("$dir/model.manifest.json").readBytes(),
                 repoFile("$dir/model.wasm").readBytes(),
                 repoFile("$dir/model.sig.json").readBytes(),
+                ExactModelPlacementPolicy("policy-1"),
             )
             val rejected = vector["rejected_cases"]!!.jsonArray.map { it.jsonObject }
             assertEquals(7, rejected.size)
@@ -203,7 +236,7 @@ class ExactModelHostTest {
                                         .toString().toByteArray()
                                 }
                             }
-                            val digest = host.registerPackage(repoFile("$dir/model.manifest.json").readBytes(), wasm, signature)
+                            val digest = host.registerPackage(repoFile("$dir/model.manifest.json").readBytes(), wasm, signature, ExactModelPlacementPolicy("policy-1"))
                             buildJsonObject { put("ok", true); put("digest", digest) }
                         }
                         "execute" -> attempt {
@@ -248,6 +281,7 @@ class ExactModelHostTest {
                 repoFile("$dir/model.manifest.json").readBytes(),
                 repoFile(suite.s("wasm_path")).readBytes(),
                 repoFile("$dir/model.sig.json").readBytes(),
+                ExactModelPlacementPolicy("policy-1"),
             )
             val run = suite["execute"]!!.jsonObject
             val inputRef = host.stageModelInput(hex(run.s("input_hex")), 4096)

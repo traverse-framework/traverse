@@ -20,8 +20,8 @@ use traverse_runtime::exact_model::{
     ADAPTER_COREML, AcceleratorVariant, COREML_VARIANT_FORMAT, ExactModelHostConnector,
     ExactModelPin, ExecutionPolicy, HostModelLimits, MODEL_PACKAGE_SCHEMA_VERSION_PREPARED,
     MODEL_PACKAGE_SCHEMA_VERSION_SCORED, ModelEngine, ModelPackageManifest, ModelPackageSignature,
-    ModelUsage, PLACEMENT_WASM_CPU, PinRights, ScoreTransform, TrustedModelKeys, VariantConversion,
-    VariantTolerance, sign_model_manifest,
+    ModelUsage, PLACEMENT_WASM_CPU, PinRights, PlacementPolicy, ScoreTransform, TrustedModelKeys,
+    VariantConversion, VariantTolerance, sign_model_manifest,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -777,6 +777,15 @@ fn host_with_keys(
     host
 }
 
+/// The `wasm-cpu` policy every governed CLI run registers under (Spec 138
+/// 0.16.0, Decision 120).
+fn conformance_policy() -> PlacementPolicy {
+    PlacementPolicy {
+        policy_ref: CONFORMANCE_POLICY.to_string(),
+        ..PlacementPolicy::default()
+    }
+}
+
 fn error_json(error: &HostConnectorError) -> Value {
     let mut out = json!({
         "code": error.code.as_str(),
@@ -859,6 +868,8 @@ fn verify(
         files.wasm.clone(),
         &files.signature,
         &variant_refs,
+        &conformance_policy(),
+        None,
     );
     let imports = wasm_import_count(&files.wasm);
     // Usage actually applied to the host for this run (#1660 / #1686).
@@ -975,7 +986,12 @@ fn execute_governed(
     input: &[u8],
 ) -> Result<Vec<u8>, HostConnectorError> {
     host.engine = engine;
-    host.register_package(&files.manifest, files.wasm.clone(), &files.signature)?;
+    host.register_package(
+        &files.manifest,
+        files.wasm.clone(),
+        &files.signature,
+        &conformance_policy(),
+    )?;
     let input_ref = host.io.stage_model_input(
         input,
         usize::try_from(manifest.max_input_bytes).unwrap_or(usize::MAX),

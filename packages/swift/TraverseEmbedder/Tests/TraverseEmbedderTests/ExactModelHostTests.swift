@@ -46,7 +46,7 @@ final class ExactModelHostTests: XCTestCase {
         try await host.registerPackage(
             manifest: try fixture("digits-mlp-1.0.0/model.manifest.json"),
             wasm: try fixture("digits-mlp-1.0.0/model.wasm"),
-            signature: try fixture("digits-mlp-1.0.0/model.sig.json"))
+            signature: try fixture("digits-mlp-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
     }
 
     private static func run(_ host: ExactModelHost, _ pin: ExactModelPin, _ frame: Data, timeoutMs: Int? = nil) async throws -> ExactModelExecution {
@@ -104,8 +104,8 @@ final class ExactModelHostTests: XCTestCase {
     }
 
     /// Decision 112 (#1629 slice 3): the Core ML accelerator is opt-in at
-    /// `init`, variant files go in at registration, and the policy's
-    /// placements choose it per call.
+    /// `init`, variant files go in at registration, and the policy a package
+    /// is registered under fixes its placement there (Decision 120).
     func testCoreMLPlacementIsOptInAndReportsItsEvidence() async throws {
         let package = "digits-onnx-coreml-1.0.0"
         let manifestData = try fixture("\(package)/model.manifest.json")
@@ -122,23 +122,36 @@ final class ExactModelHostTests: XCTestCase {
             coreML: CoreMLAcceleratorConfig(computeUnits: "cpu_only", cacheDirectory: cache))
         let zipPath = "variants/coreml/model.mlpackage.zip"
         let vectorPath = "variants/coreml/conformance.json"
-        let registered = try await host.registerPackage(
-            manifest: manifestData,
-            wasm: try fixture("\(package)/model.wasm"),
-            signature: try fixture("\(package)/model.sig.json"),
-            variantFiles: [zipPath: try fixture("\(package)/\(zipPath)"),
-                           vectorPath: try fixture("\(package)/\(vectorPath)")])
-        XCTAssertEqual(registered, digest)
+        let register = { (policy: ExactModelPlacementPolicy) in
+            try await host.registerPackageWithPreparation(
+                manifest: manifestData,
+                wasm: try self.fixture("\(package)/model.wasm"),
+                signature: try self.fixture("\(package)/model.sig.json"),
+                variantFiles: [zipPath: try self.fixture("\(package)/\(zipPath)"),
+                               vectorPath: try self.fixture("\(package)/\(vectorPath)")],
+                policy: policy)
+        }
+        // The Core ML compile and self-check run here, not in the first call.
+        let registered = try await register(.init(policyRef: "policy-1", placements: ["coreml", "wasm-cpu"]))
+        XCTAssertEqual(registered.digest, digest)
+        XCTAssertEqual(registered.placement, "coreml")
+        // Requiring fuel metering excludes Core ML, which cannot meter fuel.
+        let metered = try await register(.init(policyRef: "metered", placements: ["coreml", "wasm-cpu"],
+                                               requireFuelMetering: true))
+        XCTAssertEqual(metered.placement, "wasm-cpu")
         let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture("\(package)/\(vectorPath)")) as? [String: Any])
         let testCase = try XCTUnwrap((vector["cases"] as? [[String: Any]])?.first)
         let input = Data(hex: try XCTUnwrap(testCase["input_frame_hex"] as? String))
         let expected = Data(hex: try XCTUnwrap(testCase["output_frame_hex"] as? String))
-        let inputRef = try host.stageModelInput(input, maxBytes: 4096)
-        let result = try await host.execute(
-            modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "policy-1",
-            dataClassification: "sensitive", inputSchemaRef: "schema:traverse-digits-onnx-in",
-            inputSchemaVersion: "1.0.0", maxOutputBytes: 64, allowedClassifications: ["sensitive"],
-            placements: ["coreml", "wasm-cpu"])
+        let run = { (policyRef: String, placements: [String]?) in
+            try await host.execute(
+                modelRef: (pin.modelId, pin.version, pin.digest),
+                inputRef: try host.stageModelInput(input, maxBytes: 4096), policyRef: policyRef,
+                dataClassification: "sensitive", inputSchemaRef: "schema:traverse-digits-onnx-in",
+                inputSchemaVersion: "1.0.0", maxOutputBytes: 64, allowedClassifications: ["sensitive"],
+                timeoutMs: 1_000, placements: placements)
+        }
+        let result = try await run("policy-1", nil)
         let output = try host.readModelOutput(result.outputRef, maxBytes: 64)
         func logits(_ frame: Data) -> [Float] {
             stride(from: 16, to: frame.count, by: 4).map { offset in
@@ -154,15 +167,21 @@ final class ExactModelHostTests: XCTestCase {
         XCTAssertEqual(result.placement, "coreml")
         XCTAssertEqual(result.placementEvidence,
                        PlacementEvidence(placement: "coreml", computeUnits: "cpu_only", fuelMetering: "not_applicable"))
-        // Requiring fuel metering excludes Core ML, which cannot meter fuel.
-        let meteredRef = try host.stageModelInput(input, maxBytes: 4096)
-        let metered = try await host.execute(
-            modelRef: (pin.modelId, pin.version, pin.digest), inputRef: meteredRef, policyRef: "policy-1",
-            dataClassification: "sensitive", inputSchemaRef: "schema:traverse-digits-onnx-in",
-            inputSchemaVersion: "1.0.0", maxOutputBytes: 64, allowedClassifications: ["sensitive"],
-            placements: ["coreml", "wasm-cpu"], requireFuelMetering: true)
-        XCTAssertEqual(metered.placement, "wasm-cpu")
-        XCTAssertEqual(metered.placementEvidence?.fuelMetering, "metered")
+        // Restating the registered placements is accepted; different ones,
+        // or a policy the package was not registered under, fail closed.
+        let restated = try await run("policy-1", ["coreml", "wasm-cpu"])
+        XCTAssertEqual(restated.placement, "coreml")
+        let meteredRun = try await run("metered", nil)
+        XCTAssertEqual(meteredRun.placement, "wasm-cpu")
+        XCTAssertEqual(meteredRun.placementEvidence?.fuelMetering, "metered")
+        for (policyRef, placements) in [("policy-1", ["wasm-cpu"]), ("unregistered", nil)] as [(String, [String]?)] {
+            do {
+                _ = try await run(policyRef, placements)
+                XCTFail("\(policyRef) ran")
+            } catch let error as ExactModelError {
+                XCTAssertEqual(error.reason, "placement_unavailable")
+            }
+        }
     }
 
     func testFailuresCarryStableReasons() async throws {
@@ -170,7 +189,7 @@ final class ExactModelHostTests: XCTestCase {
         do {
             _ = try await host.registerPackage(manifest: Data("{}".utf8),
                                                wasm: try fixture("digits-mlp-1.0.0/model.wasm"),
-                                               signature: try fixture("digits-mlp-1.0.0/model.sig.json"))
+                                               signature: try fixture("digits-mlp-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
             XCTFail("tampered manifest registered")
         } catch let error as ExactModelError {
             XCTAssertEqual(error.reason, "signature_invalid")
@@ -222,7 +241,7 @@ final class ExactModelHostTests: XCTestCase {
                                 digest: SHA256.hash(data: manifestBytes).hexString,
                                 rights: .init(licenseId: "Apache-2.0", commercialUse: "allowed"))
         let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [publicHex], modelUsage: "commercial")
-        _ = try await host.registerPackage(manifest: manifestBytes, wasm: wasm, signature: signature)
+        _ = try await host.registerPackage(manifest: manifestBytes, wasm: wasm, signature: signature, policy: .init(policyRef: "policy-1"))
         return (host, pin)
     }
 

@@ -61,7 +61,8 @@ public sealed class ExactModelHostTests
         var digest = await host.RegisterPackageAsync(
             Read($"{dir}/model.manifest.json"),
             Read($"{dir}/model.wasm"),
-            Read($"{dir}/model.sig.json"));
+            Read($"{dir}/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-1"));
         Assert.Equal(pin.Digest, digest);
         var request = vector["request"]!;
         var cases = vector["cases"] is JsonArray array
@@ -88,6 +89,41 @@ public sealed class ExactModelHostTests
     }
 
     /// <summary>
+    /// Spec 138 0.16.0 (Decision 120): registration fixes the placement for its policy only;
+    /// a call naming another <c>policy_ref</c> fails closed.
+    /// </summary>
+    [Fact]
+    public async Task RegistrationFixesThePlacementForItsPolicyOnly()
+    {
+        var vector = Json("fixtures/models/conformance/signed-digits-mlp.json");
+        var pin = Pin(vector["pin"]);
+        using var host = new ExactModelHost([pin], [S(vector, "trusted_public_key_hex")], "commercial");
+        var dir = $"fixtures/models/{S(vector, "package_dir")}";
+        var registered = await host.RegisterPackageWithPreparationAsync(
+            Read($"{dir}/model.manifest.json"),
+            Read($"{dir}/model.wasm"),
+            Read($"{dir}/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-1", ["wasm-cpu"]),
+            preparationBudgetMs: 60_000);
+        Assert.Equal(pin.Digest, registered.Digest);
+        Assert.Equal("wasm-cpu", registered.Placement);
+        var input = Hex(S(vector["cases"]![0], "input_frame_hex"));
+        var error = await Assert.ThrowsAsync<ExactModelException>(() => host.ExecuteAsync(
+            pin.ModelId, pin.Version, pin.Digest, host.StageModelInput(input, 4096), "unregistered", "sensitive",
+            S(vector["request"], "input_schema_ref"), "1.0.0", 64, ["sensitive"]));
+        Assert.Equal("placement_unavailable", error.Reason);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var stopped = await Assert.ThrowsAsync<ExactModelException>(() => host.RegisterPackageAsync(
+            Read($"{dir}/model.manifest.json"),
+            Read($"{dir}/model.wasm"),
+            Read($"{dir}/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-2"),
+            cancellationToken: cancelled.Token));
+        Assert.Equal("cancelled", stopped.Code);
+    }
+
+    /// <summary>
     /// Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with exactly
     /// its code and reason, as on every other host.
     /// </summary>
@@ -101,7 +137,8 @@ public sealed class ExactModelHostTests
         await host.RegisterPackageAsync(
             Read($"{dir}/model.manifest.json"),
             Read($"{dir}/model.wasm"),
-            Read($"{dir}/model.sig.json"));
+            Read($"{dir}/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-1"));
         var rejected = vector["rejected_cases"]!.AsArray();
         Assert.Equal(7, rejected.Count);
         foreach (var testCase in rejected)
@@ -235,7 +272,7 @@ public sealed class ExactModelHostTests
                                     break;
                             }
 
-                            var digest = await host.RegisterPackageAsync(Read($"{dir}/model.manifest.json"), wasm, signature);
+                            var digest = await host.RegisterPackageAsync(Read($"{dir}/model.manifest.json"), wasm, signature, new ExactModelPlacementPolicy("policy-1"));
                             return new JsonObject { ["ok"] = true, ["digest"] = digest };
                         });
                         break;
@@ -294,7 +331,8 @@ public sealed class ExactModelHostTests
         await host.RegisterPackageAsync(
             Read($"{dir}/model.manifest.json"),
             Read(S(suite, "wasm_path")),
-            Read($"{dir}/model.sig.json"));
+            Read($"{dir}/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-1"));
         Assert.Equal("Apache-2.0", host.ModelRights(pin.Digest)?.LicenseId);
         Assert.Null(host.ModelRights("00"));
         Assert.Null(host.ModelRightsRecord("00"));
@@ -364,7 +402,8 @@ public sealed class ExactModelHostTests
         await host.RegisterPackageAsync(
             manifest,
             Read("fixtures/models/fixture-looper-1.0.0/model.wasm"),
-            Read("fixtures/models/fixture-looper-1.0.0/model.sig.json"));
+            Read("fixtures/models/fixture-looper-1.0.0/model.sig.json"),
+            new ExactModelPlacementPolicy("policy-1"));
         return (host, pin);
     }
 
@@ -443,7 +482,7 @@ public sealed class ExactModelHostTests
         });
         var calls = new Func<Task>[]
         {
-            () => host.RegisterPackageAsync([], [], []),
+            () => host.RegisterPackageAsync([], [], [], new ExactModelPlacementPolicy("policy-1")),
             () => Task.FromResult(host.StageModelInput([1], 1)),
             () => Task.FromResult(host.ReadModelOutput("o", 1)),
             () => Task.FromResult(host.ModelRights("d")),

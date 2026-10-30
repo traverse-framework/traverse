@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.15.1
+**Version**: 0.16.0
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -219,6 +219,29 @@ are amended. Hosts at or below 0.15.0 reject `2.3.0` manifests, so
   signed conformance vector).
 
 Additive; legacy single-IO packages keep verifying and running.
+
+**Amendment (2026-10-30, version 0.15.1 -> 0.16.0, approved under Decision 120 and its addendum)**: `#1706`.
+One-time placement preparation moves from the first call to registration:
+- **Registration takes the policy.** `register_package(..., policy:
+  {policy_ref, placements, require_fuel_metering}, preparation_budget_ms?)`
+  walks `placements` and fixes one placement per (package, `policy_ref`).
+  The adapter compile and device self-check, or `wasm-cpu`'s
+  `model_prepare`, run there.
+- **No call is charged for it.** A call's deadline, `max_fuel` and ceilings
+  cover only its own execution. This replaces the 0.12.1 rule that a call's
+  deadline includes prepare time, except when a host has evicted a
+  snapshot.
+- **A host budget bounds it.** Each listed placement gets
+  `preparation_budget_ms`, capped by the host's `max_preparation_ms`. A
+  placement over it is unavailable, and registration moves to the next.
+- **Calls use the fixed placement.** A call naming a `policy_ref` the
+  package was not registered under fails with `placement_unavailable`. The
+  call's `placements` / `require_fuel_metering` become optional and, when
+  present, must equal the registered policy. They are removed in the next
+  major version.
+
+FR-053, FR-056, FR-060 and FR-062 are amended; FR-074 and FR-075 are new.
+Breaking for hosts: every registration API takes the policy.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -610,8 +633,11 @@ optimizing its model) and skip that work on later calls.
     a snapshot existed.
   - Cancellation or a deadline that interrupts `model_prepare` fails the
     triggering call with `cancelled` / `timeout`, and no snapshot is kept.
-  - The call's wall-clock deadline (`max_execution_ms` / `timeout_ms`)
-    includes prepare time.
+  - (0.16.0, Decision 120) Registration runs `model_prepare` once and
+    stores the snapshot (FR-074), so no call is charged for it. The call's
+    wall-clock deadline (`max_execution_ms` / `timeout_ms`) includes
+    prepare time only when the call takes the fresh path, for example after
+    the host evicted the snapshot.
 - **Evidence.** `resource_usage.fuel_consumed` reports only the v2 sequence.
   Whether a snapshot was used MAY appear in the host's internal trace, but
   MUST NOT appear in the public result, so results stay identical across
@@ -709,24 +735,28 @@ an ordered, duplicate-free list of placement ids, for example
 policy fails closed when it lists an id that is neither `wasm-cpu` nor a
 known adapter id.
 
-For each execute, the host takes the first listed placement that meets all
-of these:
+(0.16.0, Decision 120) A package is registered under the policy, and
+registration fixes the placement for that (package, `policy_ref`) pair
+(FR-074). Every execute naming the pair runs on it. Registration takes the
+first listed placement that meets all of these:
 - the host supports it;
 - the package carries it (`wasm-cpu` always, an adapter only through its
   variant);
 - it passed its device self-check (below);
 - it meets the policy's `require_fuel_metering` flag (below).
 
-Placements not listed are never used. If no listed placement qualifies, the
-call fails closed with `model_unavailable` / `placement_unavailable`, before
-any input is consumed. The result's `placement` and the trace record the
-placement that actually ran.
+Placements not listed are never used. If no listed placement qualifies,
+registration fails closed with `model_unavailable` /
+`placement_unavailable`. An execute whose `policy_ref` was not prepared for
+the package fails the same way, before any input is consumed. The result's
+`placement` and the trace record the placement that actually ran.
 
 ### Device self-check
 
 The first time a host loads a variant, it runs every case of the variant's
 conformance vector through the adapter and compares each output with the
-reference under the variant's `tolerance`. The host stores the result in
+reference under the variant's `tolerance`. (0.16.0) This happens during
+registration (FR-074), and its first prediction compiles the variant. The host stores the result in
 host-owned state, keyed by variant digest, adapter, OS version, and the
 compute units the adapter may use. It runs the check again when any part of
 that key changes.
@@ -734,7 +764,7 @@ that key changes.
 A failed self-check makes the variant unavailable on that device, and
 placement selection moves on. The failure appears in the host's trace with
 the worst case found. A self-check is not a public call, so its cost is not
-charged to any call's ceilings.
+charged to any call's ceilings; since 0.16.0 it never runs inside a call.
 
 ### Ceiling profile
 
@@ -1053,7 +1083,8 @@ Traverse MUST:
   - imports anything.
 
   A failing `model_prepare` (trap, exhausted fuel, non-zero return) MUST
-  fail the call with `execution_failed`.
+  fail with `execution_failed`: at registration (0.16.0), or in the call
+  when the call takes the fresh path.
 - **FR-054**: A v3 execute MUST run in a fresh `Store` and instance. It
   either runs `model_prepare` (fresh path) or restores the pristine
   post-prepare snapshot (memory bytes, memory size, exported mutable
@@ -1075,7 +1106,9 @@ Traverse MUST:
   snapshot MUST be used only when it fits the call's memory ceiling
   (0.12.1). Cancellation or a
   deadline during prepare MUST fail the call (`cancelled` / `timeout`) and
-  keep no snapshot.
+  keep no snapshot. (0.16.0) Registration runs `model_prepare` under the
+  same fuel ceiling and the preparation budget (FR-074); a call's
+  deadline includes prepare time only on the fresh path.
 - **FR-057**: For the same package and input, a v3 call's public result
   (status, output bytes, failure code and reason, `resource_usage` except
   `duration_ms`) MUST be identical whether it took the fresh path or the
@@ -1098,16 +1131,19 @@ Traverse MUST:
   with `digest_mismatch`, without falling back.
 - **FR-060**: Execution policy MUST carry an ordered `placements` list
   (default `["wasm-cpu"]`). Activating a policy that names an unknown id
-  MUST fail. Each execute MUST use the first listed placement that the host
-  supports, the package carries, has passed its self-check, and meets
-  `require_fuel_metering`. If none qualifies, the call MUST fail with
-  `model_unavailable` / `placement_unavailable` before consuming the input.
+  MUST fail. (0.16.0) Registration MUST fix the first listed placement that
+  the host supports, the package carries, has passed its self-check, and
+  meets `require_fuel_metering`, and each execute MUST run on it (FR-074).
+  If none qualifies, registration MUST fail with `model_unavailable` /
+  `placement_unavailable`. An execute whose `policy_ref` was not prepared
+  for the package MUST fail the same way before consuming the input.
 - **FR-061**: The success result and the public trace MUST record the
   placement that ran and `placement_evidence` (`placement`,
   `compute_units`, `fuel_metering`).
 - **FR-062**: Before first use on a device, a host MUST check a variant
   against its conformance vector under its declared `tolerance`, including
-  its `score_transform` (0.15.0). The result
+  its `score_transform` (0.15.0). (0.16.0) The check MUST run during
+  registration, never inside a call. The result
   MUST be kept per variant digest, adapter, OS version and compute units,
   and the check MUST run again when any of these change. A failed variant
   MUST be unavailable on that device.
@@ -1208,6 +1244,38 @@ Traverse MUST:
   Multi-IO I/O MUST be Spec 138 frame bundles (frames concatenated in
   config order). Manifest schema and guest ABI are unchanged (`2.2.0` /
   ABI 3). Legacy single-IO packages MUST keep verifying and running.
+- **FR-074**: (0.16.0, Decision 120) Registration MUST prepare and fix one
+  placement per (package, `policy_ref`):
+  - It walks the policy's `placements` in order. For the first that
+    qualifies (FR-060), it compiles the adapter variant and runs or reuses
+    the device self-check (FR-062, key unchanged), or, for `wasm-cpu`,
+    compiles the guest and runs `model_prepare` for ABI v3, storing the
+    snapshot. It returns only when that placement is ready.
+  - No call is charged for this work. A call's deadline, `max_fuel` and
+    ceilings cover only its own execution, except a re-prepare after a
+    snapshot eviction (FR-056).
+  - Each listed placement gets the registration's `preparation_budget_ms`,
+    capped by the host-owned `max_preparation_ms` (generous default). A
+    placement that overruns it is unavailable, is recorded in the host's
+    trace, and registration moves to the next listed placement.
+  - Registration fails with `model_unavailable` / `placement_unavailable`
+    only when no placement qualifies. Cancellation stops it with
+    `cancelled`. A failing `model_prepare` fails it with
+    `execution_failed`. In every failure no package, placement or snapshot
+    is kept.
+  - Registering the same package under another `policy_ref` adds that
+    pair; registering under the same `policy_ref` replaces it.
+- **FR-075**: (0.16.0, Decision 120 addendum) Every host's registration API
+  MUST take the policy as `{policy_ref, placements, require_fuel_metering}`
+  plus an optional `preparation_budget_ms`, and MUST report the fixed
+  placement and the preparation time. On the framed host protocol these are
+  the `register` header's `policy`, `preparation_budget_ms` and optional
+  `registration_id` (which `cancel` targets), and the response's
+  `placement` and `preparation`. An execute's `placements` and
+  `require_fuel_metering` are optional and deprecated: when present they
+  MUST equal the registered policy, otherwise the call fails with
+  `model_unavailable` / `placement_unavailable`. An invalid list still
+  fails with `policy_denied`. They are removed in the next major version.
 
 ## Acceptance scenarios
 
@@ -1234,8 +1302,8 @@ Traverse MUST:
    ≥ 95% on the 1,797-sample held-out split through signed native
    execution. The browser matches the native conformance vector
    byte-for-byte.
-10. (0.12.0) A v3 package's first execute prepares and stores a snapshot.
-    Later executes restore it in a fresh instance without calling
+10. (0.12.0; 0.16.0) Registration of a v3 package prepares and stores a
+    snapshot. Executes restore it in a fresh instance without calling
     `model_prepare`. Every result is byte-identical to the fresh path on
     every host, including after an eviction.
 11. (0.12.0) With policy `["coreml", "wasm-cpu"]`, a package carrying a
@@ -1305,11 +1373,11 @@ Traverse MUST:
     vectors byte-identically to native, web, and Swift, passes all 21 rights
     conformance cases, and fails closed with `engine_unavailable` when the
     native library is missing.
-27. (0.12.0) A v3 module with a non-exported mutable global, a
+27. (0.12.0; 0.16.0) A v3 module with a non-exported mutable global, a
     `table.set` / `data.drop`, or no `model_prepare` → `model_incompatible`
     at registration. A trapping, out-of-fuel or non-zero `model_prepare` →
-    `execution_failed`, with no snapshot stored. A cancellation during
-    prepare → `cancelled`, with no snapshot stored.
+    `execution_failed` at registration, with no snapshot stored. A
+    cancellation during prepare → `cancelled`, with no snapshot stored.
 28. (0.12.0) A call whose `max_fuel` covers `run` but not prepare plus run
     succeeds on both a cold and a warm cache. A package revocation or a
     status change drops its snapshot.
@@ -1317,10 +1385,12 @@ Traverse MUST:
     A variant whose `conversion.source_digest` differs from
     `rights.derivation.source_digest` → `rights_inconsistent`. A
     `tolerance.max_abs_diff` above `5e-3` → `manifest_invalid`.
-30. (0.12.0) A policy listing only `coreml`, on a host without Core ML or
-    after a failed self-check → `placement_unavailable`, and the input is
-    not consumed. A policy naming an unknown placement id fails activation.
-    A policy with `require_fuel_metering: true` never selects `coreml`.
+30. (0.12.0; 0.16.0) Registering under a policy listing only `coreml`, on
+    a host without Core ML or after a failed self-check →
+    `placement_unavailable`. An execute naming a `policy_ref` the package
+    was not registered under → `placement_unavailable`, and the input is
+    not consumed. A policy naming an unknown placement id fails. A policy
+    with `require_fuel_metering: true` never selects `coreml`.
 31. (0.12.0) A cancellation or deadline that lands during a Core ML
     prediction → `cancelled` / `timeout`, and the late result is discarded.
 32. (0.13.0) The .NET `ExactModelHost` meets the following:
@@ -1345,6 +1415,19 @@ Traverse MUST:
     a truncated header. A guest returning `-3` or `-4`, an unknown negative
     value, or an over-ceiling length fails with the mapped code and reason
     on every engine. No message reads "invalid output length".
+34. (0.16.0, Decision 120) On every host, with a fake adapter where the
+    host has adapters:
+    - the self-check (or `model_prepare`) runs at registration, and the
+      registration reports the fixed placement and its preparation time;
+    - a self-check slower than a call's deadline still lets the first call
+      meet that deadline;
+    - a placement over the preparation budget falls through to the next
+      listed one, and a cancelled registration keeps nothing;
+    - an execute restating different `placements` → `placement_unavailable`.
+35. (0.16.0, Decision 120) On a physical iPhone, a BirdNET package
+    registered under `[coreml, wasm-cpu]` with `cpu_only` compute units
+    registers, its first call succeeds within the call deadline, and the
+    registration time is recorded.
 
 ## Compatibility and non-goals
 

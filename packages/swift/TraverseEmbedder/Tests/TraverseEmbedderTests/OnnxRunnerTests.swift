@@ -41,7 +41,7 @@ final class OnnxRunnerTests: XCTestCase {
         let digest = try await host.registerPackage(
             manifest: try models("digits-onnx-1.0.0/model.manifest.json"),
             wasm: try models("digits-onnx-1.0.0/model.wasm"),
-            signature: try models("digits-onnx-1.0.0/model.sig.json"))
+            signature: try models("digits-onnx-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
         XCTAssertEqual(digest, pin.digest)
 
         let request = try XCTUnwrap(vector["request"] as? [String: Any])
@@ -74,7 +74,7 @@ final class OnnxRunnerTests: XCTestCase {
         let digest = try await host.registerPackage(
             manifest: try models("hf-text-encoder-toy-1.0.0/model.manifest.json"),
             wasm: try models("hf-text-encoder-toy-1.0.0/model.wasm"),
-            signature: try models("hf-text-encoder-toy-1.0.0/model.sig.json"))
+            signature: try models("hf-text-encoder-toy-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
         XCTAssertEqual(digest, pin.digest)
 
         let request = try XCTUnwrap(vector["request"] as? [String: Any])
@@ -120,7 +120,7 @@ final class OnnxRunnerTests: XCTestCase {
         _ = try await host.registerPackage(
             manifest: try models("digits-onnx-1.0.0/model.manifest.json"),
             wasm: try models("digits-onnx-1.0.0/model.wasm"),
-            signature: try models("digits-onnx-1.0.0/model.sig.json"))
+            signature: try models("digits-onnx-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
         let request = try XCTUnwrap(vector["request"] as? [String: Any])
         let rejected = try XCTUnwrap(vector["rejected_cases"] as? [[String: Any]])
         XCTAssertEqual(rejected.count, 7)
