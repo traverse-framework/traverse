@@ -1594,13 +1594,14 @@
     },
     {
       "id": "119-verified-registry-mcp-mode-a",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/119-verified-registry-mcp-mode-a/spec.md",
       "governs": [
         "crates/traverse-mcp/",
-        "specs/119-verified-registry-mcp-mode-a/"
+        "specs/119-verified-registry-mcp-mode-a/",
+        ".github/workflows/mcp-server-publish.yml"
       ]
     },
     {

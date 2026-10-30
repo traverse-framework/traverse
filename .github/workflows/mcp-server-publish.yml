@@ -3,6 +3,8 @@ name: Publish traverse-mcp binaries
 # Spec 119 FR-006 / #1653: Mode A ships as a versioned standalone binary with
 # checksums and build provenance. Artifact release tag is traverse-mcp-vX.Y.Z
 # (never Latest); product tag vX.Y.Z remains crates.io / product notes.
+# Spec 119 0.2.0 / Decision 121 / #1753: four targets (Linux x64 + arm64,
+# macOS arm64, Windows x64 as .zip), each smoke-run before upload.
 
 on:
   push:
@@ -21,6 +23,13 @@ on:
           immutable release must be replaced after a packaging fix.
         required: false
         default: ""
+      dry_run:
+        description: >-
+          Build, smoke-run, and checksum every target, but skip attestation
+          and the release. SHA256SUMS is uploaded as a workflow artifact.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -36,9 +45,23 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
+            bin: traverse-mcp
+            python: python3
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: traverse-mcp-aarch64-unknown-linux-gnu.tar.gz
+            bin: traverse-mcp
+            python: python3
           - os: macos-14
             target: aarch64-apple-darwin
             archive: traverse-mcp-aarch64-apple-darwin.tar.gz
+            bin: traverse-mcp
+            python: python3
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: traverse-mcp-x86_64-pc-windows-msvc.zip
+            bin: traverse-mcp.exe
+            python: python
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -91,19 +114,27 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked -p traverse-mcp --release --target "${{ matrix.target }}"
-          bin="target/${{ matrix.target }}/release/traverse-mcp"
+          bin="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          # Smoke run: the built binary must start and report this tag and commit.
           "$bin" --version | tee version.txt
           grep -F "traverse-mcp ${TAG_VERSION}" version.txt
           grep -F "${GIT_SHA}" version.txt
-          stage="$(mktemp -d)"
-          cp "$bin" "${stage}/traverse-mcp"
-          tar -C "${stage}" -czf "${{ matrix.archive }}" traverse-mcp
-          python3 - "${{ matrix.archive }}" <<'PY'
-          import hashlib, pathlib, sys
-          path = pathlib.Path(sys.argv[1])
+          "${{ matrix.python }}" - "$bin" "${{ matrix.archive }}" <<'PY'
+          import hashlib, os, pathlib, sys, tarfile, zipfile
+          binary = pathlib.Path(sys.argv[1])
+          path = pathlib.Path(sys.argv[2])
+          if path.name.endswith(".zip"):
+              with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                  archive.write(binary, binary.name)
+          else:
+              with tarfile.open(path, "w:gz") as archive:
+                  info = archive.gettarinfo(str(binary), arcname=binary.name)
+                  info.mode = 0o755
+                  with binary.open("rb") as handle:
+                      archive.addfile(info, handle)
           digest = hashlib.sha256(path.read_bytes()).hexdigest()
           line = f"{digest}  {path.name}\n"
-          path.with_name(path.name + ".sha256").write_text(line, encoding="utf-8")
+          path.with_name(path.name + ".sha256").write_bytes(line.encode("utf-8"))
           print(line, end="")
           PY
 
@@ -170,16 +201,35 @@ jobs:
           cd dist
           cat ./*.sha256 | sort > SHA256SUMS
           sha256sum -c SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 4
           ls -la
+          {
+            echo "### traverse-mcp asset SHA-256"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SHA256SUMS (dry run)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-SHA256SUMS
+          path: dist/SHA256SUMS
+          if-no-files-found: error
 
       - name: Attest build provenance
+        if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz
+            dist/traverse-mcp-aarch64-unknown-linux-gnu.tar.gz
             dist/traverse-mcp-aarch64-apple-darwin.tar.gz
+            dist/traverse-mcp-x86_64-pc-windows-msvc.zip
 
       - name: Create immutable artifact release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -193,7 +243,9 @@ jobs:
 
           This is **not** the Traverse product release: that is **Traverse v${TAG_VERSION}** on tag \`v${TAG_VERSION}\`. The immutable-releases policy for this repository requires a dedicated \`traverse-mcp-v*\` tag so assets ship in one create call and are never marked Latest.
 
-          Verify:
+          Targets: \`x86_64-unknown-linux-gnu\`, \`aarch64-unknown-linux-gnu\`, \`aarch64-apple-darwin\` (\`.tar.gz\`), and \`x86_64-pc-windows-msvc\` (\`.zip\`).
+
+          Verify (on Windows, download the \`.zip\` and run \`traverse-mcp.exe --version\`):
 
           \`\`\`bash
           curl -LO https://github.com/${{ github.repository }}/releases/download/${MCP_RELEASE_TAG}/traverse-mcp-<target>.tar.gz
@@ -204,14 +256,24 @@ jobs:
           ./traverse-mcp --version
           \`\`\`
 
+          SHA-256 of each asset:
+
+          \`\`\`
+          $(cat dist/SHA256SUMS)
+          \`\`\`
+
           Built from commit \`${GITHUB_SHA}\` for workspace **v${TAG_VERSION}**.
           NOTES
           )"
           gh release create "${MCP_RELEASE_TAG}" \
             dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz \
             dist/traverse-mcp-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+            dist/traverse-mcp-aarch64-unknown-linux-gnu.tar.gz \
+            dist/traverse-mcp-aarch64-unknown-linux-gnu.tar.gz.sha256 \
             dist/traverse-mcp-aarch64-apple-darwin.tar.gz \
             dist/traverse-mcp-aarch64-apple-darwin.tar.gz.sha256 \
+            dist/traverse-mcp-x86_64-pc-windows-msvc.zip \
+            dist/traverse-mcp-x86_64-pc-windows-msvc.zip.sha256 \
             dist/SHA256SUMS \
             --repo "${{ github.repository }}" \
             --title "traverse-mcp binaries (workspace v${TAG_VERSION})" \
