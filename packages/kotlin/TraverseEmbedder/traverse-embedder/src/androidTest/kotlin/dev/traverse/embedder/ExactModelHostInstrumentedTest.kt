@@ -63,6 +63,7 @@ class ExactModelHostInstrumentedTest {
                 read("$dir/model.manifest.json"),
                 read("$dir/model.wasm"),
                 read("$dir/model.sig.json"),
+                ExactModelPlacementPolicy("policy-1"),
             )
             assertEquals(pin.digest, digest)
             val request = vector["request"]!!.jsonObject
@@ -112,6 +113,7 @@ class ExactModelHostInstrumentedTest {
                 read("$dir/model.manifest.json"),
                 read("$dir/model.wasm"),
                 read("$dir/model.sig.json"),
+                ExactModelPlacementPolicy("policy-1"),
             )
             val rejected = vector["rejected_cases"]!!.jsonArray.map { it.jsonObject }
             assertEquals(7, rejected.size)
@@ -216,7 +218,7 @@ class ExactModelHostInstrumentedTest {
                                         .toString().toByteArray()
                                 }
                             }
-                            val digest = host.registerPackage(read("$dir/model.manifest.json"), wasm, signature)
+                            val digest = host.registerPackage(read("$dir/model.manifest.json"), wasm, signature, ExactModelPlacementPolicy("policy-1"))
                             buildJsonObject { put("ok", true); put("digest", digest) }
                         }
                         "execute" -> attempt {

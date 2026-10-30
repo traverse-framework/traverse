@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use traverse_coreml_adapter::{ComputeUnits, CoreMlAdapter};
 use traverse_runtime::exact_model::{
     AcceleratorAdapter, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, FuelMetering,
-    ModelUsage, TrustedModelKeys, decode_guest_frame, digest_hex,
+    ModelUsage, PlacementPolicy, TrustedModelKeys, decode_guest_frame, digest_hex,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
@@ -95,14 +95,24 @@ fn host(adapter: CoreMlAdapter) -> (ExactModelHostConnector, String, Cases) {
     let zip_path = variant["path"].as_str().expect("path");
     let vector_path = variant["conformance_vector_path"].as_str().expect("path");
     let (zip, vector) = (read(zip_path), read(vector_path));
-    connector
-        .register_package_with_variants(
-            &manifest_bytes,
-            read("model.wasm"),
-            &read("model.sig.json"),
-            &[(zip_path, &zip), (vector_path, &vector)],
-        )
-        .expect("register");
+    // One registration per placement list the tests call with; each fixes
+    // its placement up front (Spec 138 0.16.0, Decision 120).
+    for placements in [&["coreml"][..], &["coreml", "wasm-cpu"][..]] {
+        connector
+            .register_package_with_variants(
+                &manifest_bytes,
+                read("model.wasm"),
+                &read("model.sig.json"),
+                &[(zip_path, &zip), (vector_path, &vector)],
+                &PlacementPolicy {
+                    policy_ref: placements.join("+"),
+                    placements: placements.iter().map(ToString::to_string).collect(),
+                    require_fuel_metering: false,
+                },
+                None,
+            )
+            .expect("register");
+    }
     let cases = serde_json::from_slice::<Value>(&vector).expect("vector")["cases"]
         .as_array()
         .expect("cases")
@@ -123,14 +133,14 @@ fn execute(
     input: &[u8],
     placements: &[&str],
 ) -> Result<(Vec<u8>, Value), String> {
+    let policy_ref = placements.join("+");
     connector.policies.insert(
-        "policy-1".to_string(),
+        policy_ref.clone(),
         ExecutionPolicy {
-            policy_ref: "policy-1".to_string(),
+            policy_ref: policy_ref.clone(),
             allowed_classifications: vec!["sensitive".to_string()],
             max_output_bytes: 4096,
-            placements: placements.iter().map(ToString::to_string).collect(),
-            require_fuel_metering: false,
+            ..ExecutionPolicy::default()
         },
     );
     let input_ref = connector
@@ -151,7 +161,7 @@ fn execute(
                     "digest": digest,
                 },
                 "input_ref": input_ref,
-                "policy_ref": "policy-1",
+                "policy_ref": policy_ref,
                 "data_classification": "sensitive",
                 "input_schema_ref": "schema:traverse-digits-onnx-in",
                 "input_schema_version": "1.0.0",

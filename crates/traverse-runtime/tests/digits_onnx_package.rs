@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 use std::fs;
 use traverse_runtime::exact_model::{
     CommercialUse, DerivationKind, ExactModelHostConnector, ExactModelPin, ExecutionPolicy,
-    ModelEngine, ModelUsage, TrustedModelKeys, decode_guest_frame, encode_guest_frame,
+    ModelEngine, ModelUsage, PlacementPolicy, TrustedModelKeys, decode_guest_frame,
+    encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort,
@@ -62,6 +63,10 @@ fn registered_host(engine: ModelEngine) -> (ExactModelHostConnector, ExactModelP
         &read(&format!("{DIR}/model.manifest.json")),
         read(&format!("{DIR}/model.wasm")),
         &read(&format!("{DIR}/model.sig.json")),
+        &PlacementPolicy {
+            policy_ref: "policy-1".to_string(),
+            ..PlacementPolicy::default()
+        },
     )
     .expect("signed runner-built package must verify");
     host.policies.insert(

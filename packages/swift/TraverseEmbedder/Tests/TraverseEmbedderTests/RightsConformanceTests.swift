@@ -79,7 +79,7 @@ final class RightsConformanceTests: XCTestCase {
         }
         do {
             let digest = try await host.registerPackage(manifest: try file("\(dir)/model.manifest.json"),
-                                                        wasm: wasm, signature: signature)
+                                                        wasm: wasm, signature: signature, policy: .init(policyRef: "policy-1"))
             return ["ok": true, "digest": digest]
         } catch {
             return try errorJSON(error)

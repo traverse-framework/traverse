@@ -8,7 +8,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -130,6 +129,33 @@ data class ExactModelHostLimits(
      * calls take the slower fresh path; `0` disables reuse.
      */
     val maxSnapshotBytes: Long = 256L * 1024 * 1024,
+    /**
+     * Max milliseconds registration spends preparing one listed placement (Spec 138 0.16.0,
+     * Decision 120), for example `model_prepare`. A placement over it is skipped.
+     */
+    val maxPreparationMs: Long = 300_000L,
+)
+
+/**
+ * The execution policy a package is registered under (Spec 138 0.16.0, Decision 120).
+ * Registration prepares and fixes one placement per (package, [policyRef]); every call naming
+ * [policyRef] runs on it.
+ *
+ * @param placements allowed placements in preference order (FR-060); empty means `["wasm-cpu"]`.
+ * @param requireFuelMetering excludes placements that cannot meter fuel (FR-064).
+ */
+data class ExactModelPlacementPolicy(
+    val policyRef: String,
+    val placements: List<String> = emptyList(),
+    val requireFuelMetering: Boolean = false,
+)
+
+/** What registration prepared (Decision 120): the cached digest and the fixed placement. */
+data class ExactModelRegistration(
+    val digest: String,
+    val placement: String,
+    /** Wall time of the preparation, including the guest compile. */
+    val preparationMs: Long,
 )
 
 /** Typed `model.execute` result with identity, placement, usage, and rights evidence. */
@@ -194,6 +220,7 @@ class ExactModelHost(
                 put("max_memory_bytes", limits.maxMemoryBytes)
                 put("max_fuel", limits.maxFuel)
                 put("max_snapshot_bytes", limits.maxSnapshotBytes)
+                put("max_preparation_ms", limits.maxPreparationMs)
             })
             modelUsage?.let { put("model_usage", it) }
             put("host_requires_commercial", hostRequiresCommercial)
@@ -203,16 +230,57 @@ class ExactModelHost(
     }
 
     /** Verify and admit a signed package; returns the pin digest it is cached under. */
-    suspend fun registerPackage(manifest: ByteArray, wasm: ByteArray, signature: ByteArray): String =
-        withContext(Dispatchers.IO) {
-            val response = call(
-                handle,
-                buildJsonObject { put("op", "register") },
-                listOf("manifest" to manifest, "wasm" to wasm, "signature" to signature),
-            )
-            response.header.optStr("digest")
-                ?: throw ExactModelError("model_incompatible", null, "registration returned no digest")
+    suspend fun registerPackage(
+        manifest: ByteArray,
+        wasm: ByteArray,
+        signature: ByteArray,
+        policy: ExactModelPlacementPolicy,
+        preparationBudgetMs: Long? = null,
+    ): String = registerPackageWithPreparation(manifest, wasm, signature, policy, preparationBudgetMs).digest
+
+    /**
+     * Verify and admit a signed package, then prepare and fix its placement for [policy] (Spec 138
+     * 0.16.0, Decision 120): `model_prepare` runs here, never in a call. A call naming a
+     * `policy_ref` the package was not registered under fails with `placement_unavailable`.
+     * Coroutine cancellation stops the preparation (`cancelled`).
+     *
+     * @param preparationBudgetMs per-placement budget, capped by [ExactModelHostLimits.maxPreparationMs].
+     */
+    suspend fun registerPackageWithPreparation(
+        manifest: ByteArray,
+        wasm: ByteArray,
+        signature: ByteArray,
+        policy: ExactModelPlacementPolicy,
+        preparationBudgetMs: Long? = null,
+    ): ExactModelRegistration = coroutineScope {
+        val registrationId = UUID.randomUUID().toString()
+        val header = buildJsonObject {
+            put("op", "register")
+            put("registration_id", registrationId)
+            put("policy", buildJsonObject {
+                put("policy_ref", policy.policyRef)
+                put("placements", JsonArray(policy.placements.map { JsonPrimitive(it) }))
+                put("require_fuel_metering", policy.requireFuelMetering)
+            })
+            preparationBudgetMs?.let { put("preparation_budget_ms", it) }
         }
+        val running = async(Dispatchers.IO) {
+            call(handle, header, listOf("manifest" to manifest, "wasm" to wasm, "signature" to signature))
+        }
+        val response = try {
+            running.await()
+        } catch (cancelled: CancellationException) {
+            call(handle, buildJsonObject { put("op", "cancel"); put("execution_id", registrationId) })
+            throw cancelled
+        }
+        val digest = response.header.optStr("digest")
+            ?: throw ExactModelError("model_incompatible", null, "registration returned no digest")
+        ExactModelRegistration(
+            digest = digest,
+            placement = response.header.optStr("placement").orEmpty(),
+            preparationMs = (response.header.optObj("preparation")?.get("duration_ms") as? JsonPrimitive)?.longOrNull ?: 0L,
+        )
+    }
 
     /** Stage input bytes; returns a single-consume opaque `input_ref`. */
     fun stageModelInput(bytes: ByteArray, maxBytes: Int): String =

@@ -70,7 +70,7 @@ async function register(host, step) {
     assert.equal(step.tamper, undefined, `unknown tamper ${step.tamper}`);
   }
   try {
-    return { ok: true, digest: await host.registerPackage(manifest, wasm, signature) };
+    return { ok: true, digest: await host.registerPackage(manifest, wasm, signature, { policy_ref: SUITE.execute.policy_ref }) };
   } catch (error) {
     return errorJson(error);
   }

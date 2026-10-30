@@ -118,7 +118,22 @@ public sealed record ExactModelHostLimits(
     ulong MaxPackageBytes = 256UL * 1024 * 1024,
     ulong MaxMemoryBytes = 1024UL * 1024 * 1024,
     ulong MaxFuel = 50_000_000_000UL,
-    ulong MaxSnapshotBytes = 512UL * 1024 * 1024);
+    ulong MaxSnapshotBytes = 512UL * 1024 * 1024,
+    ulong MaxPreparationMs = 300_000UL);
+
+/// <summary>
+/// The execution policy a package is registered under (Spec 138 0.16.0, Decision 120).
+/// Registration prepares and fixes one placement per (package, <paramref name="PolicyRef"/>);
+/// every call naming it runs on that placement. Empty <paramref name="Placements"/> means
+/// <c>["wasm-cpu"]</c>.
+/// </summary>
+public sealed record ExactModelPlacementPolicy(
+    string PolicyRef,
+    IReadOnlyList<string>? Placements = null,
+    bool RequireFuelMetering = false);
+
+/// <summary>What registration prepared (Decision 120): the cached digest and the fixed placement.</summary>
+public sealed record ExactModelRegistration(string Digest, string Placement, ulong PreparationMs);
 
 /// <summary>Typed <c>model.execute</c> result with identity, placement, usage, and rights evidence.</summary>
 public sealed record ExactModelExecution(
@@ -220,6 +235,7 @@ public sealed class ExactModelHost : IDisposable
                 ["max_memory_bytes"] = limits.MaxMemoryBytes,
                 ["max_fuel"] = limits.MaxFuel,
                 ["max_snapshot_bytes"] = limits.MaxSnapshotBytes,
+                ["max_preparation_ms"] = limits.MaxPreparationMs,
             },
             ["host_requires_commercial"] = hostRequiresCommercial,
         };
@@ -233,14 +249,69 @@ public sealed class ExactModelHost : IDisposable
     }
 
     /// <summary>Verify and admit a signed package; returns the pin digest it is cached under.</summary>
-    public Task<string> RegisterPackageAsync(byte[] manifest, byte[] wasm, byte[] signature) =>
-        Task.Run(() => Call(
-            handle,
-            new JsonObject { ["op"] = "register" },
-            ("manifest", manifest),
-            ("wasm", wasm),
-            ("signature", signature)).Header.OptStr("digest")
-            ?? throw new ExactModelException("model_incompatible", null, "registration returned no digest"));
+    public async Task<string> RegisterPackageAsync(
+        byte[] manifest,
+        byte[] wasm,
+        byte[] signature,
+        ExactModelPlacementPolicy policy,
+        ulong? preparationBudgetMs = null,
+        CancellationToken cancellationToken = default) =>
+        (await RegisterPackageWithPreparationAsync(
+            manifest, wasm, signature, policy, preparationBudgetMs, cancellationToken).ConfigureAwait(false)).Digest;
+
+    /// <summary>
+    /// Verify and admit a signed package, then prepare and fix its placement for
+    /// <paramref name="policy"/> (Spec 138 0.16.0, Decision 120): <c>model_prepare</c> runs here,
+    /// never in a call. A call naming a <c>policy_ref</c> the package was not registered under
+    /// fails with <c>placement_unavailable</c>. Cancelling <paramref name="cancellationToken"/>
+    /// stops the preparation (<c>cancelled</c>); <paramref name="preparationBudgetMs"/> is a
+    /// per-placement budget capped by <see cref="ExactModelHostLimits.MaxPreparationMs"/>.
+    /// </summary>
+    public async Task<ExactModelRegistration> RegisterPackageWithPreparationAsync(
+        byte[] manifest,
+        byte[] wasm,
+        byte[] signature,
+        ExactModelPlacementPolicy policy,
+        ulong? preparationBudgetMs = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            throw new ExactModelException("cancelled", null, "registration cancelled before invoke");
+        }
+
+        var registrationId = Guid.NewGuid().ToString();
+        var header = new JsonObject
+        {
+            ["op"] = "register",
+            ["registration_id"] = registrationId,
+            ["policy"] = new JsonObject
+            {
+                ["policy_ref"] = policy.PolicyRef,
+                ["placements"] = new JsonArray((policy.Placements ?? []).Select(p => (JsonNode)p).ToArray()),
+                ["require_fuel_metering"] = policy.RequireFuelMetering,
+            },
+        };
+        if (preparationBudgetMs is { } budget)
+        {
+            header["preparation_budget_ms"] = budget;
+        }
+
+        var running = Task.Run(
+            () => Call(handle, header, ("manifest", manifest), ("wasm", wasm), ("signature", signature)),
+            CancellationToken.None);
+        using (cancellationToken.Register(() => SendCancel(registrationId)))
+        {
+            var response = await running.ConfigureAwait(false);
+            var digest = response.Header.OptStr("digest")
+                ?? throw new ExactModelException("model_incompatible", null, "registration returned no digest");
+            var preparation = response.Header["preparation"] as JsonObject;
+            return new ExactModelRegistration(
+                digest,
+                response.Header.OptStr("placement") ?? string.Empty,
+                preparation?["duration_ms"]?.GetValue<ulong>() ?? 0UL);
+        }
+    }
 
     /// <summary>Stage input bytes; returns a single-consume opaque <c>input_ref</c>.</summary>
     public string StageModelInput(byte[] bytes, int maxBytes) =>

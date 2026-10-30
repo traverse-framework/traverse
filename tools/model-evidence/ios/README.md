@@ -10,8 +10,13 @@ For each run it creates a fresh host and registers the package. The runs are:
 - one run per Core ML compute-unit setting, with the policy
   `[coreml, wasm-cpu]`.
 
-Each run makes one first call and then 21 timed calls. It records the
-placement evidence and compares accelerated outputs with the device's own
+Each run times the registration, which compiles the variant, runs the device
+self-check and `model_prepare`, and fixes the placement (Spec 138 0.16.0,
+Decision 120). The run then makes one first call and 21 timed calls. The
+report gives `registration_ms`, `registered_placement` and `first_call_ms`
+for each run; the `coreml cpu_only` run is the `#1706` closing evidence. It
+records the placement evidence and compares accelerated outputs with the
+device's own
 `wasm-cpu` outputs under Decision 106 (top-5 identical, |Δ sigmoid| ≤ 5×10⁻³).
 The report is printed as one `TRAVERSE_1630_EVIDENCE {json}` console line,
 written to the app's Documents as `evidence-1630.json`, and shown on screen.

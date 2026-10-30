@@ -889,6 +889,39 @@ pub struct VerifiedModelPackage {
 }
 
 impl VerifiedModelPackage {
+    /// Validate before admission: manifest rules, WASM and variant digests,
+    /// and the ABI v3 module shape (FR-053).
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_incompatible` when manifest validation fails or a
+    /// digest does not match its bytes.
+    fn verify(&self) -> Result<(), HostConnectorError> {
+        self.manifest.validate()?;
+        if normalize_digest(&self.manifest.wasm_digest) != digest_hex(&self.wasm) {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "model wasm digest mismatch",
+            ));
+        }
+        if self
+            .variants
+            .iter()
+            .any(|variant| !variant_bytes_match(&self.manifest, variant))
+        {
+            return Err(incompatible(
+                ModelFailureReason::DigestMismatch,
+                "accelerator variant digest mismatch",
+            ));
+        }
+        if self.manifest.abi_version == MODEL_GUEST_ABI_PREPARED {
+            check_v3_module(&self.wasm).map_err(|message| {
+                model_error_plain(HostConnectorErrorCode::ModelIncompatible, message)
+            })?;
+        }
+        Ok(())
+    }
+
     /// Re-hash cached bytes against the pinned digest (every execute).
     fn recheck(&self, pinned_digest: &str) -> Result<(), HostConnectorError> {
         if digest_hex(&self.manifest_bytes) != normalize_digest(pinned_digest)
@@ -934,41 +967,10 @@ impl ModelPackageStore {
         Self::default()
     }
 
-    /// Validate and insert a package keyed by SHA-256 of its manifest bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `model_incompatible` when manifest validation fails or the
-    /// WASM digest does not match its bytes.
-    fn insert_verified(
-        &mut self,
-        package: VerifiedModelPackage,
-    ) -> Result<String, HostConnectorError> {
-        package.manifest.validate()?;
-        if normalize_digest(&package.manifest.wasm_digest) != digest_hex(&package.wasm) {
-            return Err(incompatible(
-                ModelFailureReason::DigestMismatch,
-                "model wasm digest mismatch",
-            ));
-        }
-        if package
-            .variants
-            .iter()
-            .any(|variant| !variant_bytes_match(&package.manifest, variant))
-        {
-            return Err(incompatible(
-                ModelFailureReason::DigestMismatch,
-                "accelerator variant digest mismatch",
-            ));
-        }
-        if package.manifest.abi_version == MODEL_GUEST_ABI_PREPARED {
-            check_v3_module(&package.wasm).map_err(|message| {
-                model_error_plain(HostConnectorErrorCode::ModelIncompatible, message)
-            })?;
-        }
-        let key = digest_hex(&package.manifest_bytes);
-        self.by_digest.insert(key.clone(), package);
-        Ok(key)
+    /// Insert a package [`VerifiedModelPackage::verify`] accepted, keyed by
+    /// the SHA-256 of its manifest bytes.
+    fn insert(&mut self, digest: String, package: VerifiedModelPackage) {
+        self.by_digest.insert(digest, package);
     }
 
     /// Resolve by pin digest without network.
@@ -1186,11 +1188,70 @@ pub struct ExecutionPolicy {
     pub allowed_classifications: Vec<String>,
     /// Max output bytes under this policy.
     pub max_output_bytes: u64,
+    /// Deprecated (0.16.0, Decision 120): the placements are fixed at
+    /// registration by [`PlacementPolicy`]. When present they MUST equal the
+    /// registered ones (`placement_unavailable` otherwise); an unknown or
+    /// repeated id denies the call.
+    pub placements: Option<Vec<String>>,
+    /// Deprecated (0.16.0, Decision 120): when present it MUST equal the
+    /// registered [`PlacementPolicy::require_fuel_metering`].
+    pub require_fuel_metering: Option<bool>,
+}
+
+/// The execution policy a package is registered under (Spec 138 0.16.0,
+/// Decision 120). Registration prepares and fixes one placement per
+/// (package, `policy_ref`), so every call of that pair runs on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlacementPolicy {
+    /// Opaque policy id / `policy_ref` the calls name.
+    pub policy_ref: String,
     /// Allowed placements in preference order (FR-060); empty means
-    /// `["wasm-cpu"]`. An unknown or repeated id denies every call.
+    /// `["wasm-cpu"]`. An unknown or repeated id fails registration.
+    #[serde(default)]
     pub placements: Vec<String>,
-    /// When true, only placements that meter fuel may run (FR-064).
+    /// When true, only placements that meter fuel qualify (FR-064).
+    #[serde(default)]
     pub require_fuel_metering: bool,
+}
+
+/// What registration found for one listed placement (Decision 120).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlacementOutcome {
+    /// Prepared; this placement is fixed for the policy.
+    Ready,
+    /// The host, the package or the policy rules it out (FR-060).
+    Unsupported,
+    /// The device self-check failed (FR-062).
+    SelfCheckFailed,
+    /// Preparation did not finish within the registration budget.
+    OverBudget,
+}
+
+/// One listed placement registration tried, in policy order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacementAttempt {
+    /// Placement id.
+    pub placement: String,
+    /// What preparation found.
+    pub outcome: PlacementOutcome,
+    /// Wall time spent on this placement.
+    pub duration_ms: u64,
+}
+
+/// The placement registration fixed for a (package, `policy_ref`) pair,
+/// and how it got there (Decision 120). Host trace only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacementPreparation {
+    /// The policy the package was registered under.
+    pub policy: PlacementPolicy,
+    /// The placement every call of this pair runs on.
+    pub placement: String,
+    /// Every placement tried, in policy order.
+    pub attempts: Vec<PlacementAttempt>,
+    /// Wall time of the whole preparation, including the guest compile.
+    pub duration_ms: u64,
 }
 
 /// Engine that executes the `wasm-cpu` model guest.
@@ -1233,6 +1294,11 @@ pub struct HostModelLimits {
     /// budget, snapshots are evicted or not stored and calls take the fresh
     /// path; `0` disables reuse.
     pub max_snapshot_bytes: u64,
+    /// Max wall time registration may spend preparing one listed placement
+    /// (Decision 120): its device self-check, which compiles the variant,
+    /// or its `model_prepare`. A placement that does not finish in time is
+    /// unavailable and registration moves to the next one listed.
+    pub max_preparation_ms: u64,
 }
 
 impl Default for HostModelLimits {
@@ -1243,9 +1309,14 @@ impl Default for HostModelLimits {
             max_memory_bytes: 1024 * 1024 * 1024,
             max_fuel: 50_000_000_000,
             max_snapshot_bytes: 512 * 1024 * 1024,
+            max_preparation_ms: DEFAULT_MAX_PREPARATION_MS,
         }
     }
 }
+
+/// Default registration preparation budget: five minutes, generous enough
+/// for a first Core ML compile and self-check on a phone (Decision 120).
+pub const DEFAULT_MAX_PREPARATION_MS: u64 = 300_000;
 
 /// Fuel granted per `wasmi` slice between cancellation/deadline checks.
 pub const WASMI_FUEL_SLICE: u64 = 1_000_000;
@@ -1291,6 +1362,9 @@ pub struct ExactModelHostConnector {
     adapters: Vec<Box<dyn AcceleratorAdapter>>,
     /// Device self-check results (FR-062).
     self_checks: HashMap<SelfCheckKey, bool>,
+    /// Placement fixed at registration per (package digest, `policy_ref`)
+    /// (Decision 120).
+    prepared: HashMap<(String, String), PlacementPreparation>,
 }
 
 impl ExactModelHostConnector {
@@ -1315,6 +1389,7 @@ impl ExactModelHostConnector {
             supported_adapters: Vec::new(),
             adapters: Vec::new(),
             self_checks: HashMap::new(),
+            prepared: HashMap::new(),
         }
     }
 
@@ -1448,38 +1523,60 @@ impl ExactModelHostConnector {
     /// Verify and admit a signed package into the host cache (Decision 101):
     /// signature by a host-trusted key over the exact manifest bytes, manifest
     /// digest equal to exactly one declared pin, WASM digest, rights, target,
-    /// and limits. Returns the pin digest the package is cached under.
+    /// and limits. Then prepare and fix one placement for `policy`
+    /// (Decision 120). Returns the pin digest the package is cached under.
     ///
     /// # Errors
     ///
     /// Returns `model_unavailable` / `model_incompatible` with a stable
-    /// [`ModelFailureReason`].
+    /// [`ModelFailureReason`], `policy_denied` for an invalid placement
+    /// list, `model_unavailable` / `placement_unavailable` when no listed
+    /// placement can be prepared, and `cancelled` when the cancel flag is
+    /// raised during preparation.
     pub fn register_package(
         &mut self,
         manifest_bytes: &[u8],
         wasm: Vec<u8>,
         signature_bytes: &[u8],
+        policy: &PlacementPolicy,
     ) -> Result<String, HostConnectorError> {
-        self.register_package_with_variants(manifest_bytes, wasm, signature_bytes, &[])
+        self.register_package_with_variants(
+            manifest_bytes,
+            wasm,
+            signature_bytes,
+            &[],
+            policy,
+            None,
+        )
     }
 
-    /// [`Self::register_package`] plus the variant files this host fetched.
+    /// [`Self::register_package`] plus the variant files this host fetched
+    /// and an optional preparation budget.
     ///
     /// Files for adapters outside [`Self::supported_adapters`] are ignored.
     /// A selected variant whose file is missing or whose bytes differ from
     /// the manifest digest fails with `digest_mismatch` and is not admitted
     /// (FR-059). There is no fallback to another placement in this step.
     ///
+    /// Preparation walks `policy`'s placements in order (Decision 120). The
+    /// first one that qualifies is compiled, self-checked (FR-062) and, for
+    /// a `wasm-cpu` ABI v3 guest, prepared (`model_prepare`), then fixed for
+    /// the pair. `preparation_budget_ms` is capped by
+    /// [`HostModelLimits::max_preparation_ms`]; a placement that overruns
+    /// it is skipped. A failing `model_prepare` fails registration with
+    /// `execution_failed`. Nothing is kept when registration fails.
+    ///
     /// # Errors
     ///
-    /// Returns `model_unavailable` / `model_incompatible` with a stable
-    /// [`ModelFailureReason`].
+    /// See [`Self::register_package`].
     pub fn register_package_with_variants(
         &mut self,
         manifest_bytes: &[u8],
         wasm: Vec<u8>,
         signature_bytes: &[u8],
         variant_files: &[(&str, &[u8])],
+        policy: &PlacementPolicy,
+        preparation_budget_ms: Option<u64>,
     ) -> Result<String, HostConnectorError> {
         let signature: ModelPackageSignature =
             serde_json::from_slice(signature_bytes).map_err(|_| {
@@ -1526,17 +1623,238 @@ impl ExactModelHostConnector {
             wasm.len(),
             variant_bytes,
         )?;
+        self.admit(
+            VerifiedModelPackage {
+                manifest,
+                manifest_bytes: manifest_bytes.to_vec(),
+                wasm,
+                variants,
+            },
+            policy,
+            preparation_budget_ms,
+        )
+    }
+
+    /// Validate a package that passed the signature, pin, rights and limit
+    /// checks, prepare its placement for `policy`, and cache both. Nothing
+    /// is kept on failure.
+    fn admit(
+        &mut self,
+        package: VerifiedModelPackage,
+        policy: &PlacementPolicy,
+        preparation_budget_ms: Option<u64>,
+    ) -> Result<String, HostConnectorError> {
+        package.verify()?;
+        let digest = digest_hex(&package.manifest_bytes);
+        let placements = effective_placements(&policy.placements).ok_or_else(invalid_placements)?;
+        let budget = preparation_budget_ms.map_or(self.host_limits.max_preparation_ms, |ms| {
+            ms.min(self.host_limits.max_preparation_ms)
+        });
+        let started = Instant::now();
         // Compile once at registration so execute deadlines cover guest
         // execution only. Keyed by the bytes' own hash, so the cache can never
         // serve a module for other bytes; a module that fails to compile is
         // not cached and still fails closed at execute.
-        self.compiled.warm(self.engine, &digest_hex(&wasm), &wasm);
-        self.packages.insert_verified(VerifiedModelPackage {
-            manifest,
-            manifest_bytes: manifest_bytes.to_vec(),
-            wasm,
-            variants,
-        })
+        self.compiled
+            .warm(self.engine, &digest_hex(&package.wasm), &package.wasm);
+        let preparation = self.prepare_placement(
+            &package,
+            &digest,
+            policy,
+            &placements,
+            started,
+            Duration::from_millis(budget),
+        )?;
+        self.packages.insert(digest.clone(), package);
+        self.prepared
+            .insert((digest.clone(), policy.policy_ref.clone()), preparation);
+        Ok(digest)
+    }
+
+    /// The placement registration fixed for a package under `policy_ref`,
+    /// with every attempt and the preparation time (Decision 120).
+    #[must_use]
+    pub fn placement_preparation(
+        &self,
+        digest: &str,
+        policy_ref: &str,
+    ) -> Option<&PlacementPreparation> {
+        self.prepared
+            .get(&(normalize_digest(digest), policy_ref.to_string()))
+    }
+
+    /// Decision 120: walk the listed placements and fix the first one that
+    /// prepares within `budget`, which each placement gets afresh.
+    /// Cancellation stops registration and keeps no snapshot.
+    fn prepare_placement(
+        &mut self,
+        package: &VerifiedModelPackage,
+        digest: &str,
+        policy: &PlacementPolicy,
+        placements: &[&str],
+        started: Instant,
+        budget: Duration,
+    ) -> Result<PlacementPreparation, HostConnectorError> {
+        let mut attempts = Vec::new();
+        for &id in placements {
+            let attempt_started = Instant::now();
+            let deadline = attempt_started + budget;
+            let outcome = if self.cancel.load(Ordering::SeqCst) {
+                Err(registration_cancelled())
+            } else if id == PLACEMENT_WASM_CPU {
+                self.prepare_wasm_cpu(package, digest, deadline)
+            } else {
+                Ok(self.prepare_adapter(id, package, policy.require_fuel_metering, deadline))
+            };
+            let outcome = match outcome {
+                Ok(_) if self.cancel.load(Ordering::SeqCst) => Err(registration_cancelled()),
+                other => other,
+            };
+            let outcome = outcome.inspect_err(|_| self.snapshots.drop_package(digest))?;
+            attempts.push(PlacementAttempt {
+                placement: id.to_string(),
+                outcome,
+                duration_ms: elapsed_ms(attempt_started),
+            });
+            if outcome == PlacementOutcome::Ready {
+                return Ok(PlacementPreparation {
+                    policy: policy.clone(),
+                    placement: id.to_string(),
+                    attempts,
+                    duration_ms: elapsed_ms(started),
+                });
+            }
+        }
+        let tried: Vec<String> = attempts
+            .iter()
+            .map(|attempt| {
+                format!(
+                    "{} {}",
+                    attempt.placement,
+                    serde_json::to_value(attempt.outcome)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_string))
+                        .unwrap_or_default()
+                )
+            })
+            .collect();
+        Err(placement_unavailable(&format!(
+            "no placement the execution policy lists could be prepared: {}",
+            tried.join(", ")
+        )))
+    }
+
+    /// FR-060 qualification, then the device self-check (FR-062), for one
+    /// adapter placement. The self-check compiles the variant on its first
+    /// prediction, so both run here, never in a call.
+    fn prepare_adapter(
+        &mut self,
+        id: &str,
+        package: &VerifiedModelPackage,
+        require_fuel_metering: bool,
+        deadline: Instant,
+    ) -> PlacementOutcome {
+        let declared = package
+            .manifest
+            .accelerator_variants
+            .iter()
+            .flatten()
+            .find(|variant| variant.adapter == id);
+        let cached = package
+            .variants
+            .iter()
+            .find(|variant| variant.adapter == id);
+        let adapter = self
+            .adapters
+            .iter_mut()
+            .find(|adapter| adapter.id() == id && adapter.available());
+        let (Some(declared), Some(cached), Some(adapter)) = (declared, cached, adapter) else {
+            return PlacementOutcome::Unsupported;
+        };
+        if declared.peak_memory_bytes > self.host_limits.max_memory_bytes
+            || (require_fuel_metering && adapter.fuel_metering() != FuelMetering::Metered)
+        {
+            return PlacementOutcome::Unsupported;
+        }
+        if !self_check(&mut self.self_checks, adapter.as_mut(), declared, cached) {
+            return PlacementOutcome::SelfCheckFailed;
+        }
+        if Instant::now() > deadline {
+            return PlacementOutcome::OverBudget;
+        }
+        PlacementOutcome::Ready
+    }
+
+    /// `wasm-cpu` preparation: the guest is already compiled; an ABI v3
+    /// guest also runs `model_prepare` once and stores its snapshot
+    /// (FR-054 to FR-056), so the first call takes the snapshot path.
+    fn prepare_wasm_cpu(
+        &mut self,
+        package: &VerifiedModelPackage,
+        digest: &str,
+        deadline: Instant,
+    ) -> Result<PlacementOutcome, HostConnectorError> {
+        let manifest = &package.manifest;
+        if manifest.abi_version == MODEL_GUEST_ABI_PREPARED {
+            let limits = GuestLimits {
+                memory: manifest
+                    .max_memory_bytes
+                    .min(self.host_limits.max_memory_bytes),
+                fuel: manifest.max_fuel.min(self.host_limits.max_fuel),
+                max_output: manifest.max_output_bytes,
+                abi: manifest.abi_version,
+                prepare_fuel: manifest
+                    .max_prepare_fuel
+                    .map(|prepare| prepare.min(self.host_limits.max_fuel)),
+                prepare_only: true,
+            };
+            let mut reuse = SnapshotReuse {
+                cache: &mut self.snapshots,
+                digest,
+                engine: self.engine,
+                budget: self.host_limits.max_snapshot_bytes,
+            };
+            let key = normalize_digest(&manifest.wasm_digest);
+            let prepared = match self.engine {
+                ModelEngine::Wasmtime => execute_wasm_cpu_model(
+                    &mut self.compiled,
+                    &key,
+                    &package.wasm,
+                    &[],
+                    &limits,
+                    &mut reuse,
+                ),
+                ModelEngine::Wasmi => execute_wasmi_model(
+                    &mut self.compiled,
+                    &key,
+                    &package.wasm,
+                    &[],
+                    &limits,
+                    &SliceControl {
+                        cancel: &self.cancel,
+                        deadline,
+                    },
+                    &mut reuse,
+                ),
+            };
+            match prepared {
+                Err(error) if error.code == HostConnectorErrorCode::Timeout => {
+                    self.snapshots.drop_package(digest);
+                    return Ok(PlacementOutcome::OverBudget);
+                }
+                Err(error) if error.code == HostConnectorErrorCode::Cancelled => {
+                    return Err(registration_cancelled());
+                }
+                other => {
+                    other?;
+                }
+            }
+        }
+        if Instant::now() > deadline {
+            self.snapshots.drop_package(digest);
+            return Ok(PlacementOutcome::OverBudget);
+        }
+        Ok(PlacementOutcome::Ready)
     }
 
     /// Signed rights of a registered package, for host/UI display.
@@ -1844,14 +2162,18 @@ impl HostConnectorPort for ExactModelHostConnector {
                 message: "input schema does not match model manifest".to_string(),
             });
         }
-        // FR-060: pick the placement before the input is consumed.
-        let mut accelerator = select_placement(
-            policy,
-            package,
-            &mut self.adapters,
-            &mut self.self_checks,
-            self.host_limits.max_memory_bytes,
-        )?;
+        // Decision 120: run on the placement registration fixed for this
+        // policy, before the input is consumed. No self-check runs here.
+        let prepared = self
+            .prepared
+            .get(&(digest.clone(), payload.policy_ref.clone()))
+            .ok_or_else(|| {
+                placement_unavailable(
+                    "policy_ref was not prepared for this package at registration",
+                )
+            })?;
+        require_registered_policy(policy, &prepared.policy)?;
+        let mut accelerator = prepared_adapter(&prepared.placement, package, &mut self.adapters)?;
 
         let call_max_out = payload
             .max_output_bytes
@@ -1903,6 +2225,7 @@ impl HostConnectorPort for ExactModelHostConnector {
                 .manifest
                 .max_prepare_fuel
                 .map(|prepare| prepare.min(self.host_limits.max_fuel)),
+            prepare_only: false,
         };
         let mut reuse = SnapshotReuse {
             cache: &mut self.snapshots,
@@ -1994,57 +2317,74 @@ type SelectedAdapter<'a> = Option<(
     &'a CachedAcceleratorVariant,
 )>;
 
-/// FR-060: the first placement the policy lists that the host supports, the
-/// package carries, that has passed its device self-check (FR-062), fits the
-/// host memory ceiling, and meets `require_fuel_metering` (FR-064). An
-/// unknown or repeated placement id denies the call; when nothing qualifies
-/// the call fails closed with `placement_unavailable`.
-fn select_placement<'a>(
+fn invalid_placements() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::PolicyDenied,
+        "execution policy names an unknown or repeated placement",
+    )
+}
+
+fn registration_cancelled() -> HostConnectorError {
+    model_error_plain(
+        HostConnectorErrorCode::Cancelled,
+        "model registration cancelled during placement preparation",
+    )
+}
+
+fn elapsed_ms(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Decision 120: a call's deprecated `placements` / `require_fuel_metering`
+/// may only restate the registered policy. An unknown or repeated id still
+/// denies the call; any other difference is `placement_unavailable`.
+fn require_registered_policy(
     policy: &ExecutionPolicy,
-    package: &'a VerifiedModelPackage,
-    adapters: &'a mut [Box<dyn AcceleratorAdapter>],
-    self_checks: &mut HashMap<SelfCheckKey, bool>,
-    host_memory: u64,
-) -> Result<SelectedAdapter<'a>, HostConnectorError> {
-    let placements = effective_placements(&policy.placements).ok_or_else(|| {
-        model_error_plain(
-            HostConnectorErrorCode::PolicyDenied,
-            "execution policy names an unknown or repeated placement",
-        )
-    })?;
-    for id in placements {
-        if id == PLACEMENT_WASM_CPU {
-            return Ok(None);
-        }
-        let declared = package
-            .manifest
-            .accelerator_variants
-            .iter()
-            .flatten()
-            .find(|variant| variant.adapter == id);
-        let cached = package
-            .variants
-            .iter()
-            .find(|variant| variant.adapter == id);
-        let position = adapters
-            .iter()
-            .position(|adapter| adapter.id() == id && adapter.available());
-        let (Some(declared), Some(cached), Some(position)) = (declared, cached, position) else {
-            continue;
-        };
-        let adapter = &mut adapters[position];
-        let metering_ok =
-            !policy.require_fuel_metering || adapter.fuel_metering() == FuelMetering::Metered;
-        if declared.peak_memory_bytes <= host_memory
-            && metering_ok
-            && self_check(self_checks, adapter.as_mut(), declared, cached)
-        {
-            return Ok(Some((&mut adapters[position], cached)));
+    registered: &PlacementPolicy,
+) -> Result<(), HostConnectorError> {
+    if let Some(placements) = &policy.placements {
+        let requested = effective_placements(placements).ok_or_else(invalid_placements)?;
+        if effective_placements(&registered.placements).as_ref() != Some(&requested) {
+            return Err(placement_unavailable(
+                "call placements differ from the policy the package was registered under",
+            ));
         }
     }
-    Err(placement_unavailable(
-        "no placement the execution policy lists can run this package",
-    ))
+    if policy
+        .require_fuel_metering
+        .is_some_and(|required| required != registered.require_fuel_metering)
+    {
+        return Err(placement_unavailable(
+            "call require_fuel_metering differs from the policy the package was registered under",
+        ));
+    }
+    Ok(())
+}
+
+/// The adapter and cached variant of the placement registration fixed, or
+/// `None` for `wasm-cpu`. An adapter that has since become unavailable
+/// fails closed rather than moving to another placement.
+fn prepared_adapter<'a>(
+    placement: &str,
+    package: &'a VerifiedModelPackage,
+    adapters: &'a mut [Box<dyn AcceleratorAdapter>],
+) -> Result<SelectedAdapter<'a>, HostConnectorError> {
+    if placement == PLACEMENT_WASM_CPU {
+        return Ok(None);
+    }
+    let cached = package
+        .variants
+        .iter()
+        .find(|variant| variant.adapter == placement);
+    let adapter = adapters
+        .iter_mut()
+        .find(|adapter| adapter.id() == placement && adapter.available());
+    match (adapter, cached) {
+        (Some(adapter), Some(cached)) => Ok(Some((adapter, cached))),
+        _ => Err(placement_unavailable(
+            "the placement fixed at registration is no longer available",
+        )),
+    }
 }
 
 /// FR-063: run one prediction on a native adapter. Cancellation and the
@@ -2309,6 +2649,9 @@ fn execute_wasm_cpu_model(
             reuse,
         )?;
     }
+    if guest.prepare_only {
+        return Ok(Vec::new());
+    }
 
     let out_cap = output_capacity(max_output_bytes);
     let (in_ptr, out_ptr) = place_wasmtime_buffers(
@@ -2538,6 +2881,9 @@ struct GuestLimits {
     abi: u16,
     /// ABI v3 prepare budget: manifest `max_prepare_fuel` ∩ host fuel.
     prepare_fuel: Option<u64>,
+    /// Registration preparation (Decision 120): stop after `model_prepare`
+    /// has stored its snapshot, without running `model_execute`.
+    prepare_only: bool,
 }
 
 /// Where an ABI v3 call looks up and stores its post-prepare snapshot.
@@ -2766,6 +3112,9 @@ fn execute_wasmi_model(
             control,
             reuse,
         )?;
+    }
+    if limits.prepare_only {
+        return Ok(Vec::new());
     }
 
     let out_cap = output_capacity(limits.max_output);
@@ -3152,6 +3501,24 @@ mod tests {
         }
     }
 
+    /// The registration policy every test call names (`policy-1`).
+    fn test_placement_policy() -> PlacementPolicy {
+        PlacementPolicy {
+            policy_ref: "policy-1".to_string(),
+            ..PlacementPolicy::default()
+        }
+    }
+
+    impl ExactModelHostConnector {
+        /// Admit a sealed package under `policy-1` without a signature.
+        fn admit_test(
+            &mut self,
+            package: VerifiedModelPackage,
+        ) -> Result<String, HostConnectorError> {
+            self.admit(package, &test_placement_policy(), None)
+        }
+    }
+
     /// Re-serialize the (possibly mutated) manifest so bytes and digest agree.
     fn seal(mut package: VerifiedModelPackage) -> VerifiedModelPackage {
         package.manifest_bytes = serde_json::to_vec(&package.manifest).expect("manifest json");
@@ -3330,9 +3697,7 @@ mod tests {
         let pin = test_pin("fixture.echo", &digest);
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.model_usage = Some(ModelUsage::Commercial);
-        host.packages
-            .insert_verified(seal(package))
-            .expect("insert package");
+        host.admit_test(seal(package)).expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -3448,9 +3813,7 @@ mod tests {
         let pin = test_pin("fixture.echo", &format!("sha256:{digest}"));
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.model_usage = Some(ModelUsage::Commercial);
-        host.packages
-            .insert_verified(seal(package))
-            .expect("insert package");
+        host.admit_test(seal(package)).expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -3554,14 +3917,11 @@ mod tests {
             HostConnectorErrorCode::ModelIncompatible
         );
 
-        let mut store = ModelPackageStore::new();
+        let store = ModelPackageStore::new();
         let mut mismatched = fixture_package();
         mismatched.manifest.wasm_digest = "00".repeat(32);
         assert_eq!(
-            store
-                .insert_verified(seal(mismatched))
-                .expect_err("digest")
-                .code,
+            seal(mismatched).verify().expect_err("digest").code,
             HostConnectorErrorCode::ModelIncompatible
         );
         assert_eq!(
@@ -3830,9 +4190,7 @@ mod tests {
 
         // Restore a matching package for remaining cases.
         let restored = fixture_package();
-        host.packages
-            .insert_verified(seal(restored))
-            .expect("restore");
+        host.admit_test(seal(restored)).expect("restore");
 
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut schema = execute_request(&digest, &input_ref, serde_json::Map::new());
@@ -3900,9 +4258,7 @@ mod tests {
         bad_wasm.manifest.wasm_digest = digest_hex(&bad_wasm.wasm);
         let bad_digest = manifest_digest(&bad_wasm.manifest);
         host.pins.push(test_pin("fixture.echo", &bad_digest));
-        host.packages
-            .insert_verified(seal(bad_wasm))
-            .expect("insert bad");
+        host.admit_test(seal(bad_wasm)).expect("insert bad");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -3925,7 +4281,7 @@ mod tests {
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
         let digest_missing = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &digest_missing));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -3948,7 +4304,7 @@ mod tests {
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
         let digest_mem = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &digest_mem));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -3976,7 +4332,7 @@ mod tests {
         pkg.manifest.max_fuel = 10;
         let digest_fuel = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &digest_fuel));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -4002,7 +4358,7 @@ mod tests {
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
         let digest_len = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &digest_len));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -4056,9 +4412,7 @@ mod tests {
         grow_pkg.manifest.max_output_bytes = 70_000;
         let grow_digest = manifest_digest(&grow_pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &grow_digest));
-        host.packages
-            .insert_verified(seal(grow_pkg))
-            .expect("insert");
+        host.admit_test(seal(grow_pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut extras = serde_json::Map::new();
         extras.insert("max_output_bytes".to_string(), json!(70_000));
@@ -4083,9 +4437,7 @@ mod tests {
         blocked.manifest.max_output_bytes = 70_000;
         let blocked_digest = manifest_digest(&blocked.manifest);
         host.pins.push(test_pin("fixture.echo", &blocked_digest));
-        host.packages
-            .insert_verified(seal(blocked))
-            .expect("insert");
+        host.admit_test(seal(blocked)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         let mut extras = serde_json::Map::new();
         extras.insert("max_output_bytes".to_string(), json!(70_000));
@@ -4109,7 +4461,7 @@ mod tests {
         pkg.manifest.wasm_digest = digest_hex(&pkg.wasm);
         let import_digest = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &import_digest));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         let input_ref = host.io.stage_model_input(b"abc", 64).expect("stage");
         assert_eq!(
             host.invoke(&execute_request(
@@ -4195,9 +4547,7 @@ mod tests {
         let pin = test_pin("fixture.classifier", &digest);
         let mut host = ExactModelHostConnector::new(vec![pin], TrustedModelKeys::new());
         host.model_usage = Some(ModelUsage::Commercial);
-        host.packages
-            .insert_verified(seal(package))
-            .expect("insert package");
+        host.admit_test(seal(package)).expect("insert package");
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -4315,7 +4665,7 @@ mod tests {
         sig: &[u8],
     ) -> (HostConnectorErrorCode, Option<ModelFailureReason>) {
         let err = host
-            .register_package(manifest, wasm, sig)
+            .register_package(manifest, wasm, sig, &test_placement_policy())
             .expect_err("register must fail closed");
         (err.code, err.reason)
     }
@@ -4338,6 +4688,7 @@ mod tests {
                 &manifest,
                 read_fixture("model.wasm"),
                 &read_fixture("model.sig.json"),
+                &test_placement_policy(),
             )
             .expect("checked-in signed fixture must verify");
         assert_eq!(digest, normalize_digest(&pin.digest));
@@ -4375,6 +4726,7 @@ mod tests {
             &read_fixture("model.manifest.json"),
             read_fixture("model.wasm"),
             &read_fixture("model.sig.json"),
+            &test_placement_policy(),
         )
         .expect("register");
         let request = &vector["request"];
@@ -4475,7 +4827,7 @@ mod tests {
         let mut exact = pin;
         exact.key_id = Some(original.key_id);
         let mut host = trusted_host(vec![exact]);
-        host.register_package(&manifest, wasm, &sig)
+        host.register_package(&manifest, wasm, &sig, &test_placement_policy())
             .expect("matching key_id narrows successfully");
 
         // Find a 32-byte string that is not a valid curve point encoding.
@@ -4590,7 +4942,7 @@ mod tests {
             TrustedModelKeys::new(),
         );
         host.model_usage = Some(ModelUsage::Commercial);
-        host.packages.insert_verified(seal(other)).expect("insert");
+        host.admit_test(seal(other)).expect("insert");
         host.policies.insert(
             "policy-1".to_string(),
             ExecutionPolicy {
@@ -4901,7 +5253,7 @@ mod tests {
         tweak(&mut pkg.manifest);
         let digest = manifest_digest(&pkg.manifest);
         host.pins.push(test_pin("fixture.echo", &digest));
-        host.packages.insert_verified(seal(pkg)).expect("insert");
+        host.admit_test(seal(pkg)).expect("insert");
         digest
     }
 
@@ -5186,7 +5538,7 @@ mod tests {
             let mut host = trusted_host(vec![classifier_pin(&manifest)]);
             host.host_limits = limits;
             let err = host
-                .register_package(&manifest, wasm.clone(), &sig)
+                .register_package(&manifest, wasm.clone(), &sig, &test_placement_policy())
                 .expect_err("over host ceiling");
             assert_eq!(err.code, HostConnectorErrorCode::ModelIncompatible);
             assert_eq!(err.reason, Some(ModelFailureReason::HostLimitExceeded));
@@ -5198,7 +5550,7 @@ mod tests {
             max_fuel: parsed.max_fuel,
             ..HostModelLimits::default()
         };
-        host.register_package(&manifest, wasm, &sig)
+        host.register_package(&manifest, wasm, &sig, &test_placement_policy())
             .expect("exactly at the ceilings registers");
     }
     const ECHO_V2_DIR: &str = concat!(
@@ -5253,8 +5605,13 @@ mod tests {
         let parsed: ModelPackageManifest = serde_json::from_slice(&manifest).expect("manifest");
         assert_eq!(parsed.abi_version, 2);
         let mut host = trusted_host(vec![test_pin("fixture.echo-v2", &digest_hex(&manifest))]);
-        host.register_package(&manifest, read("model.wasm"), &read("model.sig.json"))
-            .expect("signed v2 fixture registers");
+        host.register_package(
+            &manifest,
+            read("model.wasm"),
+            &read("model.sig.json"),
+            &test_placement_policy(),
+        )
+        .expect("signed v2 fixture registers");
     }
 
     #[test]
@@ -5333,14 +5690,28 @@ mod tests {
 
     /// Host with the checked-in signed v3 fixture registered on `engine`.
     fn prepared_v3_host(engine: ModelEngine) -> (ExactModelHostConnector, String) {
+        prepared_v3_host_with(engine, HostModelLimits::default().max_snapshot_bytes)
+    }
+
+    /// [`prepared_v3_host`] with a snapshot budget set before registration.
+    fn prepared_v3_host_with(
+        engine: ModelEngine,
+        max_snapshot_bytes: u64,
+    ) -> (ExactModelHostConnector, String) {
         let read = |name: &str| std::fs::read(format!("{PREPARED_V3_DIR}/{name}")).expect(name);
         let manifest = read("model.manifest.json");
         let digest = digest_hex(&manifest);
         let mut host = trusted_host(vec![test_pin("fixture.prepared-v3", &digest)]);
         host.engine = engine;
+        host.host_limits.max_snapshot_bytes = max_snapshot_bytes;
         host.policies.insert("policy-1".to_string(), policy());
-        host.register_package(&manifest, read("model.wasm"), &read("model.sig.json"))
-            .expect("signed v3 fixture registers");
+        host.register_package(
+            &manifest,
+            read("model.wasm"),
+            &read("model.sig.json"),
+            &test_placement_policy(),
+        )
+        .expect("signed v3 fixture registers");
         (host, digest)
     }
 
@@ -5369,11 +5740,15 @@ mod tests {
         let cases = vector["cases"].as_array().expect("cases");
         for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
             for budget in [HostModelLimits::default().max_snapshot_bytes, 0] {
-                let (mut host, digest) = prepared_v3_host(engine);
-                host.host_limits.max_snapshot_bytes = budget;
-                // Every case three times: cold (fresh path), then warm
-                // (snapshot path) twice. Any carried state changes the output.
+                let (mut host, digest) = prepared_v3_host_with(engine, budget);
+                // Registration prepared the snapshot (Decision 120), so with
+                // reuse every round restores it; without reuse every call
+                // takes the fresh path. A third pass runs after an eviction.
+                // Any carried state changes the output.
                 for round in 0..3 {
+                    if round == 2 {
+                        host.snapshots.drop_package(&digest);
+                    }
                     for case in cases {
                         let input =
                             hex_decode(case["input_frame_hex"].as_str().expect("in")).expect("hex");
@@ -5408,37 +5783,20 @@ mod tests {
                     "{engine:?}"
                 );
             }
-            // A prepare budget below the loop's need fails closed and keeps
-            // no snapshot.
-            let mut starved = prepared_package(engine, |m| m.max_prepare_fuel = Some(100));
-            let package_digest = starved.1.clone();
+            // A prepare budget below the loop's need fails registration and
+            // keeps no snapshot.
+            let (starved, _, admitted) = admit_prepared_guest(
+                engine,
+                std::fs::read(format!("{PREPARED_V3_DIR}/model.wasm")).expect("wasm"),
+                |m| m.max_prepare_fuel = Some(100),
+            );
             assert_eq!(
-                run_prepared(
-                    &mut starved.0,
-                    &package_digest,
-                    b"abc",
-                    serde_json::Map::new()
-                )
-                .expect_err("prepare fuel")
-                .code,
+                admitted.expect_err("prepare fuel").code,
                 HostConnectorErrorCode::ExecutionFailed,
                 "{engine:?}"
             );
-            assert_eq!(starved.0.snapshots.total_bytes(), 0);
+            assert_eq!(starved.snapshots.total_bytes(), 0);
         }
-    }
-
-    /// Host whose only package is the v3 fixture with a mutated manifest
-    /// (bypasses signing: executor behaviour only).
-    fn prepared_package(
-        engine: ModelEngine,
-        tweak: impl FnOnce(&mut ModelPackageManifest),
-    ) -> (ExactModelHostConnector, String) {
-        prepared_guest(
-            engine,
-            std::fs::read(format!("{PREPARED_V3_DIR}/model.wasm")).expect("wasm"),
-            tweak,
-        )
     }
 
     fn prepared_guest(
@@ -5446,6 +5804,22 @@ mod tests {
         wasm: Vec<u8>,
         tweak: impl FnOnce(&mut ModelPackageManifest),
     ) -> (ExactModelHostConnector, String) {
+        let (host, digest, admitted) = admit_prepared_guest(engine, wasm, tweak);
+        admitted.expect("insert");
+        (host, digest)
+    }
+
+    /// [`prepared_guest`], returning the registration outcome instead of
+    /// requiring success.
+    fn admit_prepared_guest(
+        engine: ModelEngine,
+        wasm: Vec<u8>,
+        tweak: impl FnOnce(&mut ModelPackageManifest),
+    ) -> (
+        ExactModelHostConnector,
+        String,
+        Result<String, HostConnectorError>,
+    ) {
         let mut pkg = fixture_package();
         pkg.wasm = wasm;
         pkg.manifest.model_id = "fixture.prepared-v3".to_string();
@@ -5463,8 +5837,8 @@ mod tests {
         host.model_usage = Some(ModelUsage::Commercial);
         host.engine = engine;
         host.policies.insert("policy-1".to_string(), policy());
-        host.packages.insert_verified(seal(pkg)).expect("insert");
-        (host, digest)
+        let admitted = host.admit_test(seal(pkg));
+        (host, digest, admitted)
     }
 
     /// A snapshot-safe v3 guest: bump allocator over an exported heap, echo
@@ -5503,17 +5877,17 @@ mod tests {
         ];
         for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
             for (index, (wasm, code)) in cases.iter().enumerate() {
-                let (mut host, digest) = prepared_guest(engine, wasm.clone(), |_| {});
-                for _ in 0..2 {
-                    assert_eq!(
-                        run_prepared(&mut host, &digest, b"abc", serde_json::Map::new())
-                            .expect_err("fails closed")
-                            .code,
-                        *code,
-                        "{engine:?} case {index}"
-                    );
-                }
+                // Registration runs `model_prepare` (Decision 120), so the
+                // failure surfaces there and nothing is kept.
+                let (host, digest, admitted) = admit_prepared_guest(engine, wasm.clone(), |_| {});
+                assert_eq!(
+                    admitted.expect_err("fails closed").code,
+                    *code,
+                    "{engine:?} case {index}"
+                );
                 assert_eq!(host.snapshots.total_bytes(), 0);
+                assert!(host.packages.resolve_offline(&digest).is_err());
+                assert!(host.placement_preparation(&digest, "policy-1").is_none());
             }
             let (mut ok, digest) = prepared_guest(engine, v3_guest("i32.const 0"), |_| {});
             assert_eq!(
@@ -5524,36 +5898,74 @@ mod tests {
     }
 
     #[test]
-    fn wasmi_interrupts_a_running_prepare_and_keeps_no_snapshot() {
+    fn registration_prepare_over_budget_or_cancelled_keeps_no_snapshot() {
         let spin = v3_guest("(loop $spin (br $spin)) i32.const 0");
-        let (mut host, digest) = prepared_guest(ModelEngine::Wasmi, spin.clone(), |m| {
+        let spinning = |m: &mut ModelPackageManifest| {
             m.max_prepare_fuel = Some(1_000 * WASMI_FUEL_SLICE);
             m.max_fuel = 1_000 * WASMI_FUEL_SLICE;
-        });
-        let mut zero = serde_json::Map::new();
-        zero.insert("timeout_ms".to_string(), json!(0));
-        assert_eq!(
-            run_prepared(&mut host, &digest, b"abc", zero)
-                .expect_err("timeout")
-                .code,
-            HostConnectorErrorCode::Timeout
+        };
+        // `wasmi` interrupts a running prepare at the budget; `wasm-cpu` is
+        // then unavailable and nothing is kept.
+        let (mut host, _, _) =
+            admit_prepared_guest(ModelEngine::Wasmi, v3_guest("i32.const 0"), |_| {});
+        host.host_limits.max_preparation_ms = 0;
+        let mut package = fixture_package();
+        package.wasm.clone_from(&spin);
+        package.manifest.model_id = "fixture.prepared-v3".to_string();
+        package.manifest.wasm_digest = digest_hex(&spin);
+        package.manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        package.manifest.abi_version = MODEL_GUEST_ABI_PREPARED;
+        package.manifest.max_memory_bytes = 4 * 65_536;
+        spinning(&mut package.manifest);
+        let package = seal(package);
+        let spin_digest = digest_hex(&package.manifest_bytes);
+        let error = host.admit_test(package.clone()).expect_err("over budget");
+        assert!(
+            error.reason == Some(ModelFailureReason::PlacementUnavailable)
+                && error.message.contains("wasm-cpu over_budget"),
+            "{error:?}"
         );
+        assert!(host.packages.resolve_offline(&spin_digest).is_err());
+        // The earlier package keeps its snapshot; the spinning one stored none.
+        let kept = host.snapshots.total_bytes();
+        assert!(kept > 0);
+        // A cancellation that lands inside `model_prepare` stops it.
         host.cancel.store(true, Ordering::SeqCst);
+        let far = Instant::now() + Duration::from_mins(1);
         assert_eq!(
-            run_prepared(&mut host, &digest, b"abc", serde_json::Map::new())
-                .expect_err("cancel")
+            host.prepare_wasm_cpu(&package, &spin_digest, far)
+                .expect_err("cancelled")
                 .code,
             HostConnectorErrorCode::Cancelled
         );
+        assert_eq!(host.snapshots.total_bytes(), kept);
+        host.cancel.store(false, Ordering::SeqCst);
+        // On wasmtime prepare runs to completion and is then over budget,
+        // which drops the snapshot it stored.
+        let (mut host, digest_ok, _) =
+            admit_prepared_guest(ModelEngine::Wasmtime, v3_guest("i32.const 0"), |_| {});
+        let ok = host
+            .packages
+            .by_digest
+            .get(&digest_ok)
+            .cloned()
+            .expect("cached");
+        host.snapshots.clear();
+        let past = Instant::now();
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(
+            host.prepare_wasm_cpu(&ok, &digest_ok, past)
+                .expect("prepared"),
+            PlacementOutcome::OverBudget
+        );
         assert_eq!(host.snapshots.total_bytes(), 0);
-        // Exhausting the prepare budget across several slices.
-        let (mut slices, digest) = prepared_guest(ModelEngine::Wasmi, spin, |m| {
+        // Exhausting the prepare budget across several slices fails
+        // registration.
+        let (_, _, admitted) = admit_prepared_guest(ModelEngine::Wasmi, spin, |m| {
             m.max_prepare_fuel = Some(3 * WASMI_FUEL_SLICE + 7);
         });
         assert_eq!(
-            run_prepared(&mut slices, &digest, b"abc", serde_json::Map::new())
-                .expect_err("prepare fuel")
-                .code,
+            admitted.expect_err("prepare fuel").code,
             HostConnectorErrorCode::ExecutionFailed
         );
     }
@@ -5687,8 +6099,8 @@ mod tests {
             wasm_digest: digest_hex(&unsafe_guest.wasm),
             ..v3
         };
-        let error = ModelPackageStore::new()
-            .insert_verified(seal(unsafe_guest))
+        let error = seal(unsafe_guest)
+            .verify()
             .expect_err("non-exported mutable global");
         assert_eq!(error.code, HostConnectorErrorCode::ModelIncompatible);
     }
@@ -5777,10 +6189,7 @@ mod tests {
             Some(ModelFailureReason::DigestMismatch)
         );
         assert_eq!(
-            ModelPackageStore::new()
-                .insert_verified(dirty)
-                .expect_err("insert")
-                .reason,
+            dirty.verify().expect_err("insert").reason,
             Some(ModelFailureReason::DigestMismatch)
         );
 
@@ -5918,7 +6327,14 @@ mod tests {
             .iter()
             .map(|adapter| (*adapter).to_string())
             .collect();
-        host.register_package_with_variants(&bytes, wasm, &signature, files)?;
+        host.register_package_with_variants(
+            &bytes,
+            wasm,
+            &signature,
+            files,
+            &test_placement_policy(),
+            None,
+        )?;
         Ok(host)
     }
 
@@ -6225,91 +6641,167 @@ mod tests {
         encode_guest_frame(3, &[u32::try_from(values.len()).expect("len")], &payload)
     }
 
-    /// A host whose echo package carries a `coreml` variant with a one-case
-    /// vector (the echo guest's own output is the reference), plus a fake
-    /// adapter in `mode`.
-    fn accelerated_host(
-        mode: FakeMode,
-        tweak: impl FnOnce(&mut ModelPackageManifest),
-    ) -> (
-        ExactModelHostConnector,
-        String,
-        Arc<std::sync::Mutex<FakeState>>,
-    ) {
-        let input = float_frame(&[0.25, 0.75, 0.5]);
-        let vector = serde_json::to_vec(&json!({
-            "cases": [{
-                "input_frame_hex": hex_encode(&input),
-                "output_frame_hex": hex_encode(&input),
-            }]
-        }))
-        .expect("vector");
-        let model = b"fake-coreml-variant";
-        let mut manifest = variant_package_manifest(model, &vector);
-        if let Some(variants) = manifest.accelerator_variants.as_mut() {
-            variants[0].tolerance.f32_dtypes = vec![3];
+    /// A signed echo package carrying a `coreml` variant whose one-case
+    /// vector is `vector`, and a host with two fake adapters in `mode`. The
+    /// package is not registered yet, so a test can shape the adapters and
+    /// the policy first (Decision 120).
+    struct Accelerated {
+        host: ExactModelHostConnector,
+        digest: String,
+        state: Arc<std::sync::Mutex<FakeState>>,
+        manifest: Vec<u8>,
+        signature: Vec<u8>,
+        model: Vec<u8>,
+        vector: Vec<u8>,
+    }
+
+    impl Accelerated {
+        fn new(
+            mode: FakeMode,
+            tweak: impl FnOnce(&mut ModelPackageManifest),
+            vector: Option<Vec<u8>>,
+        ) -> Self {
+            let input = float_frame(&[0.25, 0.75, 0.5]);
+            let vector = vector.unwrap_or_else(|| {
+                serde_json::to_vec(&json!({
+                    "cases": [{
+                        "input_frame_hex": hex_encode(&input),
+                        "output_frame_hex": hex_encode(&input),
+                    }]
+                }))
+                .expect("vector")
+            });
+            let model = b"fake-coreml-variant".to_vec();
+            let mut manifest = variant_package_manifest(&model, &vector);
+            if let Some(variants) = manifest.accelerator_variants.as_mut() {
+                variants[0].tolerance.f32_dtypes = vec![3];
+            }
+            tweak(&mut manifest);
+            let bytes = serde_json::to_vec(&manifest).expect("json");
+            let (secret, public_key) = test_key();
+            let signature = serde_json::to_vec(&sign_model_manifest(&secret, &bytes)).expect("sig");
+            let mut pin = test_pin(&manifest.model_id, &digest_hex(&bytes));
+            pin.rights.license_id = manifest.rights.license_id.clone();
+            pin.rights.commercial_use = manifest.rights.commercial_use;
+            let mut keys = TrustedModelKeys::new();
+            keys.trust(&public_key).expect("trust");
+            let mut host = ExactModelHostConnector::new(vec![pin], keys);
+            host.model_usage = Some(ModelUsage::NonCommercial);
+            let state = Arc::new(std::sync::Mutex::new(FakeState {
+                mode,
+                calls: 0,
+                available: true,
+                metering: FuelMetering::NotApplicable,
+                platform: "fake-os-1".to_string(),
+            }));
+            for _ in 0..2 {
+                host.register_adapter(Box::new(FakeAdapter {
+                    state: Arc::clone(&state),
+                    cancel: Arc::clone(&host.cancel),
+                }));
+            }
+            host.policies.insert(
+                "policy-1".to_string(),
+                ExecutionPolicy {
+                    policy_ref: "policy-1".to_string(),
+                    allowed_classifications: vec!["sensitive".to_string()],
+                    max_output_bytes: 4096,
+                    ..ExecutionPolicy::default()
+                },
+            );
+            Self {
+                host,
+                digest: digest_hex(&bytes),
+                state,
+                manifest: bytes,
+                signature,
+                model,
+                vector,
+            }
         }
-        tweak(&mut manifest);
-        let digest = digest_hex(&serde_json::to_vec(&manifest).expect("json"));
-        let mut host = register_variant_host(
-            &manifest,
-            &[ADAPTER_COREML],
-            &[
-                ("variants/coreml/model.mlpackage.zip", model.as_slice()),
-                ("variants/coreml/conformance.json", vector.as_slice()),
-            ],
-        )
-        .expect("register");
-        let state = Arc::new(std::sync::Mutex::new(FakeState {
-            mode,
-            calls: 0,
-            available: true,
-            metering: FuelMetering::NotApplicable,
-            platform: "fake-os-1".to_string(),
-        }));
-        host.register_adapter(Box::new(FakeAdapter {
-            state: Arc::clone(&state),
-            cancel: Arc::clone(&host.cancel),
-        }));
-        host.register_adapter(Box::new(FakeAdapter {
-            state: Arc::clone(&state),
-            cancel: Arc::clone(&host.cancel),
-        }));
-        host.policies.insert(
-            "policy-1".to_string(),
-            ExecutionPolicy {
-                policy_ref: "policy-1".to_string(),
-                allowed_classifications: vec!["sensitive".to_string()],
-                max_output_bytes: 4096,
-                placements: vec![ADAPTER_COREML.to_string(), PLACEMENT_WASM_CPU.to_string()],
-                require_fuel_metering: false,
-            },
-        );
-        (host, digest, state)
+
+        /// Register (or re-register) the package under `policy-1`.
+        fn register(
+            &mut self,
+            placements: &[&str],
+            require_fuel_metering: bool,
+            budget_ms: Option<u64>,
+        ) -> Result<String, HostConnectorError> {
+            let wasm = fixture_package().wasm;
+            self.host.register_package_with_variants(
+                &self.manifest,
+                wasm,
+                &self.signature,
+                &[
+                    ("variants/coreml/model.mlpackage.zip", self.model.as_slice()),
+                    ("variants/coreml/conformance.json", self.vector.as_slice()),
+                ],
+                &PlacementPolicy {
+                    policy_ref: "policy-1".to_string(),
+                    placements: placements.iter().map(|id| (*id).to_string()).collect(),
+                    require_fuel_metering,
+                },
+                budget_ms,
+            )
+        }
+
+        fn calls(&self) -> usize {
+            self.state.lock().expect("state").calls
+        }
+
+        fn set(&self, change: impl FnOnce(&mut FakeState)) {
+            change(&mut self.state.lock().expect("state"));
+        }
+
+        fn prepared(&self) -> &PlacementPreparation {
+            self.host
+                .placement_preparation(&self.digest, "policy-1")
+                .expect("prepared")
+        }
+
+        fn outcomes(&self) -> Vec<(String, PlacementOutcome)> {
+            self.prepared()
+                .attempts
+                .iter()
+                .map(|attempt| (attempt.placement.clone(), attempt.outcome))
+                .collect()
+        }
+
+        fn run(
+            &mut self,
+            extras: serde_json::Map<String, Value>,
+        ) -> Result<(Vec<u8>, PlacementEvidence), HostConnectorError> {
+            let input = float_frame(&[1.0, 2.0, 3.0]);
+            let input_ref = self.host.io.stage_model_input(&input, 4096).expect("stage");
+            let result = self
+                .host
+                .invoke(&execute_request(&self.digest, &input_ref, extras))?;
+            let output = self
+                .host
+                .io
+                .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
+                .expect("read");
+            Ok((
+                output,
+                result.placement_evidence.expect("placement evidence"),
+            ))
+        }
     }
 
-    fn accelerated_run(
-        host: &mut ExactModelHostConnector,
-        digest: &str,
-        extras: serde_json::Map<String, Value>,
-    ) -> Result<(Vec<u8>, PlacementEvidence), HostConnectorError> {
-        let input = float_frame(&[1.0, 2.0, 3.0]);
-        let input_ref = host.io.stage_model_input(&input, 4096).expect("stage");
-        let result = host.invoke(&execute_request(digest, &input_ref, extras))?;
-        let output = host
-            .io
-            .read_model_output(result.artifact_ref.as_deref().expect("ref"), 4096)
-            .expect("read");
-        Ok((
-            output,
-            result.placement_evidence.expect("placement evidence"),
-        ))
+    const COREML_FIRST: [&str; 2] = [ADAPTER_COREML, PLACEMENT_WASM_CPU];
+
+    /// An accelerated package registered under `["coreml", "wasm-cpu"]`.
+    fn accelerated_host(mode: FakeMode) -> Accelerated {
+        let mut fixture = Accelerated::new(mode, |_| {}, None);
+        fixture
+            .register(&COREML_FIRST, false, None)
+            .expect("register");
+        fixture
     }
 
-    fn set_placements(host: &mut ExactModelHostConnector, placements: &[&str], require_fuel: bool) {
-        let policy = host.policies.get_mut("policy-1").expect("policy");
-        policy.placements = placements.iter().map(|id| (*id).to_string()).collect();
-        policy.require_fuel_metering = require_fuel;
+    fn unavailable(error: &HostConnectorError) -> bool {
+        error.code == HostConnectorErrorCode::ModelUnavailable
+            && error.reason == Some(ModelFailureReason::PlacementUnavailable)
     }
 
     #[test]
@@ -6333,10 +6825,17 @@ mod tests {
     }
 
     #[test]
-    fn the_first_listed_qualifying_placement_runs_and_is_recorded() {
-        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
-        let (output, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("coreml");
+    fn registration_prepares_the_first_qualifying_placement_and_calls_run_on_it() {
+        let mut fixture = accelerated_host(FakeMode::Echo);
+        // The one-case self-check ran at registration, not in a call.
+        assert_eq!(fixture.calls(), 1);
+        assert_eq!(fixture.prepared().placement, ADAPTER_COREML);
+        assert_eq!(
+            fixture.outcomes(),
+            vec![(ADAPTER_COREML.to_string(), PlacementOutcome::Ready)]
+        );
+        assert_eq!(fixture.prepared().policy.placements.len(), 2);
+        let (output, evidence) = fixture.run(serde_json::Map::new()).expect("coreml");
         assert_eq!(output, float_frame(&[1.0, 2.0, 3.0]));
         assert_eq!(
             evidence,
@@ -6346,89 +6845,200 @@ mod tests {
                 fuel_metering: FuelMetering::NotApplicable,
             }
         );
-        // One self-check case plus the call; the self-check is cached.
-        assert_eq!(state.lock().expect("state").calls, 2);
-        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("again");
-        assert_eq!(state.lock().expect("state").calls, 3);
-        // A new platform version re-runs the self-check.
-        state.lock().expect("state").platform = "fake-os-2".to_string();
-        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("re-check");
-        assert_eq!(state.lock().expect("state").calls, 5);
+        assert_eq!(fixture.calls(), 2);
+        // A platform change does not re-check inside a call; the next
+        // registration does, and the placement stays fixed meanwhile.
+        fixture.set(|state| state.platform = "fake-os-2".to_string());
+        fixture.run(serde_json::Map::new()).expect("still coreml");
+        assert_eq!(fixture.calls(), 3);
+        fixture
+            .register(&COREML_FIRST, false, None)
+            .expect("re-register");
+        assert_eq!(fixture.calls(), 4);
+        // A stored self-check is reused by a later registration.
+        fixture
+            .register(&COREML_FIRST, false, None)
+            .expect("reuse self-check");
+        assert_eq!(fixture.calls(), 4);
         // Within tolerance still passes once re-checked.
-        state.lock().expect("state").mode = FakeMode::Perturb(1e-3);
-        state.lock().expect("state").platform = "fake-os-3".to_string();
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("close");
-        assert_eq!(evidence.placement, ADAPTER_COREML);
+        fixture.set(|state| {
+            state.mode = FakeMode::Perturb(1e-3);
+            state.platform = "fake-os-3".to_string();
+        });
+        fixture.register(&COREML_FIRST, false, None).expect("close");
+        assert_eq!(
+            fixture
+                .run(serde_json::Map::new())
+                .expect("close")
+                .1
+                .placement,
+            ADAPTER_COREML
+        );
         // The wasm-cpu guest reports its own evidence.
-        set_placements(&mut host, &[PLACEMENT_WASM_CPU], false);
-        let (output, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
+        fixture
+            .register(&[PLACEMENT_WASM_CPU], false, None)
+            .expect("cpu");
+        let (output, evidence) = fixture.run(serde_json::Map::new()).expect("cpu");
         assert_eq!(output, float_frame(&[1.0, 2.0, 3.0]));
         assert_eq!(evidence, PlacementEvidence::wasm_cpu());
     }
 
     #[test]
-    fn placements_fall_back_only_to_listed_ids_and_fail_closed() {
-        // A failed self-check makes the variant unavailable on this device.
-        let (mut host, digest, state) = accelerated_host(FakeMode::Perturb(1e-2), |_| {});
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("fallback");
-        assert_eq!(evidence, PlacementEvidence::wasm_cpu());
-        let calls = state.lock().expect("state").calls;
-        set_placements(&mut host, &[ADAPTER_COREML], false);
-        let input_ref = host
-            .io
-            .stage_model_input(&float_frame(&[1.0]), 4096)
-            .expect("stage");
-        let error = host
-            .invoke(&execute_request(
-                &digest,
-                &input_ref,
-                serde_json::Map::new(),
-            ))
-            .expect_err("only coreml");
+    fn the_first_call_deadline_excludes_registration_preparation() {
+        // A self-check far slower than the call's deadline runs at
+        // registration; the first call then meets a 30 ms deadline.
+        let mut fixture = Accelerated::new(FakeMode::Slow(80), |_| {}, None);
+        fixture
+            .register(&COREML_FIRST, false, None)
+            .expect("register");
+        assert!(fixture.prepared().duration_ms >= 80);
+        fixture.set(|state| state.mode = FakeMode::Echo);
+        let mut extras = serde_json::Map::new();
+        extras.insert("timeout_ms".to_string(), json!(30));
+        let (_, evidence) = fixture.run(extras).expect("first call within deadline");
+        assert_eq!(evidence.placement, ADAPTER_COREML);
+    }
+
+    #[test]
+    fn an_over_budget_placement_falls_through_to_the_next_listed_one() {
+        let mut fixture = Accelerated::new(FakeMode::Slow(40), |_| {}, None);
+        fixture
+            .register(&COREML_FIRST, false, Some(5))
+            .expect("register");
         assert_eq!(
-            (error.code, error.reason),
-            (
-                HostConnectorErrorCode::ModelUnavailable,
-                Some(ModelFailureReason::PlacementUnavailable)
-            )
+            fixture.outcomes(),
+            vec![
+                (ADAPTER_COREML.to_string(), PlacementOutcome::OverBudget),
+                (PLACEMENT_WASM_CPU.to_string(), PlacementOutcome::Ready),
+            ]
         );
-        // The cached failure is not re-run, and the input was not consumed.
-        assert_eq!(state.lock().expect("state").calls, calls);
-        set_placements(&mut host, &[PLACEMENT_WASM_CPU], false);
-        host.invoke(&execute_request(
-            &digest,
-            &input_ref,
-            serde_json::Map::new(),
-        ))
-        .expect("input still staged");
+        assert!(fixture.prepared().attempts[0].duration_ms >= 40);
+        // The host ceiling caps a larger per-registration budget.
+        let mut fixture = Accelerated::new(FakeMode::Slow(40), |_| {}, None);
+        fixture.host.host_limits.max_preparation_ms = 5;
+        let error = fixture
+            .register(&[ADAPTER_COREML], false, Some(60_000))
+            .expect_err("over the host budget");
+        assert!(unavailable(&error), "{error:?}");
+        assert!(
+            error.message.contains("coreml over_budget"),
+            "{}",
+            error.message
+        );
+        // Nothing is kept for a failed registration.
+        assert!(
+            fixture
+                .host
+                .packages
+                .resolve_offline(&fixture.digest)
+                .is_err()
+        );
+        assert!(
+            fixture
+                .host
+                .placement_preparation(&fixture.digest, "policy-1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cancellation_stops_registration_and_keeps_nothing() {
+        let mut fixture = Accelerated::new(FakeMode::CancelDuring, |_| {}, None);
+        assert_eq!(
+            fixture
+                .register(&COREML_FIRST, false, None)
+                .expect_err("cancelled")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        assert!(
+            fixture
+                .host
+                .packages
+                .resolve_offline(&fixture.digest)
+                .is_err()
+        );
+        let mut fixture = Accelerated::new(FakeMode::Echo, |_| {}, None);
+        fixture.host.cancel.store(true, Ordering::SeqCst);
+        assert_eq!(
+            fixture
+                .register(&COREML_FIRST, false, None)
+                .expect_err("cancelled before preparation")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        assert_eq!(fixture.calls(), 0);
+        assert!(
+            fixture
+                .host
+                .placement_preparation(&fixture.digest, "policy-1")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn registration_falls_back_only_to_listed_ids_and_fails_closed() {
+        // A failed self-check makes the variant unavailable on this device.
+        let mut fixture = accelerated_host(FakeMode::Perturb(1e-2));
+        assert_eq!(
+            fixture.outcomes(),
+            vec![
+                (
+                    ADAPTER_COREML.to_string(),
+                    PlacementOutcome::SelfCheckFailed
+                ),
+                (PLACEMENT_WASM_CPU.to_string(), PlacementOutcome::Ready),
+            ]
+        );
+        assert_eq!(
+            fixture.run(serde_json::Map::new()).expect("fallback").1,
+            PlacementEvidence::wasm_cpu()
+        );
+        let calls = fixture.calls();
+        let error = fixture
+            .register(&[ADAPTER_COREML], false, None)
+            .expect_err("only coreml");
+        assert!(unavailable(&error), "{error:?}");
+        assert!(error.message.contains("coreml self_check_failed"));
+        // The stored failure is not re-run, and the earlier registration of
+        // this policy is kept.
+        assert_eq!(fixture.calls(), calls);
+        assert_eq!(fixture.prepared().placement, PLACEMENT_WASM_CPU);
 
         // Unavailable adapter, and a fuel-metering requirement, both skip it.
-        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
-        state.lock().expect("state").available = false;
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
-        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
-        state.lock().expect("state").available = true;
-        set_placements(&mut host, &[ADAPTER_COREML, PLACEMENT_WASM_CPU], true);
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("metered only");
-        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
-        state.lock().expect("state").metering = FuelMetering::Metered;
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("metered adapter");
-        assert_eq!(evidence.fuel_metering, FuelMetering::Metered);
+        let mut fixture = Accelerated::new(FakeMode::Echo, |_| {}, None);
+        fixture.set(|state| state.available = false);
+        fixture.register(&COREML_FIRST, false, None).expect("cpu");
+        assert_eq!(
+            fixture.outcomes()[0],
+            (ADAPTER_COREML.to_string(), PlacementOutcome::Unsupported)
+        );
+        fixture.set(|state| state.available = true);
+        fixture
+            .register(&COREML_FIRST, true, None)
+            .expect("metered only");
+        assert_eq!(fixture.prepared().placement, PLACEMENT_WASM_CPU);
+        fixture.set(|state| state.metering = FuelMetering::Metered);
+        fixture
+            .register(&COREML_FIRST, true, None)
+            .expect("metered adapter");
+        assert_eq!(
+            fixture
+                .run(serde_json::Map::new())
+                .expect("metered")
+                .1
+                .fuel_metering,
+            FuelMetering::Metered
+        );
 
-        // Unknown or repeated ids deny the call.
+        // Unknown or repeated ids fail registration.
         for placements in [
             &["metal"][..],
             &[PLACEMENT_WASM_CPU, PLACEMENT_WASM_CPU][..],
         ] {
-            set_placements(&mut host, placements, false);
             assert_eq!(
-                accelerated_run(&mut host, &digest, serde_json::Map::new())
+                fixture
+                    .register(placements, false, None)
                     .expect_err("bad policy")
                     .code,
                 HostConnectorErrorCode::PolicyDenied
@@ -6436,36 +7046,113 @@ mod tests {
         }
 
         // A variant over the host memory ceiling is skipped.
-        let (mut host, digest, _) = accelerated_host(FakeMode::Echo, |manifest| {
-            if let Some(variants) = manifest.accelerator_variants.as_mut() {
-                variants[0].peak_memory_bytes = u64::MAX;
-            }
-        });
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("cpu");
-        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+        let mut fixture = Accelerated::new(
+            FakeMode::Echo,
+            |manifest| {
+                if let Some(variants) = manifest.accelerator_variants.as_mut() {
+                    variants[0].peak_memory_bytes = u64::MAX;
+                }
+            },
+            None,
+        );
+        fixture.register(&COREML_FIRST, false, None).expect("cpu");
+        assert_eq!(fixture.prepared().placement, PLACEMENT_WASM_CPU);
 
         // An empty conformance vector never passes the self-check.
-        let (mut host, digest, _) = accelerated_host(FakeMode::Echo, |_| {});
-        let package = host.packages.by_digest.get_mut(&digest).expect("cached");
-        let empty = br#"{"cases":[]}"#.to_vec();
-        package
-            .manifest
-            .accelerator_variants
-            .as_mut()
-            .expect("variants")[0]
-            .conformance_vector_digest = digest_hex(&empty);
-        package.variants[0].conformance_vector = empty;
-        let (_, evidence) =
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("empty vector");
-        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
-        let (mut no_variant, digest2, _) = accelerated_host(FakeMode::Echo, |_| {});
-        if let Some(package) = no_variant.packages.by_digest.get_mut(&digest2) {
+        let mut fixture =
+            Accelerated::new(FakeMode::Echo, |_| {}, Some(br#"{"cases":[]}"#.to_vec()));
+        fixture
+            .register(&COREML_FIRST, false, None)
+            .expect("empty vector");
+        assert_eq!(
+            fixture.outcomes()[0],
+            (
+                ADAPTER_COREML.to_string(),
+                PlacementOutcome::SelfCheckFailed
+            )
+        );
+    }
+
+    #[test]
+    fn calls_use_only_the_registered_policy_and_fail_closed_otherwise() {
+        let mut fixture = accelerated_host(FakeMode::Echo);
+        let input_ref = fixture
+            .host
+            .io
+            .stage_model_input(&float_frame(&[1.0]), 4096)
+            .expect("stage");
+        // Restating the registered policy is accepted.
+        let policy = fixture.host.policies.get_mut("policy-1").expect("policy");
+        policy.placements = Some(vec![
+            ADAPTER_COREML.to_string(),
+            PLACEMENT_WASM_CPU.to_string(),
+        ]);
+        policy.require_fuel_metering = Some(false);
+        fixture.run(serde_json::Map::new()).expect("restated");
+        // A different list or fuel flag is `placement_unavailable`, before the
+        // input is consumed; an invalid list still denies the call.
+        for (placements, metering, denied) in [
+            (Some(vec![PLACEMENT_WASM_CPU.to_string()]), None, false),
+            (None, Some(true), false),
+            (Some(vec!["metal".to_string()]), None, true),
+        ] {
+            let policy = fixture.host.policies.get_mut("policy-1").expect("policy");
+            policy.placements = placements;
+            policy.require_fuel_metering = metering;
+            let error = fixture
+                .host
+                .invoke(&execute_request(
+                    &fixture.digest,
+                    &input_ref,
+                    serde_json::Map::new(),
+                ))
+                .expect_err("mismatch");
+            if denied {
+                assert_eq!(error.code, HostConnectorErrorCode::PolicyDenied);
+            } else {
+                assert!(unavailable(&error), "{error:?}");
+            }
+        }
+        let policy = fixture.host.policies.get_mut("policy-1").expect("policy");
+        policy.placements = None;
+        policy.require_fuel_metering = None;
+        fixture
+            .host
+            .invoke(&execute_request(
+                &fixture.digest,
+                &input_ref,
+                serde_json::Map::new(),
+            ))
+            .expect("input still staged");
+
+        // A policy_ref the package was not registered under.
+        fixture.host.policies.insert(
+            "policy-2".to_string(),
+            ExecutionPolicy {
+                policy_ref: "policy-2".to_string(),
+                allowed_classifications: vec!["sensitive".to_string()],
+                max_output_bytes: 4096,
+                ..ExecutionPolicy::default()
+            },
+        );
+        let mut extras = serde_json::Map::new();
+        extras.insert("policy_ref".to_string(), json!("policy-2"));
+        assert!(unavailable(&fixture.run(extras).expect_err("not prepared")));
+
+        // The fixed adapter, or its cached variant, going away fails closed
+        // instead of moving to another placement.
+        fixture.set(|state| state.available = false);
+        assert!(unavailable(
+            &fixture.run(serde_json::Map::new()).expect_err("gone")
+        ));
+        fixture.set(|state| state.available = true);
+        let digest = fixture.digest.clone();
+        if let Some(package) = fixture.host.packages.by_digest.get_mut(&digest) {
             package.variants.clear();
         }
-        let (_, evidence) =
-            accelerated_run(&mut no_variant, &digest2, serde_json::Map::new()).expect("no variant");
-        assert_eq!(evidence.placement, PLACEMENT_WASM_CPU);
+        assert!(unavailable(
+            &fixture.run(serde_json::Map::new()).expect_err("no variant")
+        ));
     }
 
     #[test]
@@ -6498,42 +7185,37 @@ mod tests {
             ),
         ];
         for (mode, timeout_ms, code) in cases {
-            let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
-            // Pass the self-check first, then switch the behaviour.
-            accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("warm");
-            state.lock().expect("state").mode = mode;
+            // The self-check passed at registration; switch the behaviour.
+            let mut fixture = accelerated_host(FakeMode::Echo);
+            fixture.set(|state| state.mode = mode);
             let mut extras = serde_json::Map::new();
             if let Some(ms) = timeout_ms {
                 extras.insert("timeout_ms".to_string(), json!(ms));
             }
             assert_eq!(
-                accelerated_run(&mut host, &digest, extras)
-                    .expect_err("fails")
-                    .code,
+                fixture.run(extras).expect_err("fails").code,
                 code,
                 "{mode:?}"
             );
         }
         // Cancelled or past the deadline before the prediction starts.
-        let (mut host, digest, state) = accelerated_host(FakeMode::Echo, |_| {});
-        accelerated_run(&mut host, &digest, serde_json::Map::new()).expect("warm");
-        let calls = state.lock().expect("state").calls;
-        host.cancel.store(true, Ordering::SeqCst);
+        let mut fixture = accelerated_host(FakeMode::Echo);
+        let calls = fixture.calls();
+        fixture.host.cancel.store(true, Ordering::SeqCst);
         assert_eq!(
-            accelerated_run(&mut host, &digest, serde_json::Map::new())
+            fixture
+                .run(serde_json::Map::new())
                 .expect_err("cancelled")
                 .code,
             HostConnectorErrorCode::Cancelled
         );
-        host.cancel.store(false, Ordering::SeqCst);
+        fixture.host.cancel.store(false, Ordering::SeqCst);
         let mut zero = serde_json::Map::new();
         zero.insert("timeout_ms".to_string(), json!(0));
         assert_eq!(
-            accelerated_run(&mut host, &digest, zero)
-                .expect_err("deadline")
-                .code,
+            fixture.run(zero).expect_err("deadline").code,
             HostConnectorErrorCode::Timeout
         );
-        assert_eq!(state.lock().expect("state").calls, calls, "never predicted");
+        assert_eq!(fixture.calls(), calls, "never predicted");
     }
 }

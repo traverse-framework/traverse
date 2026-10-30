@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::fs;
 use traverse_runtime::exact_model::{
     CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelUsage,
-    TrustedModelKeys, decode_guest_frame, encode_guest_frame,
+    PlacementPolicy, TrustedModelKeys, decode_guest_frame, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorErrorCode, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -49,6 +49,10 @@ fn registered_host() -> (ExactModelHostConnector, ExactModelPin) {
         &read(&format!("{dir}/model.manifest.json")),
         read(&format!("{dir}/model.wasm")),
         &read(&format!("{dir}/model.sig.json")),
+        &PlacementPolicy {
+            policy_ref: "policy-1".to_string(),
+            ..PlacementPolicy::default()
+        },
     )
     .expect("signed digits package must verify");
     host.policies.insert(

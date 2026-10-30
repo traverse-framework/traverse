@@ -154,22 +154,58 @@ public struct ExactModelHostLimits: Sendable, Equatable {
     /// Bytes of guest ABI v3 post-prepare snapshots kept in memory (Spec 138
     /// FR-055). Over budget, calls take the slower fresh path; `0` disables reuse.
     public let maxSnapshotBytes: UInt64
+    /// Max milliseconds registration spends preparing one listed placement
+    /// (Spec 138 0.16.0, Decision 120): its self-check, which compiles a Core
+    /// ML variant, or `model_prepare`. A placement over it is skipped.
+    public let maxPreparationMs: UInt64
 
     public init(maxPackageBytes: UInt64 = 128 * 1024 * 1024,
                 maxMemoryBytes: UInt64 = 256 * 1024 * 1024,
                 maxFuel: UInt64 = 20_000_000_000,
-                maxSnapshotBytes: UInt64 = 256 * 1024 * 1024) {
+                maxSnapshotBytes: UInt64 = 256 * 1024 * 1024,
+                maxPreparationMs: UInt64 = 300_000) {
         self.maxPackageBytes = maxPackageBytes
         self.maxMemoryBytes = maxMemoryBytes
         self.maxFuel = maxFuel
         self.maxSnapshotBytes = maxSnapshotBytes
+        self.maxPreparationMs = maxPreparationMs
     }
 }
 
+/// The execution policy a package is registered under (Spec 138 0.16.0,
+/// Decision 120). Registration prepares and fixes one placement per
+/// (package, `policyRef`); every call naming `policyRef` runs on it.
+public struct ExactModelPlacementPolicy: Sendable, Equatable {
+    /// The `policy_ref` calls name.
+    public let policyRef: String
+    /// Allowed placements in preference order (FR-060), for example
+    /// `["coreml", "wasm-cpu"]`; empty means `["wasm-cpu"]`.
+    public let placements: [String]
+    /// Excludes placements that cannot meter fuel (FR-064), which includes
+    /// Core ML.
+    public let requireFuelMetering: Bool
+
+    public init(policyRef: String, placements: [String] = [], requireFuelMetering: Bool = false) {
+        self.policyRef = policyRef
+        self.placements = placements
+        self.requireFuelMetering = requireFuelMetering
+    }
+}
+
+/// What registration prepared (Decision 120).
+public struct ExactModelRegistration: Sendable, Equatable {
+    /// The pin digest the package is cached under.
+    public let digest: String
+    /// The placement fixed for the policy, for example `coreml`.
+    public let placement: String
+    /// Wall time of the preparation, including the guest compile.
+    public let preparationMs: UInt64
+}
+
 /// Opt-in Core ML accelerator for packages with a signed `coreml` variant
-/// (Spec 138 0.13, Decision 112). A call still runs on Core ML only when its
-/// execution policy lists `coreml` in `placements` and the variant passes
-/// its on-device self-check.
+/// (Spec 138 0.13, Decision 112). A package runs on Core ML only when the
+/// policy it is registered under lists `coreml` in `placements` and the
+/// variant passes its on-device self-check at registration.
 public struct CoreMLAcceleratorConfig: Sendable, Equatable {
     /// `all` (default), `cpu_only`, `cpu_and_gpu`, or `cpu_and_neural_engine`.
     public let computeUnits: String
@@ -247,6 +283,7 @@ public final class ExactModelHost: @unchecked Sendable {
                 "max_memory_bytes": limits.maxMemoryBytes,
                 "max_fuel": limits.maxFuel,
                 "max_snapshot_bytes": limits.maxSnapshotBytes,
+                "max_preparation_ms": limits.maxPreparationMs,
             ],
         ]
         if let modelUsage { header["model_usage"] = modelUsage }
@@ -268,27 +305,70 @@ public final class ExactModelHost: @unchecked Sendable {
     }
 
     /// Verify and admit a signed package; returns the pin digest it is cached under.
-    ///
-    /// - Parameter variantFiles: accelerator variant files this host fetched,
-    ///   keyed by their package path (for example
-    ///   `variants/coreml/model.mlpackage.zip` and its conformance vector).
-    ///   Only variants for an enabled accelerator are used, and each must
-    ///   match its signed digest (`digest_mismatch` otherwise).
+    /// See ``registerPackageWithPreparation(manifest:wasm:signature:variantFiles:policy:preparationBudgetMs:)``.
+    @discardableResult
     public func registerPackage(manifest: Data, wasm: Data, signature: Data,
-                                variantFiles: [String: Data] = [:]) async throws -> String {
+                                variantFiles: [String: Data] = [:],
+                                policy: ExactModelPlacementPolicy,
+                                preparationBudgetMs: UInt64? = nil) async throws -> String {
+        try await registerPackageWithPreparation(manifest: manifest, wasm: wasm, signature: signature,
+                                                 variantFiles: variantFiles, policy: policy,
+                                                 preparationBudgetMs: preparationBudgetMs).digest
+    }
+
+    /// Verify and admit a signed package, then prepare and fix its placement
+    /// for `policy` (Spec 138 0.16.0, Decision 120): the Core ML compile and
+    /// device self-check, or `model_prepare`, run here, never in a call.
+    /// Swift `Task` cancellation stops the preparation (`cancelled`).
+    ///
+    /// - Parameters:
+    ///   - variantFiles: accelerator variant files this host fetched, keyed
+    ///     by their package path (for example
+    ///     `variants/coreml/model.mlpackage.zip` and its conformance vector).
+    ///     Only variants for an enabled accelerator are used, and each must
+    ///     match its signed digest (`digest_mismatch` otherwise).
+    ///   - policy: the policy calls will name. A call naming a `policy_ref`
+    ///     the package was not registered under fails with
+    ///     `placement_unavailable`.
+    ///   - preparationBudgetMs: per-placement budget, capped by
+    ///     ``ExactModelHostLimits/maxPreparationMs``.
+    public func registerPackageWithPreparation(manifest: Data, wasm: Data, signature: Data,
+                                               variantFiles: [String: Data] = [:],
+                                               policy: ExactModelPlacementPolicy,
+                                               preparationBudgetMs: UInt64? = nil) async throws -> ExactModelRegistration {
+        try Task.checkCancellation()
         let paths = variantFiles.keys.sorted()
-        var header: [String: Any] = ["op": "register"]
+        let registrationID = UUID().uuidString
+        var header: [String: Any] = [
+            "op": "register",
+            "registration_id": registrationID,
+            "policy": [
+                "policy_ref": policy.policyRef,
+                "placements": policy.placements,
+                "require_fuel_metering": policy.requireFuelMetering,
+            ],
+        ]
         if !paths.isEmpty { header["variant_paths"] = paths }
+        if let preparationBudgetMs { header["preparation_budget_ms"] = preparationBudgetMs }
         let segments = [("manifest", manifest), ("wasm", wasm), ("signature", signature)]
             + paths.map { ($0, variantFiles[$0] ?? Data()) }
+        let handle = handle
+        let capacity = responseCapacity
         let request = try Self.encode(header: header, segments: segments)
-        let response = try await background {
-            try Self.send(handle: self.handle, request: request, capacity: self.responseCapacity)
+        let response = try await withTaskCancellationHandler {
+            try await background { try Self.send(handle: handle, request: request, capacity: capacity) }
+        } onCancel: {
+            _ = try? Self.call(handle: handle, header: ["op": "cancel", "execution_id": registrationID], segments: [], capacity: 4096)
         }
         guard let digest = response.header["digest"] as? String else {
             throw ExactModelError(code: "model_incompatible", reason: nil, message: "registration returned no digest")
         }
-        return digest
+        let preparation = response.header["preparation"] as? [String: Any] ?? [:]
+        return ExactModelRegistration(
+            digest: digest,
+            placement: response.header["placement"] as? String ?? "",
+            preparationMs: (preparation["duration_ms"] as? NSNumber)?.uint64Value ?? 0
+        )
     }
 
     /// Stage input bytes; returns a single-consume opaque `input_ref`.
@@ -345,12 +425,15 @@ public final class ExactModelHost: @unchecked Sendable {
     /// Execute a pinned model. Swift `Task` cancellation interrupts the running
     /// inference mid-run (`cancelled`); `timeoutMs` bounds it (`timeout`).
     ///
+    /// The call runs on the placement registration fixed for `policyRef`
+    /// (Spec 138 0.16.0, Decision 120).
+    ///
     /// - Parameters:
-    ///   - placements: the policy's ordered placements (FR-060), for example
-    ///     `["coreml", "wasm-cpu"]`; `nil` means `["wasm-cpu"]`. A call that
-    ///     no listed placement can run fails with `placement_unavailable`.
-    ///   - requireFuelMetering: excludes placements that cannot meter fuel
-    ///     (FR-064), which includes Core ML.
+    ///   - placements: deprecated; when given it must equal the registered
+    ///     policy's placements (`placement_unavailable` otherwise). Removed
+    ///     in the next major version.
+    ///   - requireFuelMetering: deprecated; when given it must equal the
+    ///     registered policy's flag. Removed in the next major version.
     public func execute(
         modelRef: (modelId: String, version: String, digest: String),
         inputRef: String,
@@ -362,7 +445,7 @@ public final class ExactModelHost: @unchecked Sendable {
         allowedClassifications: [String],
         timeoutMs: Int? = nil,
         placements: [String]? = nil,
-        requireFuelMetering: Bool = false
+        requireFuelMetering: Bool? = nil
     ) async throws -> ExactModelExecution {
         var payload: [String: Any] = [
             "model_ref": ["model_id": modelRef.modelId, "version": modelRef.version, "digest": modelRef.digest],
@@ -381,7 +464,7 @@ public final class ExactModelHost: @unchecked Sendable {
     /// Execute a raw Spec 137 `model.execute` payload (used by app-command routing).
     public func execute(payload: [String: Any], allowedClassifications: [String],
                         placements: [String]? = nil,
-                        requireFuelMetering: Bool = false) async throws -> ExactModelExecution {
+                        requireFuelMetering: Bool? = nil) async throws -> ExactModelExecution {
         try Task.checkCancellation()
         let executionID = UUID().uuidString
         var header: [String: Any] = [
@@ -389,7 +472,7 @@ public final class ExactModelHost: @unchecked Sendable {
             "allowed_classifications": allowedClassifications, "payload": payload,
         ]
         if let placements { header["placements"] = placements }
-        if requireFuelMetering { header["require_fuel_metering"] = true }
+        if let requireFuelMetering { header["require_fuel_metering"] = requireFuelMetering }
         let handle = handle
         let capacity = responseCapacity
         let request = try Self.encode(header: header, segments: [])
@@ -437,7 +520,7 @@ public final class ExactModelHost: @unchecked Sendable {
             }
             let allowed = payload.removeValue(forKey: "allowed_classifications") as? [String] ?? []
             let placements = payload.removeValue(forKey: "placements") as? [String]
-            let requireFuelMetering = payload.removeValue(forKey: "require_fuel_metering") as? Bool ?? false
+            let requireFuelMetering = payload.removeValue(forKey: "require_fuel_metering") as? Bool
             do {
                 let result = try await execute(payload: payload, allowedClassifications: allowed,
                                                placements: placements, requireFuelMetering: requireFuelMetering)

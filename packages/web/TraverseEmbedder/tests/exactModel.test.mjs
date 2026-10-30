@@ -69,11 +69,14 @@ function resigned(manifestBytes, edit) {
   return { bytes, sig };
 }
 
+/** The registration policy every call names (Spec 138 0.16.0, Decision 120). */
+const POLICY = { policy_ref: "policy-1" };
+
 async function registeredHost(dir, modelId, pinOverrides = {}) {
   const pkg = fixture(dir);
   const pin = await pinFor(modelId, pkg.manifest, pinOverrides);
   const host = new ExactModelBrowserHost([pin], TRUST);
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   return { host, digest, pin };
 }
 
@@ -143,7 +146,7 @@ test("signed echo fixture verifies, executes, and returns typed output + trace",
 test("signed classifier conformance vector matches native output byte-for-byte", async () => {
   const pkg = fixture(VECTOR.package_dir);
   const host = new ExactModelBrowserHost([VECTOR.pin], { trustedPublicKeysHex: [VECTOR.trusted_public_key_hex], modelUsage: "commercial" });
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   assert.equal(digest, VECTOR.pin.digest);
   const input_ref = host.io.stageModelInput(Buffer.from(VECTOR.request.input_frame_hex, "hex"), 4096);
   const result = await host.execute(
@@ -158,7 +161,7 @@ test("trained digits MLP (#1461) matches the native vector and clears the accura
   const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-mlp.json", MODELS), "utf8"));
   const pkg = fixture(vector.package_dir);
   const host = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [vector.trusted_public_key_hex], modelUsage: "commercial" });
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   assert.equal(host.modelRights(digest).license_id, "CC-BY-4.0");
   const run = async (frame) => {
     const input_ref = host.io.stageModelInput(frame, 268);
@@ -193,7 +196,7 @@ test("ONNX runner package (#1591) matches the native vector byte-for-byte and fa
     trustedPublicKeysHex: [vector.trusted_public_key_hex],
     modelUsage: "commercial",
   });
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   const derivation = host.modelRights(digest).derivation;
   assert.equal(derivation.kind, "converted");
   assert.match(derivation.source_digest, /^[0-9a-f]{64}$/);
@@ -227,7 +230,7 @@ test("multi-IO HF text-encoder toy (#1661) matches the native vector byte-for-by
     trustedPublicKeysHex: [vector.trusted_public_key_hex],
     modelUsage: "commercial",
   });
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   const maxOut = vector.request.max_output_bytes;
   const run = async (frame) => {
     const input_ref = host.io.stageModelInput(frame, 4096);
@@ -331,7 +334,7 @@ test("registration rejects unsigned, bad-signature, and untrusted-key packages",
   const host = new ExactModelBrowserHost([pin], TRUST);
   const enc = (value) => new TextEncoder().encode(JSON.stringify(value));
   const sigDoc = JSON.parse(new TextDecoder().decode(pkg.sig));
-  const bad = (sig) => host.registerPackage(pkg.manifest, pkg.wasm, sig);
+  const bad = (sig) => host.registerPackage(pkg.manifest, pkg.wasm, sig, POLICY);
 
   await assert.rejects(() => bad(new Uint8Array(0)), reason("signature_invalid"));
   await assert.rejects(() => bad(enc({ ...sigDoc, extra: 1 })), reason("signature_invalid"));
@@ -339,7 +342,7 @@ test("registration rejects unsigned, bad-signature, and untrusted-key packages",
   await assert.rejects(() => bad(enc({ ...sigDoc, signature: "zz" })), reason("signature_invalid"));
   await assert.rejects(() => bad(enc({ ...sigDoc, signature: "00".repeat(64) })), reason("signature_invalid"));
   await assert.rejects(
-    () => host.registerPackage(new TextEncoder().encode(" "), pkg.wasm, pkg.sig),
+    () => host.registerPackage(new TextEncoder().encode(" "), pkg.wasm, pkg.sig, POLICY),
     reason("signature_invalid"),
   );
   await assert.rejects(() => bad(enc({ ...sigDoc, key_id: "ed25519:unknown" })), reason("key_untrusted"));
@@ -356,21 +359,21 @@ test("registration rejects unsigned, bad-signature, and untrusted-key packages",
     reason("key_untrusted"),
   );
   const noTrust = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: [], modelUsage: "commercial" });
-  await assert.rejects(() => noTrust.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), reason("key_untrusted"));
+  await assert.rejects(() => noTrust.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), reason("key_untrusted"));
   const badKey = new ExactModelBrowserHost([pin], { trustedPublicKeysHex: ["abcd"], modelUsage: "commercial" });
-  await assert.rejects(() => badKey.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), reason("key_untrusted"));
+  await assert.rejects(() => badKey.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), reason("key_untrusted"));
 
   const narrowedWrong = new ExactModelBrowserHost([{ ...pin, key_id: "ed25519:other" }], TRUST);
-  await assert.rejects(() => narrowedWrong.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), reason("key_untrusted"));
+  await assert.rejects(() => narrowedWrong.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), reason("key_untrusted"));
   const narrowed = new ExactModelBrowserHost([{ ...pin, key_id: TEST_KEY.key_id }], TRUST);
-  assert.equal(await narrowed.registerPackage(pkg.manifest, pkg.wasm, pkg.sig), pin.digest);
+  assert.equal(await narrowed.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), pin.digest);
 });
 
 test("registration rejects missing, ambiguous, digest, rights, and target mismatches", async () => {
   const pkg = fixture("fixture-echo-1.0.0");
   const pin = await pinFor("fixture.echo", pkg.manifest);
   const register = (pins, manifest = pkg.manifest, wasm = pkg.wasm, sig = pkg.sig) =>
-    new ExactModelBrowserHost(pins, TRUST).registerPackage(manifest, wasm, sig);
+    new ExactModelBrowserHost(pins, TRUST).registerPackage(manifest, wasm, sig, POLICY);
 
   await assert.rejects(() => register([{ ...pin, digest: "00" }]), reason("pin_mismatch", "model_unavailable"));
   await assert.rejects(() => register([pin, { ...pin, digest: "11" }]), reason("pin_ambiguous"));
@@ -431,7 +434,7 @@ test("missing WebCrypto Ed25519 fails closed with crypto_unavailable", async () 
   };
   try {
     await assert.rejects(
-      () => host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig),
+      () => host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY),
       reason("crypto_unavailable", "model_unavailable"),
     );
   } finally {
@@ -469,7 +472,7 @@ test("execute enforces cancellation, timeout, resource ceilings, schema, policy,
     m.max_memory_bytes = 128;
   });
   const tinyHost = new ExactModelBrowserHost([await pinFor("fixture.echo", tiny.bytes)], TRUST);
-  const tinyDigest = await tinyHost.registerPackage(tiny.bytes, pkg.wasm, tiny.sig);
+  const tinyDigest = await tinyHost.registerPackage(tiny.bytes, pkg.wasm, tiny.sig, POLICY);
   await assert.rejects(
     () =>
       tinyHost.execute(
@@ -522,7 +525,7 @@ test("guest ABI v2 (#1588): model_alloc buffers match the v1 echo; bad allocator
   const pkg = fixture("fixture-echo-v2-1.0.0");
   const pin = await pinFor("fixture.echo-v2", pkg.manifest);
   const host = new ExactModelBrowserHost([pin], TRUST);
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   for (const bytes of [new Uint8Array([1, 2, 3]), new Uint8Array(3000).fill(7)]) {
     const input_ref = host.io.stageModelInput(bytes, 4096);
     const result = await host.execute(executeArgs("fixture.echo-v2", digest, input_ref, "schema:fixture-in"));
@@ -559,7 +562,7 @@ test("guest ABI v2 (#1588): model_alloc buffers match the v1 echo; bad allocator
     });
     const casePin = await pinFor("fixture.echo-v2", bytes);
     const caseHost = new ExactModelBrowserHost([casePin], TRUST);
-    const caseDigest = await caseHost.registerPackage(bytes, wasm, sig);
+    const caseDigest = await caseHost.registerPackage(bytes, wasm, sig, POLICY);
     const input_ref = caseHost.io.stageModelInput(new Uint8Array([1, 2, 3]), 64);
     await assert.rejects(
       () => caseHost.execute(executeArgs("fixture.echo-v2", caseDigest, input_ref, "schema:fixture-in")),
@@ -571,7 +574,7 @@ test("guest ABI v2 (#1588): model_alloc buffers match the v1 echo; bad allocator
     m.abi_version = 3;
   });
   const future = new ExactModelBrowserHost([await pinFor("fixture.echo-v2", bytes)], TRUST);
-  await assert.rejects(() => future.registerPackage(bytes, pkg.wasm, sig), (error) => error.reason === "manifest_invalid");
+  await assert.rejects(() => future.registerPackage(bytes, pkg.wasm, sig, POLICY), (error) => error.reason === "manifest_invalid");
 });
 
 // Spec 138 0.14.0, Decision 115: each guest reject code maps to its own
@@ -608,7 +611,7 @@ test("guest reject codes map to fault-based codes and stable reasons", async () 
       m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
     });
     const host = new ExactModelBrowserHost([await pinFor("fixture.echo-v2", bytes)], TRUST);
-    const digest = await host.registerPackage(bytes, wasm, sig);
+    const digest = await host.registerPackage(bytes, wasm, sig, POLICY);
     const input_ref = host.io.stageModelInput(new Uint8Array([1, 2, 3]), 64);
     await assert.rejects(
       () => host.execute(executeArgs("fixture.echo-v2", digest, input_ref, "schema:fixture-in")),
@@ -640,7 +643,7 @@ async function v3Host(options = {}) {
   const pkg = fixture("fixture-prepared-v3-1.0.0");
   const pin = await pinFor("fixture.prepared-v3", pkg.manifest);
   const host = new ExactModelBrowserHost([pin], { ...TRUST, ...options });
-  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
   return { host, digest, pkg };
 }
 
@@ -649,6 +652,66 @@ async function runV3(host, digest, bytes, modelId = "fixture.prepared-v3") {
   const result = await host.execute(executeArgs(modelId, digest, input_ref, "schema:fixture-in"));
   return Buffer.from(host.io.readModelOutput(result.output_ref, 4096)).toString("hex");
 }
+
+test("registration prepares and fixes the placement for its policy only (Spec 138 0.16.0, Decision 120)", async () => {
+  const pkg = fixture("fixture-prepared-v3-1.0.0");
+  const pin = await pinFor("fixture.prepared-v3", pkg.manifest);
+  const host = new ExactModelBrowserHost([pin], TRUST);
+  const digest = await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, {
+    policy_ref: "policy-1",
+    placements: ["coreml", "wasm-cpu"],
+  });
+  // `model_prepare` ran at registration, so the first call restores the snapshot.
+  assert.ok(host.snapshotBytes() > 0);
+  const prepared = host.placementPreparation(digest, "policy-1");
+  assert.equal(prepared.placement, "wasm-cpu");
+  assert.deepEqual(
+    prepared.attempts.map((attempt) => [attempt.placement, attempt.outcome]),
+    [
+      ["coreml", "unsupported"],
+      ["wasm-cpu", "ready"],
+    ],
+  );
+  assert.equal(await runV3(host, digest, Buffer.from("abc")), "6a523601");
+  // A policy the package was not registered under fails before the input is consumed.
+  const input_ref = host.io.stageModelInput(Buffer.from("abc"), 4096);
+  await assert.rejects(
+    () => host.execute(executeArgs("fixture.prepared-v3", digest, input_ref, "schema:fixture-in", { policy_ref: "other" })),
+    reason("placement_unavailable", "model_unavailable"),
+  );
+  await host.execute(executeArgs("fixture.prepared-v3", digest, input_ref, "schema:fixture-in"));
+
+  const fresh = () => new ExactModelBrowserHost([pin], TRUST);
+  const register = (target, policy, options) => target.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, policy, options);
+  for (const policy of [undefined, { policy_ref: "" }, { policy_ref: "p", placements: ["metal"] }, { policy_ref: "p", placements: ["wasm-cpu", "wasm-cpu"] }]) {
+    await assert.rejects(() => register(fresh(), policy), (e) => e.code === "policy_denied", JSON.stringify(policy));
+  }
+  // The browser runs only `wasm-cpu`.
+  const onlyCoreml = fresh();
+  await assert.rejects(
+    () => register(onlyCoreml, { policy_ref: "p", placements: ["coreml"] }),
+    (e) => e.reason === "placement_unavailable" && e.message.includes("coreml unsupported"),
+  );
+  assert.equal(onlyCoreml.snapshotBytes(), 0);
+  // Over the per-placement budget (capped by the host ceiling), and cancelled.
+  const tight = new ExactModelBrowserHost([pin], { ...TRUST, maxPreparationMs: -1 });
+  await assert.rejects(
+    () => register(tight, POLICY, { preparationBudgetMs: 60_000 }),
+    (e) => e.reason === "placement_unavailable" && e.message.includes("wasm-cpu over_budget"),
+  );
+  assert.equal(tight.snapshotBytes(), 0);
+  const aborted = new AbortController();
+  aborted.abort();
+  const stopped = fresh();
+  await assert.rejects(() => register(stopped, POLICY, { signal: aborted.signal }), (e) => e.code === "cancelled");
+  assert.equal(stopped.placementPreparation(digest, "policy-1"), undefined);
+  const midway = new AbortController();
+  const late = fresh();
+  const pending = register(late, POLICY, { signal: midway.signal });
+  midway.abort();
+  await assert.rejects(() => pending, (e) => e.code === "cancelled");
+  assert.equal(late.snapshotBytes(), 0);
+});
 
 test("guest ABI v3 (#1626): signed vector matches fresh, warm, and with reuse disabled", async () => {
   assert.equal(V3_VECTOR.pin.digest, await sha256Hex(fixture("fixture-prepared-v3-1.0.0").manifest));
@@ -695,8 +758,8 @@ test("guest ABI v3: status changes, digest failures, and eviction drop snapshots
   });
   const pins = [await pinFor("fixture.prepared-v3", pkg.manifest), await pinFor("fixture.prepared-v3-b", second.bytes)];
   const budgeted = new ExactModelBrowserHost(pins, { ...TRUST, maxSnapshotBytes: 100_000 });
-  const a = await budgeted.registerPackage(pkg.manifest, pkg.wasm, pkg.sig);
-  const b = await budgeted.registerPackage(second.bytes, pkg.wasm, second.sig);
+  const a = await budgeted.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
+  const b = await budgeted.registerPackage(second.bytes, pkg.wasm, second.sig, POLICY);
   await runV3(budgeted, a, Buffer.from("abc"));
   const one = budgeted.snapshotBytes();
   await runV3(budgeted, b, Buffer.from("abc"), "fixture.prepared-v3-b");
@@ -720,10 +783,14 @@ test("guest ABI v3: registration rejects snapshot-unsafe guests (FR-053)", async
       m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
     });
     const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-    return host.registerPackage(bytes, wasm, sig);
+    return host.registerPackage(bytes, wasm, sig, POLICY);
   };
-  // A guest exercising every decoded immediate shape still registers.
-  await register(
+  // A guest exercising every decoded immediate shape passes the shape check;
+  // only the engine compile, which registration now runs (Decision 120),
+  // rejects its deliberately inconsistent `br_table`.
+  await assert.rejects(
+    () =>
+      register(
     module(`(type $t (func (param i32) (result i32)))
       (table 1 funcref) (elem (i32.const 0) $id)
       (global (export "g") (mut i64) (i64.const -1))
@@ -758,6 +825,8 @@ test("guest ABI v3: registration rejects snapshot-unsafe guests (FR-053)", async
         (local.set 2 (i32x4.add (v128.load (i32.const 0)) (local.get 2)))
         (drop (global.get $k))
         (return_call $id (local.get 0)))`),
+      ),
+    (e) => e.code === "model_incompatible" && e.message === "model wasm failed validation",
   );
   const unsafe = [
     module(`(global (mut i32) (i32.const 0))`),
@@ -803,9 +872,11 @@ test("guest ABI v3: prepare failures fail closed; manifests gate the ABI", async
       m.wasm_digest = createHash("sha256").update(wasm).digest("hex");
     });
     const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-    const digest = await host.registerPackage(bytes, wasm, sig);
-    await assert.rejects(() => runV3(host, digest, Buffer.from("abc")), (e) => e.code === code, code);
+    // `model_prepare` runs at registration (Decision 120), so it fails there
+    // and nothing is kept.
+    await assert.rejects(() => host.registerPackage(bytes, wasm, sig, POLICY), (e) => e.code === code, code);
     assert.equal(host.snapshotBytes(), 0);
+    assert.equal(host.placementPreparation(createHash("sha256").update(bytes).digest("hex"), "policy-1"), undefined);
   }
   const invalid = [
     (m) => delete m.max_prepare_fuel,
@@ -816,11 +887,11 @@ test("guest ABI v3: prepare failures fail closed; manifests gate the ABI", async
   for (const edit of invalid) {
     const { bytes, sig } = resigned(pkg.manifest, edit);
     const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-    await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig), reason("manifest_invalid"));
+    await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig, POLICY), reason("manifest_invalid"));
   }
   const { bytes, sig } = resigned(pkg.manifest, (m) => (m.max_prepare_fuel = "lots"));
   const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-  await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig), reason("manifest_invalid"));
+  await assert.rejects(() => host.registerPackage(bytes, pkg.wasm, sig, POLICY), reason("manifest_invalid"));
 });
 
 test("browser host validates accelerator variants and does not fetch them", async () => {
@@ -852,7 +923,7 @@ test("browser host validates accelerator variants and does not fetch them", asyn
   assert.deepEqual(variantsToFetch(parsed, ["wasm-cpu"]), []);
   assert.equal(variantsToFetch(parsed, [ADAPTER_COREML]).length, 1);
   const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-  await host.registerPackage(bytes, pkg.wasm, sig);
+  await host.registerPackage(bytes, pkg.wasm, sig, POLICY);
 
   const mismatch = resigned(pkg.manifest, (m) => {
     m.rights.derivation = {
@@ -865,13 +936,13 @@ test("browser host validates accelerator variants and does not fetch them", asyn
     m.accelerator_variants = [{ ...variant, conversion: { ...variant.conversion, source_digest: "11".repeat(32) } }];
   });
   const bad = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", mismatch.bytes)], TRUST);
-  await assert.rejects(() => bad.registerPackage(mismatch.bytes, pkg.wasm, mismatch.sig), reason("rights_inconsistent"));
+  await assert.rejects(() => bad.registerPackage(mismatch.bytes, pkg.wasm, mismatch.sig, POLICY), reason("rights_inconsistent"));
 });
 
 test("browser host registers signed variants with f32_dtypes (#1703) and checks score_transform (Decision 116)", async () => {
   const signed = fixture("digits-onnx-coreml-1.0.0");
   const signedHost = new ExactModelBrowserHost([await pinFor("traverse.digits-onnx-coreml", signed.manifest, { rights: { license_id: "CC-BY-4.0", commercial_use: "allowed" } })], TRUST);
-  await signedHost.registerPackage(signed.manifest, signed.wasm, signed.sig);
+  await signedHost.registerPackage(signed.manifest, signed.wasm, signed.sig, POLICY);
 
   const source = "ab".repeat(32);
   const variant = (tolerance) => ({
@@ -899,7 +970,7 @@ test("browser host registers signed variants with f32_dtypes (#1703) and checks 
       m.accelerator_variants = [variant(tolerance)];
     });
     const host = new ExactModelBrowserHost([await pinFor("fixture.prepared-v3", bytes)], TRUST);
-    return host.registerPackage(bytes, pkg.wasm, sig);
+    return host.registerPackage(bytes, pkg.wasm, sig, POLICY);
   };
   assert.equal(MODEL_PACKAGE_SCHEMA_VERSION_SCORED, "2.3.0");
   for (const [schemaVersion, tolerance] of [

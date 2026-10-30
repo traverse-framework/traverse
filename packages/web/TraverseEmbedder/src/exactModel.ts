@@ -217,7 +217,10 @@ export type ModelFailureReason =
   | "inference_failed"
   | "output_mismatch"
   | "guest_rejected"
-  | "output_limit_exceeded";
+  | "output_limit_exceeded"
+  // No listed placement could be prepared, or a call names a policy the
+  // package was not registered under (Spec 138 0.12.0 / 0.16.0).
+  | "placement_unavailable";
 
 /** Typed `model.execute` result with identity, placement, and redacted trace. */
 export type ExactModelExecution = {
@@ -838,7 +841,55 @@ export type ExactModelBrowserHostOptions = {
    * the fresh path; `0` disables reuse.
    */
   readonly maxSnapshotBytes?: number;
+  /**
+   * Max milliseconds registration spends preparing one listed placement
+   * (Spec 138 0.16.0, Decision 120), for example `model_prepare`. A
+   * placement over it is skipped. Defaults to five minutes.
+   */
+  readonly maxPreparationMs?: number;
 };
+
+/**
+ * The execution policy a package is registered under (Spec 138 0.16.0,
+ * Decision 120). Registration prepares and fixes one placement per
+ * (package, `policy_ref`); every call naming `policy_ref` runs on it.
+ */
+export type ExactModelPlacementPolicy = {
+  readonly policy_ref: string;
+  /** Allowed placements in preference order (FR-060); empty or absent means `["wasm-cpu"]`. */
+  readonly placements?: readonly string[];
+  /** Excludes placements that cannot meter fuel (FR-064). */
+  readonly require_fuel_metering?: boolean;
+};
+
+/** Per-registration options (Decision 120). */
+export type ExactModelRegisterOptions = {
+  /** Per-placement budget, capped by `maxPreparationMs`. */
+  readonly preparationBudgetMs?: number;
+  /** Aborting stops the preparation (`cancelled`); nothing is kept. */
+  readonly signal?: AbortSignal;
+};
+
+/** One listed placement registration tried, in policy order. */
+export type PlacementAttempt = {
+  readonly placement: string;
+  readonly outcome: "ready" | "unsupported" | "self_check_failed" | "over_budget";
+  readonly duration_ms: number;
+};
+
+/** The placement registration fixed for a (package, `policy_ref`) pair. Host trace only. */
+export type PlacementPreparation = {
+  readonly policy: ExactModelPlacementPolicy;
+  readonly placement: typeof PLACEMENT_WASM_CPU;
+  readonly attempts: readonly PlacementAttempt[];
+  readonly duration_ms: number;
+};
+
+/** Placement ids a policy may name (FR-060, FR-066). */
+const KNOWN_PLACEMENTS: readonly string[] = [PLACEMENT_WASM_CPU, "coreml"];
+
+/** Default registration preparation budget (Decision 120). */
+const DEFAULT_MAX_PREPARATION_MS = 300_000;
 
 /**
  * Browser Spec 138 host. Accepts only single, already-selected exact-ref
@@ -859,6 +910,8 @@ export class ExactModelBrowserHost {
   private readonly snapshots = new Map<string, { snapshot: Snapshot; used: number }>();
   private snapshotTick = 0;
   private snapshotTotal = 0;
+  private readonly maxPreparationMs: number;
+  private readonly prepared = new Map<string, PlacementPreparation>();
 
   constructor(pins: readonly ExactModelPin[], options: ExactModelBrowserHostOptions) {
     for (const pin of pins) {
@@ -875,6 +928,12 @@ export class ExactModelBrowserHost {
     this.modelUsage = parseDeclaredModelUsage(options.modelUsage as unknown);
     this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
+    this.maxPreparationMs = options.maxPreparationMs ?? DEFAULT_MAX_PREPARATION_MS;
+  }
+
+  /** The placement registration fixed for a package under `policyRef` (Decision 120). */
+  placementPreparation(digest: string, policyRef: string): PlacementPreparation | undefined {
+    return this.prepared.get(preparedKey(normalizeDigest(digest), policyRef));
   }
 
   /** Invalidate every staged ref and drop every snapshot (FR-055). */
@@ -1029,9 +1088,20 @@ export class ExactModelBrowserHost {
   /**
    * Verify and admit a signed package (Decision 101): Ed25519 signature by a
    * host-trusted key over the exact manifest bytes, manifest digest equal to
-   * exactly one pin, WASM digest, rights, target, and limits.
+   * exactly one pin, WASM digest, rights, target, and limits. Then prepare
+   * and fix its placement for `policy` (Spec 138 0.16.0, Decision 120): the
+   * browser runs only `wasm-cpu`, and an ABI v3 guest runs `model_prepare`
+   * here, so no call is charged for it. A call naming a `policy_ref` the
+   * package was not registered under fails with `placement_unavailable`.
    */
-  async registerPackage(manifestBytes: Uint8Array, wasm: Uint8Array, signatureBytes: Uint8Array): Promise<string> {
+  async registerPackage(
+    manifestBytes: Uint8Array,
+    wasm: Uint8Array,
+    signatureBytes: Uint8Array,
+    policy: ExactModelPlacementPolicy,
+    options: ExactModelRegisterOptions = {},
+  ): Promise<string> {
+    const placements = effectivePlacements(policy);
     const signature = parseSignature(signatureBytes);
     if (signature.alg !== MODEL_SIGNATURE_ALG_ED25519) {
       throw incompatible("signature_invalid", "unsupported model signature algorithm");
@@ -1105,13 +1175,77 @@ export class ExactModelBrowserHost {
       }
       snapshotGlobals = shape.mutableGlobals;
     }
-    this.packages.set(digest, {
+    const pack: StoredPackage = {
       manifest,
       manifestBytes: new Uint8Array(manifestBytes),
       wasm: new Uint8Array(wasm),
       ...(snapshotGlobals ? { snapshotGlobals } : {}),
-    });
+    };
+    const preparation = await this.preparePlacement(pack, digest, policy, placements, options);
+    this.packages.set(digest, pack);
+    this.prepared.set(preparedKey(digest, policy.policy_ref), preparation);
     return digest;
+  }
+
+  /**
+   * Decision 120: walk the listed placements; the browser supports only
+   * `wasm-cpu`, whose ABI v3 `model_prepare` runs now under the
+   * per-placement budget. Cancellation keeps no snapshot.
+   */
+  private async preparePlacement(
+    pack: StoredPackage,
+    digest: string,
+    policy: ExactModelPlacementPolicy,
+    placements: readonly string[],
+    options: ExactModelRegisterOptions,
+  ): Promise<PlacementPreparation> {
+    const started = performance.now();
+    const budget = Math.min(options.preparationBudgetMs ?? this.maxPreparationMs, this.maxPreparationMs);
+    const attempts: PlacementAttempt[] = [];
+    const cancelled = () => {
+      this.dropSnapshot(digest);
+      return new ExactModelError("cancelled", "model registration cancelled during placement preparation");
+    };
+    for (const id of placements) {
+      if (options.signal?.aborted) {
+        throw cancelled();
+      }
+      const attemptStarted = performance.now();
+      if (id !== PLACEMENT_WASM_CPU) {
+        attempts.push({ placement: id, outcome: "unsupported", duration_ms: 0 });
+        continue;
+      }
+      if (pack.snapshotGlobals) {
+        try {
+          await prepareWasmCpu(pack, this.snapshotReuse(digest, pack.snapshotGlobals));
+        } catch (error) {
+          this.dropSnapshot(digest);
+          throw error;
+        }
+      }
+      if (options.signal?.aborted) {
+        throw cancelled();
+      }
+      const durationMs = performance.now() - attemptStarted;
+      if (durationMs > budget) {
+        this.dropSnapshot(digest);
+        attempts.push({ placement: id, outcome: "over_budget", duration_ms: durationMs });
+        continue;
+      }
+      attempts.push({ placement: id, outcome: "ready", duration_ms: durationMs });
+      return {
+        policy,
+        placement: PLACEMENT_WASM_CPU,
+        attempts,
+        duration_ms: performance.now() - started,
+      };
+    }
+    const tried = attempts.map((attempt) => `${attempt.placement} ${attempt.outcome}`).join(", ");
+    throw new ExactModelError(
+      "model_unavailable",
+      `no placement the execution policy lists could be prepared: ${tried}`,
+      "placement_unavailable",
+    );
   }
 
   /** Signed rights of a registered package, for host/UI display. */
@@ -1177,6 +1311,15 @@ export class ExactModelBrowserHost {
     ) {
       throw new ExactModelError("model_incompatible", "input schema does not match model manifest");
     }
+    // Decision 120: run on the placement registration fixed for this policy,
+    // before the input is consumed.
+    if (!this.prepared.has(preparedKey(digest, args.policy_ref))) {
+      throw new ExactModelError(
+        "model_unavailable",
+        "policy_ref was not prepared for this package at registration",
+        "placement_unavailable",
+      );
+    }
     const input = this.io.takeInput(args.input_ref);
     if (input.length > pack.manifest.max_input_bytes) {
       throw new ExactModelError("resource_exhausted", "input exceeds model manifest ceiling");
@@ -1216,6 +1359,41 @@ export class ExactModelBrowserHost {
       model_evidence: evidence,
     };
   }
+}
+
+function preparedKey(digest: string, policyRef: string): string {
+  return `${digest}\u0000${policyRef}`;
+}
+
+/** A policy's effective placement order; an unknown or repeated id denies registration. */
+function effectivePlacements(policy: ExactModelPlacementPolicy): readonly string[] {
+  if (!policy || typeof policy.policy_ref !== "string" || policy.policy_ref === "") {
+    throw new ExactModelError("policy_denied", "registration needs the execution policy it prepares for");
+  }
+  const placements = policy.placements ?? [];
+  if (placements.length === 0) {
+    return [PLACEMENT_WASM_CPU];
+  }
+  if (new Set(placements).size !== placements.length || placements.some((id) => !KNOWN_PLACEMENTS.includes(id))) {
+    throw new ExactModelError("policy_denied", "execution policy names an unknown or repeated placement");
+  }
+  return placements;
+}
+
+/** Registration-time ABI v3 preparation: instantiate once and run `model_prepare`, storing the snapshot. */
+async function prepareWasmCpu(pack: StoredPackage, reuse: SnapshotReuse): Promise<void> {
+  let module: WebAssembly.Module;
+  try {
+    module = await WebAssembly.compile(new Uint8Array(pack.wasm));
+  } catch {
+    throw new ExactModelError("model_incompatible", "model wasm failed validation");
+  }
+  const instance = await WebAssembly.instantiate(module, {});
+  const memory = instance.exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) {
+    throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
+  }
+  prepareOrRestore(instance, memory, pack.manifest.max_memory_bytes, reuse);
 }
 
 async function runWasmCpu(

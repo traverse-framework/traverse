@@ -11,6 +11,11 @@
 //! Operations (`header.op`): `create` (handle 0; returns a model handle),
 //! `register`, `stage_input`, `execute`, `read_output`, `rights`,
 //! `rights_record`, `set_package_status`, `cancel`, `drop_ref`, `destroy`.
+//! `register` carries the execution `policy` (`{policy_ref, placements?,
+//! require_fuel_metering?}`) and an optional `preparation_budget_ms`; it
+//! prepares and fixes one placement per (package, `policy_ref`) and returns
+//! it with the preparation record (Spec 138 0.16.0, Decision 120). An
+//! optional `registration_id` makes the preparation cancellable.
 //! Model-level failures are data
 //! (`{"ok":false,"error":{code,reason,detail?,message}}`); envelope failures
 //! return a non-OK status from the ABI. Rights enforcement (usage policy,
@@ -31,7 +36,7 @@ use std::time::Instant;
 use traverse_runtime::exact_model::{
     AcceleratorAdapter, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, HostModelLimits,
     ModelEngine, ModelUsage, PLACEMENT_WASM_CPU, PackageStatusEntry, PlacementEvidence,
-    TrustedModelKeys,
+    PlacementPolicy, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorError, HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION,
@@ -303,11 +308,18 @@ fn create(profile: HostProfile, request: &Request<'_>) -> Result<Vec<u8>, Envelo
             .as_u64()
             .ok_or(EnvelopeError::InvalidInput("max_snapshot_bytes"))?,
     };
+    // `max_preparation_ms` is optional (Decision 120); absent keeps the
+    // runtime default registration budget.
+    let max_preparation_ms = match limits.get("max_preparation_ms") {
+        None => HostModelLimits::default().max_preparation_ms,
+        Some(_) => limit("max_preparation_ms")?,
+    };
     let host_limits = HostModelLimits {
         max_package_bytes: limit("max_package_bytes")?,
         max_memory_bytes: limit("max_memory_bytes")?,
         max_fuel: limit("max_fuel")?,
         max_snapshot_bytes,
+        max_preparation_ms,
     };
     // App `model_usage` (Decision 107): absent stays undeclared so
     // registration fails closed with `usage_undeclared`. A present but
@@ -373,17 +385,58 @@ fn register(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, Envelope
         .iter()
         .map(|path| Ok((path.as_str(), request.named_segment(path, "variant_paths")?)))
         .collect::<Result<Vec<_>, EnvelopeError>>()?;
-    Ok(
-        match lock(&host.connector).register_package_with_variants(
-            manifest,
-            wasm.to_vec(),
-            signature,
-            &variant_files,
-        ) {
-            Ok(digest) => ok(json!({ "digest": digest })),
-            Err(error) => error_response(&error),
-        },
-    )
+    // The policy the package is registered under (Decision 120): its
+    // placement is prepared now and fixed for every call naming it.
+    let policy: PlacementPolicy = request
+        .header
+        .get("policy")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .filter(|policy: &PlacementPolicy| !policy.policy_ref.is_empty())
+        .ok_or(EnvelopeError::InvalidInput("policy"))?;
+    let preparation_budget_ms = match request.header.get("preparation_budget_ms") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .ok_or(EnvelopeError::InvalidInput("preparation_budget_ms"))?,
+        ),
+    };
+    // An optional `registration_id` lets `cancel` stop the preparation
+    // (`cancelled`, nothing kept), like an execute's `execution_id`.
+    let registration_id = match request.header.get("registration_id") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or(EnvelopeError::InvalidInput("registration_id"))?
+                .to_string(),
+        ),
+    };
+    let mut connector = lock(&host.connector);
+    host.cancel.store(false, Ordering::SeqCst);
+    *lock(&host.running) = registration_id;
+    let registered = connector.register_package_with_variants(
+        manifest,
+        wasm.to_vec(),
+        signature,
+        &variant_files,
+        &policy,
+        preparation_budget_ms,
+    );
+    *lock(&host.running) = None;
+    host.cancel.store(false, Ordering::SeqCst);
+    Ok(match registered {
+        Ok(digest) => {
+            let preparation = connector.placement_preparation(&digest, &policy.policy_ref);
+            ok(json!({
+                "digest": digest,
+                "placement": preparation.map(|prepared| prepared.placement.clone()),
+                "preparation": preparation,
+            }))
+        }
+        Err(error) => error_response(&error),
+    })
 }
 
 fn stage_input(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeError> {
@@ -419,18 +472,23 @@ fn execute(host: &ModelHost, request: &Request<'_>) -> Result<Vec<u8>, EnvelopeE
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .ok_or(EnvelopeError::InvalidInput("allowed_classifications"))?;
-    // Optional execution-policy placement order and fuel requirement
-    // (Spec 138 FR-060, FR-064); absent keeps the `wasm-cpu` default.
-    let placements: Vec<String> = match request.header.get("placements") {
-        None => Vec::new(),
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|_| EnvelopeError::InvalidInput("placements"))?,
+    // Deprecated placement order and fuel requirement (Decision 120): the
+    // placement was fixed at registration, so when present they must equal
+    // the registered policy (`placement_unavailable` otherwise).
+    let placements: Option<Vec<String>> = match request.header.get("placements") {
+        None => None,
+        Some(value) => Some(
+            serde_json::from_value(value.clone())
+                .map_err(|_| EnvelopeError::InvalidInput("placements"))?,
+        ),
     };
     let require_fuel_metering = match request.header.get("require_fuel_metering") {
-        None => false,
-        Some(value) => value
-            .as_bool()
-            .ok_or(EnvelopeError::InvalidInput("require_fuel_metering"))?,
+        None => None,
+        Some(value) => Some(
+            value
+                .as_bool()
+                .ok_or(EnvelopeError::InvalidInput("require_fuel_metering"))?,
+        ),
     };
     let max_output = payload
         .get("max_output_bytes")
@@ -646,7 +704,7 @@ mod tests {
     fn register_digits(handle: u64) -> Value {
         call(
             handle,
-            &json!({ "op": "register" }),
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", &read("digits-mlp-1.0.0/model.manifest.json")),
                 ("wasm", &read("digits-mlp-1.0.0/model.wasm")),
@@ -764,7 +822,7 @@ mod tests {
                         }
                         let response = call(
                             handle,
-                            &json!({ "op": "register" }),
+                            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
                             &[
                                 ("manifest", &file(format!("{dir}/model.manifest.json"))),
                                 ("wasm", &wasm),
@@ -864,7 +922,7 @@ mod tests {
             .expect("handle");
         let registered = call(
             handle,
-            &json!({ "op": "register" }),
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", &read("digits-onnx-1.0.0/model.manifest.json")),
                 ("wasm", &read("digits-onnx-1.0.0/model.wasm")),
@@ -945,7 +1003,7 @@ mod tests {
                 let handle = created["handle"].as_u64().expect("handle");
                 let registered = call(
                     handle,
-                    &json!({ "op": "register" }),
+                    &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
                     &[
                         (
                             "manifest",
@@ -1010,7 +1068,17 @@ mod tests {
     fn execute_reports_placement_evidence_and_honours_policy_placements() {
         let pin = digits_pin();
         let handle = create(json!([pin.clone()]));
-        register_digits(handle);
+        let registered = register_digits(handle);
+        // Registration fixed `wasm-cpu` for `policy-1` (Decision 120).
+        assert_eq!(registered["placement"], json!("wasm-cpu"), "{registered}");
+        assert_eq!(
+            registered["preparation"]["attempts"][0]["outcome"],
+            json!("ready")
+        );
+        assert_eq!(
+            registered["preparation"]["policy"]["policy_ref"],
+            json!("policy-1")
+        );
         let vector: Value =
             serde_json::from_slice(&read("conformance/signed-digits-mlp.json")).expect("vector");
         let input =
@@ -1024,7 +1092,7 @@ mod tests {
         };
         for extra in [
             json!({}),
-            json!({ "placements": ["wasm-cpu"], "require_fuel_metering": true }),
+            json!({ "placements": ["wasm-cpu"], "require_fuel_metering": false }),
         ] {
             let executed = run(extra);
             assert_eq!(executed["placement"], json!("wasm-cpu"), "{executed}");
@@ -1037,12 +1105,19 @@ mod tests {
                 executed["placement_evidence"]
             );
         }
-        let unavailable = run(json!({ "placements": ["coreml"] }));
-        assert_eq!(
-            unavailable["error"]["reason"],
-            json!("placement_unavailable"),
-            "{unavailable}"
-        );
+        // Restated placements or fuel flag that differ from the registered
+        // policy fail closed.
+        for differs in [
+            json!({ "placements": ["coreml"] }),
+            json!({ "require_fuel_metering": true }),
+        ] {
+            let unavailable = run(differs);
+            assert_eq!(
+                unavailable["error"]["reason"],
+                json!("placement_unavailable"),
+                "{unavailable}"
+            );
+        }
         let denied = run(json!({ "placements": ["metal"] }));
         assert_eq!(denied["error"]["code"], json!("policy_denied"), "{denied}");
         for bad in [
@@ -1157,7 +1232,7 @@ mod tests {
                 "op": "create",
                 "pins": [pin.clone()],
                 "trusted_public_keys_hex": [key("public_key_hex")],
-                "limits": { "max_package_bytes": 64_000_000, "max_memory_bytes": 67_108_864, "max_fuel": 10_000_000_000_u64 },
+                "limits": { "max_package_bytes": 64_000_000, "max_memory_bytes": 67_108_864, "max_fuel": 10_000_000_000_u64, "max_preparation_ms": 120_000 },
                 "model_usage": "commercial",
                 "accelerators": accelerators,
             })
@@ -1209,7 +1284,7 @@ mod tests {
                     &REPLAY,
                     handle,
                     &frame(
-                        &json!({ "op": "register", "variant_paths": paths }),
+                        &json!({ "op": "register", "policy": { "policy_ref": "policy-1" }, "variant_paths": paths }),
                         &package
                     )
                 ),
@@ -1217,7 +1292,11 @@ mod tests {
             );
         }
         // Without the variant files the selected coreml variant is missing.
-        let missing = replay_call(handle, &json!({ "op": "register" }), &package);
+        let missing = replay_call(
+            handle,
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
+            &package,
+        );
         assert_eq!(
             missing["error"]["reason"],
             json!("digest_mismatch"),
@@ -1227,10 +1306,27 @@ mod tests {
         segments.extend([(zip_path, zip.as_slice()), (vector_path, vector.as_slice())]);
         let registered = replay_call(
             handle,
-            &json!({ "op": "register", "variant_paths": [zip_path, vector_path] }),
+            &json!({
+                "op": "register",
+                "policy": { "policy_ref": "policy-1", "placements": ["coreml", "wasm-cpu"] },
+                "variant_paths": [zip_path, vector_path],
+                "preparation_budget_ms": 60_000,
+                "registration_id": "register-1",
+            }),
             &segments,
         );
         assert_eq!(registered["ok"], json!(true), "{registered}");
+        // The self-check ran at registration and fixed `coreml`.
+        assert_eq!(registered["placement"], json!("coreml"), "{registered}");
+        assert_eq!(
+            replay_call(
+                handle,
+                &json!({ "op": "cancel", "execution_id": "register-1" }),
+                &[]
+            )["cancelled"],
+            json!(false),
+            "registration is over, so there is nothing to cancel"
+        );
 
         let (input, expected) = coreml_cases().swap_remove(0);
         let staged = replay_call(
@@ -1244,7 +1340,7 @@ mod tests {
             "replay",
         );
         header["payload"]["input_schema_ref"] = json!("schema:traverse-digits-onnx-in");
-        header["placements"] = json!(["coreml"]);
+        header["placements"] = json!(["coreml", "wasm-cpu"]);
         let executed = replay_call(handle, &header, &[]);
         assert_eq!(
             executed["placement_evidence"],
@@ -1410,7 +1506,7 @@ mod tests {
         let handle = create(json!([pin.clone()]));
         let tampered = call(
             handle,
-            &json!({ "op": "register" }),
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", b"{}"),
                 ("wasm", &read("digits-mlp-1.0.0/model.wasm")),
@@ -1502,6 +1598,10 @@ mod tests {
                 json!({ "op": "create", "pins": [], "trusted_public_keys_hex": [], "limits": { "max_package_bytes": 0 } }),
                 "max_package_bytes",
             ),
+            (
+                json!({ "op": "create", "pins": [], "trusted_public_keys_hex": [], "limits": { "max_preparation_ms": 0 } }),
+                "max_preparation_ms",
+            ),
         ] {
             assert_eq!(
                 bad(&frame(&header, &[])),
@@ -1526,9 +1626,35 @@ mod tests {
             EnvelopeError::InvalidInput("model_call_unknown_op")
         );
         assert_eq!(
-            env(json!({ "op": "register" }), &[]),
+            env(
+                json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
+                &[]
+            ),
             EnvelopeError::InvalidInput("manifest")
         );
+        // Registration needs the policy it prepares for (Decision 120).
+        let package: [(&str, &[u8]); 3] = [("manifest", b"m"), ("wasm", b"w"), ("signature", b"s")];
+        for (header, field) in [
+            (json!({ "op": "register" }), "policy"),
+            (
+                json!({ "op": "register", "policy": { "policy_ref": "" } }),
+                "policy",
+            ),
+            (
+                json!({ "op": "register", "policy": { "policy_ref": "p", "extra": 1 } }),
+                "policy",
+            ),
+            (
+                json!({ "op": "register", "policy": { "policy_ref": "p" }, "preparation_budget_ms": "soon" }),
+                "preparation_budget_ms",
+            ),
+            (
+                json!({ "op": "register", "policy": { "policy_ref": "p" }, "registration_id": 7 }),
+                "registration_id",
+            ),
+        ] {
+            assert_eq!(env(header, &package), EnvelopeError::InvalidInput(field));
+        }
         let mut out_of_range = json!({ "op": "stage_input", "max_bytes": 4 });
         out_of_range["segments"] = json!({ "input": [0, 99] });
         assert_eq!(env(out_of_range, &[]), EnvelopeError::InvalidInput("input"));
@@ -1616,7 +1742,7 @@ mod tests {
         let handle = create(json!([pin.clone()]));
         let registered = call(
             handle,
-            &json!({ "op": "register" }),
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", &manifest),
                 ("wasm", &wasm),
@@ -1674,7 +1800,7 @@ mod tests {
         let handle = create(json!([pin.clone()]));
         let registered = call(
             handle,
-            &json!({ "op": "register" }),
+            &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", &manifest),
                 ("wasm", &read("fixture-echo-v2-1.0.0/model.wasm")),

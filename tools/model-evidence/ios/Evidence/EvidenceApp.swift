@@ -105,6 +105,8 @@ enum Harness {
 
     struct Run {
         var label: String
+        var registrationMs: Double = 0
+        var registeredPlacement = ""
         var firstMs: Double = 0
         var times: [Double] = []
         var outputs: [Data] = []
@@ -114,8 +116,9 @@ enum Harness {
     }
 
     /// Register the package on a fresh host and run every clip once (plus a
-    /// first, untimed-in-steady-state call that includes compile and the
-    /// device self-check).
+    /// first, untimed-in-steady-state call). Registration compiles, runs the
+    /// device self-check and `model_prepare`, and fixes the placement
+    /// (Spec 138 0.16.0, Decision 120); its time is recorded separately (#1706).
     static func measure(label: String, coreML: CoreMLAcceleratorConfig?, placements: [String]?,
                         pin: ExactModelPin, key: String, files: [String: Data], clips: [Clip]) async -> Run {
         var run = Run(label: label)
@@ -127,8 +130,13 @@ enum Harness {
             let host = try ExactModelHost(pins: [pin], trustedPublicKeysHex: [key], modelUsage: "non_commercial",
                                           limits: limits, coreML: coreML)
             let variants = files.filter { $0.key.hasPrefix("variants/") }
-            _ = try await host.registerPackage(manifest: files["model.manifest.json"]!, wasm: files["model.wasm"]!,
-                                               signature: files["model.sig.json"]!, variantFiles: variants)
+            let registerStart = DispatchTime.now().uptimeNanoseconds
+            let registered = try await host.registerPackageWithPreparation(
+                manifest: files["model.manifest.json"]!, wasm: files["model.wasm"]!,
+                signature: files["model.sig.json"]!, variantFiles: variants,
+                policy: ExactModelPlacementPolicy(policyRef: "evidence", placements: placements ?? []))
+            run.registrationMs = Double(DispatchTime.now().uptimeNanoseconds - registerStart) / 1_000_000
+            run.registeredPlacement = registered.placement
             func call(_ clip: Clip) async throws -> (Double, Data, ExactModelExecution) {
                 let inputRef = try host.stageModelInput(clip.frame, maxBytes: clipBytes)
                 let start = DispatchTime.now().uptimeNanoseconds
@@ -136,7 +144,7 @@ enum Harness {
                     modelRef: (pin.modelId, pin.version, pin.digest), inputRef: inputRef, policyRef: "evidence",
                     dataClassification: "sensitive", inputSchemaRef: "schema:birdnet-audio-48k-3s-in",
                     inputSchemaVersion: "1.0.0", maxOutputBytes: outputBytes, allowedClassifications: ["sensitive"],
-                    timeoutMs: 60_000, placements: placements)
+                    timeoutMs: 60_000)
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
                 let output = try host.readModelOutput(result.outputRef, maxBytes: outputBytes)
                 return (ms, output, result)
@@ -190,7 +198,7 @@ enum Harness {
             }
 
             var report: [String: Any] = [
-                "issue": "#1630",
+                "issue": "#1630, #1706",
                 "device": deviceModel(),
                 "os": ProcessInfo.processInfo.operatingSystemVersionString,
                 "build": "Release",
@@ -206,6 +214,8 @@ enum Harness {
                     results.append(entry)
                     continue
                 }
+                entry["registration_ms"] = run.registrationMs
+                entry["registered_placement"] = run.registeredPlacement
                 entry["first_call_ms"] = run.firstMs
                 entry["steady"] = summary(run.times)
                 entry["per_clip_ms"] = run.times
