@@ -2,6 +2,16 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Docs: three-command Mode A quickstart (`#1754`, Decision 121)
+
+- The README gains a Mode A quickstart that needs no Rust toolchain:
+  download the `traverse-mcp` release binary, `traverse-mcp sync`, then
+  `traverse-mcp prepare-cache`. It was checked with the macOS binary from a
+  `mcp-server-publish.yml` dry run on a shell with no Rust toolchain.
+- `docs/mcp-mode-a-release-evidence.md` adds the sync step, the four
+  targets, a troubleshooting note for the `record` / `field` error details,
+  and the weekly demo on the release binary.
+
 ## Breaking: model registration takes the execution policy and prepares its placement (`#1706`, Decision 120, Spec 138 0.16.0)
 
 - Registration now does the one-time placement work, which first calls used

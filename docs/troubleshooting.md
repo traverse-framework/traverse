@@ -279,6 +279,11 @@ cargo run -p traverse-mcp -- stdio --simulate-startup-failure
 
 If the code and docs disagree, update the docs and validation together instead of fixing only one side.
 
+`registry_metadata_cache_invalid` from `traverse-mcp prepare-cache` or Mode A
+startup names the failing `record` (`namespace/id@version`) and `field`. Re-run
+`traverse-mcp sync` instead of editing the synced state by hand; see
+[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md#troubleshooting-invalid-metadata-names-the-record-and-field).
+
 ## App-Consumable Release Prep
 
 Primary commands:

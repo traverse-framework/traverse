@@ -137,6 +137,25 @@ here:
 - Author in plain English (skill) → [claude-skills / traverse-capability-author](https://github.com/traverse-framework/claude-skills/tree/main/skills/traverse-capability-author)
 - Author manually in Rust → [docs/capability-contract-authoring-guide.md](docs/capability-contract-authoring-guide.md)
 
+**Run an AI agent on verified public capabilities (Mode A, no Rust):**
+three commands, using the `traverse-mcp` release binary
+(`traverse-mcp-vX.Y.Z`, published with each product tag from `v0.16.0`):
+
+```bash
+curl -L https://github.com/traverse-framework/traverse/releases/download/traverse-mcp-v0.16.0/traverse-mcp-aarch64-apple-darwin.tar.gz | tar -xz
+./traverse-mcp sync --out synced-state.json
+./traverse-mcp prepare-cache --synced-state synced-state.json --cache traverse-cache --ref core/core.authorize@^1
+```
+
+Swap the target for `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`.
+On Windows, use `traverse-mcp-x86_64-pc-windows-msvc.zip`. `sync` writes the
+latest public registry index, and `prepare-cache` verifies and caches the
+refs you name; add one `--ref` per capability. Then point your MCP client
+(Claude Desktop, Cursor) at the binary with
+`"args": ["stdio", "--cache", "/absolute/path/to/traverse-cache"]`. Checksum
+and provenance verification, client configs and troubleshooting:
+[docs/mcp-mode-a-release-evidence.md](docs/mcp-mode-a-release-evidence.md).
+
 ## Install
 
 Public packages are on [crates.io](https://crates.io) and

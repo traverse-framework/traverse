@@ -26,11 +26,12 @@ Supported host commands:
 
 - `stdio [--cache <dir>] [--bundle <manifest-path>] [--simulate-startup-failure]` — serve MCP on stdio
 - `prepare-cache --synced-state <path> --cache <dir> [--ref <namespace/id@version_range>]... [--json]` — Mode B Spec 520 cache prepare
+- `sync --out <path> [--release index-vN] [--source-repo <owner/repo>] [--json]` — write the Spec 055 synced-state file `prepare-cache` reads (Spec 119 FR-010)
 
 Unsupported bootstrap attempts fail loudly:
 
 - omitting the command prints the usage line and exits non-zero
-- using any command other than `stdio` or `prepare-cache` prints `Unsupported command: <command>` and exits non-zero
+- using any command other than `stdio`, `prepare-cache` or `sync` prints `Unsupported command: <command>` and exits non-zero
 
 Contributor mode requires an explicit bundle; it never infers a bundle from the
 binary's build checkout:
@@ -165,6 +166,11 @@ private overrides, in-process registrations, or a network refresh.
 TRAVERSE_MCP_REGISTRY_CACHE=/srv/traverse/verified-registry-cache \
   cargo run -p traverse-mcp -- stdio
 ```
+
+With the release binary, three commands build that cache and need no Rust
+toolchain (download, `traverse-mcp sync --out synced-state.json`, then
+`traverse-mcp prepare-cache --synced-state synced-state.json --cache <dir> --ref …`);
+see the README Mode A quickstart.
 
 The versioned binary release and its checksum/provenance pin path for
 Claude Desktop and Cursor are documented in
