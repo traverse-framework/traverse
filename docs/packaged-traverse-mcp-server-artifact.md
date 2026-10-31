@@ -23,13 +23,15 @@ builds release binaries and publishes an artifact-only GitHub Release:
 | --- | --- |
 | Release tag | `traverse-mcp-vX.Y.Z` (optional rebuild `traverse-mcp-vX.Y.Z-N`) |
 | Latest | never (`--latest=false`) |
-| Assets | `traverse-mcp-<target>.tar.gz`, per-archive `.sha256`, `SHA256SUMS` |
+| Assets | `traverse-mcp-<target>.tar.gz` (`.zip` on Windows), per-archive `.sha256`, `SHA256SUMS` |
 | Provenance | `actions/attest-build-provenance` on the archives |
 
 Targets:
 
 - `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
 - `aarch64-apple-darwin`
+- `x86_64-pc-windows-msvc` (`.zip`, binary `traverse-mcp.exe`)
 
 `traverse-mcp --version` prints `traverse-mcp X.Y.Z (<git-sha>)` for the
 tagged commit.
@@ -38,7 +40,7 @@ tagged commit.
 
 ```bash
 TAG=traverse-mcp-v0.15.0   # replace with the release you pin
-TARGET=aarch64-apple-darwin # or x86_64-unknown-linux-gnu
+TARGET=aarch64-apple-darwin # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
 REPO=traverse-framework/traverse
 
 curl -LO "https://github.com/${REPO}/releases/download/${TAG}/traverse-mcp-${TARGET}.tar.gz"
@@ -63,8 +65,9 @@ Desktop):
 }
 ```
 
-Prepare a host-owned verified registry cache as in
-[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md) before
+Prepare a host-owned verified registry cache with `traverse-mcp sync` and
+`traverse-mcp prepare-cache`, as in
+[docs/mcp-mode-a-release-evidence.md](mcp-mode-a-release-evidence.md), before
 production discovery/execute.
 
 ## macOS Gatekeeper
