@@ -14,7 +14,10 @@ Each run times the registration, which compiles the variant, runs the device
 self-check and `model_prepare`, and fixes the placement (Spec 138 0.16.0,
 Decision 120). The run then makes one first call and 21 timed calls. The
 report gives `registration_ms`, `registered_placement` and `first_call_ms`
-for each run; the `coreml cpu_only` run is the `#1706` closing evidence. It
+for each run; the `coreml cpu_only` run is the `#1706` closing evidence.
+`placement_attempts` lists every placement registration tried, with the
+device self-check's `worst_abs_diff`, `worst_case` and `top_k_mismatches`.
+For the `coreml cpu_and_neural_engine` run, that is the `#1708` evidence. It
 records the placement evidence and compares accelerated outputs with the
 device's own
 `wasm-cpu` outputs under Decision 106 (top-5 identical, |Δ sigmoid| ≤ 5×10⁻³).

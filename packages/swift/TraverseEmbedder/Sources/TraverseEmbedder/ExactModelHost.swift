@@ -192,6 +192,39 @@ public struct ExactModelPlacementPolicy: Sendable, Equatable {
     }
 }
 
+/// What a device self-check found (Spec 138 FR-062, `#1708`): for a
+/// failure, the worst case, so a host can see why a variant was skipped.
+public struct ExactModelSelfCheck: Sendable, Equatable, Codable {
+    public let passed: Bool
+    public let cases: UInt32
+    public let failedCases: UInt32
+    /// Largest |Δ| over the declared float outputs, after `score_transform`.
+    public let worstAbsDiff: Double?
+    public let worstCase: UInt32?
+    public let topKMismatches: UInt32
+    public let otherFailures: UInt32
+
+    enum CodingKeys: String, CodingKey {
+        case passed, cases, failedCases = "failed_cases", worstAbsDiff = "worst_abs_diff",
+             worstCase = "worst_case", topKMismatches = "top_k_mismatches", otherFailures = "other_failures"
+    }
+}
+
+/// One listed placement registration tried, in policy order (Decision 120).
+public struct ExactModelPlacementAttempt: Sendable, Equatable, Codable {
+    /// Placement id, for example `coreml`.
+    public let placement: String
+    /// `ready`, `unsupported`, `self_check_failed` or `over_budget`.
+    public let outcome: String
+    public let durationMs: UInt64
+    /// The device self-check, when this placement reached it.
+    public let selfCheck: ExactModelSelfCheck?
+
+    enum CodingKeys: String, CodingKey {
+        case placement, outcome, durationMs = "duration_ms", selfCheck = "self_check"
+    }
+}
+
 /// What registration prepared (Decision 120).
 public struct ExactModelRegistration: Sendable, Equatable {
     /// The pin digest the package is cached under.
@@ -200,6 +233,8 @@ public struct ExactModelRegistration: Sendable, Equatable {
     public let placement: String
     /// Wall time of the preparation, including the guest compile.
     public let preparationMs: UInt64
+    /// Every placement tried, in policy order.
+    public let attempts: [ExactModelPlacementAttempt]
 }
 
 /// Opt-in Core ML accelerator for packages with a signed `coreml` variant
@@ -367,7 +402,8 @@ public final class ExactModelHost: @unchecked Sendable {
         return ExactModelRegistration(
             digest: digest,
             placement: response.header["placement"] as? String ?? "",
-            preparationMs: (preparation["duration_ms"] as? NSNumber)?.uint64Value ?? 0
+            preparationMs: (preparation["duration_ms"] as? NSNumber)?.uint64Value ?? 0,
+            attempts: try Self.decodeOptional([ExactModelPlacementAttempt].self, preparation["attempts"]) ?? []
         )
     }
 

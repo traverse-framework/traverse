@@ -113,35 +113,102 @@ pub(super) fn effective_placements(placements: &[String]) -> Option<Vec<&str>> {
 /// and compute units (FR-062).
 pub(super) type SelfCheckKey = (String, String, String, String);
 
-/// Run (or reuse) the device self-check for one variant. A failure, an
-/// unreadable vector, or any prediction error makes the variant unavailable
-/// on this device.
+/// What a device self-check found (FR-062): whether the variant passed and,
+/// for a failure, the worst case, so the host trace shows why a variant was
+/// skipped on this device (Spec 138 "Device self-check"; `#1708`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelfCheckEvidence {
+    /// Every case was within the variant's tolerance.
+    pub passed: bool,
+    /// Conformance-vector cases run.
+    pub cases: u32,
+    /// Cases outside the tolerance, or whose prediction failed.
+    pub failed_cases: u32,
+    /// Largest `|Δ|` over the declared float outputs of every case, after
+    /// `score_transform`; `None` when no declared float output was compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worst_abs_diff: Option<f64>,
+    /// Zero-based index of the case with `worst_abs_diff`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worst_case: Option<u32>,
+    /// Cases whose `top_k` indices differed from the reference.
+    pub top_k_mismatches: u32,
+    /// Cases whose prediction failed or returned a frame with another
+    /// dtype, shape, or undeclared-dtype bytes.
+    pub other_failures: u32,
+}
+
+impl SelfCheckEvidence {
+    /// A vector that could not be read, or had no cases, never passes.
+    fn unreadable() -> Self {
+        Self {
+            passed: false,
+            cases: 0,
+            failed_cases: 0,
+            worst_abs_diff: None,
+            worst_case: None,
+            top_k_mismatches: 0,
+            other_failures: 0,
+        }
+    }
+}
+
+/// Run (or reuse) the device self-check for one variant. Every case runs,
+/// so a failure records its worst case. A failure, an unreadable vector, or
+/// any prediction error makes the variant unavailable on this device.
 pub(super) fn self_check(
-    cache: &mut HashMap<SelfCheckKey, bool>,
+    cache: &mut HashMap<SelfCheckKey, SelfCheckEvidence>,
     adapter: &mut dyn AcceleratorAdapter,
     variant: &AcceleratorVariant,
     cached: &CachedAcceleratorVariant,
-) -> bool {
+) -> SelfCheckEvidence {
     let key = (
         variant.digest.clone(),
         adapter.id().to_string(),
         adapter.platform_version(),
         adapter.compute_units(),
     );
-    if let Some(passed) = cache.get(&key) {
-        return *passed;
+    if let Some(evidence) = cache.get(&key) {
+        return evidence.clone();
     }
-    let passed = frame_contract(&cached.conformance_vector).is_some()
-        && vector_cases(&cached.conformance_vector).is_some_and(|cases| {
-            !cases.is_empty()
-                && cases.iter().all(|(input, expected)| {
-                    adapter
-                        .predict(cached, input)
-                        .is_ok_and(|actual| within_tolerance(expected, &actual, &variant.tolerance))
-                })
-        });
-    cache.insert(key, passed);
-    passed
+    let cases = frame_contract(&cached.conformance_vector)
+        .and_then(|_| vector_cases(&cached.conformance_vector))
+        .filter(|cases| !cases.is_empty());
+    let evidence = cases.map_or_else(SelfCheckEvidence::unreadable, |cases| {
+        let mut evidence = SelfCheckEvidence {
+            passed: true,
+            cases: u32::try_from(cases.len()).unwrap_or(u32::MAX),
+            ..SelfCheckEvidence::unreadable()
+        };
+        for (index, (input, expected)) in cases.iter().enumerate() {
+            let comparison = adapter
+                .predict(cached, input)
+                .map_or(CaseComparison::FAILED, |actual| {
+                    compare_case(expected, &actual, &variant.tolerance)
+                });
+            if let Some(diff) = comparison.worst_abs_diff
+                && evidence
+                    .worst_abs_diff
+                    .is_none_or(|worst| diff > worst || diff.is_nan())
+            {
+                evidence.worst_abs_diff = Some(diff);
+                evidence.worst_case = Some(u32::try_from(index).unwrap_or(u32::MAX));
+            }
+            if !comparison.passed {
+                evidence.passed = false;
+                evidence.failed_cases += 1;
+                if comparison.top_k_mismatch {
+                    evidence.top_k_mismatches += 1;
+                }
+                if comparison.worst_abs_diff.is_none() {
+                    evidence.other_failures += 1;
+                }
+            }
+        }
+        evidence
+    });
+    cache.insert(key, evidence.clone());
+    evidence
 }
 
 /// The `{input_frame_hex, output_frame_hex}` cases of a conformance vector.
@@ -175,44 +242,83 @@ pub(super) fn frame_contract(vector: &[u8]) -> Option<VariantFrameContract> {
     contract
 }
 
+/// One self-check case compared with its reference (FR-062).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CaseComparison {
+    /// Within the variant's tolerance.
+    pub(super) passed: bool,
+    /// Largest `|Δ|` over a declared float output, after `score_transform`.
+    pub(super) worst_abs_diff: Option<f64>,
+    /// The `top_k` indices differed.
+    pub(super) top_k_mismatch: bool,
+}
+
+impl CaseComparison {
+    const FAILED: Self = Self {
+        passed: false,
+        worst_abs_diff: None,
+        top_k_mismatch: false,
+    };
+}
+
 /// Compare an accelerated output frame with the `wasm-cpu` reference
 /// (FR-062, Decision 106). Frames must agree on dtype and dims. For a dtype
 /// the variant declares in `tolerance.f32_dtypes`, every element must be
 /// within `max_abs_diff`, and the indices of the `top_k` largest values must
 /// match in order. Declared outputs are first mapped by
 /// `tolerance.score_transform` (Decision 116). Any other dtype must match
-/// byte-for-byte.
-pub(super) fn within_tolerance(
+/// byte-for-byte. A NaN difference is reported as the worst and never
+/// passes.
+pub(super) fn compare_case(
     expected: &[u8],
     actual: &[u8],
     tolerance: &VariantTolerance,
-) -> bool {
+) -> CaseComparison {
     let (Ok((dtype, dims, reference)), Ok((actual_dtype, actual_dims, values))) =
         (decode_guest_frame(expected), decode_guest_frame(actual))
     else {
-        return false;
+        return CaseComparison::FAILED;
     };
     if dtype != actual_dtype || dims != actual_dims {
-        return false;
+        return CaseComparison::FAILED;
     }
     if !tolerance.f32_dtypes.contains(&dtype) {
-        return reference == values;
+        return CaseComparison {
+            passed: reference == values,
+            ..CaseComparison::FAILED
+        };
     }
     let (Some(reference), Some(values)) = (f32s(&reference), f32s(&values)) else {
-        return false;
+        return CaseComparison::FAILED;
     };
-    let transform = tolerance.score_transform;
-    if reference.len() != values.len()
-        || reference.iter().zip(&values).any(|(left, right)| {
-            !(transform.apply(*left) - transform.apply(*right))
-                .abs()
-                .le(&tolerance.max_abs_diff)
-        })
-    {
-        return false;
+    if reference.len() != values.len() {
+        return CaseComparison::FAILED;
     }
+    let transform = tolerance.score_transform;
+    let worst = reference
+        .iter()
+        .zip(&values)
+        .map(|(left, right)| (transform.apply(*left) - transform.apply(*right)).abs())
+        .fold(0.0_f64, |worst, diff| {
+            if diff.is_nan() || worst.is_nan() {
+                f64::NAN
+            } else {
+                worst.max(diff)
+            }
+        });
     let k = usize::try_from(tolerance.top_k).unwrap_or(usize::MAX);
-    top_indices(&reference, k) == top_indices(&values, k)
+    let top_k_mismatch = top_indices(&reference, k) != top_indices(&values, k);
+    CaseComparison {
+        passed: worst.le(&tolerance.max_abs_diff) && !top_k_mismatch,
+        worst_abs_diff: Some(worst),
+        top_k_mismatch,
+    }
+}
+
+/// Whether an accelerated output is within the variant's tolerance.
+#[cfg(test)]
+fn within_tolerance(expected: &[u8], actual: &[u8], tolerance: &VariantTolerance) -> bool {
+    compare_case(expected, actual, tolerance).passed
 }
 
 fn f32s(payload: &[u8]) -> Option<Vec<f32>> {
@@ -305,6 +411,115 @@ mod tests {
         // A declared float dtype whose payload is not a whole number of f32s.
         let ragged = encode_guest_frame(3, &[1], &[1, 2, 3]);
         assert!(!within_tolerance(&ragged, &ragged, &tolerance(0)));
+    }
+
+    #[test]
+    fn case_comparison_reports_the_worst_difference_and_top_k_mismatch() {
+        let reference = frame(3, &[0.1, 0.9, 0.5]);
+        let shifted = compare_case(&reference, &frame(3, &[0.1, 0.89, 0.5]), &tolerance(1));
+        assert!(!shifted.passed && !shifted.top_k_mismatch);
+        assert!(
+            shifted
+                .worst_abs_diff
+                .is_some_and(|diff| (diff - 0.01).abs() < 1e-6)
+        );
+        let flipped = compare_case(&reference, &frame(3, &[0.1, 0.5, 0.9]), &tolerance(1));
+        assert!(flipped.top_k_mismatch && !flipped.passed);
+        for nan in [[f32::NAN, 0.9, 0.5], [0.1, f32::NAN, 0.5]] {
+            let compared = compare_case(&reference, &frame(3, &nan), &tolerance(0));
+            assert!(!compared.passed && compared.worst_abs_diff.is_some_and(f64::is_nan));
+        }
+        let labels = frame(5, &[1.0, 2.0]);
+        assert_eq!(
+            compare_case(&labels, &labels, &tolerance(0)),
+            CaseComparison {
+                passed: true,
+                worst_abs_diff: None,
+                top_k_mismatch: false,
+            }
+        );
+    }
+
+    /// Answers each prediction with its input shifted by the next delta.
+    struct Shift(Vec<f32>);
+
+    impl AcceleratorAdapter for Shift {
+        fn id(&self) -> &'static str {
+            ADAPTER_COREML
+        }
+
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn compute_units(&self) -> String {
+            "all".to_string()
+        }
+
+        fn platform_version(&self) -> String {
+            "os".to_string()
+        }
+
+        fn predict(
+            &mut self,
+            _variant: &CachedAcceleratorVariant,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            let delta = self.0.remove(0);
+            let (_, _, payload) = decode_guest_frame(input)?;
+            let values: Vec<f32> = f32s(&payload)
+                .unwrap_or_default()
+                .iter()
+                .map(|value| value + delta)
+                .collect();
+            Ok(frame(3, &values))
+        }
+    }
+
+    #[test]
+    fn self_check_runs_every_case_and_keeps_the_worst() {
+        let case = frame(3, &[0.1, 0.9]);
+        let cached = CachedAcceleratorVariant {
+            adapter: ADAPTER_COREML.to_string(),
+            path: "variants/coreml/model.mlpackage.zip".to_string(),
+            bytes: Vec::new(),
+            conformance_vector_path: "variants/coreml/conformance.json".to_string(),
+            conformance_vector: vector(&[(&case, &case), (&case, &case), (&case, &case)]),
+        };
+        let variant: AcceleratorVariant = serde_json::from_value(serde_json::json!({
+            "adapter": "coreml",
+            "format": "mlpackage-zip",
+            "path": "variants/coreml/model.mlpackage.zip",
+            "digest": "ab".repeat(32),
+            "conversion": { "tool": "t", "tool_version": "1", "source_digest": "cd".repeat(32) },
+            "conformance_vector_path": "variants/coreml/conformance.json",
+            "conformance_vector_digest": "ef".repeat(32),
+            "tolerance": { "max_abs_diff": 5e-3, "top_k": 0, "f32_dtypes": [3] },
+            "peak_memory_bytes": 1024,
+        }))
+        .expect("variant");
+        let mut cache = HashMap::new();
+        let evidence = self_check(
+            &mut cache,
+            &mut Shift(vec![0.001, 0.02, 0.01]),
+            &variant,
+            &cached,
+        );
+        assert!(!evidence.passed);
+        assert_eq!(
+            (evidence.cases, evidence.failed_cases, evidence.worst_case),
+            (3, 2, Some(1))
+        );
+        assert!(
+            evidence
+                .worst_abs_diff
+                .is_some_and(|diff| (diff - 0.02).abs() < 1e-6)
+        );
+        // A stored result is reused without predicting again.
+        assert_eq!(
+            self_check(&mut cache, &mut Shift(Vec::new()), &variant, &cached),
+            evidence
+        );
     }
 
     #[test]

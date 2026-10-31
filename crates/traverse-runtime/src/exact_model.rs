@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 mod adapter;
 mod snapshot;
-pub use adapter::{AcceleratorAdapter, FuelMetering, PlacementEvidence};
+pub use adapter::{AcceleratorAdapter, FuelMetering, PlacementEvidence, SelfCheckEvidence};
 use adapter::{SelfCheckKey, effective_placements, self_check};
 pub use snapshot::MODEL_PREPARE_EXPORT;
 use snapshot::{GlobalValue, Snapshot, SnapshotCache, check_v3_module};
@@ -1230,7 +1230,7 @@ pub enum PlacementOutcome {
 }
 
 /// One listed placement registration tried, in policy order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementAttempt {
     /// Placement id.
     pub placement: String,
@@ -1238,11 +1238,15 @@ pub struct PlacementAttempt {
     pub outcome: PlacementOutcome,
     /// Wall time spent on this placement.
     pub duration_ms: u64,
+    /// The device self-check of an adapter placement that reached it,
+    /// with the worst case when it failed (FR-062).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_check: Option<SelfCheckEvidence>,
 }
 
 /// The placement registration fixed for a (package, `policy_ref`) pair,
 /// and how it got there (Decision 120). Host trace only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementPreparation {
     /// The policy the package was registered under.
     pub policy: PlacementPolicy,
@@ -1361,7 +1365,7 @@ pub struct ExactModelHostConnector {
     /// Native accelerator adapters registered by the host (FR-063).
     adapters: Vec<Box<dyn AcceleratorAdapter>>,
     /// Device self-check results (FR-062).
-    self_checks: HashMap<SelfCheckKey, bool>,
+    self_checks: HashMap<SelfCheckKey, SelfCheckEvidence>,
     /// Placement fixed at registration per (package digest, `policy_ref`)
     /// (Decision 120).
     prepared: HashMap<(String, String), PlacementPreparation>,
@@ -1703,6 +1707,7 @@ impl ExactModelHostConnector {
                 Err(registration_cancelled())
             } else if id == PLACEMENT_WASM_CPU {
                 self.prepare_wasm_cpu(package, digest, deadline)
+                    .map(|outcome| (outcome, None))
             } else {
                 Ok(self.prepare_adapter(id, package, policy.require_fuel_metering, deadline))
             };
@@ -1710,11 +1715,13 @@ impl ExactModelHostConnector {
                 Ok(_) if self.cancel.load(Ordering::SeqCst) => Err(registration_cancelled()),
                 other => other,
             };
-            let outcome = outcome.inspect_err(|_| self.snapshots.drop_package(digest))?;
+            let (outcome, self_check) =
+                outcome.inspect_err(|_| self.snapshots.drop_package(digest))?;
             attempts.push(PlacementAttempt {
                 placement: id.to_string(),
                 outcome,
                 duration_ms: elapsed_ms(attempt_started),
+                self_check,
             });
             if outcome == PlacementOutcome::Ready {
                 return Ok(PlacementPreparation {
@@ -1746,14 +1753,15 @@ impl ExactModelHostConnector {
 
     /// FR-060 qualification, then the device self-check (FR-062), for one
     /// adapter placement. The self-check compiles the variant on its first
-    /// prediction, so both run here, never in a call.
+    /// prediction, so both run here, never in a call. Returns the self-check
+    /// evidence once the check ran.
     fn prepare_adapter(
         &mut self,
         id: &str,
         package: &VerifiedModelPackage,
         require_fuel_metering: bool,
         deadline: Instant,
-    ) -> PlacementOutcome {
+    ) -> (PlacementOutcome, Option<SelfCheckEvidence>) {
         let declared = package
             .manifest
             .accelerator_variants
@@ -1769,20 +1777,22 @@ impl ExactModelHostConnector {
             .iter_mut()
             .find(|adapter| adapter.id() == id && adapter.available());
         let (Some(declared), Some(cached), Some(adapter)) = (declared, cached, adapter) else {
-            return PlacementOutcome::Unsupported;
+            return (PlacementOutcome::Unsupported, None);
         };
         if declared.peak_memory_bytes > self.host_limits.max_memory_bytes
             || (require_fuel_metering && adapter.fuel_metering() != FuelMetering::Metered)
         {
-            return PlacementOutcome::Unsupported;
+            return (PlacementOutcome::Unsupported, None);
         }
-        if !self_check(&mut self.self_checks, adapter.as_mut(), declared, cached) {
-            return PlacementOutcome::SelfCheckFailed;
-        }
-        if Instant::now() > deadline {
-            return PlacementOutcome::OverBudget;
-        }
-        PlacementOutcome::Ready
+        let evidence = self_check(&mut self.self_checks, adapter.as_mut(), declared, cached);
+        let outcome = if !evidence.passed {
+            PlacementOutcome::SelfCheckFailed
+        } else if Instant::now() > deadline {
+            PlacementOutcome::OverBudget
+        } else {
+            PlacementOutcome::Ready
+        };
+        (outcome, Some(evidence))
     }
 
     /// `wasm-cpu` preparation: the guest is already compiled; an ABI v3
@@ -6829,6 +6839,15 @@ mod tests {
         let mut fixture = accelerated_host(FakeMode::Echo);
         // The one-case self-check ran at registration, not in a call.
         assert_eq!(fixture.calls(), 1);
+        let passed = fixture.prepared().attempts[0]
+            .self_check
+            .clone()
+            .expect("evidence");
+        assert!(passed.passed && passed.failed_cases == 0);
+        assert_eq!(
+            (passed.worst_abs_diff, passed.worst_case),
+            (Some(0.0), Some(0))
+        );
         assert_eq!(fixture.prepared().placement, ADAPTER_COREML);
         assert_eq!(
             fixture.outcomes(),
@@ -6994,6 +7013,22 @@ mod tests {
             fixture.run(serde_json::Map::new()).expect("fallback").1,
             PlacementEvidence::wasm_cpu()
         );
+        // The trace records the worst case of the failed self-check (#1708).
+        let failed = fixture.prepared().attempts[0]
+            .self_check
+            .clone()
+            .expect("self-check evidence");
+        assert!(!failed.passed);
+        assert_eq!((failed.cases, failed.failed_cases), (1, 1));
+        assert_eq!((failed.top_k_mismatches, failed.other_failures), (0, 0));
+        assert_eq!(failed.worst_case, Some(0));
+        assert!(
+            failed
+                .worst_abs_diff
+                .is_some_and(|diff| (diff - 1e-2).abs() < 1e-4),
+            "{failed:?}"
+        );
+        assert!(fixture.prepared().attempts[1].self_check.is_none());
         let calls = fixture.calls();
         let error = fixture
             .register(&[ADAPTER_COREML], false, None)
@@ -7070,6 +7105,33 @@ mod tests {
                 ADAPTER_COREML.to_string(),
                 PlacementOutcome::SelfCheckFailed
             )
+        );
+        let empty = fixture.prepared().attempts[0]
+            .self_check
+            .clone()
+            .expect("evidence");
+        assert_eq!(
+            (empty.passed, empty.cases, empty.worst_abs_diff),
+            (false, 0, None)
+        );
+
+        // A prediction that errors counts as an other failure.
+        let mut fixture = accelerated_host(FakeMode::Fail);
+        let errored = fixture.prepared().attempts[0]
+            .self_check
+            .clone()
+            .expect("evidence");
+        assert_eq!(
+            (
+                errored.failed_cases,
+                errored.other_failures,
+                errored.worst_abs_diff
+            ),
+            (1, 1, None)
+        );
+        assert_eq!(
+            fixture.run(serde_json::Map::new()).expect("cpu").1,
+            PlacementEvidence::wasm_cpu()
         );
     }
 
