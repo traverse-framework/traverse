@@ -111,6 +111,15 @@ path, device name, or native error text. Exit code 0 means every check passed, 1
 check failed, 2 means bad flags. `--dry-run` uses a synthetic driver (no prompt, no
 microphone) to check the tool itself.
 
+### Spec 104 guest `connector_invoke` (#1719)
+
+Catalog capabilities that import `traverse_host.connector_invoke` (for example
+`model.execute@1.0.0`) need a Spec 104 mediated binding in addition to Spec 137
+`ExactModelHost` / app-command adapters. Nested `runtime.wasm` now links the
+import; a Swift `activateMediatedConnector` / first-party
+`traverse.model-runtime` Spec 104 binding is **not yet** shipped. Use Spec 137
+command dispatch for app-owned model calls until that lands.
+
 The package follows semantic versioning. Additive, backward-compatible API
 changes use minor releases; breaking public API or error-semantic changes use a
 new major version. Call `shutdown()` to clear the active bundle, submission

@@ -6,8 +6,9 @@
 //! .NET/Wasmtime) require no changes. Internally, capability execution runs
 //! on a nested `wasmi` engine (Decision 87) rather than the native
 //! `WasmExecutor`'s Wasmtime, because Wasmtime cannot itself target
-//! `wasm32` — see [`executor`] for that engine and the shared
-//! `emit_event` validation core it calls.
+//! `wasm32` — see [`executor`] for that engine, the shared
+//! `emit_event` validation core it calls, and Spec 104
+//! `connector_invoke` mediation (#1719).
 //!
 //! # Audited `unsafe_code` exception (ADR-0073)
 //!
@@ -32,13 +33,16 @@ use app_sm::{
     resolve_lifecycle_transition,
 };
 use traverse_contracts::{
-    EventReference, ExecutionTarget, PlacementConstraintEvaluator, PlacementError,
-    PlacementRequest, RuntimeSnapshot, ServiceType,
+    ConnectorRequirement, EventReference, ExecutionTarget, PlacementConstraintEvaluator,
+    PlacementError, PlacementRequest, RuntimeSnapshot, ServiceType,
 };
 
 pub use executor::{
-    DEFAULT_NESTED_FUEL, DEFAULT_NESTED_MEMORY_BYTES, MAX_HOST_NESTED_FUEL,
-    MAX_HOST_NESTED_MEMORY_BYTES, NestedExecutionLimits, execute_nested_capability,
+    ActivatedConnector, ConnectorInvocationEvidence, ConnectorInvokeRequest,
+    ConnectorInvokeResponse, DEFAULT_NESTED_FUEL, DEFAULT_NESTED_MEMORY_BYTES,
+    MAX_HOST_NESTED_FUEL, MAX_HOST_NESTED_MEMORY_BYTES, MediatedConnector,
+    MediatedConnectorContext, NestedExecutionLimits, SUPPORTED_HOST_ABI_VERSION,
+    execute_nested_capability, execute_nested_capability_with_connectors,
     execute_nested_capability_with_limits,
 };
 
@@ -50,6 +54,12 @@ struct RuntimeState {
     capability_id: String,
     service_type: ServiceType,
     declared_emits: Vec<EventReference>,
+    /// Spec 104 connector requirements declared by the capability contract.
+    connector_requirements: Vec<ConnectorRequirement>,
+    /// Host-activated Spec 104 bindings for nested `connector_invoke` (#1719).
+    /// Empty until a later host API activates connectors; mediation then
+    /// fail-closes as `unbound` / `undeclared` with evidence.
+    activated_connectors: Vec<ActivatedConnector>,
     /// Targets this capability may run on (contract `permitted_targets`).
     permitted_targets: Vec<ExecutionTarget>,
     /// Placement target of this `runtime.wasm` instance (the host it is
@@ -94,6 +104,7 @@ struct InitPayload {
     capability_id: String,
     service_type: ServiceType,
     declared_emits: Vec<EventReference>,
+    connector_requirements: Vec<ConnectorRequirement>,
     permitted_targets: Vec<ExecutionTarget>,
     host_placement_target: ExecutionTarget,
     target_hint: Option<ExecutionTarget>,
@@ -265,6 +276,23 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let connector_requirements = header
+        .get("connector_requirements")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let connector_id = entry.get("connector_id")?.as_str()?.to_string();
+                    let version = entry.get("version")?.as_str()?.to_string();
+                    Some(ConnectorRequirement {
+                        connector_id,
+                        version,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let host_placement_target = header
         .get("host_placement_target")
         .and_then(serde_json::Value::as_str)
@@ -287,6 +315,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         capability_id,
         service_type,
         declared_emits,
+        connector_requirements,
         permitted_targets,
         host_placement_target,
         target_hint,
@@ -295,6 +324,26 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         app_state_machine,
         nested_limits,
     })
+}
+
+fn nested_connector_context(state: &RuntimeState) -> MediatedConnectorContext {
+    MediatedConnectorContext {
+        declared_requirements: state.connector_requirements.clone(),
+        activated_connectors: state.activated_connectors.clone(),
+    }
+}
+
+fn with_connector_evidence(
+    mut result: serde_json::Value,
+    evidence: &[ConnectorInvocationEvidence],
+) -> serde_json::Value {
+    if evidence.is_empty() {
+        return result;
+    }
+    if let Ok(value) = serde_json::to_value(evidence) {
+        result["connector_invocation_evidence"] = value;
+    }
+    result
 }
 
 fn lifecycle_event(kind: &str, session_id: &str, data: &serde_json::Value) -> Vec<u8> {
@@ -626,6 +675,53 @@ fn submit_host_connector_terminal(
     SubmitResult::accepted(session_id)
 }
 
+fn run_nested_capability(
+    state: &mut RuntimeState,
+    session_id: &str,
+    input: &[u8],
+) -> (
+    &'static str,
+    bool,
+    serde_json::Value,
+    Vec<ConnectorInvocationEvidence>,
+) {
+    let connector_context = nested_connector_context(state);
+    match execute_nested_capability_with_connectors(
+        &state.wasm_artifact,
+        input,
+        &state.service_type,
+        &state.declared_emits,
+        state.nested_limits,
+        &connector_context,
+    ) {
+        Ok(outcome) => {
+            for event in outcome.emitted_events {
+                state.pending_events.push_back(lifecycle_event(
+                    &event.event_type,
+                    session_id,
+                    &serde_json::json!({"version": event.version, "payload": event.data}),
+                ));
+            }
+            let stdout_json = serde_json::from_slice::<serde_json::Value>(&outcome.stdout)
+                .unwrap_or_else(|_| {
+                    serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
+                });
+            (
+                "capability_succeeded",
+                true,
+                stdout_json,
+                outcome.connector_invocation_evidence,
+            )
+        }
+        Err(error) => (
+            "capability_failed",
+            false,
+            serde_json::json!({"error": error}),
+            Vec::new(),
+        ),
+    }
+}
+
 fn run_capability_invoke_wait(
     state: &mut RuntimeState,
     machine: &AppStateMachine,
@@ -646,35 +742,8 @@ fn run_capability_invoke_wait(
     ));
 
     let input = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
-    let outcome = execute_nested_capability_with_limits(
-        &state.wasm_artifact,
-        &input,
-        &state.service_type,
-        &state.declared_emits,
-        state.nested_limits,
-    );
-
-    let (lifecycle_event_name, succeeded, output) = match outcome {
-        Ok(outcome) => {
-            for event in outcome.emitted_events {
-                state.pending_events.push_back(lifecycle_event(
-                    &event.event_type,
-                    session_id,
-                    &serde_json::json!({"version": event.version, "payload": event.data}),
-                ));
-            }
-            let stdout_json = serde_json::from_slice::<serde_json::Value>(&outcome.stdout)
-                .unwrap_or_else(|_| {
-                    serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
-                });
-            ("capability_succeeded", true, stdout_json)
-        }
-        Err(error) => (
-            "capability_failed",
-            false,
-            serde_json::json!({"error": error}),
-        ),
-    };
+    let (lifecycle_event_name, succeeded, output, evidence) =
+        run_nested_capability(state, session_id, &input);
 
     match resolve_lifecycle_transition(machine, invoking_state, lifecycle_event_name) {
         Ok(Some(next_state)) => {
@@ -691,6 +760,14 @@ fn run_capability_invoke_wait(
                 session.state = next_state;
                 session.wait = None;
             }
+            let result = with_connector_evidence(
+                serde_json::json!({
+                    "status": if succeeded { "completed" } else { "failed" },
+                    "output": output,
+                    "capability_id": capability_id,
+                }),
+                &evidence,
+            );
             state.pending_events.push_back(lifecycle_event(
                 if succeeded {
                     "capability_result"
@@ -698,11 +775,7 @@ fn run_capability_invoke_wait(
                     "error"
                 },
                 session_id,
-                &serde_json::json!({
-                    "status": if succeeded { "completed" } else { "failed" },
-                    "output": output,
-                    "capability_id": capability_id,
-                }),
+                &result,
             ));
         }
         Ok(None) => {
@@ -801,12 +874,14 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
         }
     }
 
-    let outcome = execute_nested_capability_with_limits(
+    let connector_context = nested_connector_context(state);
+    let outcome = execute_nested_capability_with_connectors(
         &state.wasm_artifact,
         request,
         &state.service_type,
         &state.declared_emits,
         state.nested_limits,
+        &connector_context,
     );
 
     match outcome {
@@ -822,10 +897,14 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
                 .unwrap_or_else(|_| {
                     serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
                 });
+            let result = with_connector_evidence(
+                serde_json::json!({"status": "completed", "output": stdout_json}),
+                &outcome.connector_invocation_evidence,
+            );
             state.pending_events.push_back(lifecycle_event(
                 "capability_result",
                 &session_id,
-                &serde_json::json!({"status": "completed", "output": stdout_json}),
+                &result,
             ));
         }
         Err(error) => {
@@ -943,6 +1022,8 @@ pub extern "C" fn traverse_init(ptr: i32, len: i32, out_descriptor: i32) -> i32 
                 capability_id: parsed.capability_id,
                 service_type: parsed.service_type,
                 declared_emits: parsed.declared_emits,
+                connector_requirements: parsed.connector_requirements,
+                activated_connectors: Vec::new(),
                 permitted_targets: parsed.permitted_targets,
                 host_placement_target: parsed.host_placement_target,
                 target_hint: parsed.target_hint,
@@ -1217,6 +1298,29 @@ mod tests {
         bytes.extend_from_slice(&header);
         let parsed = parse_init_payload(&bytes).expect("must parse");
         assert!(parsed.declared_emits.is_empty());
+        assert!(parsed.connector_requirements.is_empty());
+    }
+
+    #[test]
+    fn parse_init_payload_reads_connector_requirements() {
+        let header = serde_json::to_vec(&serde_json::json!({
+            "capability_id": "example.echo",
+            "connector_requirements": [{
+                "connector_id": "traverse.model-runtime",
+                "version": "^2.3.0"
+            }]
+        }))
+        .unwrap_or_default();
+        let header_len = u32::try_from(header.len()).unwrap_or(u32::MAX);
+        let mut bytes = header_len.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&header);
+        let parsed = parse_init_payload(&bytes).expect("must parse");
+        assert_eq!(parsed.connector_requirements.len(), 1);
+        assert_eq!(
+            parsed.connector_requirements[0].connector_id,
+            "traverse.model-runtime"
+        );
+        assert_eq!(parsed.connector_requirements[0].version, "^2.3.0");
     }
 
     #[test]
@@ -1280,6 +1384,8 @@ mod tests {
                 event_id: "order.placed".to_string(),
                 version: "1.0.0".to_string(),
             }],
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1318,6 +1424,8 @@ mod tests {
             capability_id: "example.echo".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local, ExecutionTarget::Cloud],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1360,6 +1468,8 @@ mod tests {
             capability_id: "example.echo".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local, ExecutionTarget::Cloud],
             host_placement_target: ExecutionTarget::Local,
             target_hint: Some(ExecutionTarget::Cloud),
@@ -1466,6 +1576,8 @@ mod tests {
             capability_id: "demo.app".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1543,6 +1655,8 @@ mod tests {
             capability_id: "demo.app".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1686,6 +1800,8 @@ mod tests {
             capability_id: "demo.app".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1793,6 +1909,8 @@ mod tests {
             capability_id: "demo.app".to_string(),
             service_type: ServiceType::Stateless,
             declared_emits: Vec::new(),
+            connector_requirements: Vec::new(),
+            activated_connectors: Vec::new(),
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,

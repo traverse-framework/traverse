@@ -64,6 +64,31 @@ no native-only connector classification.
   this port. Map Callweave recording to `capture_audio` → `audio.capture`
   in the application manifest.
 
+## Spec 104 native binding (`#1719`)
+
+For guest WASM `traverse_host.connector_invoke` (not this Spec 137 port),
+native hosts can activate a shipped `traverse.model-runtime` binding:
+
+```rust
+use traverse_runtime::{
+    ExactModelHostConnector, activate_exact_model_runtime,
+};
+use traverse_runtime::executor::{MediatedConnectorContext, WasmExecutor};
+
+let host = ExactModelHostConnector::new(pins, keys);
+// register packages / policies on `host`, then:
+let activated = activate_exact_model_runtime(host);
+let context = MediatedConnectorContext {
+    declared_requirements: /* from the capability contract */,
+    activated_connectors: vec![activated],
+};
+executor.run_bytes_with_mediated_connectors(&wasm, &input, "cap", context)?;
+```
+
+`ExactModelMediatedConnector` is the `Mutex` bridge from Spec 104
+(`&self`) to Spec 138 (`&mut self`). Web/Swift/Android/.NET activation
+APIs are follow-on work on the same issue.
+
 ## Verification
 
 ```bash
