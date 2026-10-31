@@ -2,6 +2,20 @@
 
 Unreleased changes since `v0.15.0` will be recorded here.
 
+## Device self-check records its worst case (`#1708`, Spec 138 FR-062)
+
+- A device self-check now runs every conformance case and records what it
+  found: `passed`, `cases`, `failed_cases`, `worst_abs_diff` (after
+  `score_transform`), `worst_case`, `top_k_mismatches` and
+  `other_failures`. Before, it stopped at the first failing case and
+  recorded only pass or fail, although Spec 138 says a failure appears in
+  the host's trace with the worst case found.
+- The evidence rides on each registration attempt's `self_check` (Rust
+  `PlacementAttempt`, the framed `register` response's `preparation`) and
+  on Swift `ExactModelRegistration.attempts`.
+- The iPhone harness writes it as `placement_attempts`, so one device run
+  records why `cpu_and_neural_engine` fails its self-check.
+
 ## Docs: three-command Mode A quickstart (`#1754`, Decision 121)
 
 - The README gains a Mode A quickstart that needs no Rust toolchain:

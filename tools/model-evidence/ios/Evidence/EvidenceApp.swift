@@ -107,6 +107,7 @@ enum Harness {
         var label: String
         var registrationMs: Double = 0
         var registeredPlacement = ""
+        var attempts: [[String: Any]] = []
         var firstMs: Double = 0
         var times: [Double] = []
         var outputs: [Data] = []
@@ -137,6 +138,20 @@ enum Harness {
                 policy: ExactModelPlacementPolicy(policyRef: "evidence", placements: placements ?? []))
             run.registrationMs = Double(DispatchTime.now().uptimeNanoseconds - registerStart) / 1_000_000
             run.registeredPlacement = registered.placement
+            run.attempts = registered.attempts.map { attempt in
+                var entry: [String: Any] = ["placement": attempt.placement, "outcome": attempt.outcome,
+                                            "duration_ms": attempt.durationMs]
+                if let check = attempt.selfCheck {
+                    var detail: [String: Any] = ["passed": check.passed, "cases": check.cases,
+                                                 "failed_cases": check.failedCases,
+                                                 "top_k_mismatches": check.topKMismatches,
+                                                 "other_failures": check.otherFailures]
+                    if let worst = check.worstAbsDiff { detail["worst_abs_diff"] = worst }
+                    if let index = check.worstCase { detail["worst_case"] = index }
+                    entry["self_check"] = detail
+                }
+                return entry
+            }
             func call(_ clip: Clip) async throws -> (Double, Data, ExactModelExecution) {
                 let inputRef = try host.stageModelInput(clip.frame, maxBytes: clipBytes)
                 let start = DispatchTime.now().uptimeNanoseconds
@@ -198,7 +213,7 @@ enum Harness {
             }
 
             var report: [String: Any] = [
-                "issue": "#1630, #1706",
+                "issue": "#1630, #1706, #1708",
                 "device": deviceModel(),
                 "os": ProcessInfo.processInfo.operatingSystemVersionString,
                 "build": "Release",
@@ -216,6 +231,7 @@ enum Harness {
                 }
                 entry["registration_ms"] = run.registrationMs
                 entry["registered_placement"] = run.registeredPlacement
+                entry["placement_attempts"] = run.attempts
                 entry["first_call_ms"] = run.firstMs
                 entry["steady"] = summary(run.times)
                 entry["per_clip_ms"] = run.times
