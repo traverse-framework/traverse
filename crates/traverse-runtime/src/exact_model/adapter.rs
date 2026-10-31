@@ -429,6 +429,12 @@ mod tests {
             let compared = compare_case(&reference, &frame(3, &nan), &tolerance(0));
             assert!(!compared.passed && compared.worst_abs_diff.is_some_and(f64::is_nan));
         }
+        // Same dims, but a payload that does not fill them.
+        let short = encode_guest_frame(3, &[3], &0.1f32.to_le_bytes());
+        assert_eq!(
+            compare_case(&reference, &short, &tolerance(0)),
+            CaseComparison::FAILED
+        );
         let labels = frame(5, &[1.0, 2.0]);
         assert_eq!(
             compare_case(&labels, &labels, &tolerance(0)),
@@ -484,7 +490,12 @@ mod tests {
             path: "variants/coreml/model.mlpackage.zip".to_string(),
             bytes: Vec::new(),
             conformance_vector_path: "variants/coreml/conformance.json".to_string(),
-            conformance_vector: vector(&[(&case, &case), (&case, &case), (&case, &case)]),
+            conformance_vector: vector(&[
+                (&case, &case),
+                (&case, &case),
+                (&case, &case),
+                (&case, &frame(3, &[0.1])),
+            ]),
         };
         let variant: AcceleratorVariant = serde_json::from_value(serde_json::json!({
             "adapter": "coreml",
@@ -501,14 +512,19 @@ mod tests {
         let mut cache = HashMap::new();
         let evidence = self_check(
             &mut cache,
-            &mut Shift(vec![0.001, 0.02, 0.01]),
+            &mut Shift(vec![0.001, 0.02, 0.01, 0.0]),
             &variant,
             &cached,
         );
         assert!(!evidence.passed);
         assert_eq!(
-            (evidence.cases, evidence.failed_cases, evidence.worst_case),
-            (3, 2, Some(1))
+            (
+                evidence.cases,
+                evidence.failed_cases,
+                evidence.worst_case,
+                evidence.other_failures,
+            ),
+            (4, 3, Some(1), 1)
         );
         assert!(
             evidence
@@ -516,8 +532,10 @@ mod tests {
                 .is_some_and(|diff| (diff - 0.02).abs() < 1e-6)
         );
         // A stored result is reused without predicting again.
+        let mut idle = Shift(Vec::new());
+        assert!(idle.available());
         assert_eq!(
-            self_check(&mut cache, &mut Shift(Vec::new()), &variant, &cached),
+            self_check(&mut cache, &mut idle, &variant, &cached),
             evidence
         );
     }
