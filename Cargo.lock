@@ -2672,7 +2672,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "traverse-contracts 0.16.0",
+ "traverse-contracts",
  "traverse-mcp",
  "traverse-registry",
  "traverse-registry-sync",
@@ -2683,18 +2683,6 @@ dependencies = [
  "wasmparser 0.261.0",
  "wat",
  "zeroize",
-]
-
-[[package]]
-name = "traverse-contracts"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97bb4ead3aa8345dcbb8f2be9aa2bc75931eb3ba79d73dfb2eb7a8c644690049"
-dependencies = [
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.1",
 ]
 
 [[package]]
@@ -2735,7 +2723,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts 0.16.0",
+ "traverse-contracts",
  "traverse-registry",
  "traverse-runtime",
  "wat",
@@ -2758,7 +2746,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts 0.16.0",
+ "traverse-contracts",
  "traverse-embedder",
  "traverse-registry",
  "traverse-registry-sync",
@@ -2801,20 +2789,20 @@ dependencies = [
 
 [[package]]
 name = "traverse-registry"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b002d988ccf38bf22c8618b6b517a3e121b2299eb57eb80419dc707db26a1dc"
+checksum = "f6dcd99577f7e7d738654272f4879036db3a335faa73bf276ab7d38243dffea4"
 dependencies = [
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts 0.15.0",
+ "traverse-contracts",
 ]
 
 [[package]]
 name = "traverse-registry-sync"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "sha2 0.11.1",
@@ -2833,7 +2821,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "traverse-contracts 0.16.0",
+ "traverse-contracts",
  "traverse-registry",
  "uuid",
  "wasmi",
@@ -2850,7 +2838,7 @@ name = "traverse-runtime-wasm"
 version = "0.16.0"
 dependencies = [
  "serde_json",
- "traverse-contracts 0.16.0",
+ "traverse-contracts",
  "wasmi",
  "wat",
 ]

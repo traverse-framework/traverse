@@ -26,7 +26,7 @@ Each product tag `vX.Y.Z` publishes artifact release `traverse-mcp-vX.Y.Z`
 
 ## Client pin and verification
 
-1. Record the pinned artifact tag, e.g. `traverse-mcp-v0.15.0`.
+1. Record the pinned artifact tag, e.g. `traverse-mcp-v0.16.0`.
 2. Download the archive for the host target and `SHA256SUMS`.
 3. `sha256sum -c --ignore-missing SHA256SUMS`.
 4. `gh attestation verify traverse-mcp-<target>.tar.gz --repo traverse-framework/traverse`.
