@@ -6,17 +6,89 @@
 //! functions, which convert guest pointers to slices before calling in here.
 //!
 //! Mirrors `crates/traverse-runtime/src/executor/wasm.rs`'s Wasmtime-backed
-//! `WasmExecutor`: input via WASI `stdin`, output via WASI `stdout`, and a
+//! `WasmExecutor`: input via WASI `stdin`, output via WASI `stdout`, a
 //! `traverse_host::emit_event` import validated by the same shared core
 //! (`traverse_contracts::validate_emit_event`) the native executor calls —
-//! not a second implementation of that logic (spec `1402` FR-005).
+//! not a second implementation of that logic (spec `1402` FR-005) — and
+//! Spec 104 `traverse_host::connector_invoke` with the same fail-closed
+//! mediation order as native Wasmtime (#1719).
 
+use std::sync::Arc;
+
+use semver::{Version, VersionReq};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use traverse_contracts::{
-    EventReference, ServiceType, canonicalize_json_bytes, validate_emit_event,
+    ConnectorRequirement, EventReference, ServiceType, canonicalize_json_bytes, validate_emit_event,
 };
 use wasmi::{
     Caller, Config, Engine, Error as WasmiError, Extern, Linker, Module, Store, StoreLimitsBuilder,
 };
+
+/// Host ABI version accepted on Spec 104 connector request/response envelopes.
+/// Must stay aligned with `traverse-runtime`'s `SUPPORTED_HOST_ABI_VERSION`.
+pub const SUPPORTED_HOST_ABI_VERSION: &str = "1.0.0";
+
+/// `traverse_host::connector_invoke` is unavailable unless the embedding host
+/// supplies an activated, capability-authorized connector binding (Spec 104).
+const CONNECTOR_INVOKE_ERR_UNBOUND: i32 = -2;
+const CONNECTOR_INVOKE_ERR_INVALID_REQUEST: i32 = -1;
+const CONNECTOR_INVOKE_ERR_UNDECLARED: i32 = -3;
+const CONNECTOR_INVOKE_ERR_UNAUTHORIZED: i32 = -4;
+const CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE: i32 = -5;
+const CONNECTOR_INVOKE_ERR_EXECUTION_FAILED: i32 = -6;
+const MAX_CONNECTOR_INVOKE_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_CONNECTOR_INVOKE_RESPONSE_BYTES: usize = 64 * 1024;
+
+/// Versioned guest request accepted by `traverse_host::connector_invoke`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConnectorInvokeRequest {
+    pub abi_version: String,
+    pub connector_id: String,
+    pub operation: String,
+    pub payload: Value,
+}
+
+/// Non-secret response returned to the guest by a mediated connector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConnectorInvokeResponse {
+    pub abi_version: String,
+    pub result_class: String,
+    pub payload: Value,
+}
+
+/// A host-owned activated connector. Its implementation is never visible to a guest.
+pub trait MediatedConnector: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns a stable, non-secret failure description when the host-owned
+    /// connector cannot complete the requested operation.
+    fn invoke(&self, request: &ConnectorInvokeRequest) -> Result<ConnectorInvokeResponse, String>;
+}
+
+/// The host-owned authorization context for one nested capability execution.
+#[derive(Clone, Default)]
+pub struct MediatedConnectorContext {
+    pub declared_requirements: Vec<ConnectorRequirement>,
+    pub activated_connectors: Vec<ActivatedConnector>,
+}
+
+/// One activated connector binding for nested wasmi mediation.
+#[derive(Clone)]
+pub struct ActivatedConnector {
+    pub connector_id: String,
+    pub version: String,
+    pub implementation: Arc<dyn MediatedConnector>,
+}
+
+/// Immutable, non-secret outcome evidence for one mediated connector call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConnectorInvocationEvidence {
+    pub connector_id: String,
+    pub resolved_version: Option<String>,
+    pub result_class: String,
+    pub failure_class: Option<String>,
+}
 
 const WASI_ERRNO_SUCCESS: i32 = 0;
 const WASI_ERRNO_BADF: i32 = 8;
@@ -80,6 +152,7 @@ pub struct EmittedEvent {
 pub struct NestedExecutionOutcome {
     pub stdout: Vec<u8>,
     pub emitted_events: Vec<EmittedEvent>,
+    pub connector_invocation_evidence: Vec<ConnectorInvocationEvidence>,
 }
 
 struct NestedStoreState {
@@ -90,6 +163,8 @@ struct NestedStoreState {
     service_type: ServiceType,
     declared_emits: Vec<EventReference>,
     emitted_events: Vec<EmittedEvent>,
+    connector_context: MediatedConnectorContext,
+    connector_invocation_evidence: Vec<ConnectorInvocationEvidence>,
 }
 
 fn read_memory(caller: &Caller<'_, NestedStoreState>, ptr: i32, len: i32) -> Result<Vec<u8>, i32> {
@@ -236,6 +311,268 @@ fn host_emit_event(mut caller: Caller<'_, NestedStoreState>, ptr: i32, len: i32)
     }
 }
 
+/// Spec 104 `traverse_host::connector_invoke` — same mediation order as native
+/// Wasmtime (`declared → activated → semver → 64 KiB → host-private filter`).
+fn host_connector_invoke(
+    mut caller: Caller<'_, NestedStoreState>,
+    request_ptr: i32,
+    request_len: i32,
+    response_ptr: i32,
+    response_capacity: i32,
+) -> i32 {
+    let Ok((request, response_ptr, response_capacity)) = parse_connector_request(
+        &caller,
+        request_ptr,
+        request_len,
+        response_ptr,
+        response_capacity,
+    ) else {
+        return CONNECTOR_INVOKE_ERR_INVALID_REQUEST;
+    };
+    let context = caller.data().connector_context.clone();
+    let connector = match resolve_activated_connector(&context, &request) {
+        Ok(connector) => connector,
+        Err(failure) => {
+            return connector_failure(
+                &mut caller,
+                &request.connector_id,
+                failure.resolved_version.as_deref(),
+                failure.failure_class,
+                failure.code,
+            );
+        }
+    };
+    invoke_activated_connector(
+        &mut caller,
+        request,
+        response_ptr,
+        response_capacity,
+        &connector,
+    )
+}
+
+fn parse_connector_request(
+    caller: &Caller<'_, NestedStoreState>,
+    request_ptr: i32,
+    request_len: i32,
+    response_ptr: i32,
+    response_capacity: i32,
+) -> Result<(ConnectorInvokeRequest, usize, usize), ()> {
+    if request_ptr < 0 || request_len < 0 || response_ptr < 0 || response_capacity < 0 {
+        return Err(());
+    }
+    let Ok(request_len_u) = usize::try_from(request_len) else {
+        return Err(());
+    };
+    let Ok(response_ptr_u) = usize::try_from(response_ptr) else {
+        return Err(());
+    };
+    let Ok(response_capacity_u) = usize::try_from(response_capacity) else {
+        return Err(());
+    };
+    if request_len_u > MAX_CONNECTOR_INVOKE_REQUEST_BYTES
+        || response_capacity_u > MAX_CONNECTOR_INVOKE_RESPONSE_BYTES
+    {
+        return Err(());
+    }
+    let Ok(bytes) = read_memory(caller, request_ptr, request_len) else {
+        return Err(());
+    };
+    let Ok(request) = serde_json::from_slice::<ConnectorInvokeRequest>(&bytes) else {
+        return Err(());
+    };
+    if request.abi_version != SUPPORTED_HOST_ABI_VERSION
+        || request.connector_id.is_empty()
+        || request.operation.is_empty()
+        || contains_host_private_data(&request.payload)
+    {
+        return Err(());
+    }
+    Ok((request, response_ptr_u, response_capacity_u))
+}
+
+struct ConnectorInvokeFailure {
+    failure_class: &'static str,
+    resolved_version: Option<String>,
+    code: i32,
+}
+
+fn resolve_activated_connector(
+    context: &MediatedConnectorContext,
+    request: &ConnectorInvokeRequest,
+) -> Result<ActivatedConnector, ConnectorInvokeFailure> {
+    if !context
+        .declared_requirements
+        .iter()
+        .any(|requirement| requirement.connector_id == request.connector_id)
+    {
+        return Err(ConnectorInvokeFailure {
+            failure_class: "undeclared",
+            resolved_version: None,
+            code: CONNECTOR_INVOKE_ERR_UNDECLARED,
+        });
+    }
+    let Some(connector) = context
+        .activated_connectors
+        .iter()
+        .find(|connector| connector.connector_id == request.connector_id)
+    else {
+        return Err(ConnectorInvokeFailure {
+            failure_class: "unbound",
+            resolved_version: None,
+            code: CONNECTOR_INVOKE_ERR_UNBOUND,
+        });
+    };
+    let compatible = context
+        .declared_requirements
+        .iter()
+        .filter(|requirement| requirement.connector_id == request.connector_id)
+        .any(|requirement| {
+            VersionReq::parse(&requirement.version)
+                .ok()
+                .zip(Version::parse(&connector.version).ok())
+                .is_some_and(|(range, version)| range.matches(&version))
+        });
+    if !compatible {
+        return Err(ConnectorInvokeFailure {
+            failure_class: "incompatible",
+            resolved_version: Some(connector.version.clone()),
+            code: CONNECTOR_INVOKE_ERR_UNAUTHORIZED,
+        });
+    }
+    Ok(connector.clone())
+}
+
+fn invoke_activated_connector(
+    caller: &mut Caller<'_, NestedStoreState>,
+    request: ConnectorInvokeRequest,
+    response_ptr: usize,
+    response_capacity: usize,
+    connector: &ActivatedConnector,
+) -> i32 {
+    let Ok(response) = connector.implementation.invoke(&request) else {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "execution_failed",
+            CONNECTOR_INVOKE_ERR_EXECUTION_FAILED,
+        );
+    };
+    if response.abi_version != SUPPORTED_HOST_ABI_VERSION
+        || response.result_class.is_empty()
+        || contains_host_private_data(&response.payload)
+    {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "unauthorized_output",
+            CONNECTOR_INVOKE_ERR_UNAUTHORIZED,
+        );
+    }
+    let Ok(response_bytes) = serde_json::to_vec(&response) else {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "execution_failed",
+            CONNECTOR_INVOKE_ERR_EXECUTION_FAILED,
+        );
+    };
+    if response_bytes.len() > response_capacity
+        || response_bytes.len() > MAX_CONNECTOR_INVOKE_RESPONSE_BYTES
+    {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "bounded_io",
+            CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE,
+        );
+    }
+    let Ok(response_len) = i32::try_from(response_bytes.len()) else {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "bounded_io",
+            CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE,
+        );
+    };
+    let Ok(response_ptr_i32) = i32::try_from(response_ptr) else {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "invalid_response_memory",
+            CONNECTOR_INVOKE_ERR_INVALID_REQUEST,
+        );
+    };
+    if write_memory(caller, response_ptr_i32, &response_bytes).is_err() {
+        return connector_failure(
+            caller,
+            &request.connector_id,
+            Some(&connector.version),
+            "invalid_response_memory",
+            CONNECTOR_INVOKE_ERR_INVALID_REQUEST,
+        );
+    }
+    caller
+        .data_mut()
+        .connector_invocation_evidence
+        .push(ConnectorInvocationEvidence {
+            connector_id: request.connector_id,
+            resolved_version: Some(connector.version.clone()),
+            result_class: response.result_class,
+            failure_class: None,
+        });
+    response_len
+}
+
+fn connector_failure(
+    caller: &mut Caller<'_, NestedStoreState>,
+    connector_id: &str,
+    resolved_version: Option<&str>,
+    failure_class: &str,
+    code: i32,
+) -> i32 {
+    caller
+        .data_mut()
+        .connector_invocation_evidence
+        .push(ConnectorInvocationEvidence {
+            connector_id: connector_id.to_string(),
+            resolved_version: resolved_version.map(str::to_string),
+            result_class: "failure".to_string(),
+            failure_class: Some(failure_class.to_string()),
+        });
+    code
+}
+
+fn contains_host_private_data(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            let key = key.to_ascii_lowercase();
+            [
+                "config",
+                "credential",
+                "secret",
+                "password",
+                "path",
+                "device",
+                "endpoint",
+                "bucket",
+            ]
+            .iter()
+            .any(|needle| key.contains(needle))
+                || contains_host_private_data(value)
+        }),
+        Value::Array(values) => values.iter().any(contains_host_private_data),
+        Value::String(value) => value.starts_with('/') || value.contains("://"),
+        _ => false,
+    }
+}
+
 /// Executes `artifact` as a WASI-command-shaped capability with the RFC 8785
 /// canonical form of the JSON `input` as stdin (Spec 1722, Decision 118),
 /// inside a nested `wasmi` engine — the same engine and
@@ -275,6 +612,32 @@ pub fn execute_nested_capability_with_limits(
     declared_emits: &[EventReference],
     host_limits: NestedExecutionLimits,
 ) -> Result<NestedExecutionOutcome, String> {
+    execute_nested_capability_with_connectors(
+        artifact,
+        input,
+        service_type,
+        declared_emits,
+        host_limits,
+        &MediatedConnectorContext::default(),
+    )
+}
+
+/// Like [`execute_nested_capability_with_limits`], with Spec 104 mediated
+/// connector bindings for nested `traverse_host::connector_invoke` (#1719).
+///
+/// # Errors
+///
+/// Returns a stable, secret-free error string when the input is not
+/// canonicalizable JSON (`input_not_canonicalizable: …` or `invalid_json: …`)
+/// or when module validation, linking, fuel setup, or execution fails.
+pub fn execute_nested_capability_with_connectors(
+    artifact: &[u8],
+    input: &[u8],
+    service_type: &ServiceType,
+    declared_emits: &[EventReference],
+    host_limits: NestedExecutionLimits,
+    connector_context: &MediatedConnectorContext,
+) -> Result<NestedExecutionOutcome, String> {
     // Spec 1722 FR-001/FR-003: every host's guest reads the same canonical
     // bytes, and input JCS cannot represent fails before any guest runs.
     let input = canonicalize_json_bytes(input).map_err(|error| error.to_string())?;
@@ -295,6 +658,8 @@ pub fn execute_nested_capability_with_limits(
         service_type: service_type.clone(),
         declared_emits: declared_emits.to_vec(),
         emitted_events: Vec::new(),
+        connector_context: connector_context.clone(),
+        connector_invocation_evidence: Vec::new(),
     };
     let mut store = Store::new(&engine, state);
     store.limiter(|state| &mut state.limits);
@@ -315,6 +680,9 @@ pub fn execute_nested_capability_with_limits(
     linker
         .func_wrap("traverse_host", "emit_event", host_emit_event)
         .map_err(|error| format!("link emit_event: {error}"))?;
+    linker
+        .func_wrap("traverse_host", "connector_invoke", host_connector_invoke)
+        .map_err(|error| format!("link connector_invoke: {error}"))?;
 
     let instance = linker
         .instantiate_and_start(&mut store, &module)
@@ -334,16 +702,20 @@ pub fn execute_nested_capability_with_limits(
     Ok(NestedExecutionOutcome {
         stdout: final_state.stdout,
         emitted_events: final_state.emitted_events,
+        connector_invocation_evidence: final_state.connector_invocation_evidence,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        EmittedEvent, NestedExecutionLimits, execute_nested_capability,
-        execute_nested_capability_with_limits,
+        ActivatedConnector, ConnectorInvokeRequest, ConnectorInvokeResponse, EmittedEvent,
+        MediatedConnector, MediatedConnectorContext, NestedExecutionLimits, NestedExecutionOutcome,
+        SUPPORTED_HOST_ABI_VERSION, execute_nested_capability,
+        execute_nested_capability_with_connectors, execute_nested_capability_with_limits,
     };
-    use traverse_contracts::{EventReference, ServiceType};
+    use std::sync::Arc;
+    use traverse_contracts::{ConnectorRequirement, EventReference, ServiceType};
 
     /// A WASI-command module that echoes stdin to stdout, then calls
     /// `traverse_host::emit_event` with a fixed declared event.
@@ -654,5 +1026,333 @@ mod tests {
         .clamped();
         assert_eq!(huge.fuel, super::MAX_HOST_NESTED_FUEL);
         assert_eq!(huge.max_memory_bytes, super::MAX_HOST_NESTED_MEMORY_BYTES);
+    }
+
+    const VALID_CONNECTOR_REQUEST: &str = r#"{"abi_version":"1.0.0","connector_id":"traverse.test","operation":"read","payload":{"id":"1"}}"#;
+
+    struct TestConnector;
+
+    impl MediatedConnector for TestConnector {
+        fn invoke(
+            &self,
+            request: &ConnectorInvokeRequest,
+        ) -> Result<ConnectorInvokeResponse, String> {
+            Ok(ConnectorInvokeResponse {
+                abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+                result_class: "success".to_string(),
+                payload: serde_json::json!({"request_id": request.payload["id"]}),
+            })
+        }
+    }
+
+    enum ConnectorOutcome {
+        Fails,
+        UnsafeOutput,
+        LargeOutput,
+    }
+
+    struct OutcomeConnector(ConnectorOutcome);
+
+    impl MediatedConnector for OutcomeConnector {
+        fn invoke(
+            &self,
+            _request: &ConnectorInvokeRequest,
+        ) -> Result<ConnectorInvokeResponse, String> {
+            match self.0 {
+                ConnectorOutcome::Fails => Err("connector failed".to_string()),
+                ConnectorOutcome::UnsafeOutput => Ok(ConnectorInvokeResponse {
+                    abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+                    result_class: "success".to_string(),
+                    payload: serde_json::json!({"secret": "must not cross the ABI"}),
+                }),
+                ConnectorOutcome::LargeOutput => Ok(ConnectorInvokeResponse {
+                    abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+                    result_class: "success".to_string(),
+                    payload: serde_json::json!({"value": "x".repeat(1024)}),
+                }),
+            }
+        }
+    }
+
+    fn connector_test_wasm(
+        request: &str,
+        request_ptr: i32,
+        request_len: i32,
+        response_ptr: i32,
+        response_capacity: i32,
+    ) -> Result<Vec<u8>, String> {
+        let escaped_request = request.replace('\\', "\\\\").replace('"', "\\\"");
+        wat::parse_str(format!(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+              (import "traverse_host" "connector_invoke" (func $invoke (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 32) "{escaped_request}")
+              (data (i32.const 2048) "0")
+              (func $_start (export "_start")
+                i32.const {request_ptr} i32.const {request_len} i32.const {response_ptr} i32.const {response_capacity} call $invoke drop
+                i32.const 4 i32.const 2048 i32.store
+                i32.const 8 i32.const 1 i32.store
+                i32.const 1 i32.const 4 i32.const 1 i32.const 12 call $write drop)
+            )
+            "#
+        ))
+        .map_err(|error| format!("wat: {error}"))
+    }
+
+    fn connector_response_wasm(
+        request: &str,
+        request_ptr: i32,
+        request_len: i32,
+        response_ptr: i32,
+        response_capacity: i32,
+    ) -> Result<Vec<u8>, String> {
+        let escaped_request = request.replace('\\', "\\\\").replace('"', "\\\"");
+        wat::parse_str(format!(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+              (import "traverse_host" "connector_invoke" (func $invoke (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 32) "{escaped_request}")
+              (func $_start (export "_start") (local $len i32)
+                i32.const {request_ptr} i32.const {request_len} i32.const {response_ptr} i32.const {response_capacity} call $invoke local.set $len
+                i32.const 4 i32.const {response_ptr} i32.store
+                i32.const 8 local.get $len i32.store
+                i32.const 1 i32.const 4 i32.const 1 i32.const 12 call $write drop)
+            )
+            "#
+        ))
+        .map_err(|error| format!("wat: {error}"))
+    }
+
+    fn activated_context(version: &str) -> MediatedConnectorContext {
+        MediatedConnectorContext {
+            declared_requirements: vec![ConnectorRequirement {
+                connector_id: "traverse.test".to_string(),
+                version: "^1.0.0".to_string(),
+            }],
+            activated_connectors: vec![ActivatedConnector {
+                connector_id: "traverse.test".to_string(),
+                version: version.to_string(),
+                implementation: Arc::new(TestConnector),
+            }],
+        }
+    }
+
+    fn declared_only_context() -> MediatedConnectorContext {
+        MediatedConnectorContext {
+            declared_requirements: vec![ConnectorRequirement {
+                connector_id: "traverse.test".to_string(),
+                version: "^1.0.0".to_string(),
+            }],
+            activated_connectors: Vec::new(),
+        }
+    }
+
+    fn run_with_context(
+        wasm: &[u8],
+        context: &MediatedConnectorContext,
+    ) -> Result<NestedExecutionOutcome, String> {
+        execute_nested_capability_with_connectors(
+            wasm,
+            b"{}",
+            &ServiceType::Stateless,
+            &[],
+            NestedExecutionLimits::default(),
+            context,
+        )
+    }
+
+    #[test]
+    fn nested_connector_invoke_import_instantiates() -> Result<(), String> {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (import "traverse_host" "connector_invoke"
+                (func $connector_invoke (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "_start"))
+            )
+            "#,
+        )
+        .map_err(|error| format!("wat: {error}"))?;
+        let outcome = execute_nested_capability(&wasm, b"{}", &ServiceType::Stateless, &[])?;
+        assert!(outcome.stdout.is_empty());
+        assert!(outcome.connector_invocation_evidence.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn nested_connector_invoke_records_unbound_and_undeclared() -> Result<(), String> {
+        let request_len = i32::try_from(VALID_CONNECTOR_REQUEST.len())
+            .map_err(|error| format!("len: {error}"))?;
+        let wasm = connector_test_wasm(VALID_CONNECTOR_REQUEST, 32, request_len, 256, 64)?;
+
+        let unbound = run_with_context(&wasm, &declared_only_context())?;
+        assert_eq!(unbound.connector_invocation_evidence.len(), 1);
+        assert_eq!(
+            unbound.connector_invocation_evidence[0]
+                .failure_class
+                .as_deref(),
+            Some("unbound")
+        );
+
+        let undeclared = run_with_context(&wasm, &MediatedConnectorContext::default())?;
+        assert_eq!(undeclared.connector_invocation_evidence.len(), 1);
+        assert_eq!(
+            undeclared.connector_invocation_evidence[0]
+                .failure_class
+                .as_deref(),
+            Some("undeclared")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_connector_invoke_succeeds_with_activated_binding() -> Result<(), String> {
+        let request_len = i32::try_from(VALID_CONNECTOR_REQUEST.len())
+            .map_err(|error| format!("len: {error}"))?;
+        let wasm = connector_response_wasm(VALID_CONNECTOR_REQUEST, 32, request_len, 256, 256)?;
+        let outcome = run_with_context(&wasm, &activated_context("1.0.0"))?;
+        let response: ConnectorInvokeResponse = serde_json::from_slice(&outcome.stdout)
+            .map_err(|error| format!("stdout json: {error}"))?;
+        assert_eq!(response.result_class, "success");
+        assert_eq!(response.payload["request_id"], "1");
+        assert_eq!(outcome.connector_invocation_evidence.len(), 1);
+        assert_eq!(
+            outcome.connector_invocation_evidence[0].result_class,
+            "success"
+        );
+        assert!(
+            outcome.connector_invocation_evidence[0]
+                .failure_class
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_connector_invoke_records_activated_failures() -> Result<(), String> {
+        let request_len = i32::try_from(VALID_CONNECTOR_REQUEST.len())
+            .map_err(|error| format!("len: {error}"))?;
+        let wasm = connector_test_wasm(VALID_CONNECTOR_REQUEST, 32, request_len, 256, 64)?;
+
+        let cases: Vec<(Arc<dyn MediatedConnector>, &str, Option<&str>)> = vec![
+            (
+                Arc::new(OutcomeConnector(ConnectorOutcome::Fails)),
+                "failure",
+                Some("execution_failed"),
+            ),
+            (
+                Arc::new(OutcomeConnector(ConnectorOutcome::UnsafeOutput)),
+                "failure",
+                Some("unauthorized_output"),
+            ),
+            (
+                Arc::new(OutcomeConnector(ConnectorOutcome::LargeOutput)),
+                "failure",
+                Some("bounded_io"),
+            ),
+            (Arc::new(TestConnector), "failure", Some("incompatible")),
+        ];
+        let versions = ["1.0.0", "1.0.0", "1.0.0", "2.0.0"];
+        for ((implementation, result_class, failure_class), version) in
+            cases.into_iter().zip(versions)
+        {
+            let context = MediatedConnectorContext {
+                declared_requirements: vec![ConnectorRequirement {
+                    connector_id: "traverse.test".to_string(),
+                    version: "^1.0.0".to_string(),
+                }],
+                activated_connectors: vec![ActivatedConnector {
+                    connector_id: "traverse.test".to_string(),
+                    version: version.to_string(),
+                    implementation,
+                }],
+            };
+            let outcome = run_with_context(&wasm, &context)?;
+            assert_eq!(outcome.connector_invocation_evidence.len(), 1);
+            assert_eq!(
+                outcome.connector_invocation_evidence[0].result_class,
+                result_class
+            );
+            assert_eq!(
+                outcome.connector_invocation_evidence[0]
+                    .failure_class
+                    .as_deref(),
+                failure_class
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_connector_invoke_denies_invalid_requests() -> Result<(), String> {
+        let valid_len = i32::try_from(VALID_CONNECTOR_REQUEST.len())
+            .map_err(|error| format!("len: {error}"))?;
+        let invalid_requests = [
+            ("not-json", 32, 8, 256, 64),
+            (
+                r#"{"abi_version":"2.0.0","connector_id":"traverse.test","operation":"read","payload":{}}"#,
+                32,
+                0,
+                256,
+                64,
+            ),
+            (
+                r#"{"abi_version":"1.0.0","connector_id":"","operation":"read","payload":{}}"#,
+                32,
+                0,
+                256,
+                64,
+            ),
+            (
+                r#"{"abi_version":"1.0.0","connector_id":"traverse.test","operation":"","payload":{}}"#,
+                32,
+                0,
+                256,
+                64,
+            ),
+            (
+                r#"{"abi_version":"1.0.0","connector_id":"traverse.test","operation":"read","payload":{"path":"/private"}}"#,
+                32,
+                0,
+                256,
+                64,
+            ),
+            (
+                r#"{"abi_version":"1.0.0","connector_id":"traverse.test","operation":"read","payload":{"items":["https://example.test"]}}"#,
+                32,
+                0,
+                256,
+                64,
+            ),
+            (VALID_CONNECTOR_REQUEST, -1, 1, 256, 64),
+            (VALID_CONNECTOR_REQUEST, 65_535, 10, 256, 64),
+            (VALID_CONNECTOR_REQUEST, 32, valid_len, 256, 65_537),
+        ];
+        for (request, request_ptr, request_len, response_ptr, response_capacity) in invalid_requests
+        {
+            let request_len = if request_len == 0 {
+                i32::try_from(request.len()).map_err(|error| format!("len: {error}"))?
+            } else {
+                request_len
+            };
+            let wasm = connector_test_wasm(
+                request,
+                request_ptr,
+                request_len,
+                response_ptr,
+                response_capacity,
+            )?;
+            let outcome = run_with_context(&wasm, &activated_context("1.0.0"))?;
+            assert!(
+                outcome.connector_invocation_evidence.is_empty(),
+                "invalid requests must not record evidence"
+            );
+        }
+        Ok(())
     }
 }

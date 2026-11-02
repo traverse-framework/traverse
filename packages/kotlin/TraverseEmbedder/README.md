@@ -28,3 +28,10 @@ instantiation.
 `RuntimeTraverseEmbedder` maps that boundary into stable public Kotlin
 submission, event, and compatible-lifecycle result types while preserving
 runtime-owned identifiers and statuses.
+
+### Spec 104 guest `connector_invoke` (#1719)
+
+Nested `runtime.wasm` links Spec 104 `traverse_host.connector_invoke`, but this
+package does **not yet** ship `activateMediatedConnector` or a first-party
+`traverse.model-runtime` Spec 104 binding for capability guests. Spec 137
+`ExactModelHost` / app-command adapters remain the supported model path.

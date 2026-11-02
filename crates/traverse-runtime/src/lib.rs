@@ -11,6 +11,8 @@ pub mod component_wit;
 pub mod exact_model;
 /// Spec `137` app-command host connector dispatch.
 pub mod host_connector_dispatch;
+/// Spec 104 mediated binding for `traverse.model-runtime` (#1719).
+pub mod model_runtime_mediated;
 pub use capability_metadata::{
     CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,
@@ -22,6 +24,11 @@ pub use exact_model::{
     ModelRightsRecord, ModelUsage, PLACEMENT_WASM_CPU, PackageStatus, PackageStatusEntry,
     PinRights, TRAVERSE_MODEL_SIGNING_KEYS, TrustedModelKeys, VerifiedModelPackage, digest_hex,
     encode_guest_frame, model_signing_key_id, sign_model_manifest,
+};
+#[cfg(feature = "wasmtime-executor")]
+pub use model_runtime_mediated::{
+    ExactModelMediatedConnector, MODEL_RUNTIME_CONNECTOR_VERSION, activate_exact_model_runtime,
+    activate_exact_model_runtime_version,
 };
 pub mod data_store;
 /// Durable P3 checkpoint, recovery, wait, retry, and compensation controls.

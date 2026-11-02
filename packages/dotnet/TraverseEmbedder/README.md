@@ -94,3 +94,11 @@ Pull requests that change the .NET package, the native host, or the
 pipeline run the same steps as a dry run, which never pushes. On other
 platforms (for example macOS) the package still installs, and model calls
 fail closed with `engine_unavailable`.
+
+### Spec 104 guest `connector_invoke` (#1719)
+
+Nested `runtime.wasm` links Spec 104 `traverse_host.connector_invoke`. Native
+Rust hosts can activate `traverse.model-runtime` via
+`traverse_runtime::activate_exact_model_runtime`. This .NET package does
+**not yet** expose an equivalent Spec 104 activation API; use Spec 137
+`ExactModelHost` / `Install` for app-command `model.execute` until it lands.
