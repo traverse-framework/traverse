@@ -521,10 +521,8 @@ mod tests {
         usage: Option<ModelUsage>,
         bound: bool,
     ) -> Result<(Value, Value), String> {
-        let vector: Value = serde_json::from_slice(&read(
-            "fixtures/models/conformance/signed-digits-onnx.json",
-        )?)
-        .map_err(|error| error.to_string())?;
+        let vector = read("fixtures/models/conformance/signed-digits-onnx.json")?;
+        let vector: Value = serde_json::from_slice(&vector).map_err(|error| error.to_string())?;
         let package_pin: ExactModelPin =
             serde_json::from_value(vector["pin"].clone()).map_err(|error| error.to_string())?;
         let public: [u8; 32] = hex(vector["trusted_public_key_hex"]
@@ -595,10 +593,8 @@ mod tests {
                 },
             )
             .map_err(|error| format!("{error:?}"))?;
-        let expected = serde_json::from_slice(&read(
-            "fixtures/cross-host/model-execute-v1/expected-output.json",
-        )?)
-        .map_err(|error| error.to_string())?;
+        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
+        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
         Ok((output.value, expected))
     }
 
