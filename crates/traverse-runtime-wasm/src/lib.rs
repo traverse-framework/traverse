@@ -38,12 +38,13 @@ use traverse_contracts::{
 };
 
 pub use executor::{
-    ActivatedConnector, ConnectorInvocationEvidence, ConnectorInvokeRequest,
+    ActivatedConnector, ConnectorBinding, ConnectorInvocationEvidence, ConnectorInvokeRequest,
     ConnectorInvokeResponse, DEFAULT_NESTED_FUEL, DEFAULT_NESTED_MEMORY_BYTES,
     MAX_HOST_NESTED_FUEL, MAX_HOST_NESTED_MEMORY_BYTES, MediatedConnector,
-    MediatedConnectorContext, NestedExecutionLimits, SUPPORTED_HOST_ABI_VERSION,
-    execute_nested_capability, execute_nested_capability_with_connectors,
-    execute_nested_capability_with_limits,
+    MediatedConnectorContext, NestedExecutionLimits, NestedExecutionOutcome, NestedRun,
+    SUPPORTED_HOST_ABI_VERSION, SuspendedExecution, execute_nested_capability,
+    execute_nested_capability_with_connectors, execute_nested_capability_with_limits,
+    start_nested_capability,
 };
 
 /// Traverse Host ABI v1 is independently versioned from this crate (spec
@@ -56,10 +57,12 @@ struct RuntimeState {
     declared_emits: Vec<EventReference>,
     /// Spec 104 connector requirements declared by the capability contract.
     connector_requirements: Vec<ConnectorRequirement>,
-    /// Host-activated Spec 104 bindings for nested `connector_invoke` (#1719).
-    /// Empty until a later host API activates connectors; mediation then
-    /// fail-closes as `unbound` / `undeclared` with evidence.
+    /// Host-activated Spec 104 bindings for nested `connector_invoke` (#1719):
+    /// the init header's `deferred_connectors`. Anything else fails closed as
+    /// `unbound` / `undeclared` with evidence.
     activated_connectors: Vec<ActivatedConnector>,
+    /// A guest waiting on a deferred connector, and its session (Spec 1719).
+    suspended: Option<(String, Box<SuspendedExecution>)>,
     /// Targets this capability may run on (contract `permitted_targets`).
     permitted_targets: Vec<ExecutionTarget>,
     /// Placement target of this `runtime.wasm` instance (the host it is
@@ -105,6 +108,7 @@ struct InitPayload {
     service_type: ServiceType,
     declared_emits: Vec<EventReference>,
     connector_requirements: Vec<ConnectorRequirement>,
+    deferred_connectors: Vec<ActivatedConnector>,
     permitted_targets: Vec<ExecutionTarget>,
     host_placement_target: ExecutionTarget,
     target_hint: Option<ExecutionTarget>,
@@ -228,6 +232,26 @@ fn parse_runtime_snapshot(header: &serde_json::Value) -> Result<RuntimeSnapshot,
     Ok(RuntimeSnapshot { target_loads })
 }
 
+/// The init header's `deferred_connectors` (Spec 1719 FR-001).
+fn parse_deferred_connectors(header: &serde_json::Value) -> Vec<ActivatedConnector> {
+    let Some(entries) = header
+        .get("deferred_connectors")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            Some(ActivatedConnector {
+                connector_id: entry.get("connector_id")?.as_str()?.to_string(),
+                version: entry.get("version")?.as_str()?.to_string(),
+                binding: ConnectorBinding::Deferred,
+            })
+        })
+        .collect()
+}
+
 fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
     if bytes.len() < 4 {
         return Err("init payload shorter than the header-length prefix".to_string());
@@ -276,6 +300,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let deferred_connectors = parse_deferred_connectors(&header);
     let connector_requirements = header
         .get("connector_requirements")
         .and_then(serde_json::Value::as_array)
@@ -316,6 +341,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         service_type,
         declared_emits,
         connector_requirements,
+        deferred_connectors,
         permitted_targets,
         host_placement_target,
         target_hint,
@@ -364,6 +390,8 @@ struct SubmitResult {
     pending_host_connector: Vec<serde_json::Value>,
     /// Dual-deadline registrations staged during this submit (host drains once).
     pending_deadlines: Vec<serde_json::Value>,
+    /// The request of a guest this submit suspended (Spec 1719 FR-003).
+    pending_connector_invocation: Option<serde_json::Value>,
 }
 
 impl SubmitResult {
@@ -374,6 +402,7 @@ impl SubmitResult {
             error: Some(error),
             pending_host_connector: Vec::new(),
             pending_deadlines: Vec::new(),
+            pending_connector_invocation: None,
         }
     }
 
@@ -384,6 +413,7 @@ impl SubmitResult {
             error: None,
             pending_host_connector: Vec::new(),
             pending_deadlines: Vec::new(),
+            pending_connector_invocation: None,
         }
     }
 }
@@ -391,6 +421,10 @@ impl SubmitResult {
 /// Runs `request` against the initialized capability / app state machine and
 /// queues the resulting lifecycle + domain events.
 fn submit(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
+    if let Some((session_id, suspended)) = state.suspended.take() {
+        let run = suspended.resume(parse_connector_answer(request));
+        return finish_capability_step(state, session_id, run);
+    }
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(request) {
         match discriminate_submit(&value) {
             SubmitDiscrimination::AppCommand(envelope) => {
@@ -875,7 +909,7 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
     }
 
     let connector_context = nested_connector_context(state);
-    let outcome = execute_nested_capability_with_connectors(
+    let run = start_nested_capability(
         &state.wasm_artifact,
         request,
         &state.service_type,
@@ -883,30 +917,25 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
         state.nested_limits,
         &connector_context,
     );
+    finish_capability_step(state, session_id, run)
+}
 
-    match outcome {
-        Ok(outcome) => {
-            for event in outcome.emitted_events {
-                state.pending_events.push_back(lifecycle_event(
-                    &event.event_type,
-                    &session_id,
-                    &serde_json::json!({"version": event.version, "payload": event.data}),
-                ));
-            }
-            let stdout_json = serde_json::from_slice::<serde_json::Value>(&outcome.stdout)
-                .unwrap_or_else(|_| {
-                    serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
-                });
-            let result = with_connector_evidence(
-                serde_json::json!({"status": "completed", "output": stdout_json}),
-                &outcome.connector_invocation_evidence,
-            );
-            state.pending_events.push_back(lifecycle_event(
-                "capability_result",
-                &session_id,
-                &result,
-            ));
+/// Queues a finished guest's events and result, or keeps a suspended guest
+/// until the host answers (Spec 1719 FR-003).
+fn finish_capability_step(
+    state: &mut RuntimeState,
+    session_id: String,
+    run: Result<NestedRun, String>,
+) -> SubmitResult {
+    match run {
+        Ok(NestedRun::Suspended(suspended)) => {
+            let mut result = SubmitResult::accepted(session_id.clone());
+            result.status = "suspended";
+            result.pending_connector_invocation = serde_json::to_value(suspended.request()).ok();
+            state.suspended = Some((session_id, suspended));
+            return result;
         }
+        Ok(NestedRun::Finished(outcome)) => queue_capability_outcome(state, &session_id, outcome),
         Err(error) => {
             state.pending_events.push_back(lifecycle_event(
                 "capability_result",
@@ -915,8 +944,47 @@ fn submit_capability(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
             ));
         }
     }
-
     SubmitResult::accepted(session_id)
+}
+
+fn queue_capability_outcome(
+    state: &mut RuntimeState,
+    session_id: &str,
+    outcome: NestedExecutionOutcome,
+) {
+    for event in outcome.emitted_events {
+        state.pending_events.push_back(lifecycle_event(
+            &event.event_type,
+            session_id,
+            &serde_json::json!({"version": event.version, "payload": event.data}),
+        ));
+    }
+    let stdout_json =
+        serde_json::from_slice::<serde_json::Value>(&outcome.stdout).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&outcome.stdout).into_owned())
+        });
+    let result = with_connector_evidence(
+        serde_json::json!({"status": "completed", "output": stdout_json}),
+        &outcome.connector_invocation_evidence,
+    );
+    state
+        .pending_events
+        .push_back(lifecycle_event("capability_result", session_id, &result));
+}
+
+/// Parses a `connector_response` submit. Anything else fails closed and reaches
+/// the guest as a failed call (Spec 1719 FR-004, FR-005).
+fn parse_connector_answer(request: &[u8]) -> Result<ConnectorInvokeResponse, String> {
+    let answer = serde_json::from_slice::<serde_json::Value>(request)
+        .map_err(|_| "connector response is not JSON".to_string())?;
+    if answer.get("kind").and_then(serde_json::Value::as_str) != Some("connector_response") {
+        return Err("expected a connector_response".to_string());
+    }
+    if let Some(failure) = answer.get("failure") {
+        return Err(failure.as_str().unwrap_or("connector failed").to_string());
+    }
+    serde_json::from_value(answer.get("response").cloned().unwrap_or_default())
+        .map_err(|_| "connector response is malformed".to_string())
 }
 
 /// Writes `ptr`/`len` (as two little-endian `i32`s) to the descriptor
@@ -1023,7 +1091,8 @@ pub extern "C" fn traverse_init(ptr: i32, len: i32, out_descriptor: i32) -> i32 
                 service_type: parsed.service_type,
                 declared_emits: parsed.declared_emits,
                 connector_requirements: parsed.connector_requirements,
-                activated_connectors: Vec::new(),
+                activated_connectors: parsed.deferred_connectors,
+                suspended: None,
                 permitted_targets: parsed.permitted_targets,
                 host_placement_target: parsed.host_placement_target,
                 target_hint: parsed.target_hint,
@@ -1085,6 +1154,9 @@ pub extern "C" fn traverse_submit(ptr: i32, len: i32, out_descriptor: i32) -> i3
             if !result.pending_host_connector.is_empty() {
                 response["pending_host_connector"] =
                     serde_json::Value::Array(result.pending_host_connector);
+            }
+            if let Some(invocation) = result.pending_connector_invocation {
+                response["pending_connector_invocation"] = invocation;
             }
             if !result.pending_deadlines.is_empty() {
                 response["pending_deadlines"] = serde_json::Value::Array(result.pending_deadlines);
@@ -1386,6 +1458,7 @@ mod tests {
             }],
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1426,6 +1499,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local, ExecutionTarget::Cloud],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1470,6 +1544,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local, ExecutionTarget::Cloud],
             host_placement_target: ExecutionTarget::Local,
             target_hint: Some(ExecutionTarget::Cloud),
@@ -1578,6 +1653,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1623,6 +1699,114 @@ mod tests {
         );
     }
 
+    fn deferred_state() -> RuntimeState {
+        let request = r#"{"abi_version":"1.0.0","connector_id":"traverse.test","operation":"op","payload":{}}"#;
+        let escaped = request.replace('"', "\\\"");
+        let len = request.len();
+        let wasm = wat::parse_str(format!(
+            r#"(module
+              (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+              (import "traverse_host" "connector_invoke" (func $invoke (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 32) "{escaped}")
+              (func (export "_start") (local $len i32)
+                i32.const 32 i32.const {len} i32.const 1024 i32.const 4096 call $invoke local.set $len
+                i32.const 4 i32.const 1024 i32.store
+                i32.const 8 local.get $len i32.store
+                i32.const 1 i32.const 4 i32.const 1 i32.const 12 call $write drop))"#
+        ))
+        .expect("wat");
+        let header = serde_json::json!({
+            "capability_id": "demo.deferred",
+            "capability_version": "1.0.0",
+            "service_type": "stateless",
+            "emits": [],
+            "host_placement_target": "browser",
+            "permitted_targets": ["browser"],
+            "connector_requirements": [{"connector_id": "traverse.test", "version": "^1.0.0"}],
+            "deferred_connectors": [{"connector_id": "traverse.test", "version": "1.0.0"}],
+        });
+        let header = serde_json::to_vec(&header).expect("header");
+        let mut payload = u32::try_from(header.len())
+            .expect("len")
+            .to_le_bytes()
+            .to_vec();
+        payload.extend_from_slice(&header);
+        payload.extend_from_slice(&wasm);
+        let parsed = parse_init_payload(&payload).expect("init");
+        RuntimeState {
+            capability_id: parsed.capability_id,
+            service_type: parsed.service_type,
+            declared_emits: parsed.declared_emits,
+            connector_requirements: parsed.connector_requirements,
+            activated_connectors: parsed.deferred_connectors,
+            suspended: None,
+            permitted_targets: parsed.permitted_targets,
+            host_placement_target: parsed.host_placement_target,
+            target_hint: parsed.target_hint,
+            runtime_snapshot: parsed.runtime_snapshot,
+            wasm_artifact: parsed.wasm_artifact,
+            nested_limits: parsed.nested_limits,
+            execution_counter: 0,
+            pending_events: VecDeque::new(),
+            app_state_machine: None,
+            app_sessions: BTreeMap::new(),
+            pending_host_connector: VecDeque::new(),
+            pending_deadlines: VecDeque::new(),
+            last_host_connector_result: None,
+        }
+    }
+
+    fn last_result(state: &RuntimeState) -> serde_json::Value {
+        let event = state.pending_events.back().expect("an event");
+        serde_json::from_slice(event).expect("event json")
+    }
+
+    #[test]
+    fn submit_suspends_on_a_deferred_connector_and_finishes_on_the_answer() {
+        let mut state = deferred_state();
+        let suspended = submit(&mut state, b"{}");
+        assert_eq!(suspended.status, "suspended");
+        let invocation = suspended.pending_connector_invocation.expect("request");
+        assert_eq!(invocation["connector_id"], "traverse.test");
+        assert!(state.suspended.is_some());
+
+        let answer = serde_json::json!({
+            "kind": "connector_response",
+            "response": {"abi_version": "1.0.0", "result_class": "success", "payload": {"answer": 7}},
+        });
+        let finished = submit(&mut state, &serde_json::to_vec(&answer).expect("answer"));
+        assert_eq!(finished.status, "accepted");
+        assert_eq!(finished.session_id, suspended.session_id);
+        assert!(state.suspended.is_none());
+        let result = last_result(&state);
+        assert_eq!(result["data"]["status"], "completed");
+        assert_eq!(result["data"]["output"]["payload"]["answer"], 7);
+        assert_eq!(
+            result["data"]["connector_invocation_evidence"][0]["result_class"],
+            "success"
+        );
+    }
+
+    #[test]
+    fn an_unusable_answer_reaches_the_guest_as_a_failed_call() {
+        for answer in [
+            b"not json".to_vec(),
+            br#"{"kind":"other"}"#.to_vec(),
+            br#"{"kind":"connector_response"}"#.to_vec(),
+            br#"{"kind":"connector_response","failure":"host could not answer"}"#.to_vec(),
+        ] {
+            let mut state = deferred_state();
+            assert_eq!(submit(&mut state, b"{}").status, "suspended");
+            assert_eq!(submit(&mut state, &answer).status, "accepted");
+            let result = last_result(&state);
+            assert_eq!(
+                result["data"]["connector_invocation_evidence"][0]["failure_class"],
+                "execution_failed"
+            );
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn host_connector_wait_returns_pending_and_first_terminal_wins() {
@@ -1657,6 +1841,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1802,6 +1987,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,
@@ -1911,6 +2097,7 @@ mod tests {
             declared_emits: Vec::new(),
             connector_requirements: Vec::new(),
             activated_connectors: Vec::new(),
+            suspended: None,
             permitted_targets: vec![ExecutionTarget::Local],
             host_placement_target: ExecutionTarget::Local,
             target_hint: None,

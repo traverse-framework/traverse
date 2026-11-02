@@ -2083,6 +2083,25 @@
         "packages/web/TraverseEmbedder/",
         "fixtures/cross-host/canonical-input-v1/"
       ]
+    },
+    {
+      "id": "1719-suspended-connector-invocation",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1719-suspended-connector-invocation/spec.md",
+      "governs": [
+        "specs/1719-suspended-connector-invocation/",
+        "docs/decision-log.md",
+        "docs/host-connector-command-dispatch.md",
+        "docs/releases/next.md",
+        "CHANGELOG.md",
+        "crates/traverse-runtime-wasm/",
+        "packages/web/TraverseEmbedder/",
+        "runtime/",
+        "examples/applications/traverse-starter/runtime/",
+        "examples/applications/audio-analysis/runtime/"
+      ]
     }
   ]
 }
