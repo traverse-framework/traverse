@@ -43,7 +43,8 @@ export type EmbedderErrorCode =
   | "ambiguous_submit"
   | "invalid_app_command"
   | "resource_requirements_exceed_host"
-  | "cancelled";
+  | "cancelled"
+  | "async_submit_required";
 
 /** A structured embedder-boundary error. */
 export interface EmbedderError {

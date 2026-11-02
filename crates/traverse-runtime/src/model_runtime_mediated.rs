@@ -249,7 +249,10 @@ mod tests {
         PLACEMENT_WASM_CPU, PinRights, PlacementEvidence, PlacementPolicy, TrustedModelKeys,
         encode_guest_frame,
     };
-    use crate::executor::{ConnectorInvokeRequest, MediatedConnector, SUPPORTED_HOST_ABI_VERSION};
+    use crate::executor::{
+        ConnectorInvokeRequest, MediatedConnector, MediatedConnectorContext,
+        SUPPORTED_HOST_ABI_VERSION, WasmExecutor,
+    };
     use crate::host_connector_dispatch::{
         HostConnectorError, HostConnectorErrorCode, HostConnectorHostResult,
         MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR, ModelFailureReason,
@@ -257,6 +260,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use std::fs;
+    use traverse_contracts::ConnectorRequirement;
 
     const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
@@ -509,6 +513,114 @@ mod tests {
         assert_eq!(response.payload["status"], "ok");
         assert!(response.payload["output_ref"].as_str().is_some());
         assert!(response.payload.get("model_evidence").is_some());
+        Ok(())
+    }
+
+    /// Runs the published catalog capability, unchanged, over a signed package.
+    fn run_catalog_model_execute(
+        usage: Option<ModelUsage>,
+        bound: bool,
+    ) -> Result<(Value, Value), String> {
+        let vector = read("fixtures/models/conformance/signed-digits-onnx.json")?;
+        let vector: Value = serde_json::from_slice(&vector).map_err(|error| error.to_string())?;
+        let package_pin: ExactModelPin =
+            serde_json::from_value(vector["pin"].clone()).map_err(|error| error.to_string())?;
+        let public: [u8; 32] = hex(vector["trusted_public_key_hex"]
+            .as_str()
+            .ok_or_else(|| "missing key".to_string())?)
+        .try_into()
+        .map_err(|_| "key length".to_string())?;
+        let mut keys = TrustedModelKeys::new();
+        keys.trust(&public).map_err(|error| error.message)?;
+        let mut host = ExactModelHostConnector::new(vec![package_pin], keys);
+        host.model_usage = usage;
+        let policy_ref = "policy:default-wasm-cpu";
+        let registered = host.register_package(
+            &read("fixtures/models/digits-onnx-1.0.0/model.manifest.json")?,
+            read("fixtures/models/digits-onnx-1.0.0/model.wasm")?,
+            &read("fixtures/models/digits-onnx-1.0.0/model.sig.json")?,
+            &PlacementPolicy {
+                policy_ref: policy_ref.to_string(),
+                ..PlacementPolicy::default()
+            },
+        );
+        // Without a declared usage, registration is what fails closed.
+        match usage {
+            Some(_) => {
+                registered.map_err(|error| error.message)?;
+            }
+            None => assert_eq!(
+                registered.map_err(|error| error.reason).err(),
+                Some(Some(ModelFailureReason::UsageUndeclared))
+            ),
+        }
+        host.policies.insert(
+            policy_ref.to_string(),
+            ExecutionPolicy {
+                policy_ref: policy_ref.to_string(),
+                allowed_classifications: vec!["public".to_string()],
+                max_output_bytes: 56,
+                ..ExecutionPolicy::default()
+            },
+        );
+        let frame = hex(vector["cases"][0]["input_frame_hex"]
+            .as_str()
+            .ok_or_else(|| "missing input".to_string())?);
+        let input_ref = host
+            .io
+            .stage_model_input(&frame, 4096)
+            .map_err(|error| error.message)?;
+        let input: Value =
+            serde_json::from_slice(&read("fixtures/cross-host/model-execute-v1/input.json")?)
+                .map_err(|error| error.to_string())?;
+        assert_eq!(input["input_ref"], input_ref);
+        let executor = WasmExecutor::new().map_err(|error| format!("{error:?}"))?;
+        let output = executor
+            .run_bytes_with_mediated_connectors(
+                &read("fixtures/cross-host/model-execute-v1/model-execute-agent.wasm")?,
+                &input,
+                "model.execute",
+                MediatedConnectorContext {
+                    declared_requirements: vec![ConnectorRequirement {
+                        connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+                        version: MODEL_RUNTIME_CONNECTOR_VERSION.to_string(),
+                    }],
+                    activated_connectors: if bound {
+                        vec![activate_exact_model_runtime(host)]
+                    } else {
+                        Vec::new()
+                    },
+                },
+            )
+            .map_err(|error| format!("{error:?}"))?;
+        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
+        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
+        Ok((output.value, expected))
+    }
+
+    /// #1719: every host must produce `expected-output.json`. Only native adds
+    /// `placement_evidence`, since it alone meters fuel (Spec 1719 FR-014).
+    #[test]
+    fn catalog_model_execute_matches_the_cross_host_vector() -> Result<(), String> {
+        let (mut output, expected) =
+            run_catalog_model_execute(Some(ModelUsage::NonCommercial), true)?;
+        let evidence = output
+            .as_object_mut()
+            .and_then(|fields| fields.remove("placement_evidence"))
+            .ok_or_else(|| "missing placement_evidence".to_string())?;
+        assert_eq!(evidence["fuel_metering"], "metered");
+        assert_eq!(output, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_model_execute_fails_closed_with_the_cross_host_reasons() -> Result<(), String> {
+        let (unbound, _) = run_catalog_model_execute(Some(ModelUsage::NonCommercial), false)?;
+        assert_eq!(unbound["status"], "error");
+        assert_eq!(unbound["reason"], "connector_unavailable");
+        let (undeclared, _) = run_catalog_model_execute(None, true)?;
+        assert_eq!(undeclared["status"], "error");
+        assert_eq!(undeclared["error"]["code"], "model_unavailable");
         Ok(())
     }
 }

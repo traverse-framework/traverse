@@ -44,6 +44,8 @@ import {
   yieldToEventLoop,
 } from "./types.js";
 import { wasmInitialMemoryBytes } from "./wasmMemory.js";
+import type { MediatedConnector, MediatedConnectorRequest } from "./mediatedConnector.js";
+import type { RuntimeWasmConnectorRef } from "./runtimeWasmHost.js";
 import type {
   CompatibleLifecycleOutcome,
   CompatibleStartOutcome,
@@ -112,6 +114,8 @@ interface WasmTarget {
   readonly declaredMaxFuel: number | null;
   /** Optional `inputs.schema` from the component's `contract_path` (#1658). */
   readonly inputSchema: JsonValue | null;
+  /** Spec 104 `connector_requirements` from the component's contract. */
+  readonly connectorRequirements: readonly RuntimeWasmConnectorRef[];
 }
 
 function resolveNestedLimits(limits: BundleNestedLimits | undefined): {
@@ -330,6 +334,22 @@ function parseRuntimeDigestText(text: string, digestPath: string): string {
   return firstToken.toLowerCase();
 }
 
+/** The contract's Spec 104 `connector_requirements`; a malformed entry is dropped. */
+function parseConnectorRequirements(contract: JsonValue | undefined | null): RuntimeWasmConnectorRef[] {
+  const entries = asRecord(contract ?? null)?.["connector_requirements"];
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.flatMap((entry) => {
+    const record = asRecord(entry);
+    const connectorId = record?.["connector_id"];
+    const version = record?.["version"];
+    return typeof connectorId === "string" && typeof version === "string"
+      ? [{ connector_id: connectorId, version }]
+      : [];
+  });
+}
+
 function classifyRuntimeFailure(message: string): { code: string; message: string } {
   const lower = message.toLowerCase();
   if (lower.includes("not valid json") || lower.includes("deserialization")) {
@@ -405,6 +425,10 @@ function primaryInvokeWasmTarget(
 export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly core: EmbedderCore;
   private readonly runtimeModule: WebAssembly.Module;
+  private readonly mediatedConnectors = new Map<
+    string,
+    { readonly version: string; readonly connector: MediatedConnector }
+  >();
   private readonly runtimeDigest: string;
   private readonly wasmTargets: ReadonlyMap<string, WasmTarget>;
   private readonly workflowTargets: ReadonlyMap<string, WorkflowTarget>;
@@ -609,6 +633,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
         declaredMinMemoryBytes: declared.minMemoryBytes,
         declaredMaxFuel: declared.maxFuel,
         inputSchema,
+        connectorRequirements: parseConnectorRequirements(contractJson),
       });
       wasmComponentEvidence.push({
         component_id: component.componentId,
@@ -749,6 +774,15 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       return this.submitWorkflow(targetId, input);
     }
     if (this.wasmTargets.has(targetId)) {
+      if (this.deferredConnectorsFor(targetId).length > 0) {
+        return this.core.rejectedSubmit(
+          targetId,
+          embedderError(
+            "async_submit_required",
+            `capability '${targetId}' uses a deferred connector; use submitAsync`,
+          ),
+        );
+      }
       return this.submitCapability(targetId, input);
     }
     if (this.core.compatibleTargets.has(targetId)) {
@@ -825,6 +859,9 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       return this.submitWorkflow(targetId, input, signal);
     }
     if (this.wasmTargets.has(targetId)) {
+      if (this.deferredConnectorsFor(targetId).length > 0) {
+        return this.submitDeferredCapability(targetId, input, signal);
+      }
       return this.submitCapability(targetId, input, signal);
     }
     if (this.core.compatibleTargets.has(targetId)) {
@@ -1114,17 +1151,111 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     return host;
   }
 
+  /**
+   * Activates a Spec 104 connector for capability guests. The guest suspends at
+   * each call until `connector` answers (Spec 1719), so capabilities that
+   * require it run through `submitAsync`. Returns a function that deactivates it.
+   */
+  activateMediatedConnector(
+    connectorId: string,
+    version: string,
+    connector: MediatedConnector,
+  ): () => void {
+    const activation = { version, connector };
+    this.mediatedConnectors.set(connectorId, activation);
+    return () => {
+      if (this.mediatedConnectors.get(connectorId) === activation) {
+        this.mediatedConnectors.delete(connectorId);
+      }
+    };
+  }
+
+  /** Active connectors this capability's contract requires. */
+  private deferredConnectorsFor(targetId: string): RuntimeWasmConnectorRef[] {
+    const required = this.wasmTargets.get(targetId)?.connectorRequirements ?? [];
+    return required.flatMap((requirement) => {
+      const activation = this.mediatedConnectors.get(requirement.connector_id);
+      return activation === undefined
+        ? []
+        : [{ connector_id: requirement.connector_id, version: activation.version }];
+    });
+  }
+
   private submitCapability(
     targetId: string,
     input: JsonValue,
     signal?: AbortSignal,
   ): SubmitOutcome {
+    const admitted = this.admitCapability(targetId, input, signal);
+    if ("outcome" in admitted) {
+      return admitted.outcome;
+    }
+    const { target, sessionId, executionId } = admitted;
+    const result = executeWasmModule(
+      this.runtimeModule,
+      target,
+      input,
+      this.capabilityEventSink(targetId, sessionId, executionId),
+      this.runtimeLimitsHeader(),
+    );
+    return this.finishCapability(targetId, target, sessionId, executionId, result, signal);
+  }
+
+  /** Spec 1719 FR-012, FR-013: drives a suspended guest to its result. */
+  private async submitDeferredCapability(
+    targetId: string,
+    input: JsonValue,
+    signal?: AbortSignal,
+  ): Promise<SubmitOutcome> {
+    const admitted = this.admitCapability(targetId, input, signal);
+    if ("outcome" in admitted) {
+      return admitted.outcome;
+    }
+    const { target, sessionId, executionId } = admitted;
+    const result = await executeDeferredWasmModule(
+      this.runtimeModule,
+      target,
+      input,
+      this.capabilityEventSink(targetId, sessionId, executionId),
+      this.runtimeLimitsHeader(),
+      this.deferredConnectorsFor(targetId),
+      this.mediatedConnectors,
+      signal,
+    );
+    return this.finishCapability(targetId, target, sessionId, executionId, result, signal);
+  }
+
+  private capabilityEventSink(
+    targetId: string,
+    sessionId: string,
+    executionId: string,
+  ): (event: { event_id: string; version: string; payload: JsonValue }) => void {
+    return (event) => {
+      this.core.emit("capability_event", sessionId, {
+        execution_id: executionId,
+        capability_id: targetId,
+        event_id: event.event_id,
+        version: event.version,
+        payload: event.payload,
+      });
+    };
+  }
+
+  /** The checks before a capability runs; a refused submit is already reported. */
+  private admitCapability(
+    targetId: string,
+    input: JsonValue,
+    signal?: AbortSignal,
+  ):
+    | { readonly outcome: SubmitOutcome }
+    | { readonly target: WasmTarget; readonly sessionId: string; readonly executionId: string } {
+    const refused = (outcome: SubmitOutcome) => ({ outcome });
     const target = this.wasmTargets.get(targetId);
     if (target === undefined) {
-      return this.core.rejectedSubmit(
+      return refused(this.core.rejectedSubmit(
         targetId,
         embedderError("target_not_found", `'${targetId}' is not a bundled capability`),
-      );
+      ));
     }
     const sessionId = this.core.nextSessionId();
     const requestId = this.core.nextRequestId();
@@ -1136,12 +1267,12 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     });
 
     if (signal?.aborted) {
-      return this.cancelledSubmit(
+      return refused(this.cancelledSubmit(
         targetId,
         sessionId,
         executionId,
         target.capabilityVersion,
-      );
+      ));
     }
 
     if (target.serviceType === "stateful") {
@@ -1171,7 +1302,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
             },
           },
         });
-        return { sessionId, status: "accepted", error: null };
+        return refused({ sessionId, status: "accepted", error: null });
       }
     }
 
@@ -1205,26 +1336,20 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
             },
           },
         });
-        return { sessionId, status: "accepted", error: null };
+        return refused({ sessionId, status: "accepted", error: null });
       }
     }
+    return { target, sessionId, executionId };
+  }
 
-    const result = executeWasmModule(
-      this.runtimeModule,
-      target,
-      input,
-      (event) => {
-        this.core.emit("capability_event", sessionId, {
-          execution_id: executionId,
-          capability_id: targetId,
-          event_id: event.event_id,
-          version: event.version,
-          payload: event.payload,
-        });
-      },
-      this.runtimeLimitsHeader(),
-    );
-
+  private finishCapability(
+    targetId: string,
+    target: WasmTarget,
+    sessionId: string,
+    executionId: string,
+    result: WasmExecutionResult,
+    signal?: AbortSignal,
+  ): SubmitOutcome {
     if (signal?.aborted) {
       return this.cancelledSubmit(
         targetId,
@@ -1538,13 +1663,95 @@ function executeWasmModule(
   runtimeModule: WebAssembly.Module,
   target: WasmTarget,
   input: JsonValue,
-  onCapabilityEvent: (event: {
-    event_id: string;
-    version: string;
-    payload: JsonValue;
-  }) => void,
+  onCapabilityEvent: CapabilityEventSink,
   limits: RuntimeWasmNestedLimits,
 ): WasmExecutionResult {
+  const started = startWasmHost(runtimeModule, target, limits, []);
+  if ("result" in started) {
+    return started.result;
+  }
+  const { host } = started;
+  try {
+    host.submit(new TextEncoder().encode(JSON.stringify(input)));
+  } catch (error) {
+    return runtimeCallFailure(error, "submit");
+  }
+  return collectWasmResult(host, onCapabilityEvent);
+}
+
+/**
+ * Like {@link executeWasmModule}, answering each deferred connector call the
+ * guest suspends on (Spec 1719 FR-012). A connector that throws reaches the
+ * guest as a failed call. Cancelling drops the suspended guest (FR-013).
+ */
+async function executeDeferredWasmModule(
+  runtimeModule: WebAssembly.Module,
+  target: WasmTarget,
+  input: JsonValue,
+  onCapabilityEvent: CapabilityEventSink,
+  limits: RuntimeWasmNestedLimits,
+  deferred: readonly RuntimeWasmConnectorRef[],
+  connectors: ReadonlyMap<string, { readonly connector: MediatedConnector }>,
+  signal?: AbortSignal,
+): Promise<WasmExecutionResult> {
+  const started = startWasmHost(runtimeModule, target, limits, deferred);
+  if ("result" in started) {
+    return started.result;
+  }
+  const { host } = started;
+  const encoder = new TextEncoder();
+  try {
+    let response = host.submit(encoder.encode(JSON.stringify(input)));
+    for (;;) {
+      const record = asRecord(asJsonValue(response));
+      if (record?.["status"] !== "suspended") {
+        break;
+      }
+      const request = record["pending_connector_invocation"] as unknown as MediatedConnectorRequest;
+      let answer: { [key: string]: JsonValue };
+      try {
+        const connector = connectors.get(request.connector_id)?.connector;
+        if (connector === undefined) {
+          throw new Error("connector was deactivated");
+        }
+        const invoked = await connector.invoke(request, signal !== undefined ? { signal } : {});
+        answer = { kind: "connector_response", response: invoked as unknown as JsonValue };
+      } catch (error) {
+        answer = { kind: "connector_response", failure: String(error) };
+      }
+      if (signal?.aborted) {
+        host.shutdown();
+        return { ok: false, output: null, code: "cancelled", message: "submit cancelled" };
+      }
+      response = host.submit(encoder.encode(JSON.stringify(answer)));
+    }
+  } catch (error) {
+    return runtimeCallFailure(error, "submit");
+  }
+  return collectWasmResult(host, onCapabilityEvent);
+}
+
+function runtimeCallFailure(error: unknown, step: string): WasmExecutionResult {
+  const message =
+    error instanceof RuntimeWasmHostError
+      ? error.message
+      : `runtime.wasm ${step} failed: ${String(error)}`;
+  return { ok: false, output: null, ...classifyRuntimeFailure(message) };
+}
+
+type CapabilityEventSink = (event: {
+  event_id: string;
+  version: string;
+  payload: JsonValue;
+}) => void;
+
+/** Instantiates and initializes a fresh `runtime.wasm` for one capability run. */
+function startWasmHost(
+  runtimeModule: WebAssembly.Module,
+  target: WasmTarget,
+  limits: RuntimeWasmNestedLimits,
+  deferredConnectors: readonly RuntimeWasmConnectorRef[],
+): { readonly host: RuntimeWasmHost } | { readonly result: WasmExecutionResult } {
   let host: RuntimeWasmHost;
   try {
     host = RuntimeWasmHost.fromModule(runtimeModule);
@@ -1553,7 +1760,7 @@ function executeWasmModule(
       error instanceof RuntimeWasmHostError
         ? error.message
         : `runtime.wasm instantiate failed: ${String(error)}`;
-    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
+    return { result: { ok: false, output: null, ...classifyRuntimeFailure(message) } };
   }
 
   try {
@@ -1566,27 +1773,22 @@ function executeWasmModule(
         hostPlacementTarget: "browser",
         permittedTargets: ["browser"],
         limits,
+        connectorRequirements: target.connectorRequirements,
+        deferredConnectors,
       },
       target.wasmBytes,
     );
   } catch (error) {
-    const message =
-      error instanceof RuntimeWasmHostError
-        ? error.message
-        : `runtime.wasm init failed: ${String(error)}`;
-    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
+    return { result: runtimeCallFailure(error, "init") };
   }
+  return { host };
+}
 
-  try {
-    host.submit(new TextEncoder().encode(JSON.stringify(input)));
-  } catch (error) {
-    const message =
-      error instanceof RuntimeWasmHostError
-        ? error.message
-        : `runtime.wasm submit failed: ${String(error)}`;
-    return { ok: false, output: null, ...classifyRuntimeFailure(message) };
-  }
-
+/** Drains a finished run's events into its result. */
+function collectWasmResult(
+  host: RuntimeWasmHost,
+  onCapabilityEvent: CapabilityEventSink,
+): WasmExecutionResult {
   let drained: RuntimeWasmJson[];
   try {
     drained = host.drainEvents();

@@ -1383,7 +1383,7 @@
     },
     {
       "id": "104-mediated-connector-invocation",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/104-mediated-connector-invocation/spec.md",
@@ -1391,7 +1391,8 @@
         "crates/traverse-contracts/",
         "crates/traverse-runtime/",
         "docs/adr/0039-connector-binding-and-mediated-host-integration.md",
-        "specs/104-mediated-connector-invocation/"
+        "specs/104-mediated-connector-invocation/",
+        "crates/traverse-runtime-wasm/"
       ]
     },
     {
@@ -2082,6 +2083,26 @@
         "crates/traverse-mcp/",
         "packages/web/TraverseEmbedder/",
         "fixtures/cross-host/canonical-input-v1/"
+      ]
+    },
+    {
+      "id": "1719-suspended-connector-invocation",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1719-suspended-connector-invocation/spec.md",
+      "governs": [
+        "specs/1719-suspended-connector-invocation/",
+        "docs/decision-log.md",
+        "docs/host-connector-command-dispatch.md",
+        "docs/releases/next.md",
+        "CHANGELOG.md",
+        "crates/traverse-runtime-wasm/",
+        "packages/web/TraverseEmbedder/",
+        "runtime/",
+        "examples/applications/traverse-starter/runtime/",
+        "examples/applications/audio-analysis/runtime/",
+        "fixtures/cross-host/model-execute-v1/"
       ]
     }
   ]

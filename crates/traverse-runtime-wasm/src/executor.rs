@@ -22,7 +22,8 @@ use traverse_contracts::{
     ConnectorRequirement, EventReference, ServiceType, canonicalize_json_bytes, validate_emit_event,
 };
 use wasmi::{
-    Caller, Config, Engine, Error as WasmiError, Extern, Linker, Module, Store, StoreLimitsBuilder,
+    AsContextMut, Caller, Config, Engine, Error as WasmiError, Extern, Linker, Memory, Module,
+    Store, StoreLimitsBuilder, TypedResumableCall, TypedResumableCallHostTrap, Val,
 };
 
 /// Host ABI version accepted on Spec 104 connector request/response envelopes.
@@ -78,7 +79,16 @@ pub struct MediatedConnectorContext {
 pub struct ActivatedConnector {
     pub connector_id: String,
     pub version: String,
-    pub implementation: Arc<dyn MediatedConnector>,
+    pub binding: ConnectorBinding,
+}
+
+/// How an activated connector answers a guest's call.
+#[derive(Clone)]
+pub enum ConnectorBinding {
+    /// Answered inside the call.
+    Immediate(Arc<dyn MediatedConnector>),
+    /// Answered by the host after the guest suspends (Spec 1719).
+    Deferred,
 }
 
 /// Immutable, non-secret outcome evidence for one mediated connector call.
@@ -155,6 +165,55 @@ pub struct NestedExecutionOutcome {
     pub connector_invocation_evidence: Vec<ConnectorInvocationEvidence>,
 }
 
+/// The result of starting or resuming a nested capability.
+pub enum NestedRun {
+    Finished(NestedExecutionOutcome),
+    /// The guest is waiting on a deferred connector (Spec 1719 FR-003).
+    Suspended(Box<SuspendedExecution>),
+}
+
+/// Where a connector call's answer goes in the guest.
+struct ConnectorCallTarget {
+    connector_id: String,
+    version: String,
+    response_ptr: usize,
+    response_capacity: usize,
+}
+
+/// A guest suspended at a deferred `connector_invoke`. Its memory, fuel and
+/// events live in `store` until it resumes or is dropped.
+pub struct SuspendedExecution {
+    store: Store<NestedStoreState>,
+    memory: Option<Memory>,
+    call: TypedResumableCallHostTrap<()>,
+    request: ConnectorInvokeRequest,
+    target: ConnectorCallTarget,
+}
+
+impl SuspendedExecution {
+    /// The guest's request, for the host to answer.
+    #[must_use]
+    pub fn request(&self) -> &ConnectorInvokeRequest {
+        &self.request
+    }
+
+    /// Delivers the answer and continues the guest to its next suspension or
+    /// its end (Spec 1719 FR-005, FR-006).
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, secret-free error string when the guest fails after
+    /// it resumes.
+    pub fn resume(
+        mut self,
+        response: Result<ConnectorInvokeResponse, String>,
+    ) -> Result<NestedRun, String> {
+        let code = deliver_connector_response(&mut self.store, self.memory, &self.target, response);
+        let result = self.call.resume(&mut self.store, &[Val::I32(code)]);
+        drive_nested_call(self.store, self.memory, result)
+    }
+}
+
 struct NestedStoreState {
     stdin: Vec<u8>,
     stdin_offset: usize,
@@ -165,6 +224,8 @@ struct NestedStoreState {
     emitted_events: Vec<EmittedEvent>,
     connector_context: MediatedConnectorContext,
     connector_invocation_evidence: Vec<ConnectorInvocationEvidence>,
+    /// Set by a deferred call just before it traps to suspend the guest.
+    suspending_call: Option<(ConnectorInvokeRequest, ConnectorCallTarget)>,
 }
 
 fn read_memory(caller: &Caller<'_, NestedStoreState>, ptr: i32, len: i32) -> Result<Vec<u8>, i32> {
@@ -319,7 +380,7 @@ fn host_connector_invoke(
     request_len: i32,
     response_ptr: i32,
     response_capacity: i32,
-) -> i32 {
+) -> Result<i32, WasmiError> {
     let Ok((request, response_ptr, response_capacity)) = parse_connector_request(
         &caller,
         request_ptr,
@@ -327,28 +388,46 @@ fn host_connector_invoke(
         response_ptr,
         response_capacity,
     ) else {
-        return CONNECTOR_INVOKE_ERR_INVALID_REQUEST;
+        return Ok(CONNECTOR_INVOKE_ERR_INVALID_REQUEST);
     };
     let context = caller.data().connector_context.clone();
     let connector = match resolve_activated_connector(&context, &request) {
         Ok(connector) => connector,
         Err(failure) => {
-            return connector_failure(
+            return Ok(connector_failure(
                 &mut caller,
                 &request.connector_id,
                 failure.resolved_version.as_deref(),
                 failure.failure_class,
                 failure.code,
-            );
+            ));
         }
     };
-    invoke_activated_connector(
-        &mut caller,
-        request,
+    let target = ConnectorCallTarget {
+        connector_id: request.connector_id.clone(),
+        version: connector.version,
         response_ptr,
         response_capacity,
-        &connector,
-    )
+    };
+    match connector.binding {
+        ConnectorBinding::Deferred => {
+            caller.data_mut().suspending_call = Some((request, target));
+            Err(WasmiError::new("connector call suspended"))
+        }
+        ConnectorBinding::Immediate(implementation) => {
+            let response = implementation.invoke(&request);
+            let memory = match caller.get_export("memory") {
+                Some(Extern::Memory(memory)) => Some(memory),
+                _ => None,
+            };
+            Ok(deliver_connector_response(
+                &mut caller,
+                memory,
+                &target,
+                response,
+            ))
+        }
+    }
 }
 
 fn parse_connector_request(
@@ -443,87 +522,72 @@ fn resolve_activated_connector(
     Ok(connector.clone())
 }
 
-fn invoke_activated_connector(
-    caller: &mut Caller<'_, NestedStoreState>,
-    request: ConnectorInvokeRequest,
-    response_ptr: usize,
-    response_capacity: usize,
-    connector: &ActivatedConnector,
+/// Applies Spec 104's answer checks, writes the answer to the guest and records
+/// its evidence. An in-call and a resumed answer both come through here.
+fn deliver_connector_response(
+    ctx: &mut impl AsContextMut<Data = NestedStoreState>,
+    memory: Option<Memory>,
+    target: &ConnectorCallTarget,
+    response: Result<ConnectorInvokeResponse, String>,
 ) -> i32 {
-    let Ok(response) = connector.implementation.invoke(&request) else {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
+    let failure = |ctx: &mut _, failure_class, code| {
+        connector_failure(
+            ctx,
+            &target.connector_id,
+            Some(&target.version),
+            failure_class,
+            code,
+        )
+    };
+    let Ok(response) = response else {
+        return failure(
+            ctx,
             "execution_failed",
             CONNECTOR_INVOKE_ERR_EXECUTION_FAILED,
         );
     };
     if response.abi_version != SUPPORTED_HOST_ABI_VERSION
         || response.result_class.is_empty()
-        || contains_host_private_data(&response.payload)
+        || response_contains_host_private_data(&target.connector_id, &response.payload)
     {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
+        return failure(
+            ctx,
             "unauthorized_output",
             CONNECTOR_INVOKE_ERR_UNAUTHORIZED,
         );
     }
     let Ok(response_bytes) = serde_json::to_vec(&response) else {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
+        return failure(
+            ctx,
             "execution_failed",
             CONNECTOR_INVOKE_ERR_EXECUTION_FAILED,
         );
     };
-    if response_bytes.len() > response_capacity
-        || response_bytes.len() > MAX_CONNECTOR_INVOKE_RESPONSE_BYTES
-    {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
-            "bounded_io",
-            CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE,
-        );
-    }
-    let Ok(response_len) = i32::try_from(response_bytes.len()) else {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
-            "bounded_io",
-            CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE,
-        );
+    let response_len = i32::try_from(response_bytes.len()).ok().filter(|_| {
+        response_bytes.len() <= target.response_capacity
+            && response_bytes.len() <= MAX_CONNECTOR_INVOKE_RESPONSE_BYTES
+    });
+    let Some(response_len) = response_len else {
+        return failure(ctx, "bounded_io", CONNECTOR_INVOKE_ERR_PAYLOAD_TOO_LARGE);
     };
-    let Ok(response_ptr_i32) = i32::try_from(response_ptr) else {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
-            "invalid_response_memory",
-            CONNECTOR_INVOKE_ERR_INVALID_REQUEST,
-        );
-    };
-    if write_memory(caller, response_ptr_i32, &response_bytes).is_err() {
-        return connector_failure(
-            caller,
-            &request.connector_id,
-            Some(&connector.version),
+    let written = memory.is_some_and(|memory| {
+        memory
+            .write(&mut *ctx, target.response_ptr, &response_bytes)
+            .is_ok()
+    });
+    if !written {
+        return failure(
+            ctx,
             "invalid_response_memory",
             CONNECTOR_INVOKE_ERR_INVALID_REQUEST,
         );
     }
-    caller
+    ctx.as_context_mut()
         .data_mut()
         .connector_invocation_evidence
         .push(ConnectorInvocationEvidence {
-            connector_id: request.connector_id,
-            resolved_version: Some(connector.version.clone()),
+            connector_id: target.connector_id.clone(),
+            resolved_version: Some(target.version.clone()),
             result_class: response.result_class,
             failure_class: None,
         });
@@ -531,13 +595,13 @@ fn invoke_activated_connector(
 }
 
 fn connector_failure(
-    caller: &mut Caller<'_, NestedStoreState>,
+    ctx: &mut impl AsContextMut<Data = NestedStoreState>,
     connector_id: &str,
     resolved_version: Option<&str>,
     failure_class: &str,
     code: i32,
 ) -> i32 {
-    caller
+    ctx.as_context_mut()
         .data_mut()
         .connector_invocation_evidence
         .push(ConnectorInvocationEvidence {
@@ -547,6 +611,20 @@ fn connector_failure(
             failure_class: Some(failure_class.to_string()),
         });
     code
+}
+
+/// Spec 104 FR-008: `traverse.model-runtime`'s `model_evidence` is the signed
+/// rights record the host verified. It is public by design and may hold public
+/// URLs, so it is the one value this filter skips.
+fn response_contains_host_private_data(connector_id: &str, payload: &Value) -> bool {
+    match payload {
+        Value::Object(map) if connector_id == "traverse.model-runtime" => {
+            let mut rest = map.clone();
+            rest.remove("model_evidence");
+            contains_host_private_data(&Value::Object(rest))
+        }
+        _ => contains_host_private_data(payload),
+    }
 }
 
 fn contains_host_private_data(value: &Value) -> bool {
@@ -624,6 +702,8 @@ pub fn execute_nested_capability_with_limits(
 
 /// Like [`execute_nested_capability_with_limits`], with Spec 104 mediated
 /// connector bindings for nested `traverse_host::connector_invoke` (#1719).
+/// This path can't suspend, so a deferred connector fails closed as `unbound`
+/// (Spec 1719 FR-010).
 ///
 /// # Errors
 ///
@@ -638,6 +718,37 @@ pub fn execute_nested_capability_with_connectors(
     host_limits: NestedExecutionLimits,
     connector_context: &MediatedConnectorContext,
 ) -> Result<NestedExecutionOutcome, String> {
+    let mut immediate_only = connector_context.clone();
+    immediate_only
+        .activated_connectors
+        .retain(|connector| matches!(connector.binding, ConnectorBinding::Immediate(_)));
+    match start_nested_capability(
+        artifact,
+        input,
+        service_type,
+        declared_emits,
+        host_limits,
+        &immediate_only,
+    )? {
+        NestedRun::Finished(outcome) => Ok(outcome),
+        NestedRun::Suspended(_) => Err("execution: connector call suspended".to_string()),
+    }
+}
+
+/// Starts a nested capability that may suspend on a deferred connector
+/// (Spec 1719).
+///
+/// # Errors
+///
+/// As [`execute_nested_capability_with_connectors`].
+pub fn start_nested_capability(
+    artifact: &[u8],
+    input: &[u8],
+    service_type: &ServiceType,
+    declared_emits: &[EventReference],
+    host_limits: NestedExecutionLimits,
+    connector_context: &MediatedConnectorContext,
+) -> Result<NestedRun, String> {
     // Spec 1722 FR-001/FR-003: every host's guest reads the same canonical
     // bytes, and input JCS cannot represent fails before any guest runs.
     let input = canonicalize_json_bytes(input).map_err(|error| error.to_string())?;
@@ -660,6 +771,7 @@ pub fn execute_nested_capability_with_connectors(
         emitted_events: Vec::new(),
         connector_context: connector_context.clone(),
         connector_invocation_evidence: Vec::new(),
+        suspending_call: None,
     };
     let mut store = Store::new(&engine, state);
     store.limiter(|state| &mut state.limits);
@@ -690,20 +802,52 @@ pub fn execute_nested_capability_with_connectors(
     let start = instance
         .get_typed_func::<(), ()>(&store, "_start")
         .map_err(|error| format!("missing _start: {error}"))?;
-    if let Err(error) = start.call(&mut store, ()) {
-        // Guest `proc_exit` surfaces as `i32_exit` (see `wasi_proc_exit`);
-        // status `0` is successful completion, matching native Wasmtime.
-        if error.i32_exit_status() != Some(0) {
-            return Err(format!("execution: {error}"));
+    let memory = instance.get_memory(&store, "memory");
+    let result = start.call_resumable(&mut store, ());
+    drive_nested_call(store, memory, result)
+}
+
+/// Turns one step of a guest's `_start` into a finished run, a suspension or
+/// an error.
+fn drive_nested_call(
+    mut store: Store<NestedStoreState>,
+    memory: Option<Memory>,
+    result: Result<TypedResumableCall<()>, WasmiError>,
+) -> Result<NestedRun, String> {
+    match result {
+        Ok(TypedResumableCall::Finished(())) => {}
+        Ok(TypedResumableCall::OutOfFuel(_)) => {
+            return Err("execution: all fuel consumed by WebAssembly".to_string());
+        }
+        Ok(TypedResumableCall::HostTrap(call)) => {
+            if let Some((request, target)) = store.data_mut().suspending_call.take() {
+                return Ok(NestedRun::Suspended(Box::new(SuspendedExecution {
+                    store,
+                    memory,
+                    call,
+                    request,
+                    target,
+                })));
+            }
+            // Guest `proc_exit` surfaces as `i32_exit` (see `wasi_proc_exit`);
+            // status `0` is successful completion, matching native Wasmtime.
+            let error = call.host_error();
+            if error.i32_exit_status() != Some(0) {
+                return Err(format!("execution: {error}"));
+            }
+        }
+        Err(error) => {
+            if error.i32_exit_status() != Some(0) {
+                return Err(format!("execution: {error}"));
+            }
         }
     }
-
     let final_state = store.into_data();
-    Ok(NestedExecutionOutcome {
+    Ok(NestedRun::Finished(NestedExecutionOutcome {
         stdout: final_state.stdout,
         emitted_events: final_state.emitted_events,
         connector_invocation_evidence: final_state.connector_invocation_evidence,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -1136,7 +1280,7 @@ mod tests {
             activated_connectors: vec![ActivatedConnector {
                 connector_id: "traverse.test".to_string(),
                 version: version.to_string(),
-                implementation: Arc::new(TestConnector),
+                binding: super::ConnectorBinding::Immediate(Arc::new(TestConnector)),
             }],
         }
     }
@@ -1163,6 +1307,234 @@ mod tests {
             NestedExecutionLimits::default(),
             context,
         )
+    }
+
+    /// A deferred call in the guest: echoes the answer, twice over when `calls`
+    /// is 2.
+    fn deferred_guest(calls: usize) -> Result<Vec<u8>, String> {
+        let request_len = VALID_CONNECTOR_REQUEST.len();
+        let escaped = VALID_CONNECTOR_REQUEST
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let call = format!(
+            "i32.const 32 i32.const {request_len} i32.const 1024 i32.const 4096 call $invoke local.set $len
+             i32.const 4 i32.const 1024 i32.store
+             i32.const 8 local.get $len i32.store
+             i32.const 1 i32.const 4 i32.const 1 i32.const 12 call $write drop\n"
+        );
+        let body = call.repeat(calls);
+        wat::parse_str(format!(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+              (import "traverse_host" "connector_invoke" (func $invoke (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 32) "{escaped}")
+              (func $_start (export "_start") (local $len i32) {body})
+            )
+            "#
+        ))
+        .map_err(|error| format!("wat: {error}"))
+    }
+
+    fn deferred_context() -> MediatedConnectorContext {
+        MediatedConnectorContext {
+            declared_requirements: vec![ConnectorRequirement {
+                connector_id: "traverse.test".to_string(),
+                version: "^1.0.0".to_string(),
+            }],
+            activated_connectors: vec![ActivatedConnector {
+                connector_id: "traverse.test".to_string(),
+                version: "1.0.0".to_string(),
+                binding: super::ConnectorBinding::Deferred,
+            }],
+        }
+    }
+
+    fn start_deferred(wasm: &[u8]) -> Result<super::NestedRun, String> {
+        super::start_nested_capability(
+            wasm,
+            b"{}",
+            &ServiceType::Stateless,
+            &[],
+            NestedExecutionLimits::default(),
+            &deferred_context(),
+        )
+    }
+
+    fn answer(marker: &str) -> ConnectorInvokeResponse {
+        ConnectorInvokeResponse {
+            abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+            result_class: "success".to_string(),
+            payload: serde_json::json!({ "marker": marker }),
+        }
+    }
+
+    fn expect_suspended(run: super::NestedRun) -> Result<Box<super::SuspendedExecution>, String> {
+        match run {
+            super::NestedRun::Suspended(suspended) => Ok(suspended),
+            super::NestedRun::Finished(_) => Err("expected a suspension".to_string()),
+        }
+    }
+
+    fn expect_finished(run: super::NestedRun) -> Result<NestedExecutionOutcome, String> {
+        match run {
+            super::NestedRun::Finished(outcome) => Ok(outcome),
+            super::NestedRun::Suspended(_) => Err("expected the guest to finish".to_string()),
+        }
+    }
+
+    #[test]
+    fn deferred_call_suspends_and_resumes_with_the_answer() -> Result<(), String> {
+        let suspended = expect_suspended(start_deferred(&deferred_guest(1)?)?)?;
+        assert_eq!(suspended.request().connector_id, "traverse.test");
+        let outcome = expect_finished(suspended.resume(Ok(answer("first")))?)?;
+        assert!(String::from_utf8_lossy(&outcome.stdout).contains("first"));
+        assert_eq!(outcome.connector_invocation_evidence.len(), 1);
+        assert_eq!(
+            outcome.connector_invocation_evidence[0].result_class,
+            "success"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_resumed_guest_can_suspend_again_and_keeps_its_output() -> Result<(), String> {
+        let first = expect_suspended(start_deferred(&deferred_guest(2)?)?)?;
+        let second = expect_suspended(first.resume(Ok(answer("first")))?)?;
+        let outcome = expect_finished(second.resume(Ok(answer("second")))?)?;
+        let stdout = String::from_utf8_lossy(&outcome.stdout);
+        assert!(stdout.contains("first") && stdout.contains("second"));
+        assert_eq!(outcome.connector_invocation_evidence.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn a_resumed_answer_passes_the_same_checks_as_an_in_call_answer() -> Result<(), String> {
+        let cases = [
+            (Err("host could not answer".to_string()), "execution_failed"),
+            (
+                Ok(ConnectorInvokeResponse {
+                    abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+                    result_class: "success".to_string(),
+                    payload: serde_json::json!({ "secret": "x" }),
+                }),
+                "unauthorized_output",
+            ),
+            (
+                Ok(ConnectorInvokeResponse {
+                    abi_version: SUPPORTED_HOST_ABI_VERSION.to_string(),
+                    result_class: "success".to_string(),
+                    payload: serde_json::json!({ "marker": "x".repeat(8192) }),
+                }),
+                "bounded_io",
+            ),
+        ];
+        for (response, failure_class) in cases {
+            let suspended = expect_suspended(start_deferred(&deferred_guest(1)?)?)?;
+            let run = suspended.resume(response);
+            // The guest's negative length makes its own `fd_write` fail, which
+            // it ignores; only the evidence matters here.
+            let outcome = expect_finished(run?)?;
+            assert_eq!(
+                outcome.connector_invocation_evidence[0]
+                    .failure_class
+                    .as_deref(),
+                Some(failure_class)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn only_model_runtime_evidence_skips_the_host_private_filter() {
+        let evidence = serde_json::json!({
+            "status": "ok",
+            "model_evidence": { "rights": { "source_url": "https://example.test/model" } },
+        });
+        assert!(!super::response_contains_host_private_data(
+            "traverse.model-runtime",
+            &evidence
+        ));
+        assert!(super::response_contains_host_private_data(
+            "traverse.other",
+            &evidence
+        ));
+        for leak in [
+            serde_json::json!({ "endpoint": "x", "model_evidence": {} }),
+            serde_json::json!({ "output_ref": "https://internal.test/x", "model_evidence": {} }),
+            serde_json::json!("https://internal.test/x"),
+        ] {
+            assert!(super::response_contains_host_private_data(
+                "traverse.model-runtime",
+                &leak
+            ));
+        }
+    }
+
+    #[test]
+    fn a_deferred_call_fails_its_spec_104_checks_without_suspending() -> Result<(), String> {
+        let wasm = deferred_guest(1)?;
+        let mut undeclared = deferred_context();
+        undeclared.declared_requirements.clear();
+        let run = super::start_nested_capability(
+            &wasm,
+            b"{}",
+            &ServiceType::Stateless,
+            &[],
+            NestedExecutionLimits::default(),
+            &undeclared,
+        )?;
+        let outcome = expect_finished(run)?;
+        assert_eq!(
+            outcome.connector_invocation_evidence[0]
+                .failure_class
+                .as_deref(),
+            Some("undeclared")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_path_that_cannot_suspend_fails_a_deferred_connector_as_unbound() -> Result<(), String> {
+        let outcome = run_with_context(&deferred_guest(1)?, &deferred_context())?;
+        assert_eq!(
+            outcome.connector_invocation_evidence[0]
+                .failure_class
+                .as_deref(),
+            Some("unbound")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proc_exit_and_fuel_exhaustion_keep_their_outcomes() -> Result<(), String> {
+        let exit_zero = wat::parse_str(
+            r#"(module
+              (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+              (memory (export "memory") 1)
+              (func (export "_start") i32.const 0 call $exit))"#,
+        )
+        .map_err(|error| format!("wat: {error}"))?;
+        assert!(run_with_context(&exit_zero, &deferred_context()).is_ok());
+        let exit_one = wat::parse_str(
+            r#"(module
+              (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+              (memory (export "memory") 1)
+              (func (export "_start") i32.const 1 call $exit))"#,
+        )
+        .map_err(|error| format!("wat: {error}"))?;
+        assert!(run_with_context(&exit_one, &deferred_context()).is_err());
+        let spin = wat::parse_str(
+            r#"(module (memory (export "memory") 1)
+              (func (export "_start") (loop $l (br $l))))"#,
+        )
+        .map_err(|error| format!("wat: {error}"))?;
+        let Err(error) = run_with_context(&spin, &deferred_context()) else {
+            return Err("a spinning guest must run out of fuel".to_string());
+        };
+        assert!(error.contains("fuel"), "{error}");
+        Ok(())
     }
 
     #[test]
@@ -1269,7 +1641,7 @@ mod tests {
                 activated_connectors: vec![ActivatedConnector {
                     connector_id: "traverse.test".to_string(),
                     version: version.to_string(),
-                    implementation,
+                    binding: super::ConnectorBinding::Immediate(implementation),
                 }],
             };
             let outcome = run_with_context(&wasm, &context)?;

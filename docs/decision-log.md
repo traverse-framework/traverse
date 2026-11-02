@@ -7282,3 +7282,68 @@ Spec 138 0.16.0 (FR-074, FR-075):
 Chosen by the maintainer on `#1721` (2026-10-29): the recommended option on
 each question (shared sync crate in both binaries, same code with structured
 details, and all four targets).
+
+## Decision 122: Hosts Answer Guest Connector Calls by Suspending the Guest
+
+- **Date**: 2026-11-02
+- **Status**: Accepted
+- **Governing specs**: `1719-suspended-connector-invocation`,
+  `104-mediated-connector-invocation`,
+  `1402-runtime-wasm-orchestrator-convergence`
+- **Related issues**: `#1719`, `#1755`
+
+### Context
+
+- A guest's `traverse_host.connector_invoke` is a synchronous call. Inside
+  `runtime.wasm`, the nested `wasmi` engine runs it to an answer before the
+  guest continues.
+- A host may only be able to answer asynchronously. The browser's
+  `ExactModelBrowserHost.execute` returns a promise, and `runtime.wasm` has no
+  imports through which it could call that host anyway.
+- `model/model.execute@1.0.0` therefore can't run on any host that embeds
+  `runtime.wasm`, and `#1719` left the bridge undecided between JSPI, a Worker
+  with `Atomics.wait`, and replay.
+
+### Options considered
+
+1. **Suspend and resume.** Nested `wasmi` suspends the guest at the call, using
+   its resumable host-trap support, and the host resumes it with the answer.
+2. **Replay.** Stop at the call, get the answer, and re-run the guest from the
+   start with cached answers.
+3. **JSPI.** Suspend the whole wasm stack with a browser feature.
+4. **Worker with `Atomics.wait`.** Block `runtime.wasm` in a Worker while the
+   main thread does the work.
+
+### Decision
+
+Use option 1 on every host that embeds `runtime.wasm`.
+
+- A guest runs once. Nothing repeats, so a guest doesn't have to be
+  deterministic for this to be correct, and its effects aren't buffered.
+- It needs no browser feature or cross-origin isolation, and no host-specific
+  path. JSPI and a Worker apply only to the web.
+- The host and `runtime.wasm` exchange the request and answer through the
+  existing `traverse_submit`, so the exported symbol set Spec 071 FR-006 fixes
+  doesn't change, and neither does the bridge ABI version.
+- A host opts in per connector at `traverse_init`. A host that doesn't declare
+  one never sees a suspended submit.
+
+### Approval
+
+Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.
+
+### Addendum: signed rights evidence and the output filter
+
+Running the published `model.execute@1.0.0` over `traverse.digits-onnx@1.0.0`
+showed that Spec 104's output filter refuses any string containing `://`. A
+signed rights record holds public URLs (`source_url`, `attribution`), so the guest
+got `connector_unavailable` on every host.
+
+The filter now skips only the top-level `model_evidence` of a
+`traverse.model-runtime` response (Spec 104 1.1.0 FR-008), on native and nested.
+The record is signed and verified by the host, and Spec 104 FR-004 protects
+private data, which this isn't. Limiting the exception to URL fields would fail
+closed again on the next rights field. Withholding evidence from guests would
+break the published contract's output.
+
+Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.

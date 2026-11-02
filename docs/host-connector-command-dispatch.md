@@ -86,8 +86,13 @@ executor.run_bytes_with_mediated_connectors(&wasm, &input, "cap", context)?;
 ```
 
 `ExactModelMediatedConnector` is the `Mutex` bridge from Spec 104
-(`&self`) to Spec 138 (`&mut self`). Web/Swift/Android/.NET activation
-APIs are follow-on work on the same issue.
+(`&self`) to Spec 138 (`&mut self`).
+
+Browser and Node hosts use `BundleEmbedder.activateMediatedConnector` with
+`exactModelMediatedConnector`. See the
+[web embedder README](../packages/web/TraverseEmbedder/README.md). The guest
+suspends at the call until the host answers (Spec 1719, Decision 122). Swift,
+Android and .NET activation APIs aren't shipped yet.
 
 ## Verification
 

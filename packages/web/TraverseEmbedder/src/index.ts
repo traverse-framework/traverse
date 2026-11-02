@@ -273,3 +273,13 @@ export type {
   PackageStatus,
   PackageStatusEntry,
 } from "./exactModel.js";
+export {
+  MODEL_RUNTIME_CONNECTOR_VERSION,
+  exactModelMediatedConnector,
+} from "./mediatedConnector.js";
+export type {
+  ExactModelMediatedConnectorOptions,
+  MediatedConnector,
+  MediatedConnectorRequest,
+  MediatedConnectorResponse,
+} from "./mediatedConnector.js";

@@ -227,6 +227,8 @@ export type ExactModelExecution = {
   readonly output_ref: string;
   readonly placement: typeof PLACEMENT_WASM_CPU;
   readonly model_ref: { readonly model_id: string; readonly version: string; readonly digest: string };
+  /** The manifest's output schema (Spec 1719 FR-011). */
+  readonly output_schema_ref: string;
   readonly target: typeof PLACEMENT_WASM_CPU;
   readonly trace: {
     readonly model_id: string;
@@ -1348,6 +1350,7 @@ export class ExactModelBrowserHost {
       output_ref: this.io.putOutput(output),
       placement: PLACEMENT_WASM_CPU,
       model_ref: modelRef,
+      output_schema_ref: pack.manifest.output_schema_ref,
       target: PLACEMENT_WASM_CPU,
       trace: {
         ...modelRef,
