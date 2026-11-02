@@ -160,6 +160,11 @@ bash scripts/ci/runtime_wasm_reproducibility_check.sh
 shasum -a 256 runtime/runtime.wasm             # must match runtime/runtime.wasm.sha256
 ```
 
+The committed bytes are the Linux CI build. A macOS build passes this check
+locally but produces a different digest, so CI rejects it. On a mismatch, pin
+the bytes from the `runtime-wasm-linux-rebuild` artifact of the failed
+`runtime-wasm-reproducibility` job.
+
 Every in-repo copy (`examples/applications/*/runtime/`,
 `packages/web/TraverseEmbedder/tests/fixtures/`) must share that digest.
 
