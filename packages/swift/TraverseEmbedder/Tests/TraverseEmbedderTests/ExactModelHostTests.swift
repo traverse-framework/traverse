@@ -135,6 +135,11 @@ final class ExactModelHostTests: XCTestCase {
         let registered = try await register(.init(policyRef: "policy-1", placements: ["coreml", "wasm-cpu"]))
         XCTAssertEqual(registered.digest, digest)
         XCTAssertEqual(registered.placement, "coreml")
+        // The passing self-check is recorded with its worst case (#1708).
+        let check = try XCTUnwrap(registered.attempts.first?.selfCheck)
+        XCTAssertTrue(check.passed)
+        XCTAssertEqual(check.failedCases, 0)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(check.worstAbsDiff), 0.005)
         // Requiring fuel metering excludes Core ML, which cannot meter fuel.
         let metered = try await register(.init(policyRef: "metered", placements: ["coreml", "wasm-cpu"],
                                                requireFuelMetering: true))
