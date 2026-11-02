@@ -538,6 +538,20 @@ mod tests {
             self_check(&mut cache, &mut idle, &variant, &cached),
             evidence
         );
+        // A top-k flip is counted apart from a difference over the tolerance.
+        let mut ranked = variant.clone();
+        ranked.tolerance.top_k = 1;
+        let flipped = CachedAcceleratorVariant {
+            conformance_vector: vector(&[(&frame(3, &[0.9, 0.1]), &case)]),
+            ..cached.clone()
+        };
+        let evidence = self_check(
+            &mut HashMap::new(),
+            &mut Shift(vec![0.0]),
+            &ranked,
+            &flipped,
+        );
+        assert_eq!((evidence.failed_cases, evidence.top_k_mismatches), (1, 1));
     }
 
     #[test]
