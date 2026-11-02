@@ -149,6 +149,9 @@ export async function writeBundleFixture({ appId, components, workflow, compatib
     await writeJson(join(dir, "contract.json"), {
       inputs: { schema: { type: "object", additionalProperties: true } },
       outputs: { schema: { type: "object", additionalProperties: true } },
+      ...(component.connectorRequirements !== undefined
+        ? { connector_requirements: component.connectorRequirements }
+        : {}),
     });
     await writeJson(join(dir, "component.manifest.json"), {
       component_id: `fixture.component-${index}`,

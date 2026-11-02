@@ -7331,3 +7331,19 @@ Use option 1 on every host that embeds `runtime.wasm`.
 ### Approval
 
 Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.
+
+### Addendum: signed rights evidence and the output filter
+
+Running the published `model.execute@1.0.0` over `traverse.digits-onnx@1.0.0`
+showed that Spec 104's output filter refuses any string containing `://`. A
+signed rights record holds public URLs (`source_url`, `attribution`), so the guest
+got `connector_unavailable` on every host.
+
+The filter now skips only the top-level `model_evidence` of a
+`traverse.model-runtime` response (Spec 104 1.1.0 FR-008), on native and nested.
+The record is signed and verified by the host, and Spec 104 FR-004 protects
+private data, which this isn't. Limiting the exception to URL fields would fail
+closed again on the next rights field. Withholding evidence from guests would
+break the published contract's output.
+
+Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.

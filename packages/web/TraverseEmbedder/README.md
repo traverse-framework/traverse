@@ -179,15 +179,36 @@ const host = new ExactModelBrowserHost(pins, {
 
 ### Spec 104 guest `connector_invoke` (#1719)
 
-Nested `runtime.wasm` now links `traverse_host.connector_invoke` (same
-fail-closed mediation as native Wasmtime). A public
-`BundleEmbedder.activateMediatedConnector` API and a first-party browser
-`traverse.model-runtime` Spec 104 binding are **not yet** shipped: Spec 104
-is a synchronous ABI while `ExactModelBrowserHost.execute` is async, so the
-binding needs JSPI, a Worker + `Atomics.wait`, or a documented replay
-strategy before it can land. Until then, use Spec 137
-`ExactModelBrowserHost` / `registerHostConnectorAdapter` for app-command
-`model.execute`, not catalog guest `connector_invoke`.
+A capability guest can call a connector you answer asynchronously. The guest
+suspends at the call and resumes with your answer (Spec 1719, Decision 122), with
+no JSPI, Worker or cross-origin isolation.
+
+```ts
+import {
+  BundleEmbedder,
+  ExactModelBrowserHost,
+  MODEL_RUNTIME_CONNECTOR,
+  MODEL_RUNTIME_CONNECTOR_VERSION,
+  exactModelMediatedConnector,
+} from "traverse-embedder-web";
+
+const host = new ExactModelBrowserHost(pins, { trustedPublicKeysHex, modelUsage: "non_commercial" });
+await host.registerPackage(manifest, wasm, signature, { policy_ref: "policy:default-wasm-cpu" });
+
+embedder.activateMediatedConnector(
+  MODEL_RUNTIME_CONNECTOR,
+  MODEL_RUNTIME_CONNECTOR_VERSION,
+  exactModelMediatedConnector(host, { allowedClassifications: ["public"] }),
+);
+await embedder.submitAsync("model.execute", input);
+```
+
+- A capability takes its requirements from its contract's `connector_requirements`.
+- Use `submitAsync`. Sync `submit` can't wait for an answer, so it fails a target
+  with an active connector with `async_submit_required`.
+- Your answer passes the same Spec 104 checks as any connector response.
+- A connector you haven't activated fails closed, and the catalog guest reports
+  `connector_unavailable`.
 
 ## Error mapping
 

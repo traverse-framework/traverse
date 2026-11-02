@@ -548,7 +548,7 @@ fn deliver_connector_response(
     };
     if response.abi_version != SUPPORTED_HOST_ABI_VERSION
         || response.result_class.is_empty()
-        || contains_host_private_data(&response.payload)
+        || response_contains_host_private_data(&target.connector_id, &response.payload)
     {
         return failure(
             ctx,
@@ -611,6 +611,20 @@ fn connector_failure(
             failure_class: Some(failure_class.to_string()),
         });
     code
+}
+
+/// Spec 104 FR-008: `traverse.model-runtime`'s `model_evidence` is the signed
+/// rights record the host verified. It is public by design and may hold public
+/// URLs, so it is the one value this filter skips.
+fn response_contains_host_private_data(connector_id: &str, payload: &Value) -> bool {
+    match payload {
+        Value::Object(map) if connector_id == "traverse.model-runtime" => {
+            let mut rest = map.clone();
+            rest.remove("model_evidence");
+            contains_host_private_data(&Value::Object(rest))
+        }
+        _ => contains_host_private_data(payload),
+    }
 }
 
 fn contains_host_private_data(value: &Value) -> bool {
@@ -1430,6 +1444,32 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn only_model_runtime_evidence_skips_the_host_private_filter() {
+        let evidence = serde_json::json!({
+            "status": "ok",
+            "model_evidence": { "rights": { "source_url": "https://example.test/model" } },
+        });
+        assert!(!super::response_contains_host_private_data(
+            "traverse.model-runtime",
+            &evidence
+        ));
+        assert!(super::response_contains_host_private_data(
+            "traverse.other",
+            &evidence
+        ));
+        for leak in [
+            serde_json::json!({ "endpoint": "x", "model_evidence": {} }),
+            serde_json::json!({ "output_ref": "https://internal.test/x", "model_evidence": {} }),
+            serde_json::json!("https://internal.test/x"),
+        ] {
+            assert!(super::response_contains_host_private_data(
+                "traverse.model-runtime",
+                &leak
+            ));
+        }
     }
 
     #[test]

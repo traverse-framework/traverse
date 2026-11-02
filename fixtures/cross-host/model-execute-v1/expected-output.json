@@ -1,0 +1,33 @@
+{
+  "model_evidence": {
+    "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+    "effective_usage": "non_commercial",
+    "model_id": "traverse.digits-onnx",
+    "rights": {
+      "attribution": "ONNX export of Traverse's digits MLP, trained on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0); packaged on the Traverse ONNX runner guest",
+      "commercial_use": "allowed",
+      "derivation": {
+        "kind": "converted",
+        "source_commercial_use": "allowed",
+        "source_digest": "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc",
+        "source_license_id": "CC-BY-4.0",
+        "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/digits-mlp-1.0.0.onnx"
+      },
+      "license_id": "CC-BY-4.0",
+      "redistribution": "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+      "source_url": "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits"
+    },
+    "status": "active",
+    "version": "1.0.0"
+  },
+  "model_ref": {
+    "digest": "sha256:a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+    "model_id": "traverse.digits-onnx",
+    "version": "1.0.0"
+  },
+  "output_ref": "output-1",
+  "output_schema_ref": "schema:traverse-digits-onnx-out",
+  "placement": "wasm-cpu",
+  "result_class": "success",
+  "status": "ok"
+}

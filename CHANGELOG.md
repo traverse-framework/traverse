@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Catalog `model.execute@1.0.0` runs in Browser and Node (Decision 122, Spec 1719, `#1719`)
+
+- Unblocks the published `model/model.execute@1.0.0` capability: a guest suspends
+  at `connector_invoke`, and the host's asynchronous answer resumes it.
+- New web APIs: `BundleEmbedder.activateMediatedConnector` and
+  `exactModelMediatedConnector`.
+- **Fix (Spec 104 1.1.0).** The output filter no longer refuses a signed
+  `model_evidence` for holding public URLs.
+
 ## v0.16.0 — 2026-11-02
 
 Minor lockstep release with **breaking** changes. See

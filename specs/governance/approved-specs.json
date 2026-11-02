@@ -1383,7 +1383,7 @@
     },
     {
       "id": "104-mediated-connector-invocation",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/104-mediated-connector-invocation/spec.md",
@@ -1391,7 +1391,8 @@
         "crates/traverse-contracts/",
         "crates/traverse-runtime/",
         "docs/adr/0039-connector-binding-and-mediated-host-integration.md",
-        "specs/104-mediated-connector-invocation/"
+        "specs/104-mediated-connector-invocation/",
+        "crates/traverse-runtime-wasm/"
       ]
     },
     {
@@ -2100,7 +2101,8 @@
         "packages/web/TraverseEmbedder/",
         "runtime/",
         "examples/applications/traverse-starter/runtime/",
-        "examples/applications/audio-analysis/runtime/"
+        "examples/applications/audio-analysis/runtime/",
+        "fixtures/cross-host/model-execute-v1/"
       ]
     }
   ]

@@ -2,7 +2,8 @@
 
 **Status**: Approved
 **Canonical governing ID**: `104-mediated-connector-invocation`
-**Version**: 1.0.0
+**Version**: 1.1.0
+**Amended**: 2026-11-02 (#1719, Decision 122): FR-008.
 **Extends**: `039-connector-plugin-architecture`, `098-capability-event-host-abi`, `103-application-connector-binding`
 **Input**: #826, #1050, #1052; ADR-0039.
 
@@ -28,6 +29,11 @@ without weakening Traverse's deny-by-default WASM sandbox.
   stable non-secret errors.
 - **FR-007**: Ambient WASI filesystem, network, environment, and device access
   MUST remain denied.
+- **FR-008**: The host-private output filter MUST NOT apply to the top-level
+  `model_evidence` of a `traverse.model-runtime` response. That value is the
+  signed rights record the host verified, so it is public and may hold public
+  URLs. The filter MUST still apply to the rest of that response and to every
+  other connector's response.
 
 ## Acceptance Scenarios
 

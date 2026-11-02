@@ -59,6 +59,10 @@ Native Wasmtime hosts answer in the call and aren't affected.
   deferred connector with `async_submit_required`.
 - **FR-013**: Cancelling `submitAsync` while a guest is suspended MUST drop the
   guest and report the session as cancelled.
+- **FR-014**: `fixtures/cross-host/model-execute-v1` MUST run on native and in
+  `traverse-embedder-web` with the same output, except that native adds
+  `placement_evidence`. The web host doesn't meter fuel, so it MUST NOT report
+  that evidence.
 
 ## Scenarios
 
@@ -72,6 +76,8 @@ Native Wasmtime hosts answer in the call and aren't affected.
 6. Browser and Node: a target running a guest against
    `traverse.model-runtime` returns the same response shape as the native binding
    for `usage_undeclared` and for a connector that isn't activated.
+7. The published `model.execute@1.0.0`, unchanged, over
+   `traverse.digits-onnx@1.0.0` returns `status: ok` and `model_evidence` in Node.
 
 ## Out of scope
 

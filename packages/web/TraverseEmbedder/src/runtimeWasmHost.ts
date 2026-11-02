@@ -48,6 +48,15 @@ export interface RuntimeWasmCapabilityInit {
   readonly stateMachine?: RuntimeWasmJson;
   /** Host-configurable nested execution limits (#1656). */
   readonly limits?: RuntimeWasmNestedLimits;
+  /** Spec 104 connector requirements from the capability contract. */
+  readonly connectorRequirements?: readonly RuntimeWasmConnectorRef[];
+  /** Connectors this host answers after the guest suspends (Spec 1719 FR-001). */
+  readonly deferredConnectors?: readonly RuntimeWasmConnectorRef[];
+}
+
+export interface RuntimeWasmConnectorRef {
+  readonly connector_id: string;
+  readonly version: string;
 }
 
 export class RuntimeWasmHostError extends Error {
@@ -241,6 +250,12 @@ export class RuntimeWasmHost {
     if (capability.stateMachine !== undefined) {
       headerObject.state_machine = capability.stateMachine;
       headerObject.app_id = capability.capabilityId;
+    }
+    if (capability.connectorRequirements !== undefined) {
+      headerObject.connector_requirements = capability.connectorRequirements.map((entry) => ({ ...entry }));
+    }
+    if (capability.deferredConnectors !== undefined) {
+      headerObject.deferred_connectors = capability.deferredConnectors.map((entry) => ({ ...entry }));
     }
     if (capability.limits !== undefined) {
       const limitsHeader: Record<string, number> = {};
