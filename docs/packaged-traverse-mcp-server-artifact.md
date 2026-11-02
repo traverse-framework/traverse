@@ -39,7 +39,7 @@ tagged commit.
 ## Pin and verify
 
 ```bash
-TAG=traverse-mcp-v0.15.0   # replace with the release you pin
+TAG=traverse-mcp-v0.16.0   # replace with the release you pin
 TARGET=aarch64-apple-darwin # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
 REPO=traverse-framework/traverse
 

@@ -246,7 +246,8 @@ mod tests {
     };
     use crate::exact_model::{
         CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelUsage,
-        PLACEMENT_WASM_CPU, PinRights, PlacementEvidence, TrustedModelKeys, encode_guest_frame,
+        PLACEMENT_WASM_CPU, PinRights, PlacementEvidence, PlacementPolicy, TrustedModelKeys,
+        encode_guest_frame,
     };
     use crate::executor::{ConnectorInvokeRequest, MediatedConnector, SUPPORTED_HOST_ABI_VERSION};
     use crate::host_connector_dispatch::{
@@ -456,6 +457,10 @@ mod tests {
             &read("fixtures/models/digits-mlp-1.0.0/model.manifest.json")?,
             read("fixtures/models/digits-mlp-1.0.0/model.wasm")?,
             &read("fixtures/models/digits-mlp-1.0.0/model.sig.json")?,
+            &PlacementPolicy {
+                policy_ref: "policy-1".to_string(),
+                ..PlacementPolicy::default()
+            },
         )
         .map_err(|error| error.message)?;
         host.policies.insert(

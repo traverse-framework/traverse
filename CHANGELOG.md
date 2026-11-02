@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v0.16.0 — 2026-11-02
+
+Minor lockstep release with **breaking** changes. See
+[docs/releases/v0.16.0.md](docs/releases/v0.16.0.md) and
+[docs/upgrade-to-v0.16.0.md](docs/upgrade-to-v0.16.0.md).
+
+### Model placement prepared at registration (Decision 120, Spec 138 0.16.0, `#1706`)
+
+- **Breaking.** Every host's registration call takes the execution policy and
+  fixes one placement per (package, `policy_ref`). No call pays the one-time
+  preparation.
+
+### Registry rights fail closed and contract signatures (`#1727`, `#1728`, `#1729`)
+
+- **Breaking.** The runtime rejects revoked Registry versions. Conditional
+  model rights need an explicit host opt-in, and unknown rights are denied.
+- `traverse-cli registry inspect` shows lifecycle status, revocation and
+  model-rights records. `registry list` and `registry search` can filter on
+  them.
+- Registry contract signatures are verified over their exact source bytes.
+
+### Mode A and security (`#1744`, `#1735`, `#1751`–`#1754`, Decision 121)
+
+- `traverse-mcp sync`, binaries for four targets and a three-command
+  quickstart.
+- `wasmtime` 48.0.7 with Rust 1.95, and the ONNX runner guest on `tract-onnx`
+  0.23.9.
+
 ### Breaking: guests receive canonical JSON input on every host (Spec 1722, Decision 118, `#1722`)
 
 - Every host now feeds a capability guest the RFC 8785 (JCS) canonical

@@ -9,11 +9,11 @@ model` (Decision 105, `#1589`). The host behaviour it targets is described in
 ## Install the CLI
 
 Package models with the published Traverse CLI. The crate is
-**`traverse-cli-rs`** (binary `traverse-cli`). It requires **rustc ≥ 1.94**.
+**`traverse-cli-rs`** (binary `traverse-cli`). It requires **rustc ≥ 1.95**.
 
 ```bash
-rustup toolchain install 1.94.0
-cargo +1.94.0 install traverse-cli-rs --version =0.15.0 --locked
+rustup toolchain install 1.95.0
+cargo +1.95.0 install traverse-cli-rs --version =0.16.0 --locked
 ```
 
 > **Warning:** crates.io [`traverse-cli`](https://crates.io/crates/traverse-cli)
@@ -25,19 +25,19 @@ the `onnx-runner-v*` artifact release (never marked Latest; same pattern as
 `swift-host-v*` / `runtime-wasm-v*`):
 
 ```bash
-VERSION=0.15.0
+VERSION=0.16.0
 curl -fsSL -o runner.wasm \
   "https://github.com/traverse-framework/traverse/releases/download/onnx-runner-v${VERSION}/runner.wasm"
-echo "bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622  runner.wasm" | shasum -a 256 -c -
+echo "ac5591fac5f37435667169e969f9117cc6f81dc66b73cd74d1aef9000f5d3a0a  runner.wasm" | shasum -a 256 -c -
 ```
 
-Pinned digest for `onnx-runner-v0.15.0` / `fixtures/onnx/runner.wasm`:
-`bd95db176d9268f04b06b42c4bd9a380e568a9bfb4b6abeaa8c07c3d79763622`.
+Pinned digest for `onnx-runner-v0.16.0` / `fixtures/onnx/runner.wasm`:
+`ac5591fac5f37435667169e969f9117cc6f81dc66b73cd74d1aef9000f5d3a0a`.
 
 Digits fixture inputs (no git checkout required):
 
 ```bash
-TAG=v0.15.0
+TAG=v0.16.0
 BASE="https://raw.githubusercontent.com/traverse-framework/traverse/${TAG}/fixtures/onnx"
 curl -fsSL -o digits-mlp-1.0.0.onnx "${BASE}/digits-mlp-1.0.0.onnx"
 curl -fsSL -o digits-onnx.package.json "${BASE}/digits-onnx.package.json"
@@ -497,11 +497,11 @@ A package runs on any host that supports its manifest schema and guest ABI:
 
 | Host | Engine | ABI v1 / v2 (schemas `2.0.0`, `2.1.0`) | ABI v3 (schema `2.2.0`, what `package-onnx` emits) | Specific reject codes (Spec 138 0.14.0) | Accelerator placements |
 | --- | --- | --- | --- | --- | --- |
-| Rust (`traverse-runtime`, CLI) | `wasmtime` or `wasmi` | yes | v0.15.0+ | after v0.15.0 | `coreml` on Apple (`traverse-coreml-adapter`) |
-| Browser (`traverse-embedder-web`) | browser WebAssembly | yes | v0.15.0+ (npm 0.14.0 rejects it with `manifest_invalid`) | after v0.15.0 | none (`wasm-cpu` only) |
+| Rust (`traverse-runtime`, CLI) | `wasmtime` or `wasmi` | yes | v0.15.0+ | v0.16.0+ | `coreml` on Apple (`traverse-coreml-adapter`) |
+| Browser (`traverse-embedder-web`) | browser WebAssembly | yes | v0.15.0+ (npm 0.14.0 rejects it with `manifest_invalid`) | v0.16.0+ | none (`wasm-cpu` only) |
 | Swift (`TraverseEmbedder`, xcframework) | `wasmi` | yes | `swift-host-v0.15.0`+ | `swift-host-v0.15.0-1`+ | `coreml` |
-| Kotlin / Android (JNI) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
-| .NET (P/Invoke) | `wasmi` | yes | v0.15.0+ | after v0.15.0 | none |
+| Kotlin / Android (JNI) | `wasmi` | yes | v0.15.0+ | v0.16.0+ | none |
+| .NET (P/Invoke) | `wasmi` | yes | v0.15.0+ | v0.16.0+ | none |
 
 Every host gives byte-identical `wasm-cpu` output for the same package and
 frame; that's what conformance vectors check. A host from before the

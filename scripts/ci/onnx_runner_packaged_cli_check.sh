@@ -21,9 +21,9 @@ if [[ "${actual_digest}" != "${expected_digest}" ]]; then
   exit 1
 fi
 echo "==> cargo package -p traverse-cli-rs"
-# traverse-registry-sync is packaged alongside so Cargo resolves it locally
-# until its first crates.io release (#1751).
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo package -p traverse-registry-sync -p traverse-cli-rs --no-verify --allow-dirty --target-dir "${workdir}/pkg-target"
+# Its workspace dependencies are packaged alongside so Cargo resolves them
+# locally: a version bump PR runs before those versions reach crates.io.
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" cargo package -p traverse-contracts -p traverse-runtime -p traverse-embedder -p traverse-registry-sync -p traverse-mcp -p traverse-cli-rs --no-verify --allow-dirty --target-dir "${workdir}/pkg-target"
 crate_path="$(find "${workdir}/pkg-target" -name 'traverse-cli-rs-*.crate' | head -n 1)"
 test -n "${crate_path}"
 mkdir -p "${workdir}/crate"

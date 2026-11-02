@@ -7,10 +7,10 @@ manifest_path="${repo_root}/examples/expedition/registry-bundle/manifest.json"
 request_path="${repo_root}/examples/expedition/runtime-requests/plan-expedition.json"
 
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "${tmpdir}"' EXIT
+invalid_manifest_path="$(mktemp "${repo_root}/examples/expedition/registry-bundle/.invalid-manifest.XXXXXX")"
+trap 'rm -rf "${tmpdir}"; rm -f "${invalid_manifest_path}"' EXIT
 
 trace_path="${tmpdir}/plan-expedition-trace.json"
-invalid_manifest_path="${tmpdir}/invalid-manifest.json"
 
 pushd "${repo_root}" >/dev/null
 
