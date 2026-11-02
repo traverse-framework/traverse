@@ -16,8 +16,8 @@ let traverseSwiftHost: Target = FileManager.default.fileExists(atPath: absoluteL
     ? .binaryTarget(name: "TraverseSwiftHost", path: relativeLocalHost)
     : .binaryTarget(
         name: "TraverseSwiftHost",
-        url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.15.0-1/TraverseSwiftHost.xcframework.zip",
-        checksum: "bc741716851f1f3559c2c7571002546d4b9d2bf36d81c88ef399e746c05ddd6e"
+        url: "https://github.com/traverse-framework/traverse/releases/download/swift-host-v0.16.0/TraverseSwiftHost.xcframework.zip",
+        checksum: "77588d09e76d1d72788426fb11d6c0ebea8181bb2ec3820764876c33ebbbac09"
     )
 
 let package = Package(
