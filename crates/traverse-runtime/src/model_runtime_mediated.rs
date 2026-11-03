@@ -246,8 +246,8 @@ mod tests {
     };
     use crate::exact_model::{
         CommercialUse, ExactModelHostConnector, ExactModelPin, ExecutionPolicy, ModelUsage,
-        PLACEMENT_WASM_CPU, PinRights, PlacementEvidence, PlacementPolicy, TrustedModelKeys,
-        encode_guest_frame,
+        PLACEMENT_WASM_CPU, PackageStatus, PackageStatusEntry, PinRights, PlacementEvidence,
+        PlacementPolicy, TrustedModelKeys, encode_guest_frame,
     };
     use crate::executor::{
         ConnectorInvokeRequest, MediatedConnector, MediatedConnectorContext,
@@ -263,6 +263,7 @@ mod tests {
     use traverse_contracts::ConnectorRequirement;
 
     const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    const CATALOG_POLICY_REF: &str = "policy:default-wasm-cpu";
 
     fn pin(digest: &str) -> ExactModelPin {
         ExactModelPin {
@@ -534,15 +535,11 @@ mod tests {
         keys.trust(&public).map_err(|error| error.message)?;
         let mut host = ExactModelHostConnector::new(vec![package_pin], keys);
         host.model_usage = usage;
-        let policy_ref = "policy:default-wasm-cpu";
         let registered = host.register_package(
             &read("fixtures/models/digits-onnx-1.0.0/model.manifest.json")?,
             read("fixtures/models/digits-onnx-1.0.0/model.wasm")?,
             &read("fixtures/models/digits-onnx-1.0.0/model.sig.json")?,
-            &PlacementPolicy {
-                policy_ref: policy_ref.to_string(),
-                ..PlacementPolicy::default()
-            },
+            &catalog_placement_policy(),
         );
         // Without a declared usage, registration is what fails closed.
         match usage {
@@ -554,10 +551,29 @@ mod tests {
                 Some(Some(ModelFailureReason::UsageUndeclared))
             ),
         }
+        let output = run_catalog_guest(host, &vector, bound)?;
+        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
+        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
+        Ok((output, expected))
+    }
+
+    fn catalog_placement_policy() -> PlacementPolicy {
+        PlacementPolicy {
+            policy_ref: CATALOG_POLICY_REF.to_string(),
+            ..PlacementPolicy::default()
+        }
+    }
+
+    /// Stages the vector's first input and runs the catalog guest over `host`.
+    fn run_catalog_guest(
+        mut host: ExactModelHostConnector,
+        vector: &Value,
+        bound: bool,
+    ) -> Result<Value, String> {
         host.policies.insert(
-            policy_ref.to_string(),
+            CATALOG_POLICY_REF.to_string(),
             ExecutionPolicy {
-                policy_ref: policy_ref.to_string(),
+                policy_ref: CATALOG_POLICY_REF.to_string(),
                 allowed_classifications: vec!["public".to_string()],
                 max_output_bytes: 56,
                 ..ExecutionPolicy::default()
@@ -593,9 +609,52 @@ mod tests {
                 },
             )
             .map_err(|error| format!("{error:?}"))?;
-        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
-        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
-        Ok((output.value, expected))
+        Ok(output.value)
+    }
+
+    /// One `fail-closed.json` case: the registration's reason and the guest's output.
+    fn run_fail_closed_case(case: &Value) -> Result<(Value, Value), String> {
+        let vector = read("fixtures/models/conformance/signed-digits-onnx.json")?;
+        let vector: Value = serde_json::from_slice(&vector).map_err(|error| error.to_string())?;
+        let mut package_pin: ExactModelPin =
+            serde_json::from_value(vector["pin"].clone()).map_err(|error| error.to_string())?;
+        let digest = package_pin.digest.clone();
+        if let Some(pin_digest) = case["pin_digest"].as_str() {
+            package_pin.digest = pin_digest.to_string();
+        }
+        let mut keys = TrustedModelKeys::new();
+        if case["trusted"] != json!(false) {
+            let public: [u8; 32] = hex(vector["trusted_public_key_hex"].as_str().unwrap_or(""))
+                .try_into()
+                .map_err(|_| "key length".to_string())?;
+            keys.trust(&public).map_err(|error| error.message)?;
+        }
+        let mut host = ExactModelHostConnector::new(vec![package_pin], keys);
+        host.model_usage = Some(ModelUsage::NonCommercial);
+        let mut wasm = read("fixtures/models/digits-onnx-1.0.0/model.wasm")?;
+        if case["tamper_wasm"] == json!(true) {
+            let last = wasm.len() - 1;
+            wasm[last] ^= 1;
+        }
+        let registered = host.register_package(
+            &read("fixtures/models/digits-onnx-1.0.0/model.manifest.json")?,
+            wasm,
+            &read("fixtures/models/digits-onnx-1.0.0/model.sig.json")?,
+            &catalog_placement_policy(),
+        );
+        let reason = registered.err().and_then(|error| error.reason);
+        if case["revoke"] == json!(true) {
+            host.set_package_status([(
+                digest,
+                PackageStatusEntry {
+                    status: PackageStatus::Revoked,
+                    reason: "fixture".to_string(),
+                },
+            )]);
+        }
+        let reason = serde_json::to_value(reason).map_err(|error| error.to_string())?;
+        let output = run_catalog_guest(host, &vector, true)?;
+        Ok((reason, output))
     }
 
     /// #1719: every host must produce `expected-output.json`. Only native adds
@@ -621,6 +680,20 @@ mod tests {
         let (undeclared, _) = run_catalog_model_execute(None, true)?;
         assert_eq!(undeclared["status"], "error");
         assert_eq!(undeclared["error"]["code"], "model_unavailable");
+        Ok(())
+    }
+
+    /// #1719: registration refuses or the status map revokes; every host reports
+    /// the same reason and guest output (`fail-closed.json`).
+    #[test]
+    fn catalog_model_execute_fail_closed_cases_match_the_cross_host_vector() -> Result<(), String> {
+        let cases = read("fixtures/cross-host/model-execute-v1/fail-closed.json")?;
+        let cases: Value = serde_json::from_slice(&cases).map_err(|error| error.to_string())?;
+        for case in cases["cases"].as_array().into_iter().flatten() {
+            let (reason, output) = run_fail_closed_case(case)?;
+            assert_eq!(reason, case["registration_reason"], "{}", case["name"]);
+            assert_eq!(output, case["expected_output"], "{}", case["name"]);
+        }
         Ok(())
     }
 }
