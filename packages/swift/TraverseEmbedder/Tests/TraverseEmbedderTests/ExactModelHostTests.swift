@@ -103,6 +103,32 @@ final class ExactModelHostTests: XCTestCase {
         XCTAssertEqual(correct, 1727, "same count as the trainer, native wasmtime, and the browser")
     }
 
+    /// Decision 120 (#1706): a placement over its preparation budget falls
+    /// through to the next listed one, and a failed registration keeps nothing.
+    func testAnOverBudgetPlacementFallsThroughToTheNextListedOne() async throws {
+        let vector = try json("conformance/signed-prepared-v3.json")
+        let host = try ExactModelHost(pins: [try pin(from: vector["pin"])],
+                                      trustedPublicKeysHex: [try XCTUnwrap(vector["trusted_public_key_hex"] as? String)],
+                                      modelUsage: "commercial")
+        let dir = try XCTUnwrap(vector["package_dir"] as? String)
+        let register = { (policy: ExactModelPlacementPolicy, budget: UInt64) in
+            try await host.registerPackageWithPreparation(
+                manifest: try self.fixture("\(dir)/model.manifest.json"),
+                wasm: try self.fixture("\(dir)/model.wasm"),
+                signature: try self.fixture("\(dir)/model.sig.json"),
+                policy: policy, preparationBudgetMs: budget)
+        }
+        do {
+            _ = try await register(.init(policyRef: "policy-1", placements: ["wasm-cpu", "coreml"]), 0)
+            XCTFail("a registration with no placement within budget succeeded")
+        } catch let error as ExactModelError {
+            XCTAssertEqual(error.reason, "placement_unavailable")
+            XCTAssertTrue(error.message.contains("wasm-cpu over_budget, coreml unsupported"), error.message)
+        }
+        let registered = try await register(.init(policyRef: "policy-1", placements: ["wasm-cpu"]), 60_000)
+        XCTAssertEqual(registered.placement, "wasm-cpu")
+    }
+
     /// Decision 112 (#1629 slice 3): the Core ML accelerator is opt-in at
     /// `init`, variant files go in at registration, and the policy a package
     /// is registered under fixes its placement there (Decision 120).

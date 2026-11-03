@@ -124,6 +124,31 @@ public sealed class ExactModelHostTests
     }
 
     /// <summary>
+    /// Decision 120 (#1706): a placement over its preparation budget falls through to
+    /// the next listed one, and a failed registration keeps nothing.
+    /// </summary>
+    [Fact]
+    public async Task AnOverBudgetPlacementFallsThroughToTheNextListedOne()
+    {
+        var vector = Json("fixtures/models/conformance/signed-prepared-v3.json");
+        using var host = new ExactModelHost([Pin(vector["pin"])], [S(vector, "trusted_public_key_hex")], "commercial");
+        var dir = $"fixtures/models/{S(vector, "package_dir")}";
+        Task<ExactModelRegistration> Register(ExactModelPlacementPolicy policy, ulong budget) =>
+            host.RegisterPackageWithPreparationAsync(
+                Read($"{dir}/model.manifest.json"),
+                Read($"{dir}/model.wasm"),
+                Read($"{dir}/model.sig.json"),
+                policy,
+                preparationBudgetMs: budget);
+        var error = await Assert.ThrowsAsync<ExactModelException>(
+            () => Register(new ExactModelPlacementPolicy("policy-1", ["wasm-cpu", "coreml"]), 0));
+        Assert.Equal("placement_unavailable", error.Reason);
+        Assert.Contains("wasm-cpu over_budget, coreml unsupported", error.Message);
+        var registered = await Register(new ExactModelPlacementPolicy("policy-1", ["wasm-cpu"]), 60_000);
+        Assert.Equal("wasm-cpu", registered.Placement);
+    }
+
+    /// <summary>
     /// Spec 138 0.14.0 (Decision 115): the shared reject corpus fails with exactly
     /// its code and reason, as on every other host.
     /// </summary>

@@ -109,6 +109,35 @@ class ExactModelHostTest {
         }
     }
 
+    /** Decision 120 (#1706): an over-budget placement falls through; a failed registration keeps nothing. */
+    @Test
+    fun anOverBudgetPlacementFallsThroughToTheNextListedOne() = runBlocking {
+        val vector = json("fixtures/models/conformance/signed-prepared-v3.json")
+        ExactModelHost(listOf(pin(vector["pin"]!!)), listOf(vector.s("trusted_public_key_hex")), "commercial").use { host ->
+            val dir = "fixtures/models/${vector.s("package_dir")}"
+            val register = { policy: ExactModelPlacementPolicy, budget: Long ->
+                runBlocking {
+                    host.registerPackageWithPreparation(
+                        repoFile("$dir/model.manifest.json").readBytes(),
+                        repoFile("$dir/model.wasm").readBytes(),
+                        repoFile("$dir/model.sig.json").readBytes(),
+                        policy,
+                        preparationBudgetMs = budget,
+                    )
+                }
+            }
+            try {
+                register(ExactModelPlacementPolicy("policy-1", listOf("wasm-cpu", "coreml")), 0)
+                fail("a registration with no placement within budget succeeded")
+            } catch (error: ExactModelError) {
+                assertEquals("placement_unavailable", error.reason)
+                assertTrue(error.message!!, error.message!!.contains("wasm-cpu over_budget, coreml unsupported"))
+            }
+            val registered = register(ExactModelPlacementPolicy("policy-1", listOf("wasm-cpu")), 60_000)
+            assertEquals("wasm-cpu", registered.placement)
+        }
+    }
+
     @Test
     fun signedClassifierVectorIsByteIdentical() = vectorCheck("signed-classifier.json", 4096)
 
