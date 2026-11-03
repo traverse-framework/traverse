@@ -209,6 +209,8 @@ await embedder.submitAsync("model.execute", input);
 - Your answer passes the same Spec 104 checks as any connector response.
 - A connector you haven't activated fails closed, and the catalog guest reports
   `connector_unavailable`.
+- Native counterpart and shared notes:
+  [host-connector-command-dispatch.md](../../../docs/host-connector-command-dispatch.md).
 
 ## Error mapping
 
@@ -247,7 +249,7 @@ npm test   # builds with tsc, then runs the node:test suite
 ## Publishing
 
 Published to npm as [`traverse-embedder-web`](https://www.npmjs.com/package/traverse-embedder-web)
-(currently `0.16.0`; verify with `npm view traverse-embedder-web version`):
+(currently `0.16.1`; verify with `npm view traverse-embedder-web version`):
 
 ```bash
 npm install traverse-embedder-web

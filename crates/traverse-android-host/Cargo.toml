@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 jni = "0.22.4"
 serde_json = "1.0.145"
-traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.16.0" }
+traverse-model-host-frame = { path = "../traverse-model-host-frame", version = "0.16.1" }
 
 [lints]
 workspace = true

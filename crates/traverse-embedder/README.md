@@ -110,6 +110,13 @@ scripted results, identical event envelopes, deterministic identifiers, and
 the same compatible lifecycle — for host tests without WASM or file I/O
 (spec 068 FR-006).
 
+## Mediated connectors (Spec 104 / Spec 1719)
+
+Native hosts activate `traverse.model-runtime` with
+`traverse_runtime::activate_exact_model_runtime`. Browser/Node use
+`activateMediatedConnector` + `submitAsync`. Minimal examples:
+[host-connector-command-dispatch.md](../../docs/host-connector-command-dispatch.md).
+
 ## Upgrade policy
 
 - Embedder API `1.0.0`; a new IDL version requires a new conformance suite
