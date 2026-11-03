@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-### Catalog `model.execute@1.0.0` runs in Browser and Node (Decision 122, Spec 1719, `#1719`)
+## v0.16.1 — 2026-11-03
+
+Patch lockstep release. Catalog `model.execute@1.0.0` runs on Browser and Node
+via Spec 1719. See [docs/releases/v0.16.1.md](docs/releases/v0.16.1.md).
+
+### Catalog `model.execute@1.0.0` runs in Browser and Node (Decision 122, Spec 1719, `#1719`, `#1770`)
 
 - Unblocks the published `model/model.execute@1.0.0` capability: a guest suspends
   at `connector_invoke`, and the host's asynchronous answer resumes it.
@@ -10,6 +15,7 @@
   `exactModelMediatedConnector`.
 - **Fix (Spec 104 1.1.0).** The output filter no longer refuses a signed
   `model_evidence` for holding public URLs.
+- Examples: [docs/host-connector-command-dispatch.md](docs/host-connector-command-dispatch.md).
 
 ## v0.16.0 — 2026-11-02
 

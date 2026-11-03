@@ -89,9 +89,37 @@ executor.run_bytes_with_mediated_connectors(&wasm, &input, "cap", context)?;
 (`&self`) to Spec 138 (`&mut self`).
 
 Browser and Node hosts use `BundleEmbedder.activateMediatedConnector` with
-`exactModelMediatedConnector`. See the
-[web embedder README](../packages/web/TraverseEmbedder/README.md). The guest
-suspends at the call until the host answers (Spec 1719, Decision 122). Swift,
+`exactModelMediatedConnector`. The guest suspends at the call until the host
+answers (Spec 1719, Decision 122):
+
+```ts
+import {
+  BundleEmbedder,
+  ExactModelBrowserHost,
+  MODEL_RUNTIME_CONNECTOR,
+  MODEL_RUNTIME_CONNECTOR_VERSION,
+  exactModelMediatedConnector,
+} from "traverse-embedder-web";
+
+const host = new ExactModelBrowserHost(pins, {
+  trustedPublicKeysHex,
+  modelUsage: "non_commercial",
+});
+await host.registerPackage(manifest, wasm, signature, {
+  policy_ref: "policy:default-wasm-cpu",
+});
+
+embedder.activateMediatedConnector(
+  MODEL_RUNTIME_CONNECTOR,
+  MODEL_RUNTIME_CONNECTOR_VERSION,
+  exactModelMediatedConnector(host, { allowedClassifications: ["public"] }),
+);
+await embedder.submitAsync("model.execute", input);
+```
+
+Use `submitAsync`. Sync `submit` fails a target with an active connector with
+`async_submit_required`. Full package notes:
+[web embedder README](../packages/web/TraverseEmbedder/README.md). Swift,
 Android and .NET activation APIs aren't shipped yet.
 
 ## Verification
