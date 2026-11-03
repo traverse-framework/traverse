@@ -2104,6 +2104,21 @@
         "examples/applications/audio-analysis/runtime/",
         "fixtures/cross-host/model-execute-v1/"
       ]
+    },
+    {
+      "id": "1773-host-connector-invoke-union",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1773-host-connector-invoke-union/spec.md",
+      "governs": [
+        "specs/1773-host-connector-invoke-union/",
+        "crates/traverse-cli/",
+        "crates/traverse-runtime/",
+        "packages/web/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/"
+      ]
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `codex/issue-1773-host-connector-invoke-spec`
 **Created**: 2026-11-02
-**Status**: Draft — requires maintainer approval before #1772 implementation
+**Status**: Approved (2026-11-03; maintainer approval recorded in #1773)
 **Canonical governing ID**: `1773-host-connector-invoke-union`
 **Version**: 1.0.0
 **Amends on approval**: `044-application-bundle-manifest`,
