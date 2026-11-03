@@ -6,6 +6,12 @@
 - **Raw data:** [`birdnet-iphone-governed-2026-10-15.json`](birdnet-iphone-governed-2026-10-15.json)
 - **Harness:** [`tools/model-evidence/ios`](../../tools/model-evidence/ios)
 
+> **Later evidence:** [`birdnet-iphone-governed-2026-11-03.md`](birdnet-iphone-governed-2026-11-03.md)
+> resolves findings 2 and 3. `cpu_only` now completes its first call after
+> Decision 120. It fails the self-check with the same numbers as
+> `cpu_and_neural_engine`, so the Neural Engine explanation in finding 2 does
+> not hold on its own.
+
 ## Result
 
 On an **iPhone 14 Pro Max** (`iPhone15,3`, iOS 26.6, build 23G71), with a

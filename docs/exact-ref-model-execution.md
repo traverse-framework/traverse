@@ -119,10 +119,18 @@ this governed path under `[coreml, wasm-cpu]` with the default `all`:
 - top-5 is identical and |Δ sigmoid| is ≤ 4.8×10⁻³ against `wasm-cpu`;
 - on `wasm-cpu` alone it takes about 10 s per clip.
 
-The claim covers only that device, model and policy. On that device,
-`cpu_and_neural_engine` failed the self-check and fell back to `wasm-cpu`.
-Other models, devices and compute units need their own measurement. No host
-is Certified (Spec 529).
+The claim covers only that device, model and policy. Other models, devices
+and compute units need their own measurement. No host is Certified (Spec 529).
+
+**A self-check result depends on the compute units (#1708,
+[evidence](evidence/birdnet-iphone-governed-2026-11-03.md)).** On the same
+phone, with a later clip set, `all` and `cpu_and_gpu` passed with a worst
+|Δ sigmoid| of 4.41×10⁻³. `cpu_and_neural_engine` and `cpu_only` both failed
+with 5.07×10⁻³ against the 5×10⁻³ limit, on 1 of 21 cases and with no top-5
+mismatches. A variant can be unusable on some compute units and still be safe:
+registration records the failed attempt and moves to the next listed placement.
+Read `self_check` on the registration's attempts to see why a variant was
+skipped. `all` remains the default.
 
 ## Signed packages and exact-ref resolution (Spec 138 0.4.0, Decision 101)
 

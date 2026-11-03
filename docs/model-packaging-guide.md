@@ -486,6 +486,17 @@ back to `wasm-cpu`. The flag writes manifest schema `2.3.0`, which hosts
 newer than 0.15.0 accept. Leave it off for outputs that are already scores
 or plain values; those keep schema `2.2.0`.
 
+**The self-check runs per compute-unit setting.** A variant that passes under
+`all` can fail under another setting, because Core ML may run it on different
+hardware with slightly different results. BirdNET's fp32 variant passes under
+`all` and `cpu_and_gpu` and narrowly fails under `cpu_only` and
+`cpu_and_neural_engine` on an iPhone 14 Pro Max
+([evidence](evidence/birdnet-iphone-governed-2026-11-03.md)). This is safe:
+the variant is unavailable under that setting and registration moves to the
+next listed placement, so list `wasm-cpu` after it. Do not widen
+`--max-abs-diff` to make a failing setting pass unless the wider bar is also
+acceptable for the model's outputs. Measure the settings you ship on.
+
 `fixtures/models/digits-onnx-coreml-1.0.0` is the worked example. CI re-runs
 the conversion on a macOS arm64 runner and requires the committed digest
 (`scripts/ci/coreml_variant_reconvert_check.sh`). When you change

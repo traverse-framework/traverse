@@ -3,7 +3,9 @@
 A small iOS app that measures a signed Spec 138 package on the **governed
 path**, through the public `TraverseEmbedder.ExactModelHost`, on a physical
 device. It produced
-[`docs/evidence/birdnet-iphone-governed-2026-10-15.md`](../../../docs/evidence/birdnet-iphone-governed-2026-10-15.md).
+[`docs/evidence/birdnet-iphone-governed-2026-10-15.md`](../../../docs/evidence/birdnet-iphone-governed-2026-10-15.md)
+and
+[`docs/evidence/birdnet-iphone-governed-2026-11-03.md`](../../../docs/evidence/birdnet-iphone-governed-2026-11-03.md).
 
 For each run it creates a fresh host and registers the package. The runs are:
 - `wasm-cpu` with snapshot reuse, which is the reference;
