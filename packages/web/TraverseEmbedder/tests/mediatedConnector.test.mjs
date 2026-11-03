@@ -293,3 +293,61 @@ test("catalog model.execute fails closed with the cross-host reasons", async () 
   assert.equal(undeclared.output.status, "error");
   assert.equal(undeclared.output.error.code, "model_unavailable");
 });
+
+/** One `fail-closed.json` case: the registration's reason and the guest's output. */
+async function runFailClosedCase(testCase) {
+  const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-onnx.json", MODELS), "utf8"));
+  const file = (name) => new Uint8Array(readFileSync(new URL(`${vector.package_dir}/${name}`, MODELS)));
+  const pin = testCase.pin_digest ? { ...vector.pin, digest: testCase.pin_digest } : vector.pin;
+  const host = new ExactModelBrowserHost([pin], {
+    trustedPublicKeysHex: testCase.trusted === false ? [] : [vector.trusted_public_key_hex],
+    modelUsage: "non_commercial",
+  });
+  const wasm = file("model.wasm");
+  if (testCase.tamper_wasm) {
+    wasm[wasm.length - 1] ^= 1;
+  }
+  const reason = await host
+    .registerPackage(file("model.manifest.json"), wasm, file("model.sig.json"), {
+      policy_ref: "policy:default-wasm-cpu",
+    })
+    .then(
+      () => null,
+      (error) => error.reason,
+    );
+  if (testCase.revoke) {
+    host.setPackageStatus({ [vector.pin.digest]: { status: "revoked", reason: "fixture" } });
+  }
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture.catalog",
+    components: [
+      {
+        capabilityId: "model.execute",
+        wasmBytes: new Uint8Array(readFileSync(new URL("model-execute-agent.wasm", CROSS_HOST))),
+        connectorRequirements: [{ connector_id: MODEL_RUNTIME_CONNECTOR, version: "2.3.0" }],
+      },
+    ],
+  });
+  const embedder = await BundleEmbedder.init({ manifestPath, loader: new NodeFsBundleLoader(), platform: "web" });
+  const events = [];
+  embedder.subscribe((event) => events.push(event));
+  embedder.activateMediatedConnector(
+    MODEL_RUNTIME_CONNECTOR,
+    MODEL_RUNTIME_CONNECTOR_VERSION,
+    exactModelMediatedConnector(host, { allowedClassifications: ["public"] }),
+  );
+  const input = crossHostJson("input.json");
+  assert.equal(host.io.stageModelInput(Buffer.from(vector.cases[0].input_frame_hex, "hex"), 4096), input.input_ref);
+  await embedder.submitAsync("model.execute", input);
+  const result = terminal(events);
+  assert.equal(result.event_type, "capability_result");
+  return { reason, output: result.data.output };
+}
+
+for (const testCase of crossHostJson("fail-closed.json").cases) {
+  test(`catalog model.execute fails closed like native: ${testCase.name}`, async () => {
+    const { reason, output } = await runFailClosedCase(testCase);
+    assert.equal(reason, testCase.registration_reason);
+    assert.deepEqual(output, testCase.expected_output);
+  });
+}

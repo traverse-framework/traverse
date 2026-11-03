@@ -1,0 +1,63 @@
+{
+  "cases": [
+    {
+      "name": "key_untrusted",
+      "trusted": false,
+      "registration_reason": "key_untrusted",
+      "expected_output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "pin_mismatch",
+      "pin_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "registration_reason": "pin_mismatch",
+      "expected_output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model_ref does not match an exact_model_dependencies pin",
+          "reason": "pin_mismatch"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "digest_mismatch",
+      "tamper_wasm": true,
+      "registration_reason": "digest_mismatch",
+      "expected_output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "package_revoked",
+      "revoke": true,
+      "registration_reason": null,
+      "expected_output": {
+        "error": {
+          "code": "model_unavailable",
+          "detail": {
+            "actual": "revoked",
+            "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+            "effective_usage": "non_commercial",
+            "expected": "active|deprecated",
+            "field": "status",
+            "model_id": "traverse.digits-onnx",
+            "version": "1.0.0"
+          },
+          "message": "the host package status map marks this package revoked",
+          "reason": "package_revoked"
+        },
+        "status": "error"
+      }
+    }
+  ]
+}
