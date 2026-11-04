@@ -620,6 +620,11 @@ pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
 /// contract here rather than duplicating its operation and configuration
 /// metadata in Rust, so activation registers the same artifact consumed by
 /// every host conformance fixture.
+///
+/// # Errors
+///
+/// Returns an error when the checked-in audio-input contract cannot be parsed
+/// or does not satisfy connector-contract validation.
 pub fn activation_reference_connector_contracts() -> Result<Vec<ConnectorContract>, String> {
     let mut contracts = reference_connector_contracts();
     let audio_input = parse_connector_contract(include_str!(
