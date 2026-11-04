@@ -5,10 +5,10 @@ import { extname, join, normalize } from "node:path";
 const TYPES = { ".html": "text/html", ".mjs": "text/javascript", ".js": "text/javascript", ".json": "application/json", ".wasm": "application/wasm" };
 createServer(async (request, response) => {
   const path = normalize(new URL(request.url, "http://x").pathname).replace(/^\/+/, "") || "src/browser.html";
-  if (request.method === "POST" && path === "proof") {
+  if (request.method === "POST" && (path === "proof" || path === "failed")) {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    await writeFile("proof/browser.json", Buffer.concat(chunks));
+    await writeFile(path === "proof" ? "proof/browser.json" : "proof/browser-failed.txt", Buffer.concat(chunks));
     response.writeHead(204).end();
     return;
   }

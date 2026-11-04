@@ -1,0 +1,67 @@
+name: Published model.execute demo
+
+# #1776: catalog model.execute on Browser, Node and native from published packages
+# only, on a clean runner, compared against the committed proof.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  pull_request:
+    paths:
+      - ".github/workflows/published-model-execute-demo.yml"
+      - "docs/evidence/model-execute-published-2026-11-03/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  published-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout only the demo folder
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: docs/evidence/model-execute-published-2026-11-03
+
+      - name: Copy the demo out and delete the checkout
+        run: |
+          cp -R docs/evidence/model-execute-published-2026-11-03 "$RUNNER_TEMP/demo"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+          if git -C "$RUNNER_TEMP/demo" rev-parse --is-inside-work-tree 2>/dev/null; then
+            echo "the demo folder is inside a git repository" >&2
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Run Node and native from published packages
+        working-directory: ${{ runner.temp }}/demo
+        run: bash run.sh
+
+      - name: Run headless Chrome
+        working-directory: ${{ runner.temp }}/demo
+        env:
+          # Ubuntu's runner image blocks Chrome's user namespace sandbox. The page is this demo's own.
+          CHROME_FLAGS: --no-sandbox
+        run: bash src/browser-run.sh
+
+      - name: Compare the hosts and the committed proof
+        working-directory: ${{ runner.temp }}/demo
+        run: node src/compare.mjs
+
+      - name: Upload the proof
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: published-model-execute-proof
+          path: ${{ runner.temp }}/demo/proof
