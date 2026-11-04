@@ -137,9 +137,24 @@ struct PersistedState {
 }
 
 #[derive(Debug, Deserialize)]
-struct PersistedInvoke {
+#[serde(untagged)]
+enum PersistedInvoke {
+    Capability(PersistedCapabilityInvoke),
+    HostConnector(PersistedHostConnectorInvoke),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedCapabilityInvoke {
     capability_id: String,
-    input_from: String,
+    #[serde(default)]
+    input_from: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedHostConnectorInvoke {
+    host_connector: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,17 +265,35 @@ fn decode_state_machine(
     }
     let mut states = Vec::new();
     for state in persisted.states {
-        if let Some(invoke) = &state.invoke
-            && !registered_capabilities.contains(&invoke.capability_id)
-        {
-            return Err(());
-        }
+        let invoke = match state.invoke {
+            Some(PersistedInvoke::Capability(invoke)) => {
+                if invoke.capability_id.trim().is_empty()
+                    || !registered_capabilities.contains(&invoke.capability_id)
+                    || invoke
+                        .input_from
+                        .as_deref()
+                        .is_some_and(|input_from| input_from.trim().is_empty())
+                {
+                    return Err(());
+                }
+                Some(ApplicationStateInvoke::Capability {
+                    capability_id: invoke.capability_id,
+                    input_from: invoke.input_from,
+                })
+            }
+            Some(PersistedInvoke::HostConnector(invoke)) => {
+                if invoke.host_connector.trim().is_empty() {
+                    return Err(());
+                }
+                Some(ApplicationStateInvoke::HostConnector {
+                    host_connector: invoke.host_connector,
+                })
+            }
+            None => None,
+        };
         states.push(ApplicationState {
             id: state.id,
-            invoke: state.invoke.map(|invoke| ApplicationStateInvoke {
-                capability_id: invoke.capability_id,
-                input_from: invoke.input_from,
-            }),
+            invoke,
             transitions: state
                 .transitions
                 .into_iter()
@@ -510,13 +543,63 @@ mod tests {
         assert!(loaded.failure.is_none());
         let machine = loaded.machine.expect("valid declaration must load");
         assert_eq!(machine.initial_state, "idle");
+        assert!(matches!(
+            machine.states[1].invoke.as_ref(),
+            Some(ApplicationStateInvoke::Capability { capability_id, .. })
+                if capability_id == "traverse-starter.process"
+        ));
+    }
+
+    #[test]
+    fn host_connector_persisted_state_machine_materializes() {
+        let dir = unique_dir();
+        let state_path = dir.join("registration.json");
+        let machine = serde_json::json!({
+            "initial_state": "capturing",
+            "states": [{
+                "id": "capturing",
+                "invoke": { "host_connector": "audio.permission.request" },
+                "transitions": [
+                    { "on": "host_connector_succeeded", "to": "done" },
+                    { "on": "host_connector_failed", "to": "error" },
+                    { "on": "host_connector_timeout", "to": "error" },
+                    { "on": "host_connector_cancelled", "to": "error" }
+                ]
+            }, { "id": "done", "transitions": [] }, { "id": "error", "transitions": [] }]
+        });
+        write_registration(&state_path, &base_registration(Some(machine)));
+
+        let loaded = materialize_workspace_app(&app_for(&state_path));
+        assert!(loaded.failure.is_none());
+        let machine = loaded
+            .machine
+            .expect("host connector declaration must load");
+        assert!(matches!(
+            machine.states[0].invoke.as_ref(),
+            Some(ApplicationStateInvoke::HostConnector { host_connector })
+                if host_connector == "audio.permission.request"
+        ));
+    }
+
+    #[test]
+    fn ambiguous_or_unknown_persisted_invoke_is_unavailable() {
+        let dir = unique_dir();
+        let state_path = dir.join("registration.json");
+        let mut machine = valid_machine();
+        machine["states"][1]["invoke"] = serde_json::json!({
+            "capability_id": "traverse-starter.process",
+            "host_connector": "audio.permission.request"
+        });
+        write_registration(&state_path, &base_registration(Some(machine)));
+
+        let loaded = materialize_workspace_app(&app_for(&state_path));
+        assert!(loaded.machine.is_none());
         assert_eq!(
-            machine.states[1]
-                .invoke
-                .as_ref()
-                .expect("processing invoke")
-                .capability_id,
-            "traverse-starter.process"
+            loaded
+                .failure
+                .expect("ambiguous declaration must fail")
+                .code,
+            APP_UNAVAILABLE
         );
     }
 

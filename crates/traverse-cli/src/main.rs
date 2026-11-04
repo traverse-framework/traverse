@@ -10801,6 +10801,78 @@ mod tests {
     }
 
     #[test]
+    fn app_validate_and_register_accept_host_connector_invoke() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &fixture_root,
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            None,
+        );
+        let mut manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).expect("manifest must read"))
+                .expect("manifest must parse");
+        manifest["state_machine"]["states"][1]["invoke"] = serde_json::json!({
+            "host_connector": "audio.permission.request"
+        });
+        manifest["state_machine"]["states"][1]["transitions"] = serde_json::json!([
+            { "on": "host_connector_succeeded", "to": "results" },
+            { "on": "host_connector_failed", "to": "error" },
+            { "on": "host_connector_timeout", "to": "error" },
+            { "on": "host_connector_cancelled", "to": "error" }
+        ]);
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest must serialize"),
+        )
+        .expect("manifest must write");
+
+        let validation = app_validate_at(&state_root, &manifest_path, Some("local"), true)
+            .expect("host connector manifest should validate");
+        let validation_json: Value =
+            serde_json::from_str(&validation).expect("validation output must be JSON");
+        assert_eq!(validation_json["status"], "validated");
+        assert_eq!(
+            validation_json["state_machine"]["states"][1]["invoke"]["host_connector"],
+            "audio.permission.request"
+        );
+
+        let host_activation_path = fixture_root.join("host-activation.json");
+        fs::write(
+            &host_activation_path,
+            universal_host_activation_json(&serde_json::json!([])),
+        )
+        .expect("host activation fixture must write");
+        let activation = app_activate_at(
+            &state_root,
+            &manifest_path,
+            "local",
+            &host_activation_path,
+            true,
+        )
+        .expect("host connector manifest should activate");
+        let activation_json: Value =
+            serde_json::from_str(&activation).expect("activation output must be JSON");
+        assert_eq!(activation_json["status"], "activated");
+
+        let registration = app_register_at(&state_root, &manifest_path, "local", true)
+            .expect("host connector manifest should register");
+        let registration_json: Value =
+            serde_json::from_str(&registration).expect("registration output must be JSON");
+        assert_eq!(registration_json["status"], "registered");
+        assert_eq!(
+            registration_json["state_machine"]["states"][1]["invoke"]["host_connector"],
+            "audio.permission.request"
+        );
+        assert!(
+            registration_json["state_machine"]["states"][1]["invoke"]
+                .get("capability_id")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn app_validate_rejects_invoke_missing_unhappy_routes() {
         let temp_dir = unique_temp_dir();
         let manifest_path = write_app_validate_fixture(
@@ -11424,14 +11496,11 @@ mod tests {
             .as_ref()
             .expect("persisted state machine must load");
         assert_eq!(machine.initial_state, "idle");
-        assert_eq!(
-            machine.states[1]
-                .invoke
-                .as_ref()
-                .expect("processing invoke")
-                .capability_id,
-            "expedition.planning.validate-team-readiness"
-        );
+        assert!(matches!(
+            machine.states[1].invoke.as_ref(),
+            Some(traverse_registry::ApplicationStateInvoke::Capability { capability_id, .. })
+                if capability_id == "expedition.planning.validate-team-readiness"
+        ));
     }
 
     #[test]
