@@ -13,6 +13,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
       - name: Run zero-to-hero acceptance
         run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/zero_to_hero_acceptance.sh
 
@@ -78,15 +88,6 @@ jobs:
 
       - name: Run repository checks
         run: bash scripts/ci/repository_checks.sh
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.95.0
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Run Rust checks
         run: bash scripts/ci/rust_checks.sh
