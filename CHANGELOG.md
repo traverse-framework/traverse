@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v0.16.2 — 2026-11-04
+
+Patch lockstep release. `traverse-cli` now honors the approved exact-one
+host-connector invocation union for workspace application manifests. See
+[docs/releases/v0.16.2.md](docs/releases/v0.16.2.md).
+
+### Host connector manifest invokes in the CLI (Spec 1773, `#1772`, `#1788`)
+
+- Workspace applications can declare an explicit host connector invocation;
+  the CLI materializes and registers it as a host connector rather than a
+  capability reference.
+- Empty, ambiguous, and malformed invocation declarations remain rejected
+  before activation.
+- The workspace consumes `traverse-registry` `0.31.0`, whose typed union
+  preserves the exact-one invariant across the registry boundary.
+
 ## v0.16.1 — 2026-11-03
 
 Patch lockstep release. Catalog `model.execute@1.0.0` runs on Browser and Node
