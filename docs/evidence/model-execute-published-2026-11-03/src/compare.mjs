@@ -1,5 +1,5 @@
 // Compares the three hosts' results. Only native may add placement_evidence (Spec 1719 FR-014).
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sorted = (value) => Array.isArray(value) ? value.map(sorted)
@@ -49,6 +49,13 @@ const digests = {
 const crates = readFileSync("native-host/Cargo.lock", "utf8").split("[[package]]").filter((b) => /name = "traverse-/.test(b))
   .map((b) => `${b.match(/name = "(.*)"/)[1]} ${b.match(/version = "(.*)"/)[1]} ${b.match(/checksum = "(.*)"/)?.[1] ?? ""}`.trim());
 const hostNames = Object.fromEntries(Object.entries(hosts).map(([k, v]) => [k, v.host]));
+// A run must also match the committed proof.
+if (existsSync("proof/comparison.json")) {
+  const committed = JSON.parse(readFileSync("proof/comparison.json", "utf8"));
+  if (canonical(committed.scenarios) !== canonical(scenarios)) fail("results differ from the committed proof");
+  if (canonical(committed.digests) !== canonical(digests)) fail("digests differ from the committed proof");
+  if (canonical(committed.crates) !== canonical(crates)) fail("crates differ from the committed proof");
+}
 writeFileSync("proof/comparison.json", JSON.stringify({ all_identical: pass, hosts: hostNames, digests, crates, scenarios }, null, 2));
 console.log(`all_identical: ${pass}`);
 console.log(JSON.stringify({ digests, crates, hostNames }, null, 2));

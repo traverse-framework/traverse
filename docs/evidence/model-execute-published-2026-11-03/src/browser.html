@@ -21,5 +21,6 @@ try {
   out.textContent = "DONE\n" + results.map((r) => `${r.name}: reg=${r.registration_reason} ${JSON.stringify(r.output).slice(0, 90)}`).join("\n");
 } catch (error) {
   out.textContent = `FAILED ${error?.stack ?? error}`;
+  await fetch("/failed", { method: "POST", body: out.textContent });
 }
 </script>

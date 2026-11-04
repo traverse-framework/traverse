@@ -56,25 +56,35 @@ bash run.sh
 ```
 
 ```bash
-node src/server.mjs
+bash src/browser-run.sh
 ```
-
-Open `http://127.0.0.1:8791/` and wait for the page to say `DONE`. Then:
 
 ```bash
 node src/compare.mjs
 ```
 
-The committed proof comes from a second run of these steps, in a new empty
-folder outside any git repository, with a blank `HOME` and fresh npm and Cargo
-caches. A first run in another empty folder gave the same pass.
+`src/browser-run.sh` needs Chrome; set `CHROME` to its path if it isn't
+`google-chrome`. `compare.mjs` also fails if the run differs from the committed
+`proof/comparison.json`.
+
+The committed proof comes from a run in a new empty folder outside any git
+repository, with a blank `HOME` and fresh npm and Cargo caches, with the page
+opened by hand. A first run in another empty folder gave the same pass.
+
+## Clean-runner CI
+
+`.github/workflows/published-model-execute-demo.yml` runs these steps on a fresh
+GitHub-hosted Ubuntu runner, in headless Chrome. It copies this folder out, deletes
+the checkout, and installs only published packages, with no build cache. It runs
+weekly, on demand, and on changes to this folder or the workflow. It is pinned to
+v0.16.1, so it shows those published artifacts still work and match this proof.
+It does not test later releases.
 
 ## Limits
 
-- **Not a separate clean machine.** Both runs were on one Mac that has Traverse
-  checkouts elsewhere. Neither run read from them, but nothing enforces that.
-- **The real browser is Chromium inside the Claude desktop app**, not a separate
-  Chrome install. It ran once per folder, opened by hand.
+- **The committed proof isn't from the clean runner.** It came from a Mac that has
+  Traverse checkouts elsewhere, in Chromium inside the Claude desktop app. The CI
+  job re-runs it on a clean runner and requires the same results.
 - **Two inputs come from the tag, not a package or release:**
   - `runtime.wasm`, fetched by URL from the `v0.16.1` tag. Its digest matches
     `runtime/runtime-release.json`. npm doesn't ship it, and the last
