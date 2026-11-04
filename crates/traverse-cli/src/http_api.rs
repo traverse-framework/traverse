@@ -30,13 +30,14 @@ use traverse_mcp::tools::proposals::{
     deny_unless_adaptive, execute_proposal_via_mcp, submit_proposal, validate_proposal,
 };
 use traverse_registry::{
-    ApplicationBundleManifest, ApplicationStateMachine, ApplicationStateTransition,
-    ApplicationStateTransitionCondition, ApplicationStateTransitionConditionOp, ArtifactDigests,
-    BinaryFormat, BinaryReference, CapabilityArtifactRecord, CapabilityRegistration,
-    CapabilityRegistry, ComposabilityMetadata, CompositionKind, CompositionPattern, DiscoveryQuery,
-    EventRegistration, EventRegistry, ImplementationKind, LookupScope, RegistryProvenance,
-    RegistryScope, SourceKind, SourceReference, WorkflowDefinition, WorkflowRegistration,
-    WorkflowRegistry, WorkspaceAppStateErrorCode,
+    ApplicationBundleManifest, ApplicationStateInvoke, ApplicationStateMachine,
+    ApplicationStateTransition, ApplicationStateTransitionCondition,
+    ApplicationStateTransitionConditionOp, ArtifactDigests, BinaryFormat, BinaryReference,
+    CapabilityArtifactRecord, CapabilityRegistration, CapabilityRegistry, ComposabilityMetadata,
+    CompositionKind, CompositionPattern, DiscoveryQuery, EventRegistration, EventRegistry,
+    ImplementationKind, LookupScope, RegistryProvenance, RegistryScope, SourceKind,
+    SourceReference, WorkflowDefinition, WorkflowRegistration, WorkflowRegistry,
+    WorkspaceAppStateErrorCode,
 };
 use traverse_runtime::proposal::{ApprovalTokenStore, QuotaLimits, QuotaTracker};
 use traverse_runtime::security::RuntimeSecurityConfig;
@@ -6364,12 +6365,15 @@ fn run_app_command_invoke<E: LocalExecutor + Clone>(
     else {
         return Ok(None);
     };
+    let ApplicationStateInvoke::Capability { capability_id, .. } = invoke else {
+        return Err("app_state_machine_host_connector_requires_runtime_wasm".to_string());
+    };
     let runtime_request = RuntimeRequest {
         kind: "runtime_request".to_string(),
         schema_version: "1.0.0".to_string(),
         request_id: command_id.to_string(),
         intent: RuntimeIntent {
-            capability_id: Some(invoke.capability_id.clone()),
+            capability_id: Some(capability_id.clone()),
             capability_version: None,
             version_range: None,
             intent_key: None,
@@ -6413,7 +6417,7 @@ fn run_app_command_invoke<E: LocalExecutor + Clone>(
         session_id,
         machine,
         accepted_state,
-        &invoke.capability_id,
+        &capability_id,
         &outcome,
         timestamp,
     )?;
@@ -10583,9 +10587,9 @@ mod tests {
                 },
                 ApplicationState {
                     id: "processing".to_string(),
-                    invoke: Some(ApplicationStateInvoke {
+                    invoke: Some(ApplicationStateInvoke::Capability {
                         capability_id: capability_id.to_string(),
-                        input_from: "command.payload".to_string(),
+                        input_from: Some("command.payload".to_string()),
                     }),
                     transitions: vec![
                         ApplicationStateTransition {
