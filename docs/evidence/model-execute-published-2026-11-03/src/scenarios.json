@@ -1,0 +1,9 @@
+[
+  { "name": "success" },
+  { "name": "connector_unavailable", "unbound": true },
+  { "name": "usage_undeclared", "no_usage": true },
+  { "name": "key_untrusted", "untrusted": true },
+  { "name": "pin_mismatch", "pin_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
+  { "name": "digest_mismatch", "tamper_wasm": true },
+  { "name": "package_revoked", "revoke": true }
+]

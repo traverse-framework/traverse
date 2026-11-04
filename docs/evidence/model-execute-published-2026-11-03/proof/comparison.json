@@ -1,0 +1,156 @@
+{
+  "all_identical": true,
+  "hosts": {
+    "native": "native: crates.io traverse-runtime 0.16.1, wasmtime",
+    "node": "node v24.16.0",
+    "browser": "browser: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/3.6556.2 Chrome/152.0.7977.167 Safari/537.36"
+  },
+  "digests": {
+    "npm traverse-embedder-web@0.16.1 integrity": "sha512-tZnGmE1bqiVHd2bbSBQjSZYXhFTbBjc84akvNZXLMeDXtau569vc04U5Pc3PqXsicV1++5wGO1cYbimL4WYngQ==",
+    "runtime.wasm": "7a322a17e3fd58f8bd26e915dd81bad68732500dc981499bd280a6d2e6507d52",
+    "model-execute-agent.wasm": "5ccfa3721db61b42a598d703c2a110c57beaf57cde26e1c5cb7f9c5fbc8b4275",
+    "model.manifest.json (package digest)": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+    "model.wasm": "954ca59b005699efcd126cde69446c7a935bfccd9561dd248ddd844246ea10a9"
+  },
+  "crates": [
+    "traverse-contracts 0.16.1 7cc964f74c5aae0dbf24b25b149976cccaace0e3c104543dd288d77e5b67d4cb",
+    "traverse-registry 0.29.0 f6dcd99577f7e7d738654272f4879036db3a335faa73bf276ab7d38243dffea4",
+    "traverse-runtime 0.16.1 3f0c8e5797f95775230c4d5ab42ce42d34ecc1b554be220614695cb3ae1db20c"
+  ],
+  "scenarios": [
+    {
+      "name": "success",
+      "registration_reason": null,
+      "output_sha256": "4166df14f62a8da2ec48d40011f483460b30439a77f07ef78cbd2353e0c2cd9c",
+      "output_frame_hex": "01000302010000000a000000280000003f4b6a411d82b1c0d7b909c06f6af0c0a660043fda06513f2ce60dbf6448c4c020baaf3f45b8f73f",
+      "output": {
+        "model_evidence": {
+          "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+          "effective_usage": "non_commercial",
+          "model_id": "traverse.digits-onnx",
+          "rights": {
+            "attribution": "ONNX export of Traverse's digits MLP, trained on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0); packaged on the Traverse ONNX runner guest",
+            "commercial_use": "allowed",
+            "derivation": {
+              "kind": "converted",
+              "source_commercial_use": "allowed",
+              "source_digest": "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc",
+              "source_license_id": "CC-BY-4.0",
+              "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/digits-mlp-1.0.0.onnx"
+            },
+            "license_id": "CC-BY-4.0",
+            "redistribution": "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+            "source_url": "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits"
+          },
+          "status": "active",
+          "version": "1.0.0"
+        },
+        "model_ref": {
+          "digest": "sha256:a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+          "model_id": "traverse.digits-onnx",
+          "version": "1.0.0"
+        },
+        "output_ref": "output-1",
+        "output_schema_ref": "schema:traverse-digits-onnx-out",
+        "placement": "wasm-cpu",
+        "result_class": "success",
+        "status": "ok"
+      }
+    },
+    {
+      "name": "connector_unavailable",
+      "registration_reason": null,
+      "output_sha256": "2fec818f8d0b66ada663a6c524b5251a0624757db9b960e84daa0e0c8f355455",
+      "output_frame_hex": null,
+      "output": {
+        "model_ref": {
+          "digest": "",
+          "model_id": "",
+          "version": ""
+        },
+        "output_ref": "",
+        "output_schema_ref": "",
+        "placement": "",
+        "reason": "connector_unavailable",
+        "result_class": "error",
+        "status": "error"
+      }
+    },
+    {
+      "name": "usage_undeclared",
+      "registration_reason": "usage_undeclared",
+      "output_sha256": "6478ae37970cc3c2b6bf84f35733085f644b424efba2ed866202dfcba2637afd",
+      "output_frame_hex": null,
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "key_untrusted",
+      "registration_reason": "key_untrusted",
+      "output_sha256": "6478ae37970cc3c2b6bf84f35733085f644b424efba2ed866202dfcba2637afd",
+      "output_frame_hex": null,
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "pin_mismatch",
+      "registration_reason": "pin_mismatch",
+      "output_sha256": "4c455fc3458f439c4310953391925ac380a7cad7f4d1bf1de38ea600101e1590",
+      "output_frame_hex": null,
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model_ref does not match an exact_model_dependencies pin",
+          "reason": "pin_mismatch"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "digest_mismatch",
+      "registration_reason": "digest_mismatch",
+      "output_sha256": "6478ae37970cc3c2b6bf84f35733085f644b424efba2ed866202dfcba2637afd",
+      "output_frame_hex": null,
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      }
+    },
+    {
+      "name": "package_revoked",
+      "registration_reason": null,
+      "output_sha256": "7db423b67628e240952b7b041071b9edfbaabadfc0fa01067baa4bc5a812c0cd",
+      "output_frame_hex": null,
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "detail": {
+            "actual": "revoked",
+            "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+            "effective_usage": "non_commercial",
+            "expected": "active|deprecated",
+            "field": "status",
+            "model_id": "traverse.digits-onnx",
+            "version": "1.0.0"
+          },
+          "message": "the host package status map marks this package revoked",
+          "reason": "package_revoked"
+        },
+        "status": "error"
+      }
+    }
+  ]
+}
