@@ -7376,8 +7376,9 @@ Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.
 
 Use option 1. CI publishes the release from the product tag's bytes, and the
 product release can't be created until the published assets match the tag.
-Stale pins fail the tag before anything is published. `runtime-wasm-v0.16.1` is
-backfilled, and older cuts aren't.
+Stale pins fail the tag before anything is published. `runtime-wasm-v0.16.1` and
+`runtime-wasm-v0.16.2` are backfilled, and older cuts aren't. v0.16.2 was tagged
+while this change was in review.
 
 ### Approval
 

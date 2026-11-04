@@ -226,4 +226,4 @@ only fetch the file from a git tag. Pins could also go stale unnoticed: tag
 `v0.15.0` records `runtime_version` 0.12.0.
 
 **Changes**: new FR-020. Additive. Tags cut before this version keep the
-releases they have, except the v0.16.1 backfill.
+releases they have, except the v0.16.1 and v0.16.2 backfills.
