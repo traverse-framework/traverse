@@ -12,10 +12,10 @@ use traverse_contracts::{
     PublishedContractRecord, PublishedEventRecord, ReliabilityMetadata, RiskMetadata,
     SchemaContainer, ServiceType, SideEffect, SideEffectKind, ValidationContext,
     ValidationErrorCode, ValidationEvidence, ValidationFailure, ValidationResult,
-    default_risk_metadata, governed_content_digest, governed_event_content_digest,
-    is_automatic_eligible, parse_connector_contract, parse_contract, parse_event_contract,
-    reference_connector_contracts, validate_connector_contract, validate_contract,
-    validate_event_contract, validate_manifest_risk_policy,
+    activation_reference_connector_contracts, default_risk_metadata, governed_content_digest,
+    governed_event_content_digest, is_automatic_eligible, parse_connector_contract, parse_contract,
+    parse_event_contract, reference_connector_contracts, validate_connector_contract,
+    validate_contract, validate_event_contract, validate_manifest_risk_policy,
 };
 
 const GOVERNING_SPEC: &str = "002-capability-contracts@0.1.0";
@@ -142,6 +142,42 @@ fn reference_connector_registry_includes_universal_local_connectors() {
     assert!(operation_ids.contains(&"put_immutable"));
     assert!(operation_ids.contains(&"append_transition"));
     assert!(operation_ids.contains(&"schedule_invocation"));
+}
+
+#[test]
+fn activation_reference_catalog_loads_checked_in_audio_input_contract() -> Result<(), String> {
+    let contract = activation_reference_connector_contracts()?
+        .into_iter()
+        .find(|contract| contract.connector_id == "traverse.audio-input")
+        .ok_or_else(|| {
+            "activation reference catalog is missing traverse.audio-input".to_string()
+        })?;
+
+    assert_eq!(contract.version, "1.0.0");
+    assert_eq!(
+        contract.supported_placement_targets,
+        vec![ExecutionTarget::Local, ExecutionTarget::Browser]
+    );
+    assert_eq!(
+        contract.required_config_schema["required"],
+        serde_json::json!(["authority_ref"])
+    );
+    assert_eq!(
+        contract
+            .host_adapter_wit
+            .as_ref()
+            .map(|pin| pin.package.as_str()),
+        Some("traverse:audio-input")
+    );
+    assert_eq!(
+        contract
+            .operation_envelopes
+            .iter()
+            .map(|envelope| envelope.operation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audio.permission.request", "audio.capture"]
+    );
+    Ok(())
 }
 
 #[test]
@@ -1436,6 +1472,7 @@ fn validates_checked_in_reference_connector_contracts() -> Result<(), String> {
         "contracts/connectors/traverse.object-store/connector_contract.json",
         "contracts/connectors/traverse.state-store/connector_contract.json",
         "contracts/connectors/traverse.scheduler/connector_contract.json",
+        "contracts/connectors/traverse.audio-input/connector_contract.json",
     ] {
         let path = repo_root.join(relative_path);
         let contents = fs::read_to_string(&path)
