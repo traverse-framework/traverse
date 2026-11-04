@@ -1,0 +1,147 @@
+{
+  "host": "node v24.16.0",
+  "results": [
+    {
+      "name": "success",
+      "registration_reason": null,
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "model_evidence": {
+          "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+          "effective_usage": "non_commercial",
+          "model_id": "traverse.digits-onnx",
+          "rights": {
+            "attribution": "ONNX export of Traverse's digits MLP, trained on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0); packaged on the Traverse ONNX runner guest",
+            "commercial_use": "allowed",
+            "derivation": {
+              "kind": "converted",
+              "source_commercial_use": "allowed",
+              "source_digest": "c16f5e4d2b901067512812fa821f540fc8b5770845c133d608e30f8d61fd5efc",
+              "source_license_id": "CC-BY-4.0",
+              "source_url": "https://github.com/traverse-framework/traverse/blob/main/fixtures/onnx/digits-mlp-1.0.0.onnx"
+            },
+            "license_id": "CC-BY-4.0",
+            "redistribution": "Redistribution permitted under CC BY 4.0 with the attribution above; signed with the test-only key (no production trust)",
+            "source_url": "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits"
+          },
+          "status": "active",
+          "version": "1.0.0"
+        },
+        "model_ref": {
+          "digest": "sha256:a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+          "model_id": "traverse.digits-onnx",
+          "version": "1.0.0"
+        },
+        "output_ref": "output-1",
+        "output_schema_ref": "schema:traverse-digits-onnx-out",
+        "placement": "wasm-cpu",
+        "result_class": "success",
+        "status": "ok"
+      },
+      "output_frame_hex": "01000302010000000a000000280000003f4b6a411d82b1c0d7b909c06f6af0c0a660043fda06513f2ce60dbf6448c4c020baaf3f45b8f73f",
+      "expected_frame_hex": "01000302010000000a000000280000003f4b6a411d82b1c0d7b909c06f6af0c0a660043fda06513f2ce60dbf6448c4c020baaf3f45b8f73f"
+    },
+    {
+      "name": "connector_unavailable",
+      "registration_reason": null,
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "model_ref": {
+          "digest": "",
+          "model_id": "",
+          "version": ""
+        },
+        "output_ref": "",
+        "output_schema_ref": "",
+        "placement": "",
+        "reason": "connector_unavailable",
+        "result_class": "error",
+        "status": "error"
+      },
+      "output_frame_hex": null
+    },
+    {
+      "name": "usage_undeclared",
+      "registration_reason": "usage_undeclared",
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      },
+      "output_frame_hex": null
+    },
+    {
+      "name": "key_untrusted",
+      "registration_reason": "key_untrusted",
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      },
+      "output_frame_hex": null
+    },
+    {
+      "name": "pin_mismatch",
+      "registration_reason": "pin_mismatch",
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model_ref does not match an exact_model_dependencies pin",
+          "reason": "pin_mismatch"
+        },
+        "status": "error"
+      },
+      "output_frame_hex": null
+    },
+    {
+      "name": "digest_mismatch",
+      "registration_reason": "digest_mismatch",
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "message": "model package not present in verified cache"
+        },
+        "status": "error"
+      },
+      "output_frame_hex": null
+    },
+    {
+      "name": "package_revoked",
+      "registration_reason": null,
+      "submit_status": "accepted",
+      "terminal_event": "capability_result",
+      "output": {
+        "error": {
+          "code": "model_unavailable",
+          "detail": {
+            "actual": "revoked",
+            "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
+            "effective_usage": "non_commercial",
+            "expected": "active|deprecated",
+            "field": "status",
+            "model_id": "traverse.digits-onnx",
+            "version": "1.0.0"
+          },
+          "message": "the host package status map marks this package revoked",
+          "reason": "package_revoked"
+        },
+        "status": "error"
+      },
+      "output_frame_hex": null
+    }
+  ]
+}

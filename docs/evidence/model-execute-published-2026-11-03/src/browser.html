@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>model.execute clean demo</title>
+<script type="importmap">{"imports":{"traverse-embedder-web":"/node_modules/traverse-embedder-web/dist/index.js"}}</script>
+<pre id="out">running…</pre>
+<script type="module">
+import { FetchBundleLoader } from "traverse-embedder-web";
+import { runScenarios } from "/src/core.mjs";
+const out = document.getElementById("out");
+try {
+  const results = await runScenarios({
+    read: async (path) => {
+      const response = await fetch(`/${path}`);
+      if (!response.ok) throw new Error(`${path}: ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    loader: new FetchBundleLoader(), manifestPath: "/bundle/app.manifest.json", platform: "web",
+  });
+  const proof = { host: `browser: ${navigator.userAgent}`, results };
+  await fetch("/proof", { method: "POST", body: JSON.stringify(proof, null, 2) });
+  out.textContent = "DONE\n" + results.map((r) => `${r.name}: reg=${r.registration_reason} ${JSON.stringify(r.output).slice(0, 90)}`).join("\n");
+} catch (error) {
+  out.textContent = `FAILED ${error?.stack ?? error}`;
+}
+</script>
