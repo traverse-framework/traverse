@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### `runtime.wasm` ships as a release with every cut (Decision 123, Spec 048 FR-020, `#1784`)
+
+Every product tag now publishes `runtime-wasm-vX.Y.Z` with `runtime.wasm`,
+`runtime.wasm.sha256` and `runtime-release.json`, and the `Traverse vX.Y.Z`
+release can't be created without it. A tag with stale `runtime.wasm` pins fails
+before anything is published. `runtime-wasm-v0.16.1` is backfilled.
+
 ## v0.16.1 — 2026-11-03
 
 Patch lockstep release. Catalog `model.execute@1.0.0` runs on Browser and Node

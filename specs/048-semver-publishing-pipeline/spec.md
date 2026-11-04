@@ -2,9 +2,9 @@
 
 **Feature Branch**: `048-semver-publishing-pipeline`
 **Created**: 2026-07-03
-**Amended**: 2026-09-14
+**Amended**: 2026-11-04
 **Status**: Approved
-**Version**: 1.4.0
+**Version**: 1.5.0
 **Input**: Cargo.toml workspace version has drifted from the git tag (0.5.0 in Cargo.toml, v0.7.0 tagged). No crates.io publishing is configured. No automated version bump exists. `repository` field still points to old org URL. This spec closes all three gaps.
 
 ## Purpose
@@ -116,6 +116,15 @@ and never depends on a long-lived npm token.
   tags `vX.Y.Z` titled exactly `Traverse vX.Y.Z`, no other tag titled
   `Traverse v…`, and Latest equal to the highest product release. This
   catches manual edits in the GitHub UI, which FR-018's static check cannot.
+- **FR-020**: On every product tag `vX.Y.Z`, CI MUST publish the artifact
+  release `runtime-wasm-vX.Y.Z` with the tag's `runtime/runtime.wasm`,
+  `runtime/runtime.wasm.sha256`, and `runtime/runtime-release.json`, and MUST
+  confirm by download that the release holds those bytes. The FR-016 product
+  release MUST NOT be created until this succeeds. `version-guard` MUST fail
+  the tag before any publishing when `runtime_version` differs from `X.Y.Z` or
+  either recorded digest differs from the bytes. A rerun MUST succeed when the
+  existing release holds the same bytes, and fail when it doesn't. A repository
+  check MUST enforce this wiring on every PR.
 
 ## Non-Functional Requirements
 
@@ -207,3 +216,14 @@ order are unchanged.
 GitHub rejects it (`tag_name was used by an immutable release`) because an
 earlier attempt created and then deleted a release on that tag. v0.13.0
 stays documented in `docs/releases/v0.13.0.md`.
+
+### 1.5.0 — 2026-11-04
+
+**Owner**: Traverse maintainers (issue #1784, Decision 123). **Rationale**:
+`BundleEmbedder` requires `runtime/runtime.wasm`, but the last
+`runtime-wasm-v*` release was v0.11.0 because nothing automated it. Apps could
+only fetch the file from a git tag. Pins could also go stale unnoticed: tag
+`v0.15.0` records `runtime_version` 0.12.0.
+
+**Changes**: new FR-020. Additive. Tags cut before this version keep the
+releases they have, except the v0.16.1 backfill.

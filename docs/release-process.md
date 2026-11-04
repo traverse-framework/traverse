@@ -19,7 +19,8 @@ Use the release helper from a clean `main` checkout after CI is green:
    (`npm view traverse-embedder-web version`).
 8. Verify the GitHub Release **`Traverse v<version>`** exists on tag
    `v<version>` and is marked **Latest**. CI's `github-release` job creates it
-   from `docs/releases/v<version>.md` after the crates.io publish succeeds.
+   from `docs/releases/v<version>.md` after the crates.io publish and the
+   `runtime-wasm-v<version>` release succeed.
 
 ### GitHub Release naming convention (Spec 048 FR-016–FR-018)
 
@@ -92,6 +93,29 @@ that tag after `main` to trigger the credential-free npm Trusted Publishing
 workflow. See [the web embedder npm publish runbook](web-embedder-npm-publish-runbook.md)
 for setup assumptions and verification.
 
+
+## runtime.wasm artifact
+
+`BundleEmbedder` apps must include `runtime/runtime.wasm` and
+`runtime/runtime.wasm.sha256` in their bundle, and no package ships them
+(Decision 123). Each product cut publishes them on `runtime-wasm-vX.Y.Z`
+(`--latest=false`), which CI's `runtime-wasm-release` job creates with
+`scripts/ci/publish_runtime_wasm_release.sh`. Assets, read from the `vX.Y.Z`
+tag:
+
+- `runtime.wasm`
+- `runtime.wasm.sha256`
+- `runtime-release.json`
+
+The job downloads the assets and compares them to the tag, and `github-release`
+depends on it, so the product release can't exist without them. `version-guard`
+fails the tag before anything is published if the pins are stale, so finish the
+`runtime.wasm` re-pin in the checklist below before tagging.
+
+A failed job is safe to rerun. The bytes can't be replaced once published, so
+fix wrong bytes with a new patch cut. To publish for an older tag, run the
+script from any checkout that has the tag:
+`bash scripts/ci/publish_runtime_wasm_release.sh vX.Y.Z`.
 
 ## ONNX runner guest artifact
 

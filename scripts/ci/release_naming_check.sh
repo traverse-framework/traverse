@@ -9,6 +9,8 @@
 #    wired into ci.yml after the crates.io `publish` job.
 # 3. docs/releases/v<workspace version>.md MUST exist, so the product release
 #    always has its notes when the version is bumped.
+# 4. Spec 048 FR-020 (#1784): the product release depends on the runtime.wasm
+#    artifact release, and stale pins fail in version-guard before publishing.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -48,6 +50,19 @@ if ! grep -q 'bash scripts/ci/create_product_release.sh "${GITHUB_REF_NAME}"' .g
 fi
 if ! awk '/^  github-release:/{found=1} found && /- publish/{ok=1} found && /^  [a-z-]+:$/ && !/github-release/{if(found) exit} END{exit !ok}' .github/workflows/ci.yml; then
   fail ".github/workflows/ci.yml github-release job must depend on the crates.io publish job"
+fi
+
+if ! awk '/^  github-release:/{found=1} found && /- runtime-wasm-release/{ok=1} found && /^  [a-z-]+:$/ && !/github-release/{if(found) exit} END{exit !ok}' .github/workflows/ci.yml; then
+  fail ".github/workflows/ci.yml github-release job must depend on the runtime-wasm-release job"
+fi
+if ! awk '/^  runtime-wasm-release:/{found=1; next} found && /^  [a-z-]+:$/{exit} found && /bash scripts\/ci\/publish_runtime_wasm_release.sh "\$\{GITHUB_REF_NAME\}"$/{ok=1} END{exit !ok}' .github/workflows/ci.yml; then
+  fail ".github/workflows/ci.yml runtime-wasm-release job must run scripts/ci/publish_runtime_wasm_release.sh"
+fi
+if ! awk '/^  version-guard:/{found=1; next} found && /^  [a-z-]+:$/{exit} found && /publish_runtime_wasm_release.sh "\$\{GITHUB_REF_NAME\}" --verify-only/{ok=1} END{exit !ok}' .github/workflows/ci.yml; then
+  fail ".github/workflows/ci.yml version-guard job must verify the runtime.wasm pins"
+fi
+if ! grep -q -- '--latest=false' scripts/ci/publish_runtime_wasm_release.sh; then
+  fail "scripts/ci/publish_runtime_wasm_release.sh must pass --latest=false"
 fi
 
 workspace_version="$(awk '
