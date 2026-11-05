@@ -41,7 +41,7 @@ use traverse_contracts::{
     CapabilityContract, EventContract, EventValidationContext, ValidationContext, parse_contract,
     parse_event_contract, validate_contract, validate_event_contract,
 };
-use traverse_contracts::{Lifecycle, ViolationRecord, reference_connector_contracts};
+use traverse_contracts::{Lifecycle, ViolationRecord, activation_reference_connector_contracts};
 use traverse_registry::{
     ApplicationManifestError, ApplicationManifestErrorCode, ApplicationManifestFailure,
     ApplicationRegistrationRequest, ApplicationRegistry, ArtifactDigests,
@@ -4301,8 +4301,19 @@ fn app_activate_with_policy_at(
         return render_app_activation_failure(manifest_path, workspace_id, errors);
     }
 
+    let reference_connectors =
+        activation_reference_connector_contracts().map_err(CliError::ValidationFailed)?;
+    let reference_connector_wit_pins: BTreeMap<_, _> = reference_connectors
+        .iter()
+        .filter_map(|connector| {
+            connector
+                .host_adapter_wit
+                .clone()
+                .map(|pin| (connector.connector_id.clone(), pin))
+        })
+        .collect();
     let mut registry = CapabilityRegistry::new();
-    for connector in reference_connector_contracts() {
+    for connector in reference_connectors {
         registry
             .register_connector(ConnectorRegistration {
                 scope: RegistryScope::Public,
@@ -4347,6 +4358,7 @@ fn app_activate_with_policy_at(
                 "resolved_version": record.resolved_version,
                 "placement_target": record.placement_target,
                 "config_keys_present": record.config_keys_present,
+                "host_adapter_wit": reference_connector_wit_pins.get(record.connector_id.as_str()),
                 "evidence_digest": record.evidence_digest,
             })),
             Err(failure) => {
@@ -8002,7 +8014,9 @@ fn register_reference_connectors(
     capability_registry: &mut CapabilityRegistry,
     bundle: &RegistryBundle,
 ) -> Result<(), CliError> {
-    for connector in reference_connector_contracts() {
+    for connector in
+        activation_reference_connector_contracts().map_err(CliError::ValidationFailed)?
+    {
         capability_registry
             .register_connector(ConnectorRegistration {
                 scope: RegistryScope::Public,
@@ -11362,6 +11376,61 @@ mod tests {
             "activation failure leaked host-private value"
         );
         assert!(!state_root.join(".traverse").exists());
+    }
+
+    #[test]
+    fn app_activate_registers_checked_in_audio_input_contract_with_redacted_wit_evidence() {
+        let state_root = unique_temp_dir();
+        let fixture_root = unique_temp_dir();
+        let manifest_path = write_app_validate_fixture(
+            &fixture_root,
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            "sha256:470e430bb7e53d2b4d37af50186511a1f7f9ae903bc4f1524755f2a97014ef90",
+            None,
+        );
+        add_audio_input_connector_binding(&manifest_path);
+        let host_activation_path = fixture_root.join("host-activation.json");
+        fs::write(
+            &host_activation_path,
+            universal_host_activation_json(&serde_json::json!([{
+                "connector_id": "traverse.audio-input",
+                "installed_version": "1.0.0",
+                "placement_target": "browser",
+                "config": {"authority_ref": "host-managed-audio-input-private"}
+            }])),
+        )
+        .expect("host activation fixture should write");
+
+        let output = app_activate_at(
+            &state_root,
+            &manifest_path,
+            "local",
+            &host_activation_path,
+            true,
+        )
+        .expect("audio-input activation should succeed");
+        let json: Value = serde_json::from_str(&output).expect("activation output must be JSON");
+
+        assert_eq!(json["status"], "activated");
+        assert_eq!(
+            json["connectors"][0]["connector_id"],
+            "traverse.audio-input"
+        );
+        assert_eq!(json["connectors"][0]["resolved_version"], "1.0.0");
+        assert_eq!(json["connectors"][0]["placement_target"], "browser");
+        assert_eq!(
+            json["connectors"][0]["config_ref"],
+            "host-managed-audio-input"
+        );
+        assert_eq!(
+            json["connectors"][0]["host_adapter_wit"]["package"],
+            "traverse:audio-input"
+        );
+        assert_eq!(
+            json["connectors"][0]["host_adapter_wit"]["version"],
+            "1.0.0"
+        );
+        assert!(!output.contains("host-managed-audio-input-private"));
     }
 
     #[test]
@@ -14865,6 +14934,23 @@ mod tests {
                 "config_ref": "scheduler.default"
             }
         ]);
+        fs::write(
+            manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("app manifest should serialize"),
+        )
+        .expect("app manifest should write");
+    }
+
+    fn add_audio_input_connector_binding(manifest_path: &Path) {
+        let mut manifest: Value = serde_json::from_str(
+            &fs::read_to_string(manifest_path).expect("app manifest should read"),
+        )
+        .expect("app manifest should parse");
+        manifest["connector_bindings"] = serde_json::json!([{
+            "connector_id": "traverse.audio-input",
+            "version_range": "=1.0.0",
+            "config_ref": "host-managed-audio-input"
+        }]);
         fs::write(
             manifest_path,
             serde_json::to_string_pretty(&manifest).expect("app manifest should serialize"),

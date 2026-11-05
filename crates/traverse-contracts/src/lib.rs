@@ -614,6 +614,47 @@ pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
     ]
 }
 
+/// Reference catalog used when an application is activated by a host.
+///
+/// The audio authority has a checked-in WIT-pinned contract.  Parse that
+/// contract here rather than duplicating its operation and configuration
+/// metadata in Rust, so activation registers the same artifact consumed by
+/// every host conformance fixture.
+///
+/// # Errors
+///
+/// Returns an error when the checked-in audio-input contract cannot be parsed
+/// or does not satisfy connector-contract validation.
+pub fn activation_reference_connector_contracts() -> Result<Vec<ConnectorContract>, String> {
+    load_activation_reference_connector_contracts(include_str!(
+        "../../../contracts/connectors/traverse.audio-input/connector_contract.json"
+    ))
+}
+
+/// Build the activation reference catalog from an audio-input connector JSON
+/// document.
+///
+/// Hosts and tests use this helper to exercise the fail-closed parse and
+/// validation paths without mutating the checked-in contract on disk.
+///
+/// # Errors
+///
+/// Returns an error when `audio_input_json` cannot be parsed or does not
+/// satisfy connector-contract validation.
+pub fn load_activation_reference_connector_contracts(
+    audio_input_json: &str,
+) -> Result<Vec<ConnectorContract>, String> {
+    let mut contracts = reference_connector_contracts();
+    let audio_input = parse_connector_contract(audio_input_json).map_err(|error| {
+        format!("checked-in traverse.audio-input contract is invalid: {error:?}")
+    })?;
+    validate_connector_contract(audio_input.clone()).map_err(|error| {
+        format!("checked-in traverse.audio-input contract failed validation: {error:?}")
+    })?;
+    contracts.push(audio_input);
+    Ok(contracts)
+}
+
 fn reference_connector_contract(
     connector_id: &str,
     capabilities_provided: Vec<String>,
