@@ -626,16 +626,48 @@ pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
 /// Returns an error when the checked-in audio-input contract cannot be parsed
 /// or does not satisfy connector-contract validation.
 pub fn activation_reference_connector_contracts() -> Result<Vec<ConnectorContract>, String> {
-    let mut contracts = reference_connector_contracts();
-    let audio_input = parse_connector_contract(include_str!(
+    load_activation_reference_connector_contracts(include_str!(
         "../../../contracts/connectors/traverse.audio-input/connector_contract.json"
     ))
-    .map_err(|error| format!("checked-in traverse.audio-input contract is invalid: {error:?}"))?;
+}
+
+fn load_activation_reference_connector_contracts(
+    audio_input_json: &str,
+) -> Result<Vec<ConnectorContract>, String> {
+    let mut contracts = reference_connector_contracts();
+    let audio_input = parse_connector_contract(audio_input_json).map_err(|error| {
+        format!("checked-in traverse.audio-input contract is invalid: {error:?}")
+    })?;
     validate_connector_contract(audio_input.clone()).map_err(|error| {
         format!("checked-in traverse.audio-input contract failed validation: {error:?}")
     })?;
     contracts.push(audio_input);
     Ok(contracts)
+}
+
+#[cfg(test)]
+mod activation_reference_catalog_tests {
+    use super::{load_activation_reference_connector_contracts, reference_connector_contracts};
+
+    #[test]
+    fn load_rejects_invalid_checked_in_json() {
+        let error = load_activation_reference_connector_contracts("{")
+            .expect_err("malformed JSON must fail closed");
+        assert!(error.contains("checked-in traverse.audio-input contract is invalid"));
+    }
+
+    #[test]
+    fn load_rejects_checked_in_contract_that_fails_validation() {
+        let mut invalid = reference_connector_contracts()
+            .into_iter()
+            .next()
+            .expect("reference connector should exist");
+        invalid.kind = "wrong".to_string();
+        let contents = serde_json::to_string(&invalid).expect("serialize invalid connector");
+        let error = load_activation_reference_connector_contracts(&contents)
+            .expect_err("invalid connector shape must fail closed");
+        assert!(error.contains("checked-in traverse.audio-input contract failed validation"));
+    }
 }
 
 fn reference_connector_contract(
