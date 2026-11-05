@@ -65,6 +65,7 @@ if ! rustup toolchain list | awk '{print $1}' | grep -q "^${ci_toolchain}"; then
 fi
 
 export PATH="$(dirname "$(rustup which --toolchain "$ci_toolchain" cargo)"):$PATH"
+source scripts/ci/checkout_target_dir.sh
 
 if ! rustup target list --toolchain "$ci_toolchain" --installed | grep -qx "$target"; then
   echo "local-preflight: missing Rust target $target" >&2

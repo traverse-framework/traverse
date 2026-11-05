@@ -14,7 +14,12 @@ const BRIDGE_VERSION: &str = "1.1.0";
 const ABI_VERSION: u32 = 10_100;
 
 fn workspace_root() -> Result<PathBuf, String> {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Read at run time, not with `env!`: a target directory shared between
+    // checkouts reuses this binary, so a compiled-in path would build whichever
+    // checkout compiled it (#1801).
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
+        .ok_or_else(|| "run through `cargo run -p traverse-native-bridge`".to_string())?;
+    PathBuf::from(manifest_dir)
         .parent()
         .and_then(std::path::Path::parent)
         .map(std::path::Path::to_path_buf)
