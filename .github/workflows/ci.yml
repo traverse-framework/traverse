@@ -86,6 +86,15 @@ jobs:
 
           echo "Cargo.toml workspace version ${workspace_version} and web package ${web_version} match ${tag_name}."
 
+      # Spec 048 FR-020 (#1784): stale runtime.wasm pins fail before anything is published.
+      - name: Verify runtime.wasm pins match the release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            bash scripts/ci/publish_runtime_wasm_release.sh "${GITHUB_REF_NAME}" --verify-only
+          fi
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -666,6 +675,33 @@ jobs:
           TRAVERSE_PUBLISH_DRY_RUN_BEFORE: "1"
         run: bash scripts/ci/publish_crates.sh
 
+  # Spec 048 FR-020 (#1784): apps need runtime.wasm in their bundle, so it ships
+  # as runtime-wasm-vX.Y.Z before the product release can exist.
+  runtime-wasm-release:
+    name: Publish runtime.wasm artifact release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: runtime/runtime.wasm
+
+      - name: Publish and verify the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/publish_runtime_wasm_release.sh "${GITHUB_REF_NAME}"
+
   # Spec 048 FR-016 (#1574): the product GitHub Release "Traverse vX.Y.Z",
   # marked Latest, created only after crates.io publishing succeeded.
   # Artifact releases (swift-host-v*, runtime-wasm-v*) are never Latest.
@@ -674,6 +710,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - publish
+      - runtime-wasm-release
     runs-on: ubuntu-latest
     permissions:
       contents: write

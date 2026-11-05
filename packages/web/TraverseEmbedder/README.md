@@ -21,6 +21,15 @@ App bundles must include `runtime/runtime.wasm` plus
 supports linear `direct`-triggered pipelines; event-driven/conditional edges
 are rejected deterministically at `init`.
 
+Get both files from the `runtime-wasm-v<version>` GitHub Release that matches
+your package version (v0.16.1 onward):
+
+```bash
+base=https://github.com/traverse-framework/traverse/releases/download/runtime-wasm-v<version>
+curl -fsSLO "$base/runtime.wasm"
+curl -fsSLO "$base/runtime.wasm.sha256"
+```
+
 **Migration (Phase 3 / FR-010):** the interim TypeScript `emit_event` host
 (#1404), `wasi.ts`, and per-capability Host ABI import gating are removed.
 Bundles without `runtime/runtime.wasm` fail closed at `init`. This breaking

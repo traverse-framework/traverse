@@ -85,13 +85,11 @@ It does not test later releases.
 - **The committed proof isn't from the clean runner.** It came from a Mac that has
   Traverse checkouts elsewhere, in Chromium inside the Claude desktop app. The CI
   job re-runs it on a clean runner and requires the same results.
-- **Two inputs come from the tag, not a package or release:**
-  - `runtime.wasm`, fetched by URL from the `v0.16.1` tag. Its digest matches
-    `runtime/runtime-release.json`. npm doesn't ship it, and the last
-    `runtime-wasm-v*` release is v0.11.0, although `docs/release-process.md` lists
-    that release type.
-  - The `digits-onnx` package, also from the tag. It is signed with the
-    **test-only** key.
+- **`runtime.wasm` comes from a backfilled release.** It is fetched from
+  `runtime-wasm-v0.16.1`, published after this proof was first recorded (`#1784`).
+  The bytes are the same as the `v0.16.1` tag's, which the proof first used.
+- **One input comes from the tag, not a package or release:** the `digits-onnx`
+  package. It is signed with the **test-only** key.
 - **Output comparison:** the hosts expose parsed output, so the comparison uses
   sorted-key JSON, not raw stdout bytes. Output frames are compared byte for byte.
 - **Frame access on native:** `activate_exact_model_runtime` keeps the host, so a
