@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Native hosts can read the model output frame after `model.execute` (`#1785`)
+
+`ExactModelMediatedConnector::activated()` and `activated_version()` activate a
+shared connector, so a native host can read the frame behind `output_ref`
+through `with_host_mut` after the run. `activate_exact_model_runtime` is
+unchanged.
+
 ### Breaking: guests on `runtime.wasm` receive only the submitted input (Decision 124, Spec 071 FR-018, `#1794`)
 
 Swift, Kotlin and .NET guests read `{"input":...,"target_id":...}` on stdin

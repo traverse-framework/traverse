@@ -75,6 +75,25 @@ impl ExactModelMediatedConnector {
             .map_err(|_| "exact-model mediated connector lock unavailable".to_string())?;
         Ok(f(&mut guard))
     }
+
+    /// Activate this shared connector at the shipped connector version. The
+    /// caller keeps the `Arc`, so after `model.execute` it can still reach the
+    /// host through [`Self::with_host_mut`], for example to read the frame
+    /// behind the returned `output_ref` (#1785).
+    #[must_use]
+    pub fn activated(self: &Arc<Self>) -> ActivatedConnector {
+        self.activated_version(MODEL_RUNTIME_CONNECTOR_VERSION)
+    }
+
+    /// Like [`Self::activated`], at an explicit semantic version.
+    #[must_use]
+    pub fn activated_version(self: &Arc<Self>, version: &str) -> ActivatedConnector {
+        ActivatedConnector {
+            connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
+            version: version.to_string(),
+            implementation: Arc::clone(self) as Arc<dyn MediatedConnector>,
+        }
+    }
 }
 
 #[cfg(feature = "wasmtime-executor")]
@@ -196,11 +215,7 @@ pub fn activate_exact_model_runtime_version(
     host: ExactModelHostConnector,
     version: &str,
 ) -> ActivatedConnector {
-    ActivatedConnector {
-        connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
-        version: version.to_string(),
-        implementation: Arc::new(ExactModelMediatedConnector::new(host)),
-    }
+    Arc::new(ExactModelMediatedConnector::new(host)).activated_version(version)
 }
 
 #[cfg(feature = "wasmtime-executor")]
@@ -250,7 +265,7 @@ mod tests {
         PlacementPolicy, TrustedModelKeys, encode_guest_frame,
     };
     use crate::executor::{
-        ConnectorInvokeRequest, MediatedConnector, MediatedConnectorContext,
+        ActivatedConnector, ConnectorInvokeRequest, MediatedConnector, MediatedConnectorContext,
         SUPPORTED_HOST_ABI_VERSION, WasmExecutor,
     };
     use crate::host_connector_dispatch::{
@@ -260,6 +275,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use std::fs;
+    use std::sync::Arc;
     use traverse_contracts::ConnectorRequirement;
 
     const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -522,6 +538,16 @@ mod tests {
         usage: Option<ModelUsage>,
         bound: bool,
     ) -> Result<(Value, Value), String> {
+        let (host, vector) = catalog_host(usage)?;
+        let output = run_catalog_guest(host, &vector, bound)?;
+        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
+        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
+        Ok((output, expected))
+    }
+
+    /// A host with the signed digits ONNX package registered under `usage`,
+    /// and the conformance vector it was checked against.
+    fn catalog_host(usage: Option<ModelUsage>) -> Result<(ExactModelHostConnector, Value), String> {
         let vector = read("fixtures/models/conformance/signed-digits-onnx.json")?;
         let vector: Value = serde_json::from_slice(&vector).map_err(|error| error.to_string())?;
         let package_pin: ExactModelPin =
@@ -551,10 +577,47 @@ mod tests {
                 Some(Some(ModelFailureReason::UsageUndeclared))
             ),
         }
-        let output = run_catalog_guest(host, &vector, bound)?;
-        let expected = read("fixtures/cross-host/model-execute-v1/expected-output.json")?;
-        let expected = serde_json::from_slice(&expected).map_err(|error| error.to_string())?;
-        Ok((output, expected))
+        Ok((host, vector))
+    }
+
+    /// #1785: a native host activates the shipped binding with `activated()`
+    /// and reads the model's output frame back through the same connector.
+    #[test]
+    fn activated_connector_keeps_the_output_frame_readable() -> Result<(), String> {
+        let (mut host, vector) = catalog_host(Some(ModelUsage::NonCommercial))?;
+        let input = stage_catalog_input(&mut host, &vector)?;
+        let connector = Arc::new(ExactModelMediatedConnector::new(host));
+        let output = run_catalog_agent(&input, vec![connector.activated()])?;
+        let output_ref = output["output_ref"]
+            .as_str()
+            .ok_or_else(|| format!("missing output_ref: {output}"))?;
+        let frame = connector
+            .with_host_mut(|host| host.io.read_model_output(output_ref, 56))?
+            .map_err(|error| error.message)?;
+        assert_eq!(
+            frame,
+            hex(vector["cases"][0]["output_frame_hex"]
+                .as_str()
+                .ok_or_else(|| "missing output frame".to_string())?)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn activated_version_keeps_identity_and_shares_the_connector() {
+        let keys = TrustedModelKeys::new();
+        let connector = Arc::new(ExactModelMediatedConnector::new(
+            ExactModelHostConnector::new(Vec::new(), keys),
+        ));
+        let activated = connector.activated_version("9.9.9");
+        assert_eq!(activated.connector_id, MODEL_RUNTIME_CONNECTOR);
+        assert_eq!(activated.version, "9.9.9");
+        // The activation holds the caller's connector, not a copy.
+        assert_eq!(Arc::strong_count(&connector), 2);
+        assert_eq!(
+            connector.activated().version,
+            MODEL_RUNTIME_CONNECTOR_VERSION
+        );
     }
 
     fn catalog_placement_policy() -> PlacementPolicy {
@@ -569,6 +632,20 @@ mod tests {
         mut host: ExactModelHostConnector,
         vector: &Value,
         bound: bool,
+    ) -> Result<Value, String> {
+        let input = stage_catalog_input(&mut host, vector)?;
+        let activated = if bound {
+            vec![activate_exact_model_runtime(host)]
+        } else {
+            Vec::new()
+        };
+        run_catalog_agent(&input, activated)
+    }
+
+    /// Installs the catalog policy and stages the vector's first input frame.
+    fn stage_catalog_input(
+        host: &mut ExactModelHostConnector,
+        vector: &Value,
     ) -> Result<Value, String> {
         host.policies.insert(
             CATALOG_POLICY_REF.to_string(),
@@ -590,22 +667,26 @@ mod tests {
             serde_json::from_slice(&read("fixtures/cross-host/model-execute-v1/input.json")?)
                 .map_err(|error| error.to_string())?;
         assert_eq!(input["input_ref"], input_ref);
+        Ok(input)
+    }
+
+    /// Runs the published catalog `model.execute` guest with `activated`.
+    fn run_catalog_agent(
+        input: &Value,
+        activated: Vec<ActivatedConnector>,
+    ) -> Result<Value, String> {
         let executor = WasmExecutor::new().map_err(|error| format!("{error:?}"))?;
         let output = executor
             .run_bytes_with_mediated_connectors(
                 &read("fixtures/cross-host/model-execute-v1/model-execute-agent.wasm")?,
-                &input,
+                input,
                 "model.execute",
                 MediatedConnectorContext {
                     declared_requirements: vec![ConnectorRequirement {
                         connector_id: MODEL_RUNTIME_CONNECTOR.to_string(),
                         version: MODEL_RUNTIME_CONNECTOR_VERSION.to_string(),
                     }],
-                    activated_connectors: if bound {
-                        vec![activate_exact_model_runtime(host)]
-                    } else {
-                        Vec::new()
-                    },
+                    activated_connectors: activated,
                 },
             )
             .map_err(|error| format!("{error:?}"))?;
