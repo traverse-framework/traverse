@@ -37,6 +37,9 @@ const INTERNAL_ERROR: i32 = -5;
 const BUFFER_TOO_SMALL: i32 = -6;
 const BRIDGE_VERSION: i32 = 10_100;
 const MAX_ERROR_BYTES: usize = 512;
+/// Guest error text kept in a host error. Even if every char escapes to six
+/// bytes, the serialized error stays under `MAX_ERROR_BYTES`.
+const MAX_ERROR_MESSAGE_CHARS: usize = 64;
 
 #[repr(C)]
 pub struct TraverseSwiftHostLimits {
@@ -275,9 +278,14 @@ impl HostError {
     /// 1722's `input_not_canonicalizable`, becomes the message, as the Kotlin
     /// and .NET bridges pass the guest's response through (#1795).
     fn runtime(status: i32, response: &[u8]) -> Self {
+        // Bounded so the serialized error stays whole JSON under
+        // `MAX_ERROR_BYTES` (Spec 076 FR-006).
         let message = serde_json::from_slice::<serde_json::Value>(response)
             .ok()
-            .and_then(|value| value.get("error")?.as_str().map(str::to_string));
+            .and_then(|value| {
+                let error = value.get("error")?.as_str()?;
+                Some(error.chars().take(MAX_ERROR_MESSAGE_CHARS).collect())
+            });
         Self {
             status,
             code: "bridge_runtime_error",
@@ -867,6 +875,17 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&opaque.json()).expect("HostError::json() must be valid JSON");
         assert_eq!(value["message"], "bridge_runtime_error");
+    }
+
+    #[test]
+    fn runtime_error_message_stays_within_the_error_bound() {
+        let long = format!(
+            r#"{{"error":"{}"}}"#,
+            r"\u0001".repeat(super::MAX_ERROR_BYTES)
+        );
+        let json = HostError::runtime(-1, long.as_bytes()).json();
+        assert!(json.len() <= super::MAX_ERROR_BYTES);
+        serde_json::from_slice::<serde_json::Value>(&json).expect("bounded error stays valid JSON");
     }
 
     /// #1795: the pre-check accepts a lone surrogate so `runtime.wasm` can
