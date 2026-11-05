@@ -2,14 +2,22 @@
 
 ## Unreleased
 
+### Web capability input reaches the guest as sent (Decision 125, Spec 071 FR-018, `#1802`)
+
+The web package now submits capability input as `{target_id, input}`, like the
+native hosts. Input holding routing members such as `kind: "app_command"`, a bare
+`command`, or both `target_id` and `input` used to be routed, rejected or unwrapped
+by `runtime.wasm`. It now reaches the guest unchanged, in `BundleEmbedder` submits,
+deferred-connector submits and composed workflow nodes.
+
 ### Breaking: guests on `runtime.wasm` receive only the submitted input (Decision 124, Spec 071 FR-018, `#1794`)
 
 Swift, Kotlin and .NET guests read `{"input":...,"target_id":...}` on stdin
 instead of the caller's input. `runtime.wasm` now unwraps that form. It rejects
 a `target_id` other than the initialized capability with `target_not_found`, a
 non-object `input`, and any extra member with `ambiguous_submit`. A guest written
-to read the envelope must now read its input directly. Raw submits, which the web
-package uses, are unchanged unless the body holds both `target_id` and `input`.
+to read the envelope must now read its input directly. Raw submits are unchanged
+unless the body holds both `target_id` and `input`.
 
 ### `runtime.wasm` ships as a release with every cut (Decision 123, Spec 048 FR-020, `#1784`)
 

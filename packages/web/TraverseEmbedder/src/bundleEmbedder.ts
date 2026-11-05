@@ -25,6 +25,7 @@ import { IndexedDbDataStore } from "./indexedDbDataStore.js";
 import {
   RuntimeWasmHost,
   RuntimeWasmHostError,
+  capabilitySubmitBody,
   mapRuntimeWasmEvents,
   mapServiceType,
   parseDeclaredEmits,
@@ -1672,7 +1673,7 @@ function executeWasmModule(
   }
   const { host } = started;
   try {
-    host.submit(new TextEncoder().encode(JSON.stringify(input)));
+    host.submit(capabilitySubmitBody(target.capabilityId, input));
   } catch (error) {
     return runtimeCallFailure(error, "submit");
   }
@@ -1701,7 +1702,7 @@ async function executeDeferredWasmModule(
   const { host } = started;
   const encoder = new TextEncoder();
   try {
-    let response = host.submit(encoder.encode(JSON.stringify(input)));
+    let response = host.submit(capabilitySubmitBody(target.capabilityId, input));
     for (;;) {
       const record = asRecord(asJsonValue(response));
       if (record?.["status"] !== "suspended") {
