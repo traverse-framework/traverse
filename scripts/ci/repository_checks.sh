@@ -184,6 +184,8 @@ required_files=(
   "scripts/ci/spec_context_check.sh"
   "scripts/ci/bump_version.sh"
   "scripts/ci/bump_version_test.sh"
+  "scripts/ci/publish_runtime_wasm_release.sh"
+  "scripts/ci/publish_runtime_wasm_release_test.sh"
 )
 
 for file in "${required_files[@]}"; do
@@ -563,6 +565,9 @@ grep -q 'bash scripts/ci/coverage_gate.sh' scripts/ci/local_preflight.sh
 
 echo "Running bump_version.sh fixture tests (spec 048)..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/bump_version_test.sh"
+
+echo "Running publish_runtime_wasm_release.sh fixture tests (spec 048 FR-020)..."
+bash "$(pwd)/scripts/ci/publish_runtime_wasm_release_test.sh"
 
 echo "Running new-capability scaffold smoke..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/new_capability_scaffold_smoke.sh"

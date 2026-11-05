@@ -527,7 +527,7 @@
     },
     {
       "id": "048-semver-publishing-pipeline",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/048-semver-publishing-pipeline/spec.md",
@@ -551,7 +551,14 @@
         "scripts/ci/release_naming_check.sh",
         ".github/workflows/swift-embedder-publish.yml",
         "scripts/ci/release_naming_audit.sh",
-        ".github/workflows/release-naming-audit.yml"
+        ".github/workflows/release-naming-audit.yml",
+        "scripts/ci/publish_runtime_wasm_release.sh",
+        "scripts/ci/publish_runtime_wasm_release_test.sh",
+        "scripts/ci/repository_checks.sh",
+        "docs/decision-log.md",
+        "docs/releases/next.md",
+        "CHANGELOG.md",
+        "docs/evidence/model-execute-published-2026-11-03/"
       ]
     },
     {

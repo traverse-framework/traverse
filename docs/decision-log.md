@@ -7347,3 +7347,39 @@ closed again on the next rights field. Withholding evidence from guests would
 break the published contract's output.
 
 Chosen by the maintainer on `#1719` (2026-11-02): the recommended option.
+
+## Decision 123: Every Product Cut Publishes runtime.wasm as a Release
+
+- **Date**: 2026-11-04
+- **Status**: Accepted
+- **Governing specs**: `048-semver-publishing-pipeline`,
+  `068-public-platform-embedder-packages`
+- **Related issues**: `#1784`, `#1776`
+
+### Context
+
+- `BundleEmbedder` requires `runtime/runtime.wasm` in the app bundle and fails
+  closed without it. The npm package doesn't ship it.
+- The last `runtime-wasm-v*` release was v0.11.0, because no workflow creates
+  them. Apps could only fetch the file from a git tag.
+
+### Options considered
+
+1. **Publish `runtime-wasm-vX.Y.Z` with every product release.** The naming and
+   audit rules already expect this release type.
+2. **Ship it in the npm package.** It wouldn't serve the native hosts, and it adds
+   about 2 MB to every install.
+3. **Document the tagged file as the source and remove the release type.** No new
+   machinery, but apps would depend on a repo path, not a published artifact.
+
+### Decision
+
+Use option 1. CI publishes the release from the product tag's bytes, and the
+product release can't be created until the published assets match the tag.
+Stale pins fail the tag before anything is published. `runtime-wasm-v0.16.1` and
+`runtime-wasm-v0.16.2` are backfilled, and older cuts aren't. v0.16.2 was tagged
+while this change was in review.
+
+### Approval
+
+Chosen by the maintainer on `#1784` (2026-11-04): the recommended option.
