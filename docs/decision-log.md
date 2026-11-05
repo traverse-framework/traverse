@@ -7383,3 +7383,40 @@ while this change was in review.
 ### Approval
 
 Chosen by the maintainer on `#1784` (2026-11-04): the recommended option.
+
+## Decision 124: runtime.wasm Unwraps the Target Submit Form
+
+- **Date**: 2026-11-04
+- **Status**: Accepted
+- **Governing specs**: `071-native-runtime-wasm-bridge`,
+  `057-embeddable-runtime-host`, `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1794`, `#1795`
+
+### Context
+
+- `embedder-api` defines the capability submit form as `{target_id, input}`, and
+  the Swift, Kotlin and .NET embedders send it.
+- `runtime.wasm` forwarded the whole body, so those guests read the envelope, and
+  any `target_id` ran the capability. A run against the real artifact confirmed
+  both.
+- The web package sends raw input instead, so input containing
+  `"kind":"app_command"` routes as a command there.
+
+### Options considered
+
+1. **`runtime.wasm` unwraps the form.** It honors the published form and can check
+   the target and fail closed. It needs a re-pin.
+2. **Native embedders send raw input, like web.** No re-pin, but the target stays
+   unchecked, input can route as a command on every host, and the embedders depart
+   from `embedder-api`.
+3. **Both hosts move to the envelope.** Most consistent, but the largest change.
+
+### Decision
+
+Use option 1. A body holding both `target_id` and `input` is the envelope form.
+Raw submits stay accepted, so a raw input with both members is now read as an
+envelope. The web package keeps its raw submit, with its routing gap, for now.
+
+### Approval
+
+Chosen by the maintainer on `#1794` (2026-11-04): the recommended option.

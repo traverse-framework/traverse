@@ -3,7 +3,7 @@
 **Feature Branch**: `071-native-runtime-wasm-bridge`  
 **Created**: 2026-07-15  
 **Status**: Approved  
-**Version**: 1.1.0  
+**Version**: 1.2.0  
 **Input**: Decision 23, ADR-0007, and Traverse #712.
 
 **Amendment (2026-09-15, version 1.0.0 -> 1.1.0, approved 2026-09-15)**:
@@ -18,6 +18,12 @@ JSON-only fixture. Resolved via Decision 90 (`docs/decision-log.md`): FR-005
 now carves out `init` on a `runtime.wasm` orchestrator instance as the one
 exception to "UTF-8 JSON bytes," which stays the rule for every other
 operation. No other requirement changed.
+
+**Amendment (2026-11-04, version 1.1.0 -> 1.2.0)**: `runtime.wasm` forwarded the
+whole `embedder-api` `{target_id, input}` submit body to the guest, so guests on
+Swift, Kotlin, and .NET read the envelope instead of the caller's input, and any
+`target_id` ran the capability (`#1794`, Decision 124). New FR-018. Additive for
+raw submits, except the body shapes FR-018 names.
 
 ## Purpose
 
@@ -99,6 +105,14 @@ public application operations.
 - **FR-017**: Engine dependencies MUST follow ADR-0007. Exact versions are
   release-pinned and changes require license/security review plus the full
   cross-engine conformance suite.
+- **FR-018**: On `runtime.wasm`, a `submit` body holding both `target_id` and
+  `input` is the `embedder-api` workflow/capability form, and the guest MUST
+  receive only `input`, under Spec 1722's canonical rules for the whole body.
+  The runtime MUST reject the body without running the guest when `target_id`
+  differs from the initialized capability (`target_not_found`), when `target_id`
+  isn't a non-empty string or `input` isn't a JSON object, or when the body has
+  any other member (`ambiguous_submit`). Any other object body stays raw
+  capability input.
 
 ## Acceptance Scenarios
 

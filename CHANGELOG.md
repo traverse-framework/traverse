@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Breaking: guests on `runtime.wasm` receive only the submitted input (Decision 124, Spec 071 FR-018, `#1794`)
+
+Swift, Kotlin and .NET guests read `{"input":...,"target_id":...}` on stdin
+instead of the caller's input. `runtime.wasm` now unwraps that form. It rejects
+a `target_id` other than the initialized capability with `target_not_found`, a
+non-object `input`, and any extra member with `ambiguous_submit`. A guest written
+to read the envelope must now read its input directly. Raw submits, which the web
+package uses, are unchanged unless the body holds both `target_id` and `input`.
+
 ### `runtime.wasm` ships as a release with every cut (Decision 123, Spec 048 FR-020, `#1784`)
 
 Every product tag now publishes `runtime-wasm-vX.Y.Z` with `runtime.wasm`,
