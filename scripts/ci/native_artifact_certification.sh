@@ -7,6 +7,7 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+source "${repo_root}/scripts/ci/checkout_target_dir.sh"
 artifact_root="$(mktemp -d "${TMPDIR:-/tmp}/traverse-native-artifact.XXXXXX")"
 cleanup() { rm -rf "${artifact_root}"; }
 trap cleanup EXIT
