@@ -157,6 +157,40 @@ test("submitAsync abort before nested work returns cancelled outcome + trace", a
   assert.equal(detail.failureCode, "cancelled");
 });
 
+// Inputs whose member names runtime.wasm also uses to route a submit body.
+// Web sends the {target_id, input} envelope, so each one reaches the guest
+// unchanged instead of being routed (Spec 071 FR-018, #1802).
+const ROUTING_SHAPED_INPUTS = [
+  { kind: "app_command", command: "go" },
+  { kind: "deadline_fired", note: 1 },
+  { command: "go" },
+  { target_id: "fixture.echo", input: { a: 1 } },
+];
+
+test("capability input shaped like a routing envelope reaches the guest unchanged", async () => {
+  const echo = await compileWat(ECHO_WAT);
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [{ capabilityId: "fixture.echo", wasmBytes: echo }],
+  });
+  const embedder = await initEmbedder(manifestPath);
+  const events = collectEvents(embedder);
+
+  for (const input of ROUTING_SHAPED_INPUTS) {
+    for (const submit of [
+      () => embedder.submit("fixture.echo", input),
+      () => embedder.submitAsync("fixture.echo", input),
+    ]) {
+      events.length = 0;
+      assert.equal((await submit()).status, "accepted");
+      const result = events.find((event) => event.event_type === "capability_result");
+      assert.ok(result, `${JSON.stringify(input)}: ${JSON.stringify(events)}`);
+      assert.equal(result.data.status, "completed", JSON.stringify(input));
+      assert.deepEqual(result.data.output, input);
+    }
+  }
+});
+
 test("capability submit surfaces invalid stdout via runtime.wasm capability_result", async () => {
   const invalid = await compileWat(INVALID_OUTPUT_WAT);
   const manifestPath = await writeBundleFixture({

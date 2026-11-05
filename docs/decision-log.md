@@ -7420,3 +7420,36 @@ envelope. The web package keeps its raw submit, with its routing gap, for now.
 ### Approval
 
 Chosen by the maintainer on `#1794` (2026-11-04): the recommended option.
+
+## Decision 125: The Web Package Sends the Target Submit Form
+
+- **Date**: 2026-11-05
+- **Status**: Accepted
+- **Governing specs**: `071-native-runtime-wasm-bridge`,
+  `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1802`, `#1794`
+
+### Context
+
+- After Decision 124, web was the one host still submitting raw capability input.
+- `runtime.wasm` routes a raw body by its members, so web input holding
+  `kind: "app_command"`, `kind: "deadline_fired"` or `kind: "host_connector_result"`,
+  a bare `command`, or both `target_id` and `input` never reached the guest as
+  sent. Tests through `BundleEmbedder` and composed workflows confirmed it.
+
+### Options considered
+
+1. **Web sends `{target_id, input}`.** Matches the native hosts and `embedder-api`,
+   and `runtime.wasm` already unwraps it, so there's no re-pin.
+2. **Keep raw input and reserve the routing member names.** No wire change, but
+   apps lose those names and every host must document them.
+
+### Decision
+
+Use option 1 for every capability submit: `executeWasmModule`, the first submit
+of `executeDeferredWasmModule`, and composed workflow nodes. Connector replies in
+the deferred loop and app commands keep their own forms.
+
+### Approval
+
+Chosen by the maintainer on `#1802` (2026-11-05): the recommended option.
