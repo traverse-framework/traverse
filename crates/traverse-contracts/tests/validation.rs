@@ -13,10 +13,10 @@ use traverse_contracts::{
     SchemaContainer, ServiceType, SideEffect, SideEffectKind, ValidationContext,
     ValidationErrorCode, ValidationEvidence, ValidationFailure, ValidationResult,
     activation_reference_connector_contracts, default_risk_metadata, governed_content_digest,
-    governed_event_content_digest, is_automatic_eligible, load_activation_reference_connector_contracts,
-    parse_connector_contract, parse_contract, parse_event_contract, reference_connector_contracts,
-    validate_connector_contract, validate_contract, validate_event_contract,
-    validate_manifest_risk_policy,
+    governed_event_content_digest, is_automatic_eligible,
+    load_activation_reference_connector_contracts, parse_connector_contract, parse_contract,
+    parse_event_contract, reference_connector_contracts, validate_connector_contract,
+    validate_contract, validate_event_contract, validate_manifest_risk_policy,
 };
 
 const GOVERNING_SPEC: &str = "002-capability-contracts@0.1.0";
