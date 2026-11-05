@@ -37,5 +37,10 @@ capability:
 | Host | Test |
 |---|---|
 | Native runtime (wasmtime), CLI, MCP | `crates/traverse-runtime/tests/canonical_input_conformance.rs` |
-| `runtime.wasm` (wasmi), as the Swift, Kotlin and .NET hosts run it | the same file, `runtime_wasm_feeds_canonical_stdin` |
+| `runtime.wasm` (wasmi) | the same file, `runtime_wasm_feeds_canonical_stdin` |
 | `traverse-embedder-web` (Node) | `packages/web/TraverseEmbedder/tests/canonicalInput.test.mjs` |
+| Swift package | `packages/swift/TraverseEmbedder/Tests/TraverseEmbedderTests/CanonicalInputConformanceTests.swift` |
+| Kotlin package | `packages/kotlin/TraverseEmbedder/traverse-embedder/src/test/kotlin/dev/traverse/embedder/CanonicalInputConformanceTest.kt` |
+| .NET package | `packages/dotnet/TraverseEmbedder/TraverseEmbedder.Tests/CanonicalInputConformanceTests.cs` |
+
+The Swift, Kotlin and .NET tests run on the real `runtime.wasm` in `TRAVERSE_NATIVE_ARTIFACT_ROOT`, which `scripts/ci/native_artifact_certification.sh` sets in CI. Each runs every vector twice: as raw bytes on the bridge client, and through `RuntimeTraverseEmbedder`, which passes the caller's input bytes through unchanged (Decision 126).
