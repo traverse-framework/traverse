@@ -135,10 +135,18 @@ pub(crate) struct HostConnectorTerminal {
     pub(crate) payload: Value,
 }
 
+/// The `embedder-api` workflow/capability submit form (Spec 071 FR-018).
+#[derive(Debug, Clone)]
+pub(crate) struct TargetEnvelope {
+    pub(crate) target_id: String,
+    pub(crate) input: Value,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum SubmitDiscrimination {
     AppCommand(AppCommandEnvelope),
     HostConnectorTerminal(HostConnectorTerminal),
+    TargetEnvelope(TargetEnvelope),
     CapabilityOrWorkflow,
     Ambiguous,
     Invalid(String),
@@ -191,7 +199,33 @@ pub(crate) fn discriminate_submit(request: &Value) -> SubmitDiscrimination {
         // Bare `command` without `kind` is ambiguous with future envelopes.
         return SubmitDiscrimination::Ambiguous;
     }
+    if has_target && object.contains_key("input") {
+        return parse_target_envelope(object);
+    }
     SubmitDiscrimination::CapabilityOrWorkflow
+}
+
+/// A body holding both `target_id` and `input` is the envelope form, so extra
+/// members can't be read as either form and fail closed (Spec 071 FR-018).
+fn parse_target_envelope(object: &serde_json::Map<String, Value>) -> SubmitDiscrimination {
+    if object.len() != 2 {
+        return SubmitDiscrimination::Ambiguous;
+    }
+    let target_id = match object.get("target_id").and_then(Value::as_str) {
+        Some(target_id) if !target_id.trim().is_empty() => target_id.to_string(),
+        _ => {
+            return SubmitDiscrimination::Invalid(
+                "target_id must be a non-empty string".to_string(),
+            );
+        }
+    };
+    match object.get("input") {
+        Some(input @ Value::Object(_)) => SubmitDiscrimination::TargetEnvelope(TargetEnvelope {
+            target_id,
+            input: input.clone(),
+        }),
+        _ => SubmitDiscrimination::Invalid("input must be a JSON object".to_string()),
+    }
 }
 
 fn parse_host_connector_terminal(
@@ -420,9 +454,39 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
-        match discriminate_submit(&json!({"target_id": "demo.cap", "input": {}})) {
-            SubmitDiscrimination::CapabilityOrWorkflow => {}
+        match discriminate_submit(&json!({"target_id": "demo.cap", "input": {"a": 1}})) {
+            SubmitDiscrimination::TargetEnvelope(envelope) => {
+                assert_eq!(envelope.target_id, "demo.cap");
+                assert_eq!(envelope.input, json!({"a": 1}));
+            }
             other => panic!("unexpected {other:?}"),
+        }
+
+        // Raw capability input stays raw unless it holds both envelope members.
+        for raw in [
+            json!({"a": 1}),
+            json!({"target_id": "x"}),
+            json!({"input": 1}),
+        ] {
+            assert!(matches!(
+                discriminate_submit(&raw),
+                SubmitDiscrimination::CapabilityOrWorkflow
+            ));
+        }
+
+        assert!(matches!(
+            discriminate_submit(&json!({"target_id": "x", "input": {}, "extra": 1})),
+            SubmitDiscrimination::Ambiguous
+        ));
+        for invalid in [
+            json!({"target_id": " ", "input": {}}),
+            json!({"target_id": 1, "input": {}}),
+            json!({"target_id": "x", "input": "text"}),
+        ] {
+            assert!(matches!(
+                discriminate_submit(&invalid),
+                SubmitDiscrimination::Invalid(_)
+            ));
         }
 
         assert!(matches!(

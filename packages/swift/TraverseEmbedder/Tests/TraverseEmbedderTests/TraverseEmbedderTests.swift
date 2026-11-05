@@ -145,8 +145,9 @@ import Testing
     #expect(try client.shutdown() == Data(#"{"status":"stopped"}"#.utf8))
 }
 
-@Test func realNativeArtifactRunsWithoutASidecar() throws {
-    guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return }
+/// A client on the real artifact with a nested echo capability, or nil outside certification.
+private func realNativeClient() throws -> WasmiHostBridgeClient? {
+    guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return nil }
     let runtimeURL = URL(fileURLWithPath: rootPath).appendingPathComponent("runtime/runtime.wasm")
     let runtime = try Data(contentsOf: runtimeURL)
     // The default `fuelPerInvocation` is sized for a trivial fixture guest.
@@ -189,6 +190,25 @@ import Testing
 
     let initResponse = try jsonObject(from: client.initialize(configJSON: initPayload))
     #expect(initResponse["status"] as? String == "ready")
+    return client
+}
+
+@Test func realNativeArtifactGivesTheGuestOnlyTheSubmissionInput() throws {
+    guard let client = try realNativeClient() else { return }
+    let runtime = RuntimeTraverseEmbedder(client: client)
+
+    let result = try runtime.submit(try TraverseSubmission(
+        targetID: "swift.conformance.echo", inputJSON: Data(#"{"b":1,"a":2}"#.utf8)))
+    #expect(result.status == "accepted")
+
+    let completed = try #require(try runtime.subscribe().first { $0.eventType == "capability_result" })
+    let data = try jsonObject(from: try #require(completed.output))
+    let output = try #require(data["output"] as? [String: Any])
+    #expect(output.count == 2 && output["a"] as? Int == 2 && output["b"] as? Int == 1)
+}
+
+@Test func realNativeArtifactRunsWithoutASidecar() throws {
+    guard let client = try realNativeClient() else { return }
 
     let submitResponse = try jsonObject(from: client.submit(requestJSON: Data(#"{"hello":"swift-conformance"}"#.utf8)))
     #expect(submitResponse["status"] as? String == "accepted")

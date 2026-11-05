@@ -24,17 +24,17 @@ public sealed class WasmtimeRuntimeBridgeTests
     private const string ClientFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDQwAAQIDAwMBAwMDAwEFBAEBARAGBgF/AUEACwf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAAED3RyYXZlcnNlX3N1Ym1pdAAFE3RyYXZlcnNlX25leHRfZXZlbnQABg90cmF2ZXJzZV9jYW5jZWwABxl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAgYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAkYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAoRdHJhdmVyc2Vfc2h1dGRvd24ACwqXAQwGAEH0zgALBQBBwAALAgALFQAgACABNgIAIABBBGogAjYCAEEACwsAIAJBgARBEhADCwsAIAJBoARBFRADCxsAIwBFBH9BASQAIABBwARBDhADGkEBBUEACwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACACQaAEQRUQAwsLACAAQeAEQRQQAwsLYgQAQYAECxJ7InN0YXR1cyI6InJlYWR5In0AQaAECxV7InN0YXR1cyI6ImFjY2VwdGVkIn0AQcAECw57InNlcXVlbmNlIjoxfQBB4AQLFHsic3RhdHVzIjoic3RvcHBlZCJ9";
     private const string TypedClientFixture = "AGFzbQEAAAABFgRgAAF/YAF/AX9gAn9/AGADf39/AX8DDQwAAQIDAwMBAwMDAwEFBAEBARAGBgF/AUEACwf8AQwGbWVtb3J5AgAbdHJhdmVyc2VfYnJpZGdlX2FiaV92ZXJzaW9uAAAOdHJhdmVyc2VfYWxsb2MAARB0cmF2ZXJzZV9kZWFsbG9jAAINdHJhdmVyc2VfaW5pdAAED3RyYXZlcnNlX3N1Ym1pdAAFE3RyYXZlcnNlX25leHRfZXZlbnQABg90cmF2ZXJzZV9jYW5jZWwABxl0cmF2ZXJzZV9jb21wYXRpYmxlX3N0YXJ0AAgYdHJhdmVyc2VfY29tcGF0aWJsZV9zdG9wAAkYdHJhdmVyc2VfY29tcGF0aWJsZV9raWxsAAoRdHJhdmVyc2Vfc2h1dGRvd24ACwqXAQwGAEH0zgALBQBBwAALAgALFQAgACABNgIAIABBBGogAjYCAEEACwsAIAJBgARBEhADCwsAIAJBoARBJxADCxsAIwBFBH9BASQAIABB4ARBNhADGkEBBUEACwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACACQaAEQScQAwsLACAAQcAFQRQQAwsLnAEEAEGABAsSeyJzdGF0dXMiOiJyZWFkeSJ9AEGgBAsneyJzZXNzaW9uX2lkIjoiczEiLCJzdGF0dXMiOiJhY2NlcHRlZCJ9AEHgBAs2eyJzZXF1ZW5jZSI6MSwidGFyZ2V0X2lkIjoiZGVtbyIsInN0YXR1cyI6ImNvbXBsZXRlZCJ9AEHABQsUeyJzdGF0dXMiOiJzdG9wcGVkIn0=";
 
-    [Fact]
-    public void RealNativeArtifactRunsWithoutASidecar()
+    /// <summary>A client on the real artifact with a nested echo capability, or null outside certification.</summary>
+    private static (WasmtimeRuntimeBridge Bridge, WasmtimeBridgeClient Client)? RealNativeClient()
     {
         var root = Environment.GetEnvironmentVariable("TRAVERSE_NATIVE_ARTIFACT_ROOT");
-        if (string.IsNullOrWhiteSpace(root)) return;
+        if (string.IsNullOrWhiteSpace(root)) return null;
         var bytes = File.ReadAllBytes(Path.Join(root, "runtime", "runtime.wasm"));
         // The default fuel budget is sized for a trivial fixture guest. The
         // real `runtime.wasm` interprets genuine Rust code (JSON parsing,
         // heap allocation, a nested wasmi engine) on `init`/`submit`, which
         // costs far more simulated fuel than a few store instructions.
-        using var bridge = new WasmtimeRuntimeBridge(new TraverseBundle(root, Digest(bytes)), fuelPerCall: 50_000_000);
+        var bridge = new WasmtimeRuntimeBridge(new TraverseBundle(root, Digest(bytes)), fuelPerCall: 50_000_000);
         var client = new WasmtimeBridgeClient(bridge);
 
         // The real `runtime-wasm-bridge/1.0.0` guest (crates/traverse-runtime-wasm)
@@ -59,6 +59,32 @@ public sealed class WasmtimeRuntimeBridgeTests
 
         using var initResponse = JsonDocument.Parse(client.Initialize(initPayload));
         Assert.Equal("ready", initResponse.RootElement.GetProperty("status").GetString());
+        return (bridge, client);
+    }
+
+    [Fact]
+    public void RealNativeArtifactGivesTheGuestOnlyTheSubmissionInput()
+    {
+        if (RealNativeClient() is not var (bridge, client)) return;
+        using var ownedBridge = bridge;
+        var runtime = new RuntimeTraverseEmbedder(client);
+
+        var result = runtime.Submit(new TraverseSubmission("dotnet.conformance.echo", "{\"b\":1,\"a\":2}"));
+        Assert.Equal("accepted", result.Status);
+
+        var completed = runtime.Subscribe().Single(item => item.EventType == "capability_result");
+        using var data = JsonDocument.Parse(completed.Output!);
+        var output = data.RootElement.GetProperty("output");
+        Assert.Equal(2, output.EnumerateObject().Count());
+        Assert.Equal(2, output.GetProperty("a").GetInt32());
+        Assert.Equal(1, output.GetProperty("b").GetInt32());
+    }
+
+    [Fact]
+    public void RealNativeArtifactRunsWithoutASidecar()
+    {
+        if (RealNativeClient() is not var (bridge, client)) return;
+        using var ownedBridge = bridge;
 
         using var submitResponse = JsonDocument.Parse(client.Submit("{\"hello\":\"dotnet-conformance\"}"u8));
         Assert.Equal("accepted", submitResponse.RootElement.GetProperty("status").GetString());

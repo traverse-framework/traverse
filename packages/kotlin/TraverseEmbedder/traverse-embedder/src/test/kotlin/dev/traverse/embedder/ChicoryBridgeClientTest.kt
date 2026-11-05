@@ -16,8 +16,9 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ChicoryBridgeClientTest {
-    @Test fun realNativeArtifactRunsWithoutASidecar() {
-        val rootPath = System.getenv("TRAVERSE_NATIVE_ARTIFACT_ROOT") ?: return
+    /** A client on the real artifact with a nested echo capability, or null outside certification. */
+    private fun realNativeClient(): ChicoryBridgeClient? {
+        val rootPath = System.getenv("TRAVERSE_NATIVE_ARTIFACT_ROOT") ?: return null
         val runtime = File(rootPath, "runtime/runtime.wasm").readBytes()
         val digest = "sha256:" + MessageDigest.getInstance("SHA-256")
             .digest(runtime).joinToString("") { "%02x".format(it) }
@@ -49,6 +50,25 @@ class ChicoryBridgeClientTest {
 
         val initResponse = Json.parseToJsonElement(client.initialize(initPayload)).jsonObject
         assertEquals("ready", initResponse["status"]?.jsonPrimitive?.content)
+        return client
+    }
+
+    @Test fun realNativeArtifactGivesTheGuestOnlyTheSubmissionInput() {
+        val client = realNativeClient() ?: return
+        val runtime = RuntimeTraverseEmbedder(client)
+
+        val result = runtime.submit(TraverseSubmission("kotlin.conformance.echo", "{\"b\":1,\"a\":2}"))
+        assertEquals("accepted", result.status)
+
+        val completed = runtime.subscribe().single { it.eventType == "capability_result" }
+        val output = Json.parseToJsonElement(completed.output!!).jsonObject["output"]!!.jsonObject
+        assertEquals(setOf("a", "b"), output.keys)
+        assertEquals("2", output["a"]?.jsonPrimitive?.content)
+        assertEquals("1", output["b"]?.jsonPrimitive?.content)
+    }
+
+    @Test fun realNativeArtifactRunsWithoutASidecar() {
+        val client = realNativeClient() ?: return
 
         val submitResponse = Json.parseToJsonElement(
             client.submit("{\"hello\":\"kotlin-conformance\"}"),

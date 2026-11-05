@@ -34,7 +34,7 @@ use app_sm::{
 };
 use traverse_contracts::{
     ConnectorRequirement, EventReference, ExecutionTarget, PlacementConstraintEvaluator,
-    PlacementError, PlacementRequest, RuntimeSnapshot, ServiceType,
+    PlacementError, PlacementRequest, RuntimeSnapshot, ServiceType, parse_canonicalizable,
 };
 
 pub use executor::{
@@ -439,10 +439,30 @@ fn submit(state: &mut RuntimeState, request: &[u8]) -> SubmitResult {
             SubmitDiscrimination::Invalid(message) => {
                 return SubmitResult::rejected(String::new(), message);
             }
+            SubmitDiscrimination::TargetEnvelope(envelope) => {
+                return submit_target_envelope(state, request, &envelope);
+            }
             SubmitDiscrimination::CapabilityOrWorkflow => {}
         }
     }
     submit_capability(state, request)
+}
+
+/// Runs the `{target_id, input}` submit form: the guest receives only `input`
+/// (Spec 071 FR-018). The checks use the whole body because parsing to a
+/// `Value` has already dropped any duplicate member names (Spec 1722 FR-003).
+fn submit_target_envelope(
+    state: &mut RuntimeState,
+    request: &[u8],
+    envelope: &app_sm::TargetEnvelope,
+) -> SubmitResult {
+    if envelope.target_id != state.capability_id {
+        return SubmitResult::rejected(String::new(), "target_not_found".to_string());
+    }
+    if let Err(error) = parse_canonicalizable(request) {
+        return SubmitResult::rejected(String::new(), error.to_string());
+    }
+    submit_capability(state, envelope.input.to_string().as_bytes())
 }
 
 #[allow(clippy::too_many_lines)]

@@ -223,6 +223,47 @@ fn submit_to_runtime_wasm(
     }
 }
 
+/// The `embedder-api` submit form the native embedders send (Spec 071 FR-018).
+fn target_envelope(target_id: &str, input: &str) -> String {
+    format!(r#"{{"target_id":"{target_id}","input":{input}}}"#)
+}
+
+#[test]
+fn runtime_wasm_gives_the_guest_only_the_envelope_input() {
+    let runtime_wasm = std::fs::read(build_runtime_wasm_artifact()).expect("read runtime.wasm");
+    let guest = guest();
+    for vector in vectors() {
+        let input = vector["input"].as_str().expect("input");
+        let body = target_envelope("conformance.stdin-echo", input);
+        let result = submit_to_runtime_wasm(&runtime_wasm, &guest, body.as_bytes());
+        assert_vector("runtime.wasm envelope", &vector, result);
+    }
+}
+
+#[test]
+fn runtime_wasm_rejects_envelopes_it_cannot_run() {
+    let runtime_wasm = std::fs::read(build_runtime_wasm_artifact()).expect("read runtime.wasm");
+    let guest = guest();
+    for (body, expected) in [
+        (
+            target_envelope("other.capability", "{}"),
+            "target_not_found",
+        ),
+        (
+            target_envelope("conformance.stdin-echo", "[1]"),
+            "input must be a JSON object",
+        ),
+        (
+            r#"{"target_id":"conformance.stdin-echo","input":{},"extra":1}"#.to_string(),
+            "ambiguous_submit",
+        ),
+    ] {
+        let error = submit_to_runtime_wasm(&runtime_wasm, &guest, body.as_bytes())
+            .expect_err("guest must not run");
+        assert!(error.contains(expected), "{body}: {error}");
+    }
+}
+
 #[test]
 fn runtime_wasm_feeds_canonical_stdin() {
     let runtime_wasm = std::fs::read(build_runtime_wasm_artifact()).expect("read runtime.wasm");
