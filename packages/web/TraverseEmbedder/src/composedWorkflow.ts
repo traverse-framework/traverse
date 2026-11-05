@@ -11,6 +11,7 @@ import type { BrowserWorkflowProposal } from "./browserLocalPlan.js";
 import type { JsonValue } from "./types.js";
 import {
   RuntimeWasmHost,
+  capabilitySubmitBody,
   mapRuntimeWasmEvents,
   mapServiceType,
   parseDeclaredEmits,
@@ -148,7 +149,7 @@ async function runThroughRuntime(
     return { output: null, failure: classifyFailure(String(error)) };
   }
   try {
-    host.submit(encoder.encode(JSON.stringify(input)));
+    host.submit(capabilitySubmitBody(meta.capabilityId, input));
   } catch (error) {
     return { output: null, failure: classifyFailure(String(error)) };
   }

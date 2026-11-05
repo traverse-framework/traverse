@@ -67,6 +67,15 @@ const answer = (marker) => ({
 
 const terminal = (events) => events.find((e) => e.event_type === "capability_result" || e.event_type === "error");
 
+test("a deferred guest runs when its input is shaped like an app command (#1802)", async () => {
+  const { embedder, events } = await load();
+  embedder.activateMediatedConnector(CONNECTOR, "1.0.0", { invoke: async () => answer("routed") });
+  await embedder.submitAsync("fixture.deferred", { kind: "app_command", command: "go" });
+  const result = terminal(events);
+  assert.equal(result.event_type, "capability_result", JSON.stringify(events));
+  assert.equal(result.data.output.payload.marker, "routed");
+});
+
 test("submitAsync resumes a suspended guest with the connector's answer", async () => {
   const { embedder, events } = await load();
   const requests = [];

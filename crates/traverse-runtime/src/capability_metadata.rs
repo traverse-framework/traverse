@@ -205,6 +205,16 @@ impl CapabilityMetadataIndex {
     }
 }
 
+/// Returns a cached contract and marks it most recently used.
+fn cache_get(inner: &mut CacheInner, key: &HydrationKey) -> Option<Arc<CapabilityContract>> {
+    let hit = inner.entries.get(key).cloned()?;
+    if let Some(position) = inner.order.iter().position(|item| item == key) {
+        inner.order.remove(position);
+    }
+    inner.order.push_back(key.clone());
+    Some(hit)
+}
+
 impl ContractHydrationCache {
     #[must_use]
     pub fn new(capacity: usize) -> Self {
@@ -271,22 +281,30 @@ impl ContractHydrationCache {
             capability_version: indexed.capability_version.clone(),
             contract_digest: indexed.contract_digest.clone(),
         };
-        if let Some(hit) = self.cache_get(&key) {
-            self.record(
-                HydrationEvidenceKind::CacheHit,
-                &indexed,
-                "hydration_cache_hit",
-            );
-            return Ok(hit);
-        }
-
+        // The cache check and the in-flight claim share one lock: the leader
+        // caches before it clears its slot, so a caller can't miss both and
+        // become a second leader (#1799).
         let slot = {
             let mut inner = self.lock_inner();
-            inner
-                .inflight
-                .entry(key.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(None)))
-                .clone()
+            match cache_get(&mut inner, &key) {
+                Some(hit) => Err(hit),
+                None => Ok(inner
+                    .inflight
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(None)))
+                    .clone()),
+            }
+        };
+        let slot = match slot {
+            Ok(slot) => slot,
+            Err(hit) => {
+                self.record(
+                    HydrationEvidenceKind::CacheHit,
+                    &indexed,
+                    "hydration_cache_hit",
+                );
+                return Ok(hit);
+            }
         };
 
         let mut slot_guard = slot
@@ -354,16 +372,6 @@ impl ContractHydrationCache {
             code: reason_code,
             message: "persisted contract could not be hydrated".to_string(),
         })
-    }
-
-    fn cache_get(&self, key: &HydrationKey) -> Option<Arc<CapabilityContract>> {
-        let mut inner = self.lock_inner();
-        let hit = inner.entries.get(key).cloned()?;
-        if let Some(position) = inner.order.iter().position(|item| item == key) {
-            inner.order.remove(position);
-        }
-        inner.order.push_back(key.clone());
-        Some(hit)
     }
 
     fn insert(&self, indexed: &IndexedCapability, contract: Arc<CapabilityContract>) {
@@ -739,6 +747,38 @@ mod tests {
             .count();
         assert_eq!(leaders, 1);
         assert_eq!(leaders + waiters + hits, 8);
+    }
+
+    #[test]
+    fn concurrent_hydration_never_elects_a_second_leader() {
+        // A caller that misses the cache while the leader is finishing must
+        // see the cached contract, not start a second hydration (#1799).
+        let dir = unique_dir();
+        let contract_path = dir.join("contract.json");
+        fs::write(&contract_path, real_contract()).expect("contract");
+        let state_path = write_registration(&dir, &contract_path, json!({}));
+        let index = Arc::new(CapabilityMetadataIndex::from_workspace_applications(&[
+            app_for(&state_path),
+        ]));
+        for round in 0..1000 {
+            let cache = Arc::new(ContractHydrationCache::new(4));
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    let index = Arc::clone(&index);
+                    let cache = Arc::clone(&cache);
+                    thread::spawn(move || cache.hydrate(&index, "demo.capability", "1.0.0"))
+                })
+                .collect();
+            for worker in workers {
+                worker.join().expect("join").expect("hydrate");
+            }
+            let leaders = cache
+                .evidence_snapshot()
+                .iter()
+                .filter(|record| record.kind == HydrationEvidenceKind::HydrationLeader)
+                .count();
+            assert_eq!(leaders, 1, "round {round}");
+        }
     }
 
     #[test]

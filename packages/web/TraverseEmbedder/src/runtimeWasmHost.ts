@@ -362,6 +362,15 @@ export function mapRuntimeWasmEvents(
 }
 
 /**
+ * The submit body for capability input: the `{target_id, input}` envelope, so
+ * input whose members look like an app command or host terminal reaches the
+ * guest unchanged instead of being routed (Spec 071 FR-018, #1802).
+ */
+export function capabilitySubmitBody(capabilityId: string, input: RuntimeWasmJson): Uint8Array {
+  return encodeUtf8(JSON.stringify({ target_id: capabilityId, input }));
+}
+
+/**
  * Parse contract/manifest `emits` entries into `{ event_id, version }` pairs
  * for `RuntimeWasmHost.init`. Unknown shapes are skipped.
  */

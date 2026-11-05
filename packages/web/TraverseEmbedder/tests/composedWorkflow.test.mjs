@@ -43,6 +43,15 @@ test("reviewed composed proposal executes exact prepared WASM offline with a red
   assert.equal(JSON.stringify(trace).includes("world"), false);
 });
 
+test("composed input shaped like an app command reaches the node as input (#1802)", async () => {
+  const { store, snapshot, proposal } = await fixture();
+  proposal.proposal.initial_input = { kind: "app_command", command: "go" };
+  proposal.proposal.mappings = ["kind", "command"].map(field => ({ from_node_id: null, from_field: field, to_node_id: "one", to_field: field, source: "starting_facts" }));
+  const trace = await executeBrowserComposedWorkflow(proposal, store, snapshot, withRuntime());
+  assert.equal(trace.terminal_state, "succeeded", JSON.stringify(trace));
+  assert.deepEqual(trace.node_outcomes.map(outcome => outcome.status), ["succeeded"]);
+});
+
 test("composed execution fails closed on artifact drift and unreviewed mappings", async () => {
   const { store, snapshot, proposal } = await fixture();
   await assert.rejects(() => executeBrowserComposedWorkflow({ ...proposal, mapping_unconfirmed: true }, store, snapshot, withRuntime()), error => error instanceof ComposedWorkflowError && error.code === "composed_workflow_proposal_invalid");
