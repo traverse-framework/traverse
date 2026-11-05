@@ -40,15 +40,16 @@ public sealed class RuntimeTraverseEmbedder
     public TraverseSubmissionResult Submit(TraverseSubmission submission)
     {
         submission.Validate();
-        var request = new JsonObject
-        {
-            ["target_id"] = submission.TargetId,
-            ["input"] = JsonNode.Parse(submission.InputJson),
-        };
-        using var result = Result(client.Submit(Encoding.UTF8.GetBytes(request.ToJsonString())));
+        // The caller's input goes into the envelope unchanged, so the runtime applies Spec 1722's
+        // canonical rules to exactly what the caller sent. Re-serializing could alter or drop
+        // input it must reject (#1795).
+        var request = "{\"target_id\":" + JsonSerializer.Serialize(submission.TargetId)
+            + ",\"input\":" + submission.InputJson + "}";
+        using var result = Result(client.Submit(Encoding.UTF8.GetBytes(request)));
         return new TraverseSubmissionResult(
             RequiredString(result.RootElement, "session_id"),
-            RequiredString(result.RootElement, "status"));
+            RequiredString(result.RootElement, "status"),
+            OptionalString(result.RootElement, "error"));
     }
 
     /// <summary>

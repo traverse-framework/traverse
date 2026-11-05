@@ -4,7 +4,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,11 +25,16 @@ class RuntimeTraverseEmbedder internal constructor(
     fun initialize(configJson: String): String = client.initialize(configJson)
 
     fun submit(submission: TraverseSubmission): TraverseSubmissionResult {
-        val result = resultObject(client.submit(buildJsonObject {
-            put("target_id", submission.targetId)
-            put("input", Json.parseToJsonElement(submission.inputJson))
-        }.toString()))
-        return TraverseSubmissionResult(result.requiredString("session_id"), result.requiredString("status"))
+        // The caller's input goes into the envelope unchanged, so the runtime applies Spec 1722's
+        // canonical rules to exactly what the caller sent. Re-serializing could alter or drop
+        // input it must reject (#1795).
+        val request = "{\"target_id\":${JsonPrimitive(submission.targetId)},\"input\":${submission.inputJson}}"
+        val result = resultObject(client.submit(request))
+        return TraverseSubmissionResult(
+            result.requiredString("session_id"),
+            result.requiredString("status"),
+            result["error"]?.jsonPrimitive?.contentOrNull,
+        )
     }
 
     /**

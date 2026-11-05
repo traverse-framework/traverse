@@ -14,6 +14,7 @@ crate-type = ["staticlib"]
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "auto-dispatch", "simd"] }
 wat = "1"
 sha2 = "0.11"
+serde = "1"
 serde_json = "1.0.145"
 # Spec 138 exact-ref model host (Decision 104): the framed protocol lives in
 # the shared safe crate (Decision 108); this crate keeps only the C-ABI shim.

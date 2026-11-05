@@ -165,6 +165,7 @@ public final class WasmiHostBridgeClient: @unchecked Sendable, TraverseBridgeCli
         else {
             return TraverseBridgeError(status: status, message: fallbackMessage)
         }
-        return TraverseBridgeError(status: status, message: code, code: code)
+        // A guest's own rejection (for example `input_not_canonicalizable`) rides in `message`.
+        return TraverseBridgeError(status: status, message: object["message"] as? String ?? code, code: code)
     }
 }
