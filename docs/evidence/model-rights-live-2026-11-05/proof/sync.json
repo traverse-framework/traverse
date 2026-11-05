@@ -1,0 +1,11 @@
+{
+  "index_version": 416,
+  "record_count": 232,
+  "release_tag": "index-v416",
+  "source": "traverse-framework/registry",
+  "state_path": "<work>/.traverse/workspaces/rights-live/registry/public/index.json",
+  "status": "synced",
+  "synced_at": "unix:1793913678",
+  "validation_status": "passed",
+  "workspace": "rights-live"
+}

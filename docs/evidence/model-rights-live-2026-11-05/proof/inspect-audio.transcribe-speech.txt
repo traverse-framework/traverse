@@ -1,0 +1,66 @@
+audio:audio.transcribe-speech@1.3.0
+  status: active
+  models:
+  - id: openai/whisper-tiny
+    spdx_expression: MIT OR Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.LICENSE-MIT (sha256 b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d)
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.LICENSE-Apache-2.0 (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.NOTICE (sha256 0e8fd3e9794986303f29e242f5e1d32ef1382e032929a2bac87127ce13c41f1f)
+    derivation: converted (Per-tensor symmetric int8 of Xenova/whisper-tiny ONNX encoder/decoder Linear weights plus mel filters and tiktoken vocab, packed into whisper-tiny-int8.bin.; converted_sha256 3963e45908f17009ffcb6b16647991f021210b86baea0f558d53c96dcf86460e)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+  - id: snakers4/silero-vad
+    spdx_expression: MIT
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.LICENSE (sha256 2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.NOTICE (sha256 e907bf4b5f372f4fe1f7264f15492e7ade8c2b24645f7005695e4c28a1486dfe)
+    derivation: converted (Float32 weight tensors extracted from silero_vad_16k_op15.onnx initializers into a flat little-endian .bin (no quantization; LSTM quantization was measured to break recurrent output).; converted_sha256 0688f0fadaeba187dc827d90228ea7bb2eda887829e8d9524d0b9535557668fe)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+audio:audio.transcribe-speech@1.2.0
+  status: active
+  models:
+  - id: openai/whisper-tiny
+    spdx_expression: MIT OR Apache-2.0
+    attribution_required: true
+    commercial_use: not stated
+    redistribution: not stated
+    derivatives: not stated
+    usage_class: not stated
+    license_files: none
+    notice_files: none
+    derivation: not stated
+    data_obligations: not stated
+    verification_status: not stated
+  - id: snakers4/silero-vad
+    spdx_expression: MIT
+    attribution_required: true
+    commercial_use: not stated
+    redistribution: not stated
+    derivatives: not stated
+    usage_class: not stated
+    license_files: none
+    notice_files: none
+    derivation: not stated
+    data_obligations: not stated
+    verification_status: not stated
+audio:audio.transcribe-speech@1.1.0
+  status: active
+  models:
+  - id: openai/whisper-tiny
+    rights: not recorded (legacy shape)
+audio:audio.transcribe-speech@1.0.0
+  status: active
+  models:
+  - id: openai/whisper-tiny
+    rights: not recorded (legacy shape)
+

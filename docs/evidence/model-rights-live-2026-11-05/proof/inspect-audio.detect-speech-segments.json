@@ -1,0 +1,99 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.detect-speech-segments/1.2.0/contract.json",
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "0688f0fadaeba187dc827d90228ea7bb2eda887829e8d9524d0b9535557668fe",
+            "description": "Float32 weight tensors extracted from silero_vad_16k_op15.onnx initializers into a flat little-endian .bin (no quantization; LSTM quantization was measured to break recurrent output).",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/audio-detect-speech-segments/data/README.md",
+            "transformations": [
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "snakers4/silero-vad",
+          "license_files": [
+            {
+              "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "e907bf4b5f372f4fe1f7264f15492e7ade8c2b24645f7005695e4c28a1486dfe",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "MIT",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.2.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.detect-speech-segments/1.1.0/contract.json",
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "snakers4/silero-vad",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "MIT",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.1.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.detect-speech-segments/1.0.0/contract.json",
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "model_backed": true,
+      "models": [
+        {
+          "id": "snakers4/silero-vad",
+          "rights": "not recorded (legacy shape)",
+          "shape": "legacy"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.0.0"
+    }
+  ],
+  "source_release": "index-v416",
+  "status": "ok",
+  "workspace": "rights-live"
+}

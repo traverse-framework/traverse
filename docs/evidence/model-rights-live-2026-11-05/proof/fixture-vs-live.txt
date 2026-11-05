@@ -1,0 +1,3 @@
+fixture model refs: 96 live rights model refs: 6
+in live, never in fixtures: []
+in fixtures, never live: ['.data_obligations', '.data_obligations.dataset', '.data_obligations[].dataset', '.data_obligations[].kind', '.data_obligations[].obligation', '.data_obligations[].source_url', '.data_obligations[].spdx_expression', '.derivation.transformations[].kind', '.rights_change', '.rights_change.evidence_url', '.rights_change.reason']

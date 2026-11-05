@@ -1,0 +1,12 @@
+{
+  "errors": [
+    {
+      "code": "registry_reference_requires_resolution",
+      "message": "cached registry contract is invalid: unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 210 column 23",
+      "path": "$.registry_ref",
+      "severity": "error"
+    }
+  ],
+  "manifest_path": "app/app.manifest.json",
+  "status": "failed"
+}
