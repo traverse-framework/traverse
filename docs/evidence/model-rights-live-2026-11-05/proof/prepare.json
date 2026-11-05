@@ -1,0 +1,145 @@
+{
+  "prepared": [
+    {
+      "namespace": "text",
+      "id": "text.detect-entities",
+      "requested_range": "=1.2.0",
+      "selected_version": "1.2.0",
+      "contract_digest": "sha256:9ad8c055a244f4cc89b80ca76389bf4af80db573d4bd0a5be0996f719e8a5c4a",
+      "artifact_digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "trust_lifecycle": "active",
+      "abi": "wasm/wasi-command",
+      "target": "local",
+      "placement": "local",
+      "constraints": {
+        "host_api_access": "none",
+        "network_access": "forbidden",
+        "filesystem_access": "none"
+      },
+      "resolver_evidence": [
+        "index_selection: 1.2.0",
+        "policy: permitted",
+        "contract_digest: verified",
+        "lifecycle: active",
+        "artifact_digest: verified",
+        "signature: verified",
+        "abi: wasm/wasi-command",
+        "target: local",
+        "cache_commit: contract+artifact"
+      ]
+    },
+    {
+      "namespace": "text",
+      "id": "text.redact-entities",
+      "requested_range": "=1.2.0",
+      "selected_version": "1.2.0",
+      "contract_digest": "sha256:e450f00e0c72af27eb459d108c8230cccaa7eed717f9756a57383fca1ddd12b5",
+      "artifact_digest": "sha256:9f6fcff01b9b9045bcb1dc54d331a8ca3b3e9c1c2e0508b2b78629f227f06191",
+      "trust_lifecycle": "active",
+      "abi": "wasm/wasi-command",
+      "target": "local",
+      "placement": "local",
+      "constraints": {
+        "host_api_access": "none",
+        "network_access": "forbidden",
+        "filesystem_access": "none"
+      },
+      "resolver_evidence": [
+        "index_selection: 1.2.0",
+        "policy: permitted",
+        "contract_digest: verified",
+        "lifecycle: active",
+        "artifact_digest: verified",
+        "signature: verified",
+        "abi: wasm/wasi-command",
+        "target: local",
+        "cache_commit: contract+artifact"
+      ]
+    },
+    {
+      "namespace": "audio",
+      "id": "audio.detect-speech-segments",
+      "requested_range": "=1.2.0",
+      "selected_version": "1.2.0",
+      "contract_digest": "sha256:846bec07a7a8f1c80a86d9e31a4a30ac7f6fd2697c16825f9be5b0dc0af9480c",
+      "artifact_digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "trust_lifecycle": "active",
+      "abi": "wasm/wasi-command",
+      "target": "local",
+      "placement": "local",
+      "constraints": {
+        "host_api_access": "none",
+        "network_access": "forbidden",
+        "filesystem_access": "none"
+      },
+      "resolver_evidence": [
+        "index_selection: 1.2.0",
+        "policy: permitted",
+        "contract_digest: verified",
+        "lifecycle: active",
+        "artifact_digest: verified",
+        "signature: verified",
+        "abi: wasm/wasi-command",
+        "target: local",
+        "cache_commit: contract+artifact"
+      ]
+    },
+    {
+      "namespace": "audio",
+      "id": "audio.transcribe-speech",
+      "requested_range": "=1.3.0",
+      "selected_version": "1.3.0",
+      "contract_digest": "sha256:7655cfc8a2815d34a7f465d6a80245e03063bf5ae1c512f7a8bca32eac39fad0",
+      "artifact_digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "trust_lifecycle": "active",
+      "abi": "wasm/wasi-command",
+      "target": "local",
+      "placement": "local",
+      "constraints": {
+        "host_api_access": "none",
+        "network_access": "forbidden",
+        "filesystem_access": "none"
+      },
+      "resolver_evidence": [
+        "index_selection: 1.3.0",
+        "policy: permitted",
+        "contract_digest: verified",
+        "lifecycle: active",
+        "artifact_digest: verified",
+        "signature: verified",
+        "abi: wasm/wasi-command",
+        "target: local",
+        "cache_commit: contract+artifact"
+      ]
+    },
+    {
+      "namespace": "report",
+      "id": "report.translate-fr-semantic",
+      "requested_range": "=1.2.0",
+      "selected_version": "1.2.0",
+      "contract_digest": "sha256:19573332254b0783a472727805708ab520c9ec62ae272d762be0cdf38cc3a773",
+      "artifact_digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "trust_lifecycle": "active",
+      "abi": "wasm/wasi-command",
+      "target": "local",
+      "placement": "local",
+      "constraints": {
+        "host_api_access": "none",
+        "network_access": "forbidden",
+        "filesystem_access": "none"
+      },
+      "resolver_evidence": [
+        "index_selection: 1.2.0",
+        "policy: permitted",
+        "contract_digest: verified",
+        "lifecycle: active",
+        "artifact_digest: verified",
+        "signature: verified",
+        "abi: wasm/wasi-command",
+        "target: local",
+        "cache_commit: contract+artifact"
+      ]
+    }
+  ],
+  "failed": null
+}

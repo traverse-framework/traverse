@@ -1,0 +1,24 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "license_expression": "Apache-2.0",
+      "namespace": "report",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.0",
+      "yanked": false
+    }
+  ],
+  "source_commit": "3984b73c888731ebd39914fb39d07bd7d2c43883",
+  "source_release": "index-v416",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1793913678",
+  "workspace": "rights-live"
+}

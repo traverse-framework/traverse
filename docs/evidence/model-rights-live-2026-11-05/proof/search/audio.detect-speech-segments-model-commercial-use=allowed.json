@@ -1,0 +1,24 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.0",
+      "yanked": false
+    }
+  ],
+  "source_commit": "3984b73c888731ebd39914fb39d07bd7d2c43883",
+  "source_release": "index-v416",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1793913678",
+  "workspace": "rights-live"
+}

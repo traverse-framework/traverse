@@ -1,0 +1,148 @@
+[
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "audio.detect-speech-segments",
+    "status": "Active",
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "audio.detect-speech-segments",
+    "status": "Active",
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": [
+      "unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 3385 column 23"
+    ],
+    "contract_parse_with_spec_002_source": "ok",
+    "default_policy": "permitted",
+    "id": "audio.detect-speech-segments",
+    "status": "Active",
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "audio.transcribe-speech",
+    "status": "Active",
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "audio.transcribe-speech",
+    "status": "Active",
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "audio.transcribe-speech",
+    "status": "Active",
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": [
+      "unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 33762 column 23"
+    ],
+    "contract_parse_with_spec_002_source": "ok",
+    "default_policy": "permitted",
+    "id": "audio.transcribe-speech",
+    "status": "Active",
+    "version": "1.3.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "report.translate-fr-semantic",
+    "status": "Active",
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "report.translate-fr-semantic",
+    "status": "Active",
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": [
+      "unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 165 column 23"
+    ],
+    "contract_parse_with_spec_002_source": "ok",
+    "default_policy": "permitted",
+    "id": "report.translate-fr-semantic",
+    "status": "Active",
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.detect-entities",
+    "status": "Active",
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.detect-entities",
+    "status": "Active",
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.detect-entities",
+    "status": "Active",
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": [
+      "unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 210 column 23"
+    ],
+    "contract_parse_with_spec_002_source": "ok",
+    "default_policy": "permitted",
+    "id": "text.detect-entities",
+    "status": "Active",
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.redact-entities",
+    "status": "Active",
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.redact-entities",
+    "status": "Active",
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "id": "text.redact-entities",
+    "status": "Active",
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": [
+      "unknown variant `derived`, expected one of `greenfield`, `brownfield-extracted`, `ai-generated`, `ai-assisted` at line 129 column 23"
+    ],
+    "contract_parse_with_spec_002_source": "ok",
+    "default_policy": "permitted",
+    "id": "text.redact-entities",
+    "status": "Active",
+    "version": "1.2.0"
+  }
+]

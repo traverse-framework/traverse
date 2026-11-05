@@ -1,0 +1,63 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "id": "text.detect-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "id": "text.detect-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.1",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:c3f1ab26fc20e9f81dc117e34073cde3960861798d67adad5eb73a361eceb788",
+      "id": "text.detect-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:c3f1ab26fc20e9f81dc117e34073cde3960861798d67adad5eb73a361eceb788",
+      "id": "text.detect-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.0.0",
+      "yanked": false
+    }
+  ],
+  "source_commit": "3984b73c888731ebd39914fb39d07bd7d2c43883",
+  "source_release": "index-v416",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1793913678",
+  "workspace": "rights-live"
+}

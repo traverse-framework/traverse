@@ -1,0 +1,129 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/text/text.detect-entities/1.2.0/contract.json",
+      "digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "id": "text.detect-entities",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "12891d6c53ff7808d2dd6edfe78235cf7ad8d17a8ebdbd5d14f31a9b6998e120",
+            "description": "Per-tensor symmetric int8 on every Linear weight matrix from dslim/distilbert-NER onnx/model.onnx; biases and LayerNorm stay float32; packed into a flat little-endian .bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/text-detect-entities/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "dslim/distilbert-NER",
+          "license_files": [
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "6e32951997dcf92187f6e3330c9a274f6a5d088449bdb506b4eac55d227e2d2f",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "text",
+      "revocation": null,
+      "status": "active",
+      "version": "1.2.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/text/text.detect-entities/1.1.1/contract.json",
+      "digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "id": "text.detect-entities",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "dslim/distilbert-NER",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        }
+      ],
+      "namespace": "text",
+      "revocation": null,
+      "status": "active",
+      "version": "1.1.1"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/text/text.detect-entities/1.1.0/contract.json",
+      "digest": "sha256:c3f1ab26fc20e9f81dc117e34073cde3960861798d67adad5eb73a361eceb788",
+      "id": "text.detect-entities",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "dslim/distilbert-NER",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        }
+      ],
+      "namespace": "text",
+      "revocation": null,
+      "status": "active",
+      "version": "1.1.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/text/text.detect-entities/1.0.0/contract.json",
+      "digest": "sha256:c3f1ab26fc20e9f81dc117e34073cde3960861798d67adad5eb73a361eceb788",
+      "id": "text.detect-entities",
+      "model_backed": true,
+      "models": [
+        {
+          "id": "dslim/distilbert-NER",
+          "rights": "not recorded (legacy shape)",
+          "shape": "legacy"
+        }
+      ],
+      "namespace": "text",
+      "revocation": null,
+      "status": "active",
+      "version": "1.0.0"
+    }
+  ],
+  "source_release": "index-v416",
+  "status": "ok",
+  "workspace": "rights-live"
+}
