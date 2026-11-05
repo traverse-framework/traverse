@@ -92,9 +92,10 @@ public sealed class CanonicalInputConformanceTests
             }
             return new Outcome(null, "no capability_result event");
         }
-        catch (Exception error)
+        catch (TraverseBridgeException error)
         {
-            return new Outcome(null, error.ToString());
+            // A rejected submit: the message is the runtime's response, with its code.
+            return new Outcome(null, error.Message);
         }
     }
 
