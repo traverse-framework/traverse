@@ -2,6 +2,10 @@
 
 Unreleased changes since `v0.16.2` will be recorded here.
 
+- `runtime.wasm` now runs the compatible-capability start, stop and kill
+  lifecycle instead of returning `-1`. It enforces the `platforms[]`
+  allowlist and returns canonical start input. The hosts switch over in
+  `#1820` (Decision 127, `#1819`).
 - Swift, Kotlin and .NET embedders now pass capability input to the runtime
   unchanged, so input Spec 1722 can't represent is rejected instead of altered
   (Decision 126, `#1795`).

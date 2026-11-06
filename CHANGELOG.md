@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### `runtime.wasm` runs the compatible-capability lifecycle (Decision 127, Spec 072 1.1.0, `#1819`)
+
+`traverse_compatible_start`, `traverse_compatible_stop` and
+`traverse_compatible_kill` used to return `-1` on every call. They now run the
+Spec 072 lifecycle for a capability initialized with `execution_mode:
+"compatible"`, `platforms[]` and `host_platform`:
+
+- the runtime assigns instance identifiers and queues ordered
+  `compatible_started`, `compatible_stopped` and `compatible_killed` events
+- it enforces the platform allowlist (`platform_not_supported`)
+- start returns the Spec 1722 `canonical_input` the host hands to the platform
+  wrapper
+- shutdown kills and lists a running instance
+
+The bridge stays `runtime-wasm-bridge/1.1.0`. Swift, Kotlin, .NET and web move
+onto it together in `#1820`.
+
 ### Native embedders pass capability input through unchanged (Decision 126, Spec 1722, `#1795`)
 
 `RuntimeTraverseEmbedder.submit` on Swift, Kotlin and .NET used to parse the

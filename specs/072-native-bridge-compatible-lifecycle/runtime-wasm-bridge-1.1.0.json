@@ -16,15 +16,25 @@
     "traverse_compatible_stop": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32",
     "traverse_compatible_kill": "(input_pointer: i32, input_length: i32, output_descriptor: i32) -> status: i32"
   },
+  "init_header": {
+    "compatible": { "required": ["execution_mode", "platforms", "host_platform"], "execution_mode": "compatible", "artifact_bytes": "none" }
+  },
   "requests": {
     "compatible_start": { "required": ["capability_id", "input"] },
     "compatible_stop": { "required": ["capability_id", "instance_id"] },
     "compatible_kill": { "required": ["capability_id", "instance_id"] }
   },
+  "responses": {
+    "compatible_start": { "required": ["instance_id", "status", "error", "canonical_input"] }
+  },
   "errors": {
     "invalid_input": -2,
     "invalid_state": -1,
-    "compatible_instance_not_active": -1
+    "compatible_instance_not_active": -1,
+    "compatible_instance_active": -1,
+    "platform_not_supported": -1,
+    "input_not_canonicalizable": -2,
+    "capability_not_compatible": -2
   },
   "complete_embedder_api_range": ">=1.1.0,<2.0.0"
 }
