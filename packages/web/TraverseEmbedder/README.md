@@ -226,8 +226,11 @@ await embedder.submitAsync("model.execute", input);
 Boundary failures use stable `EmbedderErrorCode` values —
 `bundle_load_failed`, `unsupported_bundle_schema`, `runtime_stopped`,
 `target_not_found`, `compatible_lifecycle_required`,
-`capability_not_compatible`, `platform_not_supported`, `instance_not_found`,
-`instance_not_running` — identical to the Rust `traverse-embedder` crate.
+`capability_not_compatible`, `platform_not_supported`,
+`compatible_instance_active`, `compatible_instance_not_active`,
+`input_not_canonicalizable`, `invalid_input`. The compatible lifecycle codes
+are `runtime.wasm`'s own (Spec 072, Decision 128); the Rust `traverse-embedder`
+crate still uses its earlier instance codes.
 Runtime execution failures surface inside `error` events with the runtime's
 stable snake_case codes. Secrets never appear in events, errors, or evidence
 (spec 068 NFR-004).

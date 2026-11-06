@@ -357,6 +357,49 @@ test("platform-guard: wrong platform rejects with a deterministic error event", 
   assert.equal(events[0].data.error.code, "platform_not_supported");
 });
 
+test("compatible lifecycle runs in runtime.wasm with its codes and canonical input", async () => {
+  const manifestPath = await writeBundleFixture({
+    appId: "fixture-app",
+    components: [],
+    compatible: { capabilityId: "fixture.render", platforms: ["web"] },
+  });
+  const embedder = await initEmbedder(manifestPath, { platform: "web" });
+  const events = collectEvents(embedder);
+
+  const started = embedder.startCompatible("fixture.render", { zoom: 2.0, lens: "wide" });
+  assert.equal(started.instanceId, "fixture.render-compatible-1");
+  const startedEvent = events.find((event) => event.event_type === "state_changed");
+  assert.deepEqual(startedEvent.data, {
+    capability_id: "fixture.render",
+    instance_id: "fixture.render-compatible-1",
+    state: "started",
+    previous_state: null,
+    input: { lens: "wide", zoom: 2 },
+  });
+  assert.equal(
+    embedder.startCompatible("fixture.render", {}).error.code,
+    "compatible_instance_active",
+  );
+  assert.equal(
+    embedder.stopCompatible("fixture.render", "other").error.code,
+    "compatible_instance_not_active",
+  );
+  assert.equal(embedder.killCompatible("fixture.render").status, "killed");
+  const repeated = embedder.killCompatible("fixture.render", started.instanceId);
+  assert.equal(repeated.error.code, "compatible_instance_not_active");
+  assert.equal(
+    embedder.startCompatible("fixture.render", { id: 2 ** 60 }).error.code,
+    "input_not_canonicalizable",
+  );
+  assert.equal(
+    embedder.startCompatible("fixture.unknown", {}).error.code,
+    "capability_not_compatible",
+  );
+  assert.equal(embedder.shutdown().killedInstances, 0);
+  assert.equal(embedder.shutdown().killedInstances, 0);
+  assert.equal(embedder.startCompatible("fixture.render", {}).error.code, "runtime_stopped");
+});
+
 // --- init rejection paths (spec 068 NFR-001) ---
 
 test("unauthorized host import fails at execution through runtime.wasm (not at bundle load)", async () => {

@@ -54,6 +54,26 @@ export interface RuntimeWasmCapabilityInit {
   readonly deferredConnectors?: readonly RuntimeWasmConnectorRef[];
 }
 
+/**
+ * A Spec 072 compatible capability (Decision 127): its logic runs in a host
+ * platform module, and `runtime.wasm` owns its lifecycle and allowlist.
+ */
+export interface RuntimeWasmCompatibleInit {
+  readonly capabilityId: string;
+  readonly capabilityVersion: string;
+  readonly platforms: readonly string[];
+  /** The platform this host runs on, checked against `platforms`. */
+  readonly hostPlatform: string;
+}
+
+/** A compatible lifecycle call's bridge status and response body. */
+export interface RuntimeWasmCompatibleResult {
+  readonly status: number;
+  readonly response: RuntimeWasmJson;
+}
+
+export type RuntimeWasmCompatibleOperation = "start" | "stop" | "kill";
+
 export interface RuntimeWasmConnectorRef {
   readonly connector_id: string;
   readonly version: string;
@@ -97,6 +117,7 @@ export class RuntimeWasmHost {
   private readonly submitFn: TriadFn;
   private readonly nextEventFn: NextEventFn;
   private readonly shutdownFn: ShutdownFn;
+  private readonly compatibleFns: ReadonlyMap<RuntimeWasmCompatibleOperation, TriadFn>;
 
   private constructor(
     memory: WebAssembly.Memory,
@@ -106,6 +127,7 @@ export class RuntimeWasmHost {
     submitFn: TriadFn,
     nextEventFn: NextEventFn,
     shutdownFn: ShutdownFn,
+    compatibleFns: ReadonlyMap<RuntimeWasmCompatibleOperation, TriadFn>,
   ) {
     this.memory = memory;
     this.alloc = alloc;
@@ -114,6 +136,7 @@ export class RuntimeWasmHost {
     this.submitFn = submitFn;
     this.nextEventFn = nextEventFn;
     this.shutdownFn = shutdownFn;
+    this.compatibleFns = compatibleFns;
   }
 
   /** Instantiates `runtimeWasmBytes` and resolves the required ABI exports. */
@@ -160,6 +183,11 @@ export class RuntimeWasmHost {
     if (typeof submitFn !== "function") throw err("missing export: traverse_submit");
     if (typeof nextEventFn !== "function") throw err("missing export: traverse_next_event");
     if (typeof shutdownFn !== "function") throw err("missing export: traverse_shutdown");
+    const compatibleFns = new Map<RuntimeWasmCompatibleOperation, TriadFn>();
+    for (const operation of ["start", "stop", "kill"] as const) {
+      const fn = exports[`traverse_compatible_${operation}`];
+      if (typeof fn === "function") compatibleFns.set(operation, fn as TriadFn);
+    }
     return new RuntimeWasmHost(
       memory,
       alloc as AllocFn,
@@ -168,6 +196,7 @@ export class RuntimeWasmHost {
       submitFn as TriadFn,
       nextEventFn as NextEventFn,
       shutdownFn as ShutdownFn,
+      compatibleFns,
     );
   }
 
@@ -269,6 +298,27 @@ export class RuntimeWasmHost {
         headerObject.limits = limitsHeader;
       }
     }
+    return this.initWith(headerObject, capabilityWasm);
+  }
+
+  /** Calls `traverse_init` for a compatible capability, which carries no artifact. */
+  initCompatible(capability: RuntimeWasmCompatibleInit): RuntimeWasmJson {
+    return this.initWith(
+      {
+        capability_id: capability.capabilityId,
+        capability_version: capability.capabilityVersion,
+        execution_mode: "compatible",
+        platforms: [...capability.platforms],
+        host_platform: capability.hostPlatform,
+      },
+      new Uint8Array(0),
+    );
+  }
+
+  private initWith(
+    headerObject: Record<string, RuntimeWasmJson>,
+    capabilityWasm: Uint8Array,
+  ): RuntimeWasmJson {
     const headerBytes = encodeUtf8(JSON.stringify(headerObject));
     const headerLen = headerBytes.byteLength;
     if (headerLen > 0xffff_ffff) {
@@ -285,6 +335,22 @@ export class RuntimeWasmHost {
       throw err(`traverse_init rejected: ${JSON.stringify(parsed)}`);
     }
     return parsed;
+  }
+
+  /**
+   * Calls `traverse_compatible_<operation>` (Spec 072). A non-zero status is
+   * returned, not thrown: the response carries the runtime's error code.
+   */
+  compatible(
+    operation: RuntimeWasmCompatibleOperation,
+    request: RuntimeWasmJson,
+  ): RuntimeWasmCompatibleResult {
+    const fn = this.compatibleFns.get(operation);
+    if (fn === undefined) {
+      throw err(`missing export: traverse_compatible_${operation}`);
+    }
+    const { status, response } = this.callJson(fn, encodeUtf8(JSON.stringify(request)));
+    return { status, response: this.parseResponse(response) };
   }
 
   /** Calls `traverse_submit` with raw capability-stdin bytes. */

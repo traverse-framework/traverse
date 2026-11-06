@@ -92,3 +92,26 @@ test("a JS caller's parsed input reaches the guest as the same canonical bytes",
     check("js-value", vector, await run(runtimeBytes, guest, bytes));
   }
 });
+
+test("compatible start returns a JS caller's input as the same canonical bytes", async () => {
+  // Spec 072 FR-012 (Decision 128): the host hands `canonical_input` to the platform wrapper.
+  const { runtimeBytes, fixture } = await load();
+  for (const vector of fixture.vectors.filter((candidate) => !candidate.bytes_only)) {
+    const host = await RuntimeWasmHost.instantiate(runtimeBytes);
+    host.initCompatible({
+      capabilityId: "conformance.camera",
+      capabilityVersion: "1.0.0",
+      platforms: ["web"],
+      hostPlatform: "web",
+    });
+    const { status, response } = host.compatible("start", {
+      capability_id: "conformance.camera",
+      input: JSON.parse(vector.input),
+    });
+    const outcome =
+      status === 0
+        ? { output: { stdin: response.canonical_input } }
+        : { error: String(response.error) };
+    check("compatible-start", vector, outcome);
+  }
+});

@@ -319,6 +319,12 @@ export class EmbedderCore {
           `capability '${capabilityId}' permits platforms [${platforms.join(", ")}] ` +
             `but this embedder runs on '${this.platform}'`,
         );
+      } else if (this.runningInstances(capabilityId).length > 0) {
+        // One instance at a time, as runtime.wasm enforces (Spec 072 FR-013).
+        error = embedderError(
+          "compatible_instance_active",
+          `capability '${capabilityId}' already has a running instance`,
+        );
       }
     }
     if (error !== null) {
@@ -349,47 +355,20 @@ export class EmbedderCore {
       return { status: "error", error };
     }
 
-    let selected: string[];
-    if (instanceId !== null) {
-      const instance = this.instances.get(instanceId);
-      if (instance === undefined || instance.capabilityId !== capabilityId) {
-        const error = embedderError(
-          "instance_not_found",
-          `no instance '${instanceId}' exists for capability '${capabilityId}'`,
-        );
-        this.emitErrorEvent(null, error, {
-          capability_id: capabilityId,
-          instance_id: instanceId,
-        });
-        return { status: "error", error };
-      }
-      if (instance.state !== "started") {
-        const error = embedderError(
-          "instance_not_running",
-          `instance '${instanceId}' of capability '${capabilityId}' is not running`,
-        );
-        this.emitErrorEvent(null, error, {
-          capability_id: capabilityId,
-          instance_id: instanceId,
-        });
-        return { status: "error", error };
-      }
-      selected = [instanceId];
-    } else {
-      selected = [...this.instances.entries()]
-        .filter(
-          ([, instance]) =>
-            instance.capabilityId === capabilityId && instance.state === "started",
-        )
-        .map(([id]) => id);
-    }
-
+    // Same rules and codes as runtime.wasm (Spec 072 FR-003, FR-006).
+    const running = this.runningInstances(capabilityId);
+    const selected = instanceId === null ? running : running.filter((id) => id === instanceId);
     if (selected.length === 0) {
       const error = embedderError(
-        "instance_not_running",
-        `capability '${capabilityId}' has no running instances`,
+        "compatible_instance_not_active",
+        instanceId === null
+          ? `capability '${capabilityId}' has no running instance`
+          : `instance '${instanceId}' of capability '${capabilityId}' is not running`,
       );
-      this.emitErrorEvent(null, error, { capability_id: capabilityId });
+      this.emitErrorEvent(null, error, {
+        capability_id: capabilityId,
+        ...(instanceId === null ? {} : { instance_id: instanceId }),
+      });
       return { status: "error", error };
     }
 
@@ -397,6 +376,12 @@ export class EmbedderCore {
       this.setInstanceState(id, targetState);
     }
     return { status: targetState, error: null };
+  }
+
+  private runningInstances(capabilityId: string): string[] {
+    return [...this.instances.entries()]
+      .filter(([, instance]) => instance.capabilityId === capabilityId && instance.state === "started")
+      .map(([id]) => id);
   }
 
   private setInstanceState(instanceId: string, targetState: InstanceState): void {

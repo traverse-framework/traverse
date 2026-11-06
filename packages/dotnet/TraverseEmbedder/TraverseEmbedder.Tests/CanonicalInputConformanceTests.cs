@@ -147,4 +147,63 @@ public sealed class CanonicalInputConformanceTests
             }));
         }
     }
+
+    // A fresh real `runtime.wasm` initialized with a compatible capability on `windows` (Spec 072 FR-010).
+    private static (WasmtimeRuntimeBridge Bridge, WasmtimeBridgeClient Client)? CompatibleClient()
+    {
+        var root = Environment.GetEnvironmentVariable("TRAVERSE_NATIVE_ARTIFACT_ROOT");
+        if (string.IsNullOrWhiteSpace(root)) return null;
+        var runtime = File.ReadAllBytes(Path.Join(root, "runtime", "runtime.wasm"));
+        var bridge = new WasmtimeRuntimeBridge(new TraverseBundle(root, "sha256:" + Sha256(runtime)), fuelPerCall: 50_000_000);
+        var client = new WasmtimeBridgeClient(bridge);
+        var header = Encoding.UTF8.GetBytes(
+            "{\"capability_id\":\"conformance.camera\",\"capability_version\":\"1.0.0\","
+            + "\"execution_mode\":\"compatible\",\"platforms\":[\"windows\"],\"host_platform\":\"windows\"}");
+        var initPayload = new byte[4 + header.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(initPayload, (uint)header.Length);
+        header.CopyTo(initPayload, 4);
+        using var ready = JsonDocument.Parse(client.Initialize(initPayload));
+        Assert.Equal("ready", ready.RootElement.GetProperty("status").GetString());
+        return (bridge, client);
+    }
+
+    [Fact]
+    public void CanonicalInputVectorsReachTheWrapperThroughCompatibleStart()
+    {
+        // Spec 072 FR-012 (Decision 128): the started event's input is the runtime's canonical bytes.
+        const string marker = ",\"input\":";
+        foreach (var vector in Vectors())
+        {
+            if (CompatibleClient() is not var (bridge, client)) return;
+            using var ownedBridge = bridge;
+            var runtime = new RuntimeTraverseEmbedder(client);
+            Outcome outcome;
+            try
+            {
+                runtime.CompatibleStart("conformance.camera", vector.Input);
+                var output = runtime.Subscribe().First(item => item.EventType == "state_changed").Output!;
+                var start = output.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                outcome = new Outcome(output[start..^1], null);
+            }
+            catch (TraverseBridgeException error)
+            {
+                outcome = new Outcome(null, error.Message);
+            }
+            Check("dotnet compatible", vector, outcome);
+        }
+    }
+
+    [Fact]
+    public void CompatibleLifecycleUsesTheRuntimeRules()
+    {
+        if (CompatibleClient() is not var (bridge, client)) return;
+        using var ownedBridge = bridge;
+        var runtime = new RuntimeTraverseEmbedder(client);
+        var started = runtime.CompatibleStart("conformance.camera", "{}");
+        Assert.Equal("conformance.camera-compatible-1", started.InstanceId);
+        Assert.Throws<TraverseBridgeException>(() => runtime.CompatibleStart("conformance.camera", "{}"));
+        Assert.Equal("killed", runtime.CompatibleKill("conformance.camera", null).Status);
+        Assert.Throws<TraverseBridgeException>(() => runtime.CompatibleKill("conformance.camera", started.InstanceId));
+        Assert.Equal(["started", "killed"], runtime.Subscribe().Select(item => item.Status));
+    }
 }
