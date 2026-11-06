@@ -22,14 +22,19 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     }
 
     public func submit(_ submission: TraverseSubmission) throws -> TraverseSubmissionResult {
-        let request = try encode([
-            "target_id": submission.targetID,
-            "input": try JSONSerialization.jsonObject(with: submission.inputJSON, options: .fragmentsAllowed),
-        ])
+        // The caller's input bytes go into the envelope unchanged, so the runtime
+        // applies Spec 1722's canonical rules to exactly what the caller sent.
+        // Re-serializing could alter or drop input it must reject (#1795).
+        var request = Data(#"{"target_id":"#.utf8)
+        request.append(try JSONSerialization.data(withJSONObject: submission.targetID, options: .fragmentsAllowed))
+        request.append(Data(#","input":"#.utf8))
+        request.append(submission.inputJSON)
+        request.append(Data("}".utf8))
         let result = try object(try client.submit(requestJSON: request))
         return TraverseSubmissionResult(
             sessionID: try requiredString("session_id", in: result),
-            status: try requiredString("status", in: result)
+            status: try requiredString("status", in: result),
+            error: optionalString("error", in: result)
         )
     }
 

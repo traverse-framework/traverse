@@ -37,6 +37,9 @@ const INTERNAL_ERROR: i32 = -5;
 const BUFFER_TOO_SMALL: i32 = -6;
 const BRIDGE_VERSION: i32 = 10_100;
 const MAX_ERROR_BYTES: usize = 512;
+/// Guest error text kept in a host error. Even if every char escapes to six
+/// bytes, the serialized error stays under `MAX_ERROR_BYTES`.
+const MAX_ERROR_MESSAGE_CHARS: usize = 64;
 
 #[repr(C)]
 pub struct TraverseSwiftHostLimits {
@@ -94,6 +97,8 @@ struct Host {
 struct HostError {
     status: i32,
     code: &'static str,
+    /// The guest's own error text, when a guest status carries one.
+    message: Option<String>,
 }
 
 #[cfg(test)]
@@ -263,13 +268,37 @@ fn wasi_trap(error: &wasmi::Error) -> HostError {
 
 impl HostError {
     const fn new(status: i32, code: &'static str) -> Self {
-        Self { status, code }
+        Self {
+            status,
+            code,
+            message: None,
+        }
+    }
+    /// A negative guest status. The guest's response `error`, such as Spec
+    /// 1722's `input_not_canonicalizable`, becomes the message, as the Kotlin
+    /// and .NET bridges pass the guest's response through (#1795).
+    fn runtime(status: i32, response: &[u8]) -> Self {
+        // Bounded so the serialized error stays whole JSON under
+        // `MAX_ERROR_BYTES` (Spec 076 FR-006).
+        let message = serde_json::from_slice::<serde_json::Value>(response)
+            .ok()
+            .and_then(|value| {
+                let error = value.get("error")?.as_str()?;
+                Some(error.chars().take(MAX_ERROR_MESSAGE_CHARS).collect())
+            });
+        Self {
+            status,
+            code: "bridge_runtime_error",
+            message,
+        }
     }
     fn json(&self) -> Vec<u8> {
-        format!(
-            r#"{{"code":"{}","message":"{}","details":{{}}}}"#,
-            self.code, self.code
-        )
+        serde_json::json!({
+            "code": self.code,
+            "message": self.message.as_deref().unwrap_or(self.code),
+            "details": {},
+        })
+        .to_string()
         .into_bytes()
     }
 }
@@ -486,8 +515,11 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
     // artifact) instead of bare UTF-8 JSON — spec 071 FR-005's amended text
     // (Decision 90) carves out exactly this one operation. Every other
     // operation is unchanged: still caller-owned UTF-8 JSON, validated here.
+    // Syntax only: `IgnoredAny` skips string-escape validation, so a lone
+    // surrogate reaches `runtime.wasm`, which rejects it with Spec 1722's
+    // `input_not_canonicalizable` like every other host (#1795).
     if operation != "init" && !input.is_empty() {
-        serde_json::from_slice::<serde_json::Value>(input)
+        serde_json::from_slice::<serde::de::IgnoredAny>(input)
             .map_err(|_| HostError::new(INVALID_INPUT, "bridge_invalid_json"))?;
     }
     host.store
@@ -542,7 +574,7 @@ fn invoke(host: &mut Host, operation: &str, input: &[u8]) -> Result<Vec<u8>, Hos
         );
     }
     if status < 0 {
-        return Err(HostError::new(status, "bridge_runtime_error"));
+        return Err(HostError::runtime(status, &result));
     }
     // `traverse_next_event` returns 0 when the queue is empty; do not surface a
     // stale descriptor payload as a fake event (Swift WasmiHostBridgeClient
@@ -824,6 +856,44 @@ mod tests {
             serde_json::from_slice(&error.json()).expect("HostError::json() must be valid JSON");
         assert_eq!(value["code"], "bridge_trap");
         assert_eq!(value["message"], "bridge_trap");
+    }
+
+    /// #1795: a guest rejection keeps the stable code and carries the guest's
+    /// own error, escaped, as the message.
+    #[test]
+    fn runtime_error_carries_the_guest_error_as_its_message() {
+        let error = HostError::runtime(
+            -1,
+            br#"{"status":"rejected","error":"input_not_canonicalizable: \"a\" twice"}"#,
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&error.json()).expect("HostError::json() must be valid JSON");
+        assert_eq!(value["code"], "bridge_runtime_error");
+        assert_eq!(value["message"], r#"input_not_canonicalizable: "a" twice"#);
+
+        let opaque = HostError::runtime(-1, b"not json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&opaque.json()).expect("HostError::json() must be valid JSON");
+        assert_eq!(value["message"], "bridge_runtime_error");
+    }
+
+    #[test]
+    fn runtime_error_message_stays_within_the_error_bound() {
+        let long = format!(
+            r#"{{"error":"{}"}}"#,
+            r"\u0001".repeat(super::MAX_ERROR_BYTES)
+        );
+        let json = HostError::runtime(-1, long.as_bytes()).json();
+        assert!(json.len() <= super::MAX_ERROR_BYTES);
+        serde_json::from_slice::<serde_json::Value>(&json).expect("bounded error stays valid JSON");
+    }
+
+    /// #1795: the pre-check accepts a lone surrogate so `runtime.wasm` can
+    /// reject it with `input_not_canonicalizable`, and still rejects bad syntax.
+    #[test]
+    fn input_check_leaves_string_escapes_to_the_runtime() {
+        assert!(serde_json::from_slice::<serde::de::IgnoredAny>(br#"{"s":"\ud800"}"#).is_ok());
+        assert!(serde_json::from_slice::<serde::de::IgnoredAny>(br#"{"s":"#).is_err());
     }
 
     #[test]

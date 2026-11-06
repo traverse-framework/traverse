@@ -2,6 +2,9 @@
 
 Unreleased changes since `v0.16.2` will be recorded here.
 
+- Swift, Kotlin and .NET embedders now pass capability input to the runtime
+  unchanged, so input Spec 1722 can't represent is rejected instead of altered
+  (Decision 126, `#1795`).
 - Native hosts can now read the model's output frame after `model.execute`,
   through `ExactModelMediatedConnector::activated()` (`#1785`).
 - **Breaking:** Swift, Kotlin and .NET guests now receive only the submitted

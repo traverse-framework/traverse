@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Native embedders pass capability input through unchanged (Decision 126, Spec 1722, `#1795`)
+
+`RuntimeTraverseEmbedder.submit` on Swift, Kotlin and .NET used to parse the
+caller's input and re-serialize it. On Kotlin, input holding a lone surrogate
+reached the guest as `?` instead of being rejected. The embedders now put the
+caller's input bytes into the `{target_id, input}` envelope unchanged, so
+`runtime.wasm` rejects what Spec 1722 can't represent with
+`input_not_canonicalizable`, and `TraverseSubmissionResult.error` carries the
+runtime's rejection reason. The Swift host now checks only JSON syntax and
+passes the guest's error text in its error `message`. Swift consumers get the
+host part with the next `swift-host` release.
+
 ### Native hosts can read the model output frame after `model.execute` (`#1785`)
 
 `ExactModelMediatedConnector::activated()` and `activated_version()` activate a

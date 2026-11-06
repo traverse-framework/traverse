@@ -2852,6 +2852,7 @@ dependencies = [
 name = "traverse-swift-host"
 version = "0.16.2"
 dependencies = [
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "traverse-coreml-adapter",

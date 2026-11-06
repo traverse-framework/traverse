@@ -7453,3 +7453,50 @@ the deferred loop and app commands keep their own forms.
 ### Approval
 
 Chosen by the maintainer on `#1802` (2026-11-05): the recommended option.
+
+## Decision 126: Native Embedders Pass Capability Input Bytes Through Unchanged
+
+- **Date**: 2026-11-05
+- **Status**: Accepted
+- **Governing specs**: `1722-canonical-guest-input-bytes`,
+  `071-native-runtime-wasm-bridge`
+- **Related issues**: `#1795`, `#1794`
+
+### Context
+
+- Running `fixtures/cross-host/canonical-input-v1` in the Swift, Kotlin and .NET
+  packages showed that each `RuntimeTraverseEmbedder.submit` parsed the caller's
+  input and re-serialized it to build `{target_id, input}`.
+- For the `lone_surrogate` vector, Kotlin's re-serialization replaced the
+  surrogate with `?`, and the guest ran on the altered input. Swift's and .NET's
+  parsers threw instead, so the guest didn't run, but the error wasn't
+  `input_not_canonicalizable`.
+- The Swift host's own JSON pre-check (`serde_json` into a `Value`) also
+  rejected lone surrogates, with `bridge_invalid_json`, on the raw path.
+- Every other vector passed on every host and path, including number
+  formatting.
+
+### Options considered
+
+1. **Splice the raw input.** Each embedder writes the caller's input bytes into
+   the envelope unchanged, and `runtime.wasm`'s canonical check decides. The
+   Swift host checks syntax only. This fixes the cause on every host, but the
+   Swift host part ships only with the next `swift-host` release.
+2. **Map parse errors.** Keep re-parsing, map each host's parse failure to
+   `input_not_canonicalizable`, and detect lone surrogates in Kotlin. A smaller
+   change per host, but three checks to keep in sync with the Rust rules.
+3. **Land the tests and file the defect.** Ships a known Spec 1722 violation.
+
+### Decision
+
+Use option 1. `RuntimeTraverseEmbedder.submit` on Swift, Kotlin and .NET
+splices the caller's input into the envelope and reports the runtime's
+rejection reason in `TraverseSubmissionResult.error`. The Swift host
+validates operation input with `serde::de::IgnoredAny`, which checks JSON syntax
+without validating string contents, so `runtime.wasm` reports
+`input_not_canonicalizable` for a lone surrogate as the other hosts do.
+`compatibleStart` still re-parses its input. It isn't changed here.
+
+### Approval
+
+Chosen by the maintainer on `#1795` (2026-11-05): the recommended option.
