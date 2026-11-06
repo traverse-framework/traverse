@@ -7573,19 +7573,28 @@ Chosen by the maintainer on `#1795` (2026-11-05): the recommended option.
      TypeScript lifecycle. `#1811` closes into this ticket.
 
    No host goes first, and per-host tickets would allow drift.
+5. **Bridge version.** Every native host (Swift host, Kotlin, .NET,
+   `traverse-native-bridge`) requires `traverse_bridge_abi_version() ==
+   10_100` exactly. Options considered:
+   - Stay at 1.1.0.
+   - Bump to 1.2.0 after a cross-host release that accepts a range.
+   - Bump to 1.2.0 in the host ticket.
+
+   Chosen: stay at bridge 1.1.0 (`10_100`). Spec 072 already defines the
+   compatible lifecycle as bridge 1.1, so implementing it makes the existing
+   claim true rather than adding a version. The new init and start-result
+   fields are optional JSON members that older hosts ignore, so no host or
+   published release rejects the new artifact, and the runtime can go first.
 
 ### Consequences
 
 - Spec 072 is amended (1.0.0 to 1.1.0) for the canonical-input start result,
-  the compatible init header and `platform_not_supported`.
-- The init header and start result change additively. Under the compatibility
-  policy that is a minor bridge version (1.2.0). Packages that need the
-  working lifecycle reject an older artifact as incomplete, as Decision 24 did
-  for 1.0.
+  the compatible init header and `platform_not_supported`. The bridge stays
+  `runtime-wasm-bridge/1.1.0`.
 - The public embedder API is unchanged. Hosts pass the runtime's canonical
   input to the wrapper internally.
 
 ### Approval
 
 Chosen by the maintainer in a brainstorm on `#1819` (2026-11-06): the
-recommended option at each step.
+recommended option at each step, including the bridge-version follow-up.
