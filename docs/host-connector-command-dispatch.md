@@ -88,6 +88,26 @@ executor.run_bytes_with_mediated_connectors(&wasm, &input, "cap", context)?;
 `ExactModelMediatedConnector` is the `Mutex` bridge from Spec 104
 (`&self`) to Spec 138 (`&mut self`).
 
+`activate_exact_model_runtime` takes the host, so the caller can't reach it
+after the run. To read the model's output frame, keep the connector in an `Arc`
+and activate it with `activated()` (`#1785`):
+
+```rust
+use std::sync::Arc;
+use traverse_runtime::ExactModelMediatedConnector;
+
+let connector = Arc::new(ExactModelMediatedConnector::new(host));
+let context = MediatedConnectorContext {
+    declared_requirements: /* from the capability contract */,
+    activated_connectors: vec![connector.activated()],
+};
+let output = executor.run_bytes_with_mediated_connectors(&wasm, &input, "cap", context)?;
+let output_ref = output.value["output_ref"].as_str().ok_or("no output_ref")?;
+let frame = connector.with_host_mut(|host| host.io.read_model_output(output_ref, max_bytes))??;
+```
+
+`activated_version(version)` activates at an explicit connector version.
+
 Browser and Node hosts use `BundleEmbedder.activateMediatedConnector` with
 `exactModelMediatedConnector`. The guest suspends at the call until the host
 answers (Spec 1719, Decision 122):

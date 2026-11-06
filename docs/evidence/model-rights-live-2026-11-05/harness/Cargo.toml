@@ -1,0 +1,13 @@
+[package]
+name = "rights-live-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+traverse-contracts = "=0.16.2"
+traverse-runtime = { version = "=0.16.2", default-features = false }
+traverse-registry = "=0.31.0"
+serde_json = "1"
+
+[workspace]

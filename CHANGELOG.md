@@ -14,6 +14,13 @@ runtime's rejection reason. The Swift host now checks only JSON syntax and
 passes the guest's error text in its error `message`. Swift consumers get the
 host part with the next `swift-host` release.
 
+### Native hosts can read the model output frame after `model.execute` (`#1785`)
+
+`ExactModelMediatedConnector::activated()` and `activated_version()` activate a
+shared connector, so a native host can read the frame behind `output_ref`
+through `with_host_mut` after the run. `activate_exact_model_runtime` is
+unchanged.
+
 ### Web capability input reaches the guest as sent (Decision 125, Spec 071 FR-018, `#1802`)
 
 The web package now submits capability input as `{target_id, input}`, like the

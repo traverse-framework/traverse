@@ -1,0 +1,171 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.transcribe-speech/1.3.0/contract.json",
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "3963e45908f17009ffcb6b16647991f021210b86baea0f558d53c96dcf86460e",
+            "description": "Per-tensor symmetric int8 of Xenova/whisper-tiny ONNX encoder/decoder Linear weights plus mel filters and tiktoken vocab, packed into whisper-tiny-int8.bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/audio-transcribe-speech/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "openai/whisper-tiny",
+          "license_files": [
+            {
+              "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.LICENSE-MIT"
+            },
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.LICENSE-Apache-2.0"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "0e8fd3e9794986303f29e242f5e1d32ef1382e032929a2bac87127ce13c41f1f",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/openai-whisper-tiny.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "MIT OR Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        },
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "0688f0fadaeba187dc827d90228ea7bb2eda887829e8d9524d0b9535557668fe",
+            "description": "Float32 weight tensors extracted from silero_vad_16k_op15.onnx initializers into a flat little-endian .bin (no quantization; LSTM quantization was measured to break recurrent output).",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/audio-detect-speech-segments/data/README.md",
+            "transformations": [
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "snakers4/silero-vad",
+          "license_files": [
+            {
+              "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "e907bf4b5f372f4fe1f7264f15492e7ade8c2b24645f7005695e4c28a1486dfe",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/snakers4-silero-vad.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "MIT",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.3.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.transcribe-speech/1.2.0/contract.json",
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "openai/whisper-tiny",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "MIT OR Apache-2.0",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        },
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "snakers4/silero-vad",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "MIT",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.2.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.transcribe-speech/1.1.0/contract.json",
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "model_backed": true,
+      "models": [
+        {
+          "id": "openai/whisper-tiny",
+          "rights": "not recorded (legacy shape)",
+          "shape": "legacy"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.1.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/3984b73c888731ebd39914fb39d07bd7d2c43883/capabilities/audio/audio.transcribe-speech/1.0.0/contract.json",
+      "digest": "sha256:536d395f2fc8c538b634cf4b4c16f0e95a8c1d99b6b2c6344b71df43099a400b",
+      "id": "audio.transcribe-speech",
+      "model_backed": true,
+      "models": [
+        {
+          "id": "openai/whisper-tiny",
+          "rights": "not recorded (legacy shape)",
+          "shape": "legacy"
+        }
+      ],
+      "namespace": "audio",
+      "revocation": null,
+      "status": "active",
+      "version": "1.0.0"
+    }
+  ],
+  "source_release": "index-v416",
+  "status": "ok",
+  "workspace": "rights-live"
+}

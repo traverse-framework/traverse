@@ -1,0 +1,63 @@
+{
+  "index_version": 416,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.3.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "id": "audio.transcribe-speech",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:536d395f2fc8c538b634cf4b4c16f0e95a8c1d99b6b2c6344b71df43099a400b",
+      "id": "audio.transcribe-speech",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.0.0",
+      "yanked": false
+    }
+  ],
+  "source_commit": "3984b73c888731ebd39914fb39d07bd7d2c43883",
+  "source_release": "index-v416",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1793913678",
+  "workspace": "rights-live"
+}
