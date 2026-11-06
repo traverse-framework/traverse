@@ -7500,3 +7500,92 @@ without validating string contents, so `runtime.wasm` reports
 ### Approval
 
 Chosen by the maintainer on `#1795` (2026-11-05): the recommended option.
+
+## Decision 127: runtime.wasm Owns the Compatible-Capability Lifecycle on Every Host
+
+- **Date**: 2026-11-06
+- **Status**: Accepted
+- **Governing specs**: `072-native-bridge-compatible-lifecycle`,
+  `057-embeddable-runtime-host`, `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1819`, `#1811`
+
+### Context
+
+- Since `#1422`, the shipped `runtime.wasm` has `traverse_compatible_start`,
+  `traverse_compatible_stop` and `traverse_compatible_kill` return `-1`
+  unconditionally. A code comment calls them deprecated, but no decision or
+  spec amendment did so. Spec 072 (FR-002 to FR-008) and Decision 24 still
+  require a runtime-owned lifecycle, and `runtime/runtime-release.json`
+  declares bridge 1.1.0.
+- On Swift, Kotlin and .NET, every compatible call fails on the real
+  artifact. Their compatible tests pass only against fake bridge fixtures.
+- The web package implements the lifecycle itself in TypeScript (`core.ts`
+  `startCompatible` / `transitionCompatible`), including the `platforms[]`
+  allowlist check. That bypasses `runtime.wasm`, which is the host-owned split
+  Decision 24 was written to prevent.
+- No example application declares `execution_mode: compatible`.
+- Found while starting `#1811`, whose premise (canonical input reaches a guest
+  through `compatibleStart`) can't hold while the exports are stubs. Compatible
+  capabilities also run in a platform module, not a wasm guest.
+
+### Decisions
+
+1. **Ownership.** Options considered:
+   - `runtime.wasm` owns the lifecycle on every host.
+   - Each host owns it, against a shared conformance suite.
+   - Deprecate compatible mode.
+
+   Chosen: `runtime.wasm` owns instance identifiers, state validation, ordered
+   lifecycle events and shutdown cleanup on every host, web included. This
+   keeps Decision 24 and Spec 072 FR-004. Host-owned would mean four
+   implementations to keep in sync. Deprecation would be a breaking API and
+   manifest change, and would remove the platform-module path.
+2. **Start input.** Options considered:
+   - The runtime returns canonical bytes.
+   - The runtime validates, and the host passes the caller's original bytes.
+   - The runtime ignores input.
+
+   Chosen: `traverse_compatible_start` applies Spec 1722 to `input` and rejects
+   what JCS can't represent with `input_not_canonicalizable`. Its result
+   carries the canonical input bytes, which the host hands to the platform
+   wrapper unchanged. Wrappers then see the same bytes a wasm guest would, and
+   no host re-serializes input. Leaving input to the hosts is the bug class
+   Decision 126 fixed.
+3. **Platform allowlist.** Options considered:
+   - The runtime enforces `platforms[]`.
+   - Each host enforces it.
+
+   Chosen: the runtime. A compatible capability's init carries
+   `execution_mode: compatible` and `platforms[]`, with no artifact bytes. The
+   host declares its platform identity once at init. `compatible_start` fails
+   with `platform_not_supported` on a mismatch. Policy lives with the
+   lifecycle, and every host reports the same error.
+4. **Rollout.** Options considered:
+   - The runtime first, then all hosts together.
+   - One ticket for everything.
+   - The runtime first, then one ticket per host.
+
+   Chosen: the runtime first, then all hosts together, in two tickets:
+   - `#1819`: `runtime.wasm` implements decisions 1 to 3, with tests on the
+     built artifact. The same PR amends Spec 072 and re-pins `runtime.wasm`.
+   - A follow-up: Swift, Kotlin, .NET and web all switch to the runtime
+     lifecycle together, with one shared conformance run. Web drops its
+     TypeScript lifecycle. `#1811` closes into this ticket.
+
+   No host goes first, and per-host tickets would allow drift.
+
+### Consequences
+
+- Spec 072 is amended (1.0.0 to 1.1.0) for the canonical-input start result,
+  the compatible init header and `platform_not_supported`.
+- The init header and start result change additively. Under the compatibility
+  policy that is a minor bridge version (1.2.0). Packages that need the
+  working lifecycle reject an older artifact as incomplete, as Decision 24 did
+  for 1.0.
+- The public embedder API is unchanged. Hosts pass the runtime's canonical
+  input to the wrapper internally.
+
+### Approval
+
+Chosen by the maintainer in a brainstorm on `#1819` (2026-11-06): the
+recommended option at each step.
