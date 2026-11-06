@@ -7598,3 +7598,62 @@ Chosen by the maintainer on `#1795` (2026-11-05): the recommended option.
 
 Chosen by the maintainer in a brainstorm on `#1819` (2026-11-06): the
 recommended option at each step, including the bridge-version follow-up.
+
+## Decision 128: Hosts Publish the Runtime's Compatible Lifecycle as `state_changed`
+
+- **Date**: 2026-11-06
+- **Status**: Accepted
+- **Governing specs**: `072-native-bridge-compatible-lifecycle`,
+  `057-embeddable-runtime-host`, `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1820`, `#1819`, `#1811`, `#1823`
+
+### Context
+
+- Decision 127 moved the compatible lifecycle into `runtime.wasm` (`#1819`),
+  and `#1820` moves Swift, Kotlin, .NET and web onto it.
+- The embedder-api contract has no `compatible_*` event types. Web already
+  reported the lifecycle as `state_changed`, with the start input in the
+  event's `input`, and its platform wrapper read the input from there.
+- `runtime.wasm`'s `compatible_started` event carries no input. The canonical
+  input comes back only in the start response.
+- Web allowed several instances per capability and reported
+  `instance_not_found` and `instance_not_running`. The runtime allows one
+  running instance and reports `compatible_instance_not_active` and
+  `compatible_instance_active`.
+
+### Decisions
+
+1. **How start input reaches the wrapper.** Options considered:
+   - Put it in the `state_changed` event.
+   - Have the runtime put it in its own event, which needs another re-pin.
+   - Add it to the start result, which is an API addition on four hosts and
+     drops `input` from web's event.
+
+   Chosen: the `state_changed` event. Each host keeps the start response's
+   `canonical_input` for that instance and publishes the runtime's
+   `compatible_started` as `state_changed` with that text as `input`. Native
+   hosts splice the text in unchanged. Stop and kill become `state_changed`
+   with `previous_state: "started"`. No runtime change or public API change.
+2. **Web error codes.** Options considered:
+   - Pass the runtime's codes and one-instance rule through.
+   - Map them back to web's old codes.
+
+   Chosen: pass them through on every host. Web's `EmbedderErrorCode` drops
+   `instance_not_found` and `instance_not_running`, and adds
+   `compatible_instance_active`, `compatible_instance_not_active`,
+   `input_not_canonicalizable` and `invalid_input`. This is breaking for web
+   callers that matched the old codes or started a second instance; no
+   example app does either. The web test double follows the same rules, so
+   code tested against it sees runtime behavior.
+
+### Consequences
+
+- Native `compatibleStart` passes the caller's input bytes to the runtime
+  unchanged, as `submit` does (Decision 126). This resolves `#1811`.
+- The Rust `traverse-embedder` crate still runs its own compatible lifecycle
+  on the natively linked runtime and keeps the old codes. `#1823` tracks it.
+
+### Approval
+
+Chosen by the maintainer on `#1820` (2026-11-06): the recommended option for
+both questions.

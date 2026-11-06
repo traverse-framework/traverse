@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Every host runs the compatible lifecycle in `runtime.wasm` (Decision 128, Spec 072 1.1.0, `#1820`)
+
+Swift, Kotlin, .NET and web now start, stop and kill compatible capabilities
+through `runtime.wasm` instead of tracking instances themselves:
+
+- native `compatibleStart` passes the caller's input bytes through unchanged
+- every host publishes the runtime's lifecycle events as `state_changed`, and
+  the started event's `input` carries the runtime's canonical input for the
+  platform wrapper
+- web's `BundleEmbedder` runs one compatible-mode `runtime.wasm` per
+  compatible capability, so the runtime enforces the `platforms[]` allowlist
+
+**Breaking (web):** a capability runs one instance at a time, and the
+compatible lifecycle reports the runtime's codes. `instance_not_found` and
+`instance_not_running` are replaced by `compatible_instance_not_active`, and
+`compatible_instance_active`, `input_not_canonicalizable` and `invalid_input`
+are new. The web test double follows the same rules.
+
 ### `runtime.wasm` runs the compatible-capability lifecycle (Decision 127, Spec 072 1.1.0, `#1819`)
 
 `traverse_compatible_start`, `traverse_compatible_stop` and
