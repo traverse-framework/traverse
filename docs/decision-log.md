@@ -7657,3 +7657,88 @@ recommended option at each step, including the bridge-version follow-up.
 
 Chosen by the maintainer on `#1820` (2026-11-06): the recommended option for
 both questions.
+
+## Decision 129: The Rust Embedder Shares runtime.wasm's Compatible Lifecycle Rules
+
+- **Date**: 2026-11-06
+- **Status**: Accepted
+- **Governing specs**: `072-native-bridge-compatible-lifecycle`,
+  `057-embeddable-runtime-host`, `1722-canonical-guest-input-bytes`
+- **Related issues**: `#1823`, `#1826`, `#1819`, `#1820`
+
+### Context
+
+- Decision 127 makes the compatible lifecycle runtime-owned on every host,
+  and Decision 128 has every host report it with the runtime's codes.
+  `#1819` implemented it in `runtime.wasm`, and `#1820` moved Swift,
+  Kotlin, .NET and web onto it.
+- The Rust `traverse-embedder` crate runs on the natively linked runtime,
+  not `runtime.wasm`. Its `start_compatible` and `transition_compatible`
+  still allow several instances per capability, report
+  `instance_not_found` and `instance_not_running`, and produce no Spec 1722
+  canonical input.
+- `traverse-runtime-wasm` and `traverse-embedder` both depend on
+  `traverse-contracts`. `traverse-runtime-wasm` does not depend on
+  `traverse-runtime`.
+- `TraverseEmbedderApi::start_compatible` and `submit` take a parsed
+  `serde_json::Value`, so the caller's parser resolves a duplicate member
+  name (last one wins) before the runtime sees it. Spec 1722 FR-003 only
+  requires that rejection when a host receives input as bytes.
+
+### Decisions
+
+1. **How the Rust embedder gets the lifecycle.** Options considered:
+   - One shared implementation that both crates link.
+   - Load `runtime.wasm` in the Rust embedder, as the other hosts do.
+   - A second native implementation in `traverse-runtime`.
+
+   Chosen: one shared implementation. The lifecycle rules move out of
+   `traverse-runtime-wasm` into a pure module. `runtime.wasm`'s exports and
+   `traverse-embedder` both call it, so there is still one copy of the
+   rules and no Wasm engine in the embedder. `runtime.wasm`'s behavior does
+   not change, but its bytes do, so it is re-pinned.
+2. **Where the shared module lives.** Options considered:
+   - `traverse-contracts`.
+   - A new crate.
+   - `traverse-runtime`, with `traverse-runtime-wasm` depending on it.
+
+   Chosen: `traverse-contracts`. Both crates already depend on it, and it
+   already holds the Spec 1722 canonical-JSON helpers the lifecycle uses. A
+   new crate would need its own publishing and versioning, and depending on
+   `traverse-runtime` would pull its dependencies into the wasm32 build. The
+   module meets `traverse-contracts`' 100% coverage gate.
+3. **How the Rust API takes compatible input.** Options considered:
+   - Raw JSON text.
+   - Keep `serde_json::Value` and canonicalize it.
+   - Add a raw-text method beside the `Value` one.
+
+   Chosen: raw JSON text. `start_compatible` takes `&str`, so all four
+   canonical-input rejection vectors behave the same as on the other hosts.
+   This is a breaking change to `TraverseEmbedderApi`, which semver allows
+   before 1.0.
+4. **`submit`.** Options considered:
+   - Apply the same rule to `submit` in a follow-up ticket.
+   - Change `submit` in `#1823` as well.
+   - Leave `submit` taking a `Value`.
+
+   Chosen: the same rule in a follow-up. The general rule is that embedder
+   APIs take guest input as raw JSON text. `#1823` changes
+   `start_compatible`, and `#1826` changes `submit`.
+
+### Consequences
+
+- `#1823` changes the Rust embedder's compatible lifecycle and its test
+  double. Each now allows one running instance and drops
+  `InstanceNotFound` and `InstanceNotRunning`.
+- The Rust embedder reports the runtime's codes, including
+  `compatible_instance_active`, `compatible_instance_not_active`,
+  `input_not_canonicalizable` and `invalid_input`. The started
+  `state_changed` event carries the canonical input, as Decision 128
+  requires.
+- Until `#1826` lands, `submit` and `start_compatible` take input in
+  different forms.
+
+### Approval
+
+Chosen by the maintainer on `#1823` (2026-11-06): the recommended option for
+all four questions.
