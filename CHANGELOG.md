@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### The Rust embedder shares `runtime.wasm`'s compatible lifecycle (Decision 129, Spec 072 1.1.0, `#1823`)
+
+The compatible lifecycle rules moved out of `traverse-runtime-wasm` into
+`traverse_contracts::CompatibleLifecycle`. `runtime.wasm` and
+`traverse-embedder` both apply them, so every host follows one copy.
+`runtime.wasm`'s exports behave as before.
+
+**Breaking (Rust):** `TraverseEmbedderApi::start_compatible` takes the input
+as raw JSON text (`&str`), so a duplicate member name is rejected with
+`input_not_canonicalizable`, as on the other hosts. A capability runs one
+instance at a time, and instance ids are `{capability_id}-compatible-{n}`.
+`EmbedderErrorCode` drops `InstanceNotFound` and `InstanceNotRunning`, and
+adds `CompatibleInstanceActive`, `CompatibleInstanceNotActive`,
+`InputNotCanonicalizable` and `InvalidInput`. The started `state_changed`
+event's `input` is the canonical input. `EmbedderTestDouble` follows the same
+rules.
+
 ### Every host runs the compatible lifecycle in `runtime.wasm` (Decision 128, Spec 072 1.1.0, `#1820`)
 
 Swift, Kotlin, .NET and web now start, stop and kill compatible capabilities

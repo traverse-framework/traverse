@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
 pub mod canonical_json;
+pub mod compatible_lifecycle;
 pub mod emit_event;
 pub mod placement;
 pub mod proposal;
@@ -14,6 +15,9 @@ pub mod violations;
 pub use canonical_json::{
     CanonicalJsonError, INPUT_NOT_CANONICALIZABLE, MAX_SAFE_INTEGER, canonicalize_json_bytes,
     parse_canonicalizable, to_canonical_json,
+};
+pub use compatible_lifecycle::{
+    CompatibleFinish, CompatibleLifecycle, CompatibleLifecycleError, CompatibleStart,
 };
 pub use emit_event::{
     EMIT_EVENT_ERR_INVALID_PAYLOAD, EMIT_EVENT_ERR_NOT_SUBSCRIBABLE,

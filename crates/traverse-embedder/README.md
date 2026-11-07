@@ -25,6 +25,12 @@ against their manifest `platforms[]` allowlist.
 | `compatible.stop` | `TraverseEmbedderApi::stop_compatible` |
 | `compatible.kill` | `TraverseEmbedderApi::kill_compatible` |
 
+Compatible capabilities follow the same lifecycle rules as `runtime.wasm`,
+from `traverse_contracts::CompatibleLifecycle` (Decision 129).
+`start_compatible` takes the input as raw JSON text, rejects input Spec 1722
+can't represent, and runs one instance at a time. The started
+`state_changed` event's `input` is the canonical input.
+
 ```rust,no_run
 use serde_json::json;
 use traverse_embedder::{BundleEmbedder, EmbedderConfig, TraverseEmbedderApi};
@@ -98,7 +104,10 @@ operations with `runtime_stopped`. It is idempotent.
 Boundary failures use stable `EmbedderErrorCode` values
 (`bundle_load_failed`, `unsupported_bundle_schema`, `runtime_stopped`,
 `target_not_found`, `compatible_lifecycle_required`,
-`platform_not_supported`, `instance_not_found`, `instance_not_running`, …).
+`capability_not_compatible`, `platform_not_supported`,
+`compatible_instance_active`, `compatible_instance_not_active`,
+`input_not_canonicalizable`, `invalid_input`, …). The compatible lifecycle
+codes are `runtime.wasm`'s own (Spec 072, Decisions 128 and 129).
 Runtime execution failures surface inside `error` events with the runtime's
 stable snake_case codes (`execution_failed`, `capability_not_found`, …).
 Secrets never appear in errors, events, or evidence (spec 068 NFR-004).

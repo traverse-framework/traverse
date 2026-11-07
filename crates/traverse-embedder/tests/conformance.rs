@@ -248,7 +248,7 @@ fn compatible_lifecycle_scenario_starts_stops_and_kills_on_shutdown() {
     let mut embedder = development_embedder(&fixture, "linux");
     let events = collect_events(&mut embedder);
 
-    let started = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({ "surface": "gtk" }));
+    let started = embedder.start_compatible(RENDER_CAPABILITY_ID, r#"{"surface":"gtk"}"#);
     assert_eq!(started.status, CompatibleLifecycleStatus::Started);
     let first_instance = started
         .instance_id
@@ -258,7 +258,7 @@ fn compatible_lifecycle_scenario_starts_stops_and_kills_on_shutdown() {
     assert_eq!(stopped.status, CompatibleLifecycleStatus::Stopped);
     assert_eq!(stopped.error, None);
 
-    let restarted = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({ "surface": "gtk" }));
+    let restarted = embedder.start_compatible(RENDER_CAPABILITY_ID, r#"{"surface":"gtk"}"#);
     assert_eq!(restarted.status, CompatibleLifecycleStatus::Started);
 
     let shutdown = embedder.shutdown();
@@ -277,13 +277,50 @@ fn compatible_lifecycle_scenario_starts_stops_and_kills_on_shutdown() {
     assert_eq!(states, ["started", "stopped", "started", "killed"]);
 }
 
+/// Spec 1722 FR-006 vectors through `compatible.start` (Decision 129): the
+/// started event's `input` is the canonical input, and every rejection
+/// matches the other hosts.
+#[test]
+fn canonical_input_vectors_reach_the_wrapper_through_compatible_start() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/cross-host/canonical-input-v1/vectors.json"
+    );
+    let fixture: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json");
+    let bundle = BundleFixture::new("canonical-input-compatible");
+    for vector in fixture["vectors"].as_array().expect("vectors") {
+        let name = vector["name"].as_str().expect("name");
+        let mut embedder = development_embedder(&bundle, "linux");
+        let events = collect_events(&mut embedder);
+        let outcome = embedder.start_compatible(
+            RENDER_CAPABILITY_ID,
+            vector["input"].as_str().expect("input"),
+        );
+        if let Some(code) = vector["expected_error"].as_str() {
+            let error = outcome.error.expect("vector should be rejected");
+            assert_eq!(error.code.as_str(), code, "{name}");
+            continue;
+        }
+        assert_eq!(outcome.status, CompatibleLifecycleStatus::Started, "{name}");
+        let events = snapshot(&events);
+        let canonical = traverse_contracts::to_canonical_json(&events[0]["data"]["input"])
+            .expect("canonical input");
+        assert_eq!(
+            canonical,
+            vector["expected_stdin"].as_str().expect("stdin"),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn platform_guard_scenario_rejects_wrong_platform_with_deterministic_error() {
     let fixture = BundleFixture::new("platform-guard");
     let mut embedder = development_embedder(&fixture, "ios");
     let events = collect_events(&mut embedder);
 
-    let outcome = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let outcome = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(outcome.status, CompatibleLifecycleStatus::Error);
     assert_eq!(outcome.instance_id, None);
     let error = outcome.error.expect("platform guard should error");
@@ -307,7 +344,7 @@ fn determinism_scenario_produces_identical_event_json_twice() {
         assert_eq!(submit.status, SubmitStatus::Accepted);
         let workflow = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "same input" }));
         assert_eq!(workflow.status, SubmitStatus::Accepted);
-        let started = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+        let started = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
         assert_eq!(started.status, CompatibleLifecycleStatus::Started);
         embedder.shutdown();
         snapshot(&events)

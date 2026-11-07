@@ -2,6 +2,12 @@
 
 Unreleased changes since `v0.16.2` will be recorded here.
 
+- **Breaking (Rust):** `traverse-embedder` now runs compatible capabilities
+  with `runtime.wasm`'s lifecycle rules. `start_compatible` takes raw JSON
+  text, one instance runs at a time, and the error codes match the other
+  hosts: `compatible_instance_not_active` replaces `instance_not_found` and
+  `instance_not_running`. Instance ids are now `{capability_id}-compatible-{n}`
+  (Decision 129, `#1823`).
 - **Breaking (web):** compatible capabilities now run one instance at a time
   through `runtime.wasm` on every host, and report the runtime's error codes:
   `compatible_instance_not_active` replaces `instance_not_found` and

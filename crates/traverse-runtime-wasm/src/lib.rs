@@ -33,9 +33,9 @@ use app_sm::{
     resolve_lifecycle_transition,
 };
 use traverse_contracts::{
-    ConnectorRequirement, EventReference, ExecutionTarget, PlacementConstraintEvaluator,
-    PlacementError, PlacementRequest, RuntimeSnapshot, ServiceType, parse_canonicalizable,
-    to_canonical_json,
+    CompatibleFinish, CompatibleLifecycle, CompatibleLifecycleError, ConnectorRequirement,
+    EventReference, ExecutionTarget, PlacementConstraintEvaluator, PlacementError,
+    PlacementRequest, RuntimeSnapshot, ServiceType, parse_canonicalizable,
 };
 
 pub use executor::{
@@ -96,20 +96,9 @@ struct RuntimeState {
     /// "host_connector_result.<field>"` reads from this.
     last_host_connector_result: Option<serde_json::Value>,
     /// Spec 072 compatible mode (Decision 127): the capability runs in a host
-    /// platform module, and this runtime owns its lifecycle.
-    compatible: Option<CompatibleMode>,
-}
-
-/// A compatible capability's platform allowlist and lifecycle state.
-#[derive(Debug, PartialEq)]
-struct CompatibleMode {
-    platforms: Vec<String>,
-    /// The platform the host declared at init.
-    host_platform: String,
-    /// Instances started so far; numbers the next instance identifier.
-    started: u64,
-    /// The running instance. At most one runs at a time (Spec 072 FR-003).
-    active: Option<String>,
+    /// platform module, and this runtime owns its lifecycle with the shared
+    /// rules (Decision 129).
+    compatible: Option<CompatibleLifecycle>,
 }
 
 static STATE: Mutex<Option<RuntimeState>> = Mutex::new(None);
@@ -132,16 +121,17 @@ struct InitPayload {
     wasm_artifact: Vec<u8>,
     app_state_machine: Option<AppStateMachine>,
     nested_limits: NestedExecutionLimits,
-    compatible: Option<CompatibleMode>,
+    compatible: Option<CompatibleLifecycle>,
 }
 
 /// Reads the init header's `execution_mode`. A compatible capability declares
 /// `platforms[]` and the host's `host_platform`, and carries no artifact
 /// (Spec 057 FR-022, Decision 127).
 fn parse_compatible_mode(
+    capability_id: &str,
     header: &serde_json::Value,
     wasm_artifact: &[u8],
-) -> Result<Option<CompatibleMode>, String> {
+) -> Result<Option<CompatibleLifecycle>, String> {
     match header.get("execution_mode") {
         None | Some(serde_json::Value::Null) => return Ok(None),
         Some(serde_json::Value::String(mode)) if mode == "wasm" => return Ok(None),
@@ -172,12 +162,11 @@ fn parse_compatible_mode(
     if !wasm_artifact.is_empty() {
         return Err("compatible init must not carry a wasm artifact".to_string());
     }
-    Ok(Some(CompatibleMode {
+    Ok(Some(CompatibleLifecycle::new(
+        capability_id.to_string(),
         platforms,
         host_platform,
-        started: 0,
-        active: None,
-    }))
+    )))
 }
 
 fn parse_nested_limits(header: &serde_json::Value) -> Result<NestedExecutionLimits, String> {
@@ -397,7 +386,7 @@ fn parse_init_payload(bytes: &[u8]) -> Result<InitPayload, String> {
         .transpose()?;
     let runtime_snapshot = parse_runtime_snapshot(&header)?;
     let nested_limits = parse_nested_limits(&header)?;
-    let compatible = parse_compatible_mode(&header, &wasm_artifact)?;
+    let compatible = parse_compatible_mode(&capability_id, &header, &wasm_artifact)?;
 
     Ok(InitPayload {
         capability_id,
@@ -1140,7 +1129,7 @@ fn compatible_event(kind: &str, capability_id: &str, instance_id: &str) -> Vec<u
 fn compatible_target<'a>(
     state: &'a mut RuntimeState,
     request: &serde_json::Value,
-) -> Result<&'a mut CompatibleMode, CompatibleOutcome> {
+) -> Result<&'a mut CompatibleLifecycle, CompatibleOutcome> {
     let capability_id = request
         .get("capability_id")
         .and_then(serde_json::Value::as_str)
@@ -1170,43 +1159,48 @@ fn compatible_start(state: &mut RuntimeState, request: &[u8]) -> CompatibleOutco
     let Some(input) = request.get("input") else {
         return compatible_failure(INVALID_INPUT, "invalid_input: input is required");
     };
-    let canonical_input = match to_canonical_json(input) {
-        Ok(canonical) => canonical,
-        Err(error) => return compatible_failure(INVALID_INPUT, error.to_string()),
-    };
     let capability_id = state.capability_id.clone();
-    let mode = match compatible_target(state, &request) {
-        Ok(mode) => mode,
+    let lifecycle = match compatible_target(state, &request) {
+        Ok(lifecycle) => lifecycle,
         Err(outcome) => return outcome,
     };
-    if !mode.platforms.contains(&mode.host_platform) {
-        return compatible_failure(INVALID_STATE, "platform_not_supported");
-    }
-    if mode.active.is_some() {
-        return compatible_failure(INVALID_STATE, "compatible_instance_active");
-    }
-    mode.started += 1;
-    let instance_id = format!("{capability_id}-compatible-{}", mode.started);
-    mode.active = Some(instance_id.clone());
+    let started = match lifecycle.start(input) {
+        Ok(started) => started,
+        Err(error) => return lifecycle_failure(error),
+    };
     state.pending_events.push_back(compatible_event(
         "compatible_started",
         &capability_id,
-        &instance_id,
+        &started.instance_id,
     ));
     (
         0,
         serde_json::json!({
-            "instance_id": instance_id,
+            "instance_id": started.instance_id,
             "status": "started",
             "error": null,
-            "canonical_input": canonical_input,
+            "canonical_input": started.canonical_input,
         }),
     )
 }
 
+/// A shared lifecycle rule's failure: unusable input is `invalid_input`, and
+/// every other rule is `invalid_state` (bridge 1.1).
+fn lifecycle_failure(error: CompatibleLifecycleError) -> CompatibleOutcome {
+    let status = match error {
+        CompatibleLifecycleError::InputNotCanonicalizable(_) => INVALID_INPUT,
+        _ => INVALID_STATE,
+    };
+    compatible_failure(status, error.to_string())
+}
+
 /// `traverse_compatible_stop` / `traverse_compatible_kill` (Spec 072 FR-003,
 /// FR-006, FR-007). A null `instance_id` selects the active instance.
-fn compatible_finish(state: &mut RuntimeState, request: &[u8], outcome: &str) -> CompatibleOutcome {
+fn compatible_finish(
+    state: &mut RuntimeState,
+    request: &[u8],
+    outcome: CompatibleFinish,
+) -> CompatibleOutcome {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(request) else {
         return compatible_failure(INVALID_INPUT, "invalid_input: request is not valid JSON");
     };
@@ -1221,18 +1215,15 @@ fn compatible_finish(state: &mut RuntimeState, request: &[u8], outcome: &str) ->
         }
     };
     let capability_id = state.capability_id.clone();
-    let mode = match compatible_target(state, &request) {
-        Ok(mode) => mode,
+    let lifecycle = match compatible_target(state, &request) {
+        Ok(lifecycle) => lifecycle,
         Err(outcome) => return outcome,
     };
-    let instance_id = match (mode.active.take(), requested) {
-        (Some(active), Some(requested)) if active != requested => {
-            mode.active = Some(active);
-            return compatible_failure(INVALID_STATE, "compatible_instance_not_active");
-        }
-        (Some(active), _) => active,
-        (None, _) => return compatible_failure(INVALID_STATE, "compatible_instance_not_active"),
+    let instance_id = match lifecycle.finish(requested.as_deref()) {
+        Ok(instance_id) => instance_id,
+        Err(error) => return lifecycle_failure(error),
     };
+    let outcome = outcome.as_str();
     state.pending_events.push_back(compatible_event(
         &format!("compatible_{outcome}"),
         &capability_id,
@@ -1249,9 +1240,9 @@ fn compatible_finish(state: &mut RuntimeState, request: &[u8], outcome: &str) ->
 /// FR-008); any other runtime keeps the bridge 1.0 response unchanged.
 fn shutdown_response(state: Option<RuntimeState>) -> serde_json::Value {
     match state.and_then(|state| state.compatible) {
-        Some(mode) => serde_json::json!({
+        Some(mut lifecycle) => serde_json::json!({
             "status": "stopped",
-            "killed_compatible_instances": mode.active.into_iter().collect::<Vec<_>>(),
+            "killed_compatible_instances": lifecycle.shutdown().into_iter().collect::<Vec<_>>(),
         }),
         None => serde_json::json!({"status": "stopped"}),
     }
@@ -1494,14 +1485,14 @@ pub extern "C" fn traverse_compatible_start(ptr: i32, len: i32, out_descriptor: 
 #[unsafe(no_mangle)]
 pub extern "C" fn traverse_compatible_stop(ptr: i32, len: i32, out_descriptor: i32) -> i32 {
     compatible_export(ptr, len, out_descriptor, |state, request| {
-        compatible_finish(state, request, "stopped")
+        compatible_finish(state, request, CompatibleFinish::Stopped)
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn traverse_compatible_kill(ptr: i32, len: i32, out_descriptor: i32) -> i32 {
     compatible_export(ptr, len, out_descriptor, |state, request| {
-        compatible_finish(state, request, "killed")
+        compatible_finish(state, request, CompatibleFinish::Killed)
     })
 }
 
@@ -2490,6 +2481,11 @@ mod tests {
 
     fn finish(state: &mut RuntimeState, instance_id: &str, outcome: &str) -> CompatibleOutcome {
         let request = format!(r#"{{"capability_id":"demo.camera","instance_id":{instance_id}}}"#);
+        let outcome = if outcome == "killed" {
+            CompatibleFinish::Killed
+        } else {
+            CompatibleFinish::Stopped
+        };
         compatible_finish(state, request.as_bytes(), outcome)
     }
 
@@ -2498,12 +2494,11 @@ mod tests {
         let state = compatible_state("ios");
         assert_eq!(
             state.compatible,
-            Some(CompatibleMode {
-                platforms: vec!["ios".to_string(), "android".to_string()],
-                host_platform: "ios".to_string(),
-                started: 0,
-                active: None,
-            })
+            Some(CompatibleLifecycle::new(
+                "demo.camera".to_string(),
+                vec!["ios".to_string(), "android".to_string()],
+                "ios".to_string(),
+            ))
         );
     }
 
@@ -2617,7 +2612,10 @@ mod tests {
             compatible_failure(INVALID_STATE, "compatible_instance_not_active")
         );
         assert_eq!(
-            state.compatible.and_then(|mode| mode.active).as_deref(),
+            state
+                .compatible
+                .as_ref()
+                .and_then(CompatibleLifecycle::active),
             Some("demo.camera-compatible-1")
         );
     }
@@ -2658,7 +2656,13 @@ mod tests {
                 "{input}: {error}"
             );
         }
-        assert_eq!(state.compatible.and_then(|mode| mode.active), None);
+        assert_eq!(
+            state
+                .compatible
+                .as_ref()
+                .and_then(CompatibleLifecycle::active),
+            None
+        );
     }
 
     #[test]
@@ -2679,18 +2683,22 @@ mod tests {
         );
         assert_eq!(compatible_start(&mut state, b"{").0, INVALID_INPUT);
         assert_eq!(
-            compatible_finish(&mut state, b"{", "stopped"),
+            compatible_finish(&mut state, b"{", CompatibleFinish::Stopped),
             invalid("invalid_input: request is not valid JSON")
         );
         assert_eq!(
-            compatible_finish(&mut state, br#"{"capability_id":"demo.camera"}"#, "stopped"),
+            compatible_finish(
+                &mut state,
+                br#"{"capability_id":"demo.camera"}"#,
+                CompatibleFinish::Stopped
+            ),
             invalid("invalid_input: instance_id must be a string or null")
         );
         assert_eq!(
             compatible_finish(
                 &mut state,
                 br#"{"capability_id":"x","instance_id":null}"#,
-                "killed"
+                CompatibleFinish::Killed
             ),
             invalid("capability_not_compatible")
         );
