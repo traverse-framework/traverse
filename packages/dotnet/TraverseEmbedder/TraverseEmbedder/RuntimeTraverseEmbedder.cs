@@ -66,6 +66,11 @@ public sealed class RuntimeTraverseEmbedder
         {
             using var result = Result(bytes);
             var value = result.RootElement;
+            if (OptionalString(value, "type") is { } compatibleType && compatibleType.StartsWith("compatible_", StringComparison.Ordinal))
+            {
+                events.Add(MapCompatibleEvent(compatibleType, value, Interlocked.Increment(ref eventSequence)));
+                continue;
+            }
             if (!value.TryGetProperty("sequence", out _) && OptionalString(value, "type") is { } type)
             {
                 events.Add(MapLifecycleEvent(type, value, Interlocked.Increment(ref eventSequence)));
@@ -90,6 +95,36 @@ public sealed class RuntimeTraverseEmbedder
 
     private int eventSequence;
 
+    // The runtime's canonical start input per instance, until its compatible_started event is
+    // published (Decision 128).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> compatibleInputs = new();
+
+    // Publishes a runtime compatible_<state> event as embedder-api state_changed. The started
+    // event's input is the runtime's canonical text, spliced in unchanged for the platform wrapper.
+    private TraverseRuntimeEvent MapCompatibleEvent(string type, JsonElement value, int sequence)
+    {
+        var state = type["compatible_".Length..];
+        var instanceId = OptionalString(value, "instance_id");
+        var data = new JsonObject
+        {
+            ["capability_id"] = OptionalString(value, "capability_id"),
+            ["instance_id"] = instanceId,
+            ["state"] = state,
+            ["previous_state"] = state == "started" ? null : "started",
+        }.ToJsonString();
+        if (state == "started" && instanceId is not null && compatibleInputs.TryRemove(instanceId, out var input))
+        {
+            data = data[..^1] + ",\"input\":" + input + "}";
+        }
+        return new TraverseRuntimeEvent(
+            sequence,
+            "compatible",
+            state,
+            InstanceId: instanceId,
+            EventType: "state_changed",
+            Output: data);
+    }
+
     internal static TraverseRuntimeEvent MapLifecycleEvent(string type, JsonElement value, int sequence)
     {
         var data = value.TryGetProperty("data", out var payload) ? payload.GetRawText() : "{}";
@@ -112,12 +147,17 @@ public sealed class RuntimeTraverseEmbedder
 
     public TraverseCompatibleResult CompatibleStart(string capabilityId, string inputJson)
     {
-        var request = new JsonObject
+        // The caller's input goes to the runtime unchanged. It applies Spec 1722 and returns the
+        // canonical bytes the wrapper receives (Decision 128); re-serializing could alter them (#1811).
+        var request = "{\"capability_id\":" + JsonSerializer.Serialize(capabilityId) + ",\"input\":" + inputJson + "}";
+        var response = client.CompatibleStart(Encoding.UTF8.GetBytes(request));
+        var started = CompatibleResult(response);
+        using var result = Result(response);
+        if (started.InstanceId is { } instanceId && OptionalString(result.RootElement, "canonical_input") is { } canonical)
         {
-            ["capability_id"] = capabilityId,
-            ["input"] = JsonNode.Parse(inputJson),
-        };
-        return CompatibleResult(client.CompatibleStart(Encoding.UTF8.GetBytes(request.ToJsonString())));
+            compatibleInputs[instanceId] = canonical;
+        }
+        return started;
     }
 
     public TraverseCompatibleResult CompatibleStop(string capabilityId, string? instanceId) =>

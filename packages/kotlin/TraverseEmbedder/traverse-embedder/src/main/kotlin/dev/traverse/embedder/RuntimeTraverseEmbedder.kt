@@ -1,5 +1,6 @@
 package dev.traverse.embedder
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -21,6 +22,9 @@ class RuntimeTraverseEmbedder internal constructor(
 
     private val appCommands = AppCommandCoordinator(submitJson = { client.submit(it) }, timer = timer)
     private val eventSequence = AtomicInteger(0)
+
+    /** The runtime's canonical start input per instance, until its `compatible_started` event is published (Decision 128). */
+    private val compatibleInputs = ConcurrentHashMap<String, String>()
 
     fun initialize(configJson: String): String = client.initialize(configJson)
 
@@ -59,6 +63,10 @@ class RuntimeTraverseEmbedder internal constructor(
     fun subscribe(): List<TraverseRuntimeEvent> = buildList {
         while (true) {
             val value = resultObject(client.nextEvent() ?: break)
+            if (value.optionalString("type")?.startsWith("compatible_") == true) {
+                add(compatibleEvent(value))
+                continue
+            }
             if (value["sequence"] == null && value["type"] != null) {
                 add(lifecycleEvent(value))
                 continue
@@ -89,12 +97,44 @@ class RuntimeTraverseEmbedder internal constructor(
         )
     }
 
+    /**
+     * Publishes a runtime `compatible_<state>` event as embedder-api `state_changed`. The started
+     * event's `input` is the runtime's canonical text, spliced in unchanged for the platform wrapper
+     * (Decision 128).
+     */
+    private fun compatibleEvent(event: JsonObject): TraverseRuntimeEvent {
+        val state = event.requiredString("type").removePrefix("compatible_")
+        val instanceId = event.optionalString("instance_id")
+        val data = buildJsonObject {
+            put("capability_id", event["capability_id"] ?: JsonNull)
+            put("instance_id", event["instance_id"] ?: JsonNull)
+            put("state", state)
+            if (state == "started") put("previous_state", JsonNull) else put("previous_state", "started")
+        }.toString()
+        val input = if (state == "started" && instanceId != null) compatibleInputs.remove(instanceId) else null
+        return TraverseRuntimeEvent(
+            sequence = eventSequence.incrementAndGet(),
+            targetId = "compatible",
+            status = state,
+            instanceId = instanceId,
+            eventType = "state_changed",
+            output = if (input == null) data else "${data.dropLast(1)},\"input\":$input}",
+        )
+    }
+
     fun cancel(sessionId: String): String = client.cancel(buildJsonObject {
         put("session_id", sessionId)
     }.toString())
 
-    fun compatibleStart(capabilityId: String, inputJson: String): TraverseCompatibleResult =
-        compatibleResult(client.compatibleStart(compatibleRequest(capabilityId, inputJson = inputJson)))
+    fun compatibleStart(capabilityId: String, inputJson: String): TraverseCompatibleResult {
+        // The caller's input goes to the runtime unchanged. It applies Spec 1722 and returns the
+        // canonical bytes the wrapper receives (Decision 128); re-serializing could alter them (#1811).
+        val response = client.compatibleStart("{\"capability_id\":${JsonPrimitive(capabilityId)},\"input\":$inputJson}")
+        val result = compatibleResult(response)
+        val canonical = resultObject(response)["canonical_input"]?.jsonPrimitive?.contentOrNull
+        if (result.instanceId != null && canonical != null) compatibleInputs[result.instanceId] = canonical
+        return result
+    }
 
     fun compatibleStop(capabilityId: String, instanceId: String?): TraverseCompatibleResult =
         compatibleResult(client.compatibleStop(compatibleRequest(capabilityId, instanceId = instanceId)))
@@ -109,15 +149,10 @@ class RuntimeTraverseEmbedder internal constructor(
 
     private fun compatibleRequest(
         capabilityId: String,
-        inputJson: String? = null,
-        instanceId: String? = null,
+        instanceId: String?,
     ): String = buildJsonObject {
         put("capability_id", capabilityId)
-        if (inputJson != null) {
-            put("input", Json.parseToJsonElement(inputJson))
-        } else {
-            if (instanceId == null) put("instance_id", JsonNull) else put("instance_id", instanceId)
-        }
+        if (instanceId == null) put("instance_id", JsonNull) else put("instance_id", instanceId)
     }.toString()
 
     private fun compatibleResult(json: String): TraverseCompatibleResult {

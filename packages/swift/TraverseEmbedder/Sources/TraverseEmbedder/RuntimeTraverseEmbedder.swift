@@ -6,6 +6,9 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
     private let client: any TraverseBridgeClient
     private let appCommands: AppCommandCoordinator
     private let eventSequence = OSAllocatedUnfairLock(initialState: 0)
+    /// The runtime's canonical start input per instance, until its
+    /// `compatible_started` event is published (Decision 128).
+    private let compatibleInputs = OSAllocatedUnfairLock(initialState: [String: Data]())
 
     public convenience init(bundle: TraverseBundle) throws {
         try self.init(client: WasmiHostBridgeClient(bundle: bundle))
@@ -61,6 +64,10 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         var events: [TraverseRuntimeEvent] = []
         while let bytes = try client.nextEvent() {
             let event = try object(bytes)
+            if let type = event["type"] as? String, type.hasPrefix("compatible_") {
+                events.append(try compatibleEvent(type: type, event: event))
+                continue
+            }
             if event["sequence"] == nil, let type = event["type"] as? String {
                 events.append(try lifecycleEvent(type: type, event: event))
                 continue
@@ -101,16 +108,58 @@ public final class RuntimeTraverseEmbedder: @unchecked Sendable {
         )
     }
 
+    /// Publishes a runtime `compatible_<state>` event as embedder-api
+    /// `state_changed`. The started event's `input` is the runtime's canonical
+    /// bytes, spliced in unchanged for the platform wrapper (Decision 128).
+    private func compatibleEvent(type: String, event: [String: Any]) throws -> TraverseRuntimeEvent {
+        let state = String(type.dropFirst("compatible_".count))
+        let instanceID = optionalString("instance_id", in: event)
+        var data = try encode([
+            "capability_id": (event["capability_id"] as Any?) ?? NSNull(),
+            "instance_id": (instanceID as Any?) ?? NSNull(),
+            "state": state,
+            "previous_state": state == "started" ? NSNull() : "started",
+        ])
+        if state == "started", let id = instanceID,
+           let input = compatibleInputs.withLock({ $0.removeValue(forKey: id) }) {
+            data.removeLast()
+            data.append(Data(#","input":"#.utf8))
+            data.append(input)
+            data.append(Data("}".utf8))
+        }
+        let sequence = eventSequence.withLock { value -> Int in
+            value += 1
+            return value
+        }
+        return TraverseRuntimeEvent(
+            sequence: sequence,
+            targetID: "compatible",
+            status: state,
+            instanceID: instanceID,
+            eventType: "state_changed",
+            output: data
+        )
+    }
+
     public func cancel(sessionID: String) throws -> Data {
         try client.cancel(requestJSON: encode(["session_id": sessionID]))
     }
 
     public func compatibleStart(capabilityID: String, inputJSON: Data) throws -> TraverseCompatibleResult {
-        let request = try encode([
-            "capability_id": capabilityID,
-            "input": try JSONSerialization.jsonObject(with: inputJSON, options: .fragmentsAllowed),
-        ])
-        return try compatibleResult(client.compatibleStart(requestJSON: request))
+        // The caller's input bytes go to the runtime unchanged. It applies
+        // Spec 1722 and returns the canonical bytes the wrapper receives
+        // (Decision 128); re-serializing here could alter them (#1811).
+        var request = Data(#"{"capability_id":"#.utf8)
+        request.append(try JSONSerialization.data(withJSONObject: capabilityID, options: .fragmentsAllowed))
+        request.append(Data(#","input":"#.utf8))
+        request.append(inputJSON)
+        request.append(Data("}".utf8))
+        let response = try client.compatibleStart(requestJSON: request)
+        let result = try compatibleResult(response)
+        if let id = result.instanceID, let canonical = try object(response)["canonical_input"] as? String {
+            compatibleInputs.withLock { $0[id] = Data(canonical.utf8) }
+        }
+        return result
     }
 
     public func compatibleStop(capabilityID: String, instanceID: String?) throws -> TraverseCompatibleResult {

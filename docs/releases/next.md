@@ -2,6 +2,11 @@
 
 Unreleased changes since `v0.16.2` will be recorded here.
 
+- **Breaking (web):** compatible capabilities now run one instance at a time
+  through `runtime.wasm` on every host, and report the runtime's error codes:
+  `compatible_instance_not_active` replaces `instance_not_found` and
+  `instance_not_running`. The started `state_changed` event's `input` is the
+  canonical input (Decision 128, `#1820`).
 - `runtime.wasm` now runs the compatible-capability start, stop and kill
   lifecycle instead of returning `-1`. It enforces the `platforms[]`
   allowlist and returns canonical start input. The hosts switch over in

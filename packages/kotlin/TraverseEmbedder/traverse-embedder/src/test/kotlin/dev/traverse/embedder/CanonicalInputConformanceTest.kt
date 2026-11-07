@@ -144,4 +144,45 @@ class CanonicalInputConformanceTest {
             })
         }
     }
+
+    /** A fresh real `runtime.wasm` initialized with a compatible capability on `android` (Spec 072 FR-010). */
+    private fun compatibleClient(): ChicoryBridgeClient? {
+        val rootPath = System.getenv("TRAVERSE_NATIVE_ARTIFACT_ROOT") ?: return null
+        val runtime = File(rootPath, "runtime/runtime.wasm").readBytes()
+        val client = ChicoryBridgeClient(
+            ChicoryRuntimeBridge(TraverseBundle(rootPath, "sha256:" + sha256(runtime)), maximumInstructionsPerCall = 50_000_000L),
+        )
+        val header = ("{\"capability_id\":\"conformance.camera\",\"capability_version\":\"1.0.0\"," +
+            "\"execution_mode\":\"compatible\",\"platforms\":[\"android\"],\"host_platform\":\"android\"}")
+            .toByteArray(StandardCharsets.UTF_8)
+        val headerLength = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(header.size).array()
+        val ready = client.initialize(headerLength + header)
+        assertEquals("ready", Json.parseToJsonElement(ready).jsonObject.string("status"))
+        return client
+    }
+
+    @Test fun canonicalInputVectorsReachTheWrapperThroughCompatibleStart() {
+        // Spec 072 FR-012 (Decision 128): the started event's `input` is the runtime's canonical bytes.
+        for (vector in vectors()) {
+            val runtime = RuntimeTraverseEmbedder(compatibleClient() ?: return)
+            val result = try {
+                runtime.compatibleStart("conformance.camera", vector.input)
+                val output = runtime.subscribe().first { it.eventType == "state_changed" }.output!!
+                Outcome.Output(output.substring(output.indexOf(",\"input\":") + ",\"input\":".length, output.length - 1))
+            } catch (error: Exception) {
+                Outcome.Failure(error.toString())
+            }
+            check("kotlin compatible", vector, result)
+        }
+    }
+
+    @Test fun compatibleLifecycleUsesTheRuntimeRules() {
+        val runtime = RuntimeTraverseEmbedder(compatibleClient() ?: return)
+        val started = runtime.compatibleStart("conformance.camera", "{}")
+        assertEquals("conformance.camera-compatible-1", started.instanceId)
+        assertTrue(runCatching { runtime.compatibleStart("conformance.camera", "{}") }.isFailure)
+        assertEquals("killed", runtime.compatibleKill("conformance.camera", null).status)
+        assertTrue(runCatching { runtime.compatibleKill("conformance.camera", started.instanceId) }.isFailure)
+        assertEquals(listOf("started", "killed"), runtime.subscribe().map { it.status })
+    }
 }

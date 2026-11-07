@@ -140,3 +140,67 @@ private func check(_ host: String, _ vector: Vector, _ outcome: Outcome) {
         })
     }
 }
+
+/// A fresh real `runtime.wasm` initialized with a compatible capability on
+/// `ios` (Spec 072 FR-010), or nil when no artifact root is set.
+private func compatibleClient() throws -> WasmiHostBridgeClient? {
+    guard let rootPath = ProcessInfo.processInfo.environment["TRAVERSE_NATIVE_ARTIFACT_ROOT"] else { return nil }
+    let runtime = try Data(contentsOf: URL(fileURLWithPath: rootPath).appendingPathComponent("runtime/runtime.wasm"))
+    let client = try WasmiHostBridgeClient(
+        bundle: TraverseBundle(
+            rootURL: URL(fileURLWithPath: rootPath),
+            runtimeWasmDigest: "sha256:" + SHA256.hash(data: runtime).map { String(format: "%02x", $0) }.joined()
+        ),
+        limits: try TraverseHostLimits(fuelPerInvocation: 50_000_000)
+    )
+    let header = try JSONSerialization.data(withJSONObject: [
+        "capability_id": "conformance.camera",
+        "capability_version": "1.0.0",
+        "execution_mode": "compatible",
+        "platforms": ["ios"],
+        "host_platform": "ios",
+    ] as [String: Any])
+    var initPayload = Data()
+    var headerLength = UInt32(header.count).littleEndian
+    withUnsafeBytes(of: &headerLength) { initPayload.append(contentsOf: $0) }
+    initPayload.append(header)
+    let ready = try JSONSerialization.jsonObject(with: client.initialize(configJSON: initPayload)) as? [String: Any]
+    #expect(ready?["status"] as? String == "ready")
+    return client
+}
+
+@Test func canonicalInputVectorsReachTheWrapperThroughCompatibleStart() throws {
+    // Spec 072 FR-012 (Decision 128): the started event's `input` is the runtime's canonical bytes.
+    for vector in try vectors() {
+        guard let client = try compatibleClient() else { return }
+        let runtime = RuntimeTraverseEmbedder(client: client)
+        let result: Outcome
+        do {
+            _ = try runtime.compatibleStart(capabilityID: "conformance.camera", inputJSON: Data(vector.input.utf8))
+            let started = try #require(try runtime.subscribe().first { $0.eventType == "state_changed" })
+            let output = try #require(started.output)
+            let marker = try #require(output.range(of: Data(#","input":"#.utf8)))
+            result = .output(stdin: String(decoding: output[marker.upperBound..<output.index(before: output.endIndex)], as: UTF8.self))
+        } catch {
+            result = .failure(String(describing: error))
+        }
+        check("swift compatible", vector, result)
+    }
+}
+
+@Test func compatibleLifecycleUsesTheRuntimeRules() throws {
+    guard let client = try compatibleClient() else { return }
+    let runtime = RuntimeTraverseEmbedder(client: client)
+    let started = try runtime.compatibleStart(capabilityID: "conformance.camera", inputJSON: Data("{}".utf8))
+    #expect(started.instanceID == "conformance.camera-compatible-1")
+    #expect(throws: (any Error).self) {
+        try runtime.compatibleStart(capabilityID: "conformance.camera", inputJSON: Data("{}".utf8))
+    }
+    let killed = try runtime.compatibleKill(capabilityID: "conformance.camera", instanceID: nil)
+    #expect(killed.status == "killed")
+    #expect(throws: (any Error).self) {
+        try runtime.compatibleKill(capabilityID: "conformance.camera", instanceID: started.instanceID)
+    }
+    let states = try runtime.subscribe().map { $0.status }
+    #expect(states == ["started", "killed"])
+}

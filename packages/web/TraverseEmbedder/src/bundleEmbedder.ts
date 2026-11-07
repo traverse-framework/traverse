@@ -31,6 +31,7 @@ import {
   parseDeclaredEmits,
 } from "./runtimeWasmHost.js";
 import type {
+  RuntimeWasmCompatibleOperation,
   RuntimeWasmEmitRef,
   RuntimeWasmJson,
   RuntimeWasmNestedLimits,
@@ -58,6 +59,8 @@ import type {
   JsonValue,
   ShutdownOutcome,
   AppCommandEnvelope,
+  EmbedderError,
+  EmbedderErrorCode,
   EmbedderEvent,
   SubmitAsyncOptions,
   SubmitOutcome,
@@ -65,6 +68,25 @@ import type {
 } from "./types.js";
 
 const DEFAULT_RUNTIME_WASM_PATH = "runtime/runtime.wasm";
+
+/** The compatible lifecycle error codes `runtime.wasm` reports (Spec 072 1.1.0). */
+const RUNTIME_COMPATIBLE_ERROR_CODES: ReadonlySet<string> = new Set<EmbedderErrorCode>([
+  "capability_not_compatible",
+  "platform_not_supported",
+  "compatible_instance_active",
+  "compatible_instance_not_active",
+  "input_not_canonicalizable",
+  "invalid_input",
+]);
+
+/** The runtime's error text as a boundary error; its code is the text before `:`. */
+function runtimeCompatibleError(text: string): EmbedderError {
+  const code = text.split(":", 1)[0] ?? "";
+  return embedderError(
+    (RUNTIME_COMPATIBLE_ERROR_CODES.has(code) ? code : "invalid_input") as EmbedderErrorCode,
+    text,
+  );
+}
 /** Spec 1402 FR-012 default nested fuel when the host omits `limits`. */
 export const DEFAULT_NESTED_FUEL = 10_000_000;
 /** Spec 1402 FR-012 default nested memory ceiling (32 MiB). */
@@ -436,6 +458,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   private readonly wasmComponentEvidence: readonly JsonValue[];
   private readonly stateMachine: JsonValue | null;
   private readonly nestedLimits: { fuel: number; maxMemoryBytes: number };
+  private readonly compatibleHosts: ReadonlyMap<string, RuntimeWasmHost>;
   private indexedDbDataStore: IndexedDbDataStore | null = null;
   /** Long-lived Spec 139 app orchestrator instance (process-local sessions). */
   private appHost: RuntimeWasmHost | null = null;
@@ -452,6 +475,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     wasmComponentEvidence: readonly JsonValue[],
     stateMachine: JsonValue | null,
     nestedLimits: { fuel: number; maxMemoryBytes: number },
+    compatibleHosts: ReadonlyMap<string, RuntimeWasmHost>,
   ) {
     this.core = core;
     this.runtimeModule = runtimeModule;
@@ -461,6 +485,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
     this.wasmComponentEvidence = wasmComponentEvidence;
     this.stateMachine = stateMachine;
     this.nestedLimits = nestedLimits;
+    this.compatibleHosts = compatibleHosts;
   }
 
   private runtimeLimitsHeader(): RuntimeWasmNestedLimits {
@@ -524,6 +549,10 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
 
     const wasmTargets = new Map<string, WasmTarget>();
     const compatibleTargets = new Map<string, readonly string[]>();
+    // One compatible-mode runtime.wasm per compatible capability: the runtime
+    // owns its lifecycle and platform allowlist (Decision 127).
+    const compatibleHosts = new Map<string, RuntimeWasmHost>();
+    const platform = config.platform ?? "web";
     const wasmComponentEvidence: JsonValue[] = [];
 
     for (const component of summary.components) {
@@ -559,6 +588,13 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
           throw loadFailure(`${context} declares execution_mode 'compatible' but no platforms`);
         }
         compatibleTargets.set(capabilityId, platforms);
+        try {
+          const host = RuntimeWasmHost.fromModule(runtimeModule);
+          host.initCompatible({ capabilityId, capabilityVersion, platforms, hostPlatform: platform });
+          compatibleHosts.set(capabilityId, host);
+        } catch (error) {
+          throw loadFailure(`${context} failed compatible init: ${String(error)}`);
+        }
         continue;
       }
       if (executionMode !== "wasm") {
@@ -737,7 +773,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       config.workspaceId ?? "local-default",
       summary.appId,
       summary.appVersion,
-      config.platform ?? "web",
+      platform,
       compatibleTargets,
     );
     return new BundleEmbedder(
@@ -749,6 +785,7 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       wasmComponentEvidence,
       summary.stateMachine,
       nestedLimits,
+      compatibleHosts,
     );
   }
 
@@ -1610,21 +1647,103 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
   }
 
   startCompatible(capabilityId: string, input: JsonValue): CompatibleStartOutcome {
-    return this.core.startCompatible(capabilityId, input);
+    const result = this.compatibleCall(capabilityId, "start", {
+      capability_id: capabilityId,
+      input: input as RuntimeWasmJson,
+    });
+    return result.error === null
+      ? { instanceId: result.instanceId, status: "started", error: null }
+      : { instanceId: null, status: "error", error: result.error };
   }
 
   stopCompatible(
     capabilityId: string,
     instanceId: string | null = null,
   ): CompatibleLifecycleOutcome {
-    return this.core.transitionCompatible(capabilityId, instanceId, "stopped");
+    const result = this.compatibleCall(capabilityId, "stop", {
+      capability_id: capabilityId,
+      instance_id: instanceId,
+    });
+    return result.error === null
+      ? { status: "stopped", error: null }
+      : { status: "error", error: result.error };
   }
 
   killCompatible(
     capabilityId: string,
     instanceId: string | null = null,
   ): CompatibleLifecycleOutcome {
-    return this.core.transitionCompatible(capabilityId, instanceId, "killed");
+    const result = this.compatibleCall(capabilityId, "kill", {
+      capability_id: capabilityId,
+      instance_id: instanceId,
+    });
+    return result.error === null
+      ? { status: "killed", error: null }
+      : { status: "error", error: result.error };
+  }
+
+  /**
+   * Runs one compatible lifecycle operation in the capability's runtime.wasm
+   * and republishes its events as `state_changed`. The started event's
+   * `input` is the runtime's canonical input (Decision 128).
+   */
+  private compatibleCall(
+    capabilityId: string,
+    operation: RuntimeWasmCompatibleOperation,
+    request: RuntimeWasmJson,
+  ): { instanceId: string | null; error: EmbedderError | null } {
+    const instanceId =
+      operation === "start" ? null : ((request as { instance_id: string | null }).instance_id ?? null);
+    const fail = (error: EmbedderError) => {
+      this.core.emitErrorEvent(null, error, {
+        capability_id: capabilityId,
+        ...(instanceId === null ? {} : { instance_id: instanceId }),
+      });
+      return { instanceId: null, error };
+    };
+    if (this.core.stopped) {
+      return fail(runtimeStoppedError());
+    }
+    const host = this.compatibleHosts.get(capabilityId);
+    if (host === undefined) {
+      return fail(
+        embedderError(
+          "capability_not_compatible",
+          `capability '${capabilityId}' is not a compatible-mode capability in this bundle`,
+        ),
+      );
+    }
+    const { status, response } = host.compatible(operation, request);
+    const body = asRecord(response as JsonValue);
+    if (status !== 0 || body === null) {
+      return fail(runtimeCompatibleError(String(body?.["error"] ?? "invalid_input")));
+    }
+    const canonicalInput = body["canonical_input"];
+    this.publishCompatibleEvents(
+      host.drainEvents(),
+      typeof canonicalInput === "string" ? (JSON.parse(canonicalInput) as JsonValue) : null,
+    );
+    const resolved = body["instance_id"];
+    return { instanceId: typeof resolved === "string" ? resolved : null, error: null };
+  }
+
+  /** Republishes runtime `compatible_<state>` events as embedder `state_changed`. */
+  private publishCompatibleEvents(events: readonly RuntimeWasmJson[], input: JsonValue): void {
+    for (const event of events) {
+      const record = asRecord(event as JsonValue);
+      const type = record?.["type"];
+      if (record === null || typeof type !== "string" || !type.startsWith("compatible_")) {
+        continue;
+      }
+      const state = type.slice("compatible_".length);
+      this.core.emit("state_changed", null, {
+        capability_id: record["capability_id"] ?? null,
+        instance_id: record["instance_id"] ?? null,
+        state,
+        previous_state: state === "started" ? null : "started",
+        ...(state === "started" ? { input } : {}),
+      });
+    }
   }
 
   shutdown(): ShutdownOutcome {
@@ -1639,7 +1758,24 @@ export class BundleEmbedder implements TraverseEmbedderApi, EmbeddedTraceApi {
       this.appHost = null;
     }
 
-    return this.core.shutdown();
+    if (this.core.stopped) {
+      return this.core.shutdown();
+    }
+    // runtime.wasm kills a running compatible instance on shutdown and lists
+    // it (Spec 072 FR-008).
+    let killed = 0;
+    for (const [capabilityId, host] of this.compatibleHosts) {
+      const response = asRecord(host.shutdown() as JsonValue);
+      const instances = response?.["killed_compatible_instances"];
+      for (const instanceId of Array.isArray(instances) ? instances : []) {
+        killed += 1;
+        this.publishCompatibleEvents(
+          [{ type: "compatible_killed", capability_id: capabilityId, instance_id: instanceId }],
+          null,
+        );
+      }
+    }
+    return { killedInstances: killed + this.core.shutdown().killedInstances };
   }
 
   releaseEvidence(): JsonValue {

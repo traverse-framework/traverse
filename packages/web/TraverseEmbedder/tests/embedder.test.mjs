@@ -189,18 +189,22 @@ test("compatible lifecycle edge cases use stable error codes", () => {
   );
   assert.equal(
     embedder.stopCompatible("fixture.render", "inst-99999999").error.code,
-    "instance_not_found",
+    "compatible_instance_not_active",
   );
   assert.equal(
     embedder.killCompatible("fixture.render").error.code,
-    "instance_not_running",
+    "compatible_instance_not_active",
   );
 
   const started = embedder.startCompatible("fixture.render", {});
+  assert.equal(
+    embedder.startCompatible("fixture.render", {}).error.code,
+    "compatible_instance_active",
+  );
   embedder.stopCompatible("fixture.render", started.instanceId);
   assert.equal(
     embedder.stopCompatible("fixture.render", started.instanceId).error.code,
-    "instance_not_running",
+    "compatible_instance_not_active",
   );
 
   embedder.shutdown();
