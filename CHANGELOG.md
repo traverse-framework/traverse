@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The Rust embedder's `submit` takes raw JSON text (Decision 129, `#1826`)
+
+**Breaking (Rust):** `TraverseEmbedderApi::submit` takes the input as raw
+JSON text (`&str`), like `start_compatible` and the other hosts. Input that
+is not JSON is rejected with `invalid_input`, and input JCS cannot represent
+(a duplicate member name, a lone surrogate, an unsafe number) with
+`input_not_canonicalizable`, before any guest runs. `BundleEmbedder` and
+`EmbedderTestDouble` both apply it.
+
 ### The Rust embedder shares `runtime.wasm`'s compatible lifecycle (Decision 129, Spec 072 1.1.0, `#1823`)
 
 The compatible lifecycle rules moved out of `traverse-runtime-wasm` into

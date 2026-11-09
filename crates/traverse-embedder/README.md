@@ -27,18 +27,18 @@ against their manifest `platforms[]` allowlist.
 
 Compatible capabilities follow the same lifecycle rules as `runtime.wasm`,
 from `traverse_contracts::CompatibleLifecycle` (Decision 129).
-`start_compatible` takes the input as raw JSON text, rejects input Spec 1722
-can't represent, and runs one instance at a time. The started
+`submit` and `start_compatible` take the input as raw JSON text and reject
+input Spec 1722 can't represent before any guest runs. `start_compatible`
+runs one instance at a time. The started
 `state_changed` event's `input` is the canonical input.
 
 ```rust,no_run
-use serde_json::json;
 use traverse_embedder::{BundleEmbedder, EmbedderConfig, TraverseEmbedderApi};
 
 let mut embedder = BundleEmbedder::init(EmbedderConfig::new("app/app.manifest.json"))
     .expect("bundle should initialize");
 embedder.subscribe(Box::new(|event| println!("{event}")));
-embedder.submit("my-app.process", &json!({ "note": "hello" }));
+embedder.submit("my-app.process", r#"{"note":"hello"}"#);
 embedder.shutdown();
 ```
 

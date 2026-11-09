@@ -91,7 +91,7 @@ fn submit_rejects_unknown_targets_with_error_event() {
     let mut embedder = development_embedder(&fixture, "linux");
     let events = collect_events(&mut embedder);
 
-    let outcome = embedder.submit("fixture.unknown", &json!({}));
+    let outcome = embedder.submit("fixture.unknown", "{}");
     assert_eq!(outcome.status, SubmitStatus::Rejected);
     assert_eq!(outcome.session_id, None);
     assert_eq!(
@@ -111,11 +111,46 @@ fn submit_rejects_compatible_targets_toward_lifecycle_operations() {
     let fixture = BundleFixture::new("compatible-submit");
     let mut embedder = development_embedder(&fixture, "linux");
 
-    let outcome = embedder.submit(RENDER_CAPABILITY_ID, &json!({}));
+    let outcome = embedder.submit(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(outcome.status, SubmitStatus::Rejected);
     assert_eq!(
         outcome.error.expect("compatible submit should error").code,
         EmbedderErrorCode::CompatibleLifecycleRequired,
+    );
+}
+
+#[test]
+fn submit_rejects_input_before_any_guest_runs() {
+    let fixture = BundleFixture::new("submit-input");
+    let mut embedder = development_embedder(&fixture, "linux");
+    let events = collect_events(&mut embedder);
+
+    let cases = [
+        (
+            PROCESS_CAPABILITY_ID,
+            "{\"note\":",
+            EmbedderErrorCode::InvalidInput,
+        ),
+        (
+            common::PIPELINE_WORKFLOW_ID,
+            r#"{"note":"a","note":"b"}"#,
+            EmbedderErrorCode::InputNotCanonicalizable,
+        ),
+    ];
+    for (target_id, input, code) in cases {
+        let outcome = embedder.submit(target_id, input);
+        assert_eq!(outcome.status, SubmitStatus::Rejected, "{target_id}");
+        assert_eq!(outcome.session_id, None);
+        assert_eq!(outcome.error.expect("input should be rejected").code, code);
+    }
+
+    let events = snapshot(&events);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event["event_type"] == "error"));
+    assert_eq!(events[0]["data"]["error"]["code"], "invalid_input");
+    assert_eq!(
+        events[1]["data"]["error"]["code"],
+        "input_not_canonicalizable"
     );
 }
 
@@ -131,7 +166,7 @@ fn production_posture_surfaces_unsigned_artifact_errors_as_events() {
         BundleEmbedder::init(config).expect("bundle should initialize in production posture");
     let events = collect_events(&mut embedder);
 
-    let outcome = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "unsigned" }));
+    let outcome = embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"unsigned"}"#);
     assert_eq!(outcome.status, SubmitStatus::Accepted);
 
     let events = snapshot(&events);
@@ -153,7 +188,7 @@ fn workflow_error_results_surface_as_error_events() {
 
     // The fixture capability contract requires a `note` string, so this
     // input fails the runtime's step-input contract validation.
-    let outcome = embedder.submit(common::PIPELINE_WORKFLOW_ID, &json!({ "wrong": true }));
+    let outcome = embedder.submit(common::PIPELINE_WORKFLOW_ID, r#"{"wrong":true}"#);
     assert_eq!(outcome.status, SubmitStatus::Accepted);
 
     let events = snapshot(&events);
@@ -290,7 +325,7 @@ fn late_subscribers_replay_the_identical_ordered_stream() {
     let mut embedder = development_embedder(&fixture, "linux");
     let early = collect_events(&mut embedder);
 
-    embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "replay" }));
+    embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"replay"}"#);
     let late = collect_events(&mut embedder);
 
     assert_eq!(snapshot(&early), snapshot(&late));
@@ -335,7 +370,7 @@ fn test_double_mirrors_submit_event_shapes() {
         .with_target_output(PROCESS_CAPABILITY_ID, json!({ "status": "processed" }));
     let events = collect_events(&mut double);
 
-    let outcome = double.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "double" }));
+    let outcome = double.submit(PROCESS_CAPABILITY_ID, r#"{"note":"double"}"#);
     assert_eq!(outcome.status, SubmitStatus::Accepted);
     assert_eq!(outcome.session_id.as_deref(), Some("sess-00000001"));
 
@@ -360,7 +395,7 @@ fn test_double_scripts_runtime_shaped_errors() {
         );
     let events = collect_events(&mut double);
 
-    let outcome = double.submit(PROCESS_CAPABILITY_ID, &json!({}));
+    let outcome = double.submit(PROCESS_CAPABILITY_ID, "{}");
     assert_eq!(outcome.status, SubmitStatus::Accepted);
 
     let events = snapshot(&events);
@@ -373,7 +408,7 @@ fn test_double_scripts_runtime_shaped_errors() {
 fn test_double_rejects_unscripted_targets_and_stopped_submits() {
     let mut double = EmbedderTestDouble::new("local-default", "fixture-app", "1.0.0", "linux");
 
-    let unknown = double.submit("fixture.unknown", &json!({}));
+    let unknown = double.submit("fixture.unknown", "{}");
     assert_eq!(unknown.status, SubmitStatus::Rejected);
     assert_eq!(
         unknown.error.expect("unscripted target should error").code,
@@ -381,11 +416,27 @@ fn test_double_rejects_unscripted_targets_and_stopped_submits() {
     );
 
     double.shutdown();
-    let stopped = double.submit(PROCESS_CAPABILITY_ID, &json!({}));
+    let stopped = double.submit(PROCESS_CAPABILITY_ID, "{}");
     assert_eq!(stopped.status, SubmitStatus::Rejected);
     assert_eq!(
         stopped.error.expect("stopped submit should error").code,
         EmbedderErrorCode::RuntimeStopped,
+    );
+}
+
+#[test]
+fn test_double_rejects_input_the_runtime_cannot_canonicalize() {
+    let mut double = EmbedderTestDouble::new("local-default", "fixture-app", "1.0.0", "linux")
+        .with_target_output(PROCESS_CAPABILITY_ID, json!({ "status": "processed" }));
+
+    let outcome = double.submit(PROCESS_CAPABILITY_ID, r#"{"note":"a","note":"b"}"#);
+    assert_eq!(outcome.status, SubmitStatus::Rejected);
+    assert_eq!(
+        outcome
+            .error
+            .expect("duplicate member name should error")
+            .code,
+        EmbedderErrorCode::InputNotCanonicalizable,
     );
 }
 
