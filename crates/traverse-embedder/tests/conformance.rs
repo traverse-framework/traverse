@@ -130,7 +130,7 @@ fn init_shutdown_scenario_reaches_ready_then_stopped() {
     let repeated = embedder.shutdown();
     assert_eq!(repeated.killed_instances, 0);
 
-    let rejected = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "late" }));
+    let rejected = embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"late"}"#);
     assert_eq!(rejected.status, SubmitStatus::Rejected);
     assert_eq!(
         rejected.error.expect("stopped submit should error").code,
@@ -144,7 +144,7 @@ fn wasm_capability_submit_scenario_emits_capability_result() {
     let mut embedder = development_embedder(&fixture, "linux");
     let events = collect_events(&mut embedder);
 
-    let outcome = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "hello" }));
+    let outcome = embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"hello"}"#);
     assert_eq!(outcome.status, SubmitStatus::Accepted);
     assert_eq!(outcome.session_id.as_deref(), Some("sess-00000001"));
     assert_eq!(outcome.error, None);
@@ -171,8 +171,8 @@ fn embedded_trace_companion_projects_production_capability_and_workflow_evidence
 
     // Use schema-valid inputs that still embed secret substrings so the
     // public trace surface can prove they stay redacted (#1658).
-    let _ = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "input-secret" }));
-    let _ = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "workflow-secret" }));
+    let _ = embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"input-secret"}"#);
+    let _ = embedder.submit(PIPELINE_WORKFLOW_ID, r#"{"note":"workflow-secret"}"#);
 
     let page = embedder
         .trace_list(EMBEDDED_TRACE_API_VERSION, 10, None)
@@ -215,7 +215,7 @@ fn workflow_submit_returns_runtime_owned_pipeline_output() {
     let mut embedder = development_embedder(&fixture, "linux");
     let events = collect_events(&mut embedder);
 
-    let outcome = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "hello" }));
+    let outcome = embedder.submit(PIPELINE_WORKFLOW_ID, r#"{"note":"hello"}"#);
     assert_eq!(outcome.status, SubmitStatus::Accepted);
 
     let events = snapshot(&events);
@@ -315,6 +315,41 @@ fn canonical_input_vectors_reach_the_wrapper_through_compatible_start() {
 }
 
 #[test]
+fn canonical_input_vectors_run_through_submit() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/cross-host/canonical-input-v1/vectors.json"
+    );
+    let fixture: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json");
+    let bundle = BundleFixture::new("canonical-input-submit");
+    for vector in fixture["vectors"].as_array().expect("vectors") {
+        let name = vector["name"].as_str().expect("name");
+        let mut embedder = development_embedder(&bundle, "linux");
+        let events = collect_events(&mut embedder);
+        let outcome = embedder.submit(
+            PROCESS_CAPABILITY_ID,
+            vector["input"].as_str().expect("input"),
+        );
+        let events = snapshot(&events);
+        if let Some(code) = vector["expected_error"].as_str() {
+            assert_eq!(outcome.status, SubmitStatus::Rejected, "{name}");
+            let error = outcome.error.expect("vector should be rejected");
+            assert_eq!(error.code.as_str(), code, "{name}");
+            assert!(
+                events
+                    .iter()
+                    .all(|event| event["event_type"] != "capability_invoked"),
+                "{name}: no guest runs"
+            );
+            continue;
+        }
+        assert_eq!(outcome.status, SubmitStatus::Accepted, "{name}");
+        assert_eq!(events[0]["event_type"], "capability_invoked", "{name}");
+    }
+}
+
+#[test]
 fn platform_guard_scenario_rejects_wrong_platform_with_deterministic_error() {
     let fixture = BundleFixture::new("platform-guard");
     let mut embedder = development_embedder(&fixture, "ios");
@@ -340,9 +375,9 @@ fn determinism_scenario_produces_identical_event_json_twice() {
     let run = || {
         let mut embedder = development_embedder(&fixture, "linux");
         let events = collect_events(&mut embedder);
-        let submit = embedder.submit(PROCESS_CAPABILITY_ID, &json!({ "note": "same input" }));
+        let submit = embedder.submit(PROCESS_CAPABILITY_ID, r#"{"note":"same input"}"#);
         assert_eq!(submit.status, SubmitStatus::Accepted);
-        let workflow = embedder.submit(PIPELINE_WORKFLOW_ID, &json!({ "note": "same input" }));
+        let workflow = embedder.submit(PIPELINE_WORKFLOW_ID, r#"{"note":"same input"}"#);
         assert_eq!(workflow.status, SubmitStatus::Accepted);
         let started = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
         assert_eq!(started.status, CompatibleLifecycleStatus::Started);

@@ -111,7 +111,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use traverse_contracts::{
     CanonicalJsonError, CompatibleFinish, CompatibleLifecycle, CompatibleLifecycleError,
-    parse_canonicalizable,
+    parse_canonicalizable, to_canonical_json,
 };
 use traverse_registry::{
     ApplicationManifestError, ApplicationManifestErrorCode, ApplicationManifestFailure,
@@ -595,8 +595,10 @@ pub type EventCallback = Box<dyn FnMut(&Value) + Send>;
 /// [`EmbedderTestDouble`] is the deterministic in-memory test double
 /// required by spec 068 FR-006. Both emit identical event envelopes.
 pub trait TraverseEmbedderApi {
-    /// `runtime.submit`: execute a bundled workflow or WASM capability.
-    fn submit(&mut self, target_id: &str, input: &Value) -> SubmitOutcome;
+    /// `runtime.submit`: execute a bundled workflow or WASM capability with
+    /// raw JSON `input` (Decision 129). Input JCS cannot represent is
+    /// rejected before any guest runs (Spec 1722 FR-003).
+    fn submit(&mut self, target_id: &str, input: &str) -> SubmitOutcome;
 
     /// `runtime.subscribe`: register an ordered event callback. Previously
     /// emitted events are replayed to the new subscriber first, so late
@@ -918,13 +920,7 @@ impl EmbedderCore {
         input: &str,
     ) -> Result<(String, Value), EmbedderError> {
         let lifecycle = self.compatible_lifecycle(capability_id)?;
-        let input = parse_canonicalizable(input.as_bytes()).map_err(|error| {
-            let code = match error {
-                CanonicalJsonError::InvalidJson => EmbedderErrorCode::InvalidInput,
-                _ => EmbedderErrorCode::InputNotCanonicalizable,
-            };
-            EmbedderError::new(code, error.to_string())
-        })?;
+        let input = parse_canonicalizable(input.as_bytes()).map_err(input_error)?;
         let started = lifecycle
             .start(&input)
             .map_err(|error| lifecycle_error(capability_id, lifecycle, error))?;
@@ -1473,16 +1469,22 @@ impl EmbeddedTraceApi for BundleEmbedder {
 }
 
 impl TraverseEmbedderApi for BundleEmbedder {
-    fn submit(&mut self, target_id: &str, input: &Value) -> SubmitOutcome {
+    fn submit(&mut self, target_id: &str, input: &str) -> SubmitOutcome {
         if self.core.stopped {
             let error = runtime_stopped_error();
             return self.core.rejected_submit(target_id, error);
         }
-        if self.workflow_targets.contains_key(target_id) {
-            return self.submit_workflow(target_id, input);
-        }
-        if self.wasm_targets.contains_key(target_id) {
-            return self.submit_capability(target_id, input);
+        let workflow = self.workflow_targets.contains_key(target_id);
+        if workflow || self.wasm_targets.contains_key(target_id) {
+            let input = match parse_guest_input(input) {
+                Ok(input) => input,
+                Err(error) => return self.core.rejected_submit(target_id, error),
+            };
+            return if workflow {
+                self.submit_workflow(target_id, &input)
+            } else {
+                self.submit_capability(target_id, &input)
+            };
         }
         if self.core.compatible_targets.contains_key(target_id) {
             let error = EmbedderError::new(
@@ -1671,6 +1673,25 @@ fn runtime_stopped_error() -> EmbedderError {
         EmbedderErrorCode::RuntimeStopped,
         "the embedded runtime was shut down and accepts no further operations",
     )
+}
+
+/// Raw guest input text that is not JSON, or JSON that JCS cannot represent
+/// (Spec 1722 FR-003), with the runtime's code.
+fn input_error(error: CanonicalJsonError) -> EmbedderError {
+    let code = match error {
+        CanonicalJsonError::InvalidJson => EmbedderErrorCode::InvalidInput,
+        _ => EmbedderErrorCode::InputNotCanonicalizable,
+    };
+    EmbedderError::new(code, error.to_string())
+}
+
+/// Parses raw `submit` input (Decision 129), rejecting duplicate member
+/// names, invalid Unicode and numbers JCS cannot represent before any guest
+/// runs.
+fn parse_guest_input(input: &str) -> Result<Value, EmbedderError> {
+    let value = parse_canonicalizable(input.as_bytes()).map_err(input_error)?;
+    to_canonical_json(&value).map_err(input_error)?;
+    Ok(value)
 }
 
 /// A shared lifecycle rule's failure with the runtime's code (Decision 128).
@@ -2054,9 +2075,15 @@ mod tests {
             EMBEDDED_TRACE_API_VERSION
         );
 
-        let accepted = embedder.submit("demo.success", &json!({ "secret": secret_input }));
+        let accepted = embedder.submit(
+            "demo.success",
+            &json!({ "secret": secret_input }).to_string(),
+        );
         assert_eq!(accepted.status, SubmitStatus::Accepted);
-        let accepted = embedder.submit("demo.failure", &json!({ "secret": secret_input }));
+        let accepted = embedder.submit(
+            "demo.failure",
+            &json!({ "secret": secret_input }).to_string(),
+        );
         assert_eq!(accepted.status, SubmitStatus::Accepted);
 
         let first_page = embedder
@@ -2095,8 +2122,8 @@ mod tests {
     fn embedded_trace_api_rejects_stale_versions_cursors_and_stopped_hosts() -> Result<(), String> {
         let mut embedder = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
             .with_target_output("demo.success", json!({ "value": "safe" }));
-        let _ = embedder.submit("demo.success", &json!({}));
-        let _ = embedder.submit("demo.success", &json!({}));
+        let _ = embedder.submit("demo.success", "{}");
+        let _ = embedder.submit("demo.success", "{}");
         let cursor = embedder
             .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)
             .map_err(|error| error.message.to_string())?
@@ -2119,7 +2146,7 @@ mod tests {
 
         let mut other_session = EmbedderTestDouble::new("workspace", "app", "1.0.0", "web")
             .with_target_output("demo.success", json!({ "value": "safe" }));
-        let _ = other_session.submit("demo.success", &json!({}));
+        let _ = other_session.submit("demo.success", "{}");
         let foreign_cursor_error = other_session
             .trace_list(EMBEDDED_TRACE_API_VERSION, 10, Some(&cursor))
             .err()
@@ -2147,7 +2174,7 @@ mod tests {
             .with_target_output("demo.success", json!({ "value": "safe" }));
         let mut first_trace_id = None;
         for index in 0..=EMBEDDED_TRACE_RETENTION_LIMIT {
-            let _ = embedder.submit("demo.success", &json!({ "index": index }));
+            let _ = embedder.submit("demo.success", &json!({ "index": index }).to_string());
             if index == 0 {
                 first_trace_id = embedder
                     .trace_list(EMBEDDED_TRACE_API_VERSION, 1, None)

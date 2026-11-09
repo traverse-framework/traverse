@@ -96,8 +96,7 @@ impl EmbedderTestDouble {
 }
 
 impl TraverseEmbedderApi for EmbedderTestDouble {
-    fn submit(&mut self, target_id: &str, input: &Value) -> SubmitOutcome {
-        let _ = input;
+    fn submit(&mut self, target_id: &str, input: &str) -> SubmitOutcome {
         if self.core.stopped {
             let error = crate::runtime_stopped_error();
             return self.core.rejected_submit(target_id, error);
@@ -109,6 +108,9 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
             );
             return self.core.rejected_submit(target_id, error);
         };
+        if let Err(error) = crate::parse_guest_input(input) {
+            return self.core.rejected_submit(target_id, error);
+        }
 
         let session_id = self.core.next_session_id();
         let request_id = self.core.next_request_id();

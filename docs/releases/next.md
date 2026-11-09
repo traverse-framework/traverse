@@ -2,6 +2,10 @@
 
 Unreleased changes since `v0.16.2` will be recorded here.
 
+- **Breaking (Rust):** `traverse-embedder`'s `submit` takes raw JSON text
+  (`&str`). Input JCS cannot represent, including a duplicate member name, is
+  rejected with `input_not_canonicalizable` before any guest runs, as on the
+  other hosts (Decision 129, `#1826`).
 - **Breaking (Rust):** `traverse-embedder` now runs compatible capabilities
   with `runtime.wasm`'s lifecycle rules. `start_compatible` takes raw JSON
   text, one instance runs at a time, and the error codes match the other
