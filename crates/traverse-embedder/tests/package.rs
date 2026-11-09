@@ -174,18 +174,11 @@ fn compatible_lifecycle_rejects_unknown_capabilities_and_instances() {
     let fixture = BundleFixture::new("compatible-edges");
     let mut embedder = development_embedder(&fixture, "linux");
 
-    let unknown = embedder.start_compatible(PROCESS_CAPABILITY_ID, &json!({}));
+    let unknown = embedder.start_compatible(PROCESS_CAPABILITY_ID, "{}");
     assert_eq!(unknown.status, CompatibleLifecycleStatus::Error);
     assert_eq!(
         unknown.error.expect("wasm capability should error").code,
         EmbedderErrorCode::CapabilityNotCompatible,
-    );
-
-    let missing = embedder.stop_compatible(RENDER_CAPABILITY_ID, Some("inst-99999999"));
-    assert_eq!(missing.status, CompatibleLifecycleStatus::Error);
-    assert_eq!(
-        missing.error.expect("missing instance should error").code,
-        EmbedderErrorCode::InstanceNotFound,
     );
 
     let none_running = embedder.kill_compatible(RENDER_CAPABILITY_ID, None);
@@ -193,49 +186,77 @@ fn compatible_lifecycle_rejects_unknown_capabilities_and_instances() {
     assert_eq!(
         none_running
             .error
-            .expect("no running instances should error")
+            .expect("no running instance should error")
             .code,
-        EmbedderErrorCode::InstanceNotRunning,
+        EmbedderErrorCode::CompatibleInstanceNotActive,
     );
 
-    let started = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let started = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
     let instance_id = started.instance_id.expect("instance should start");
+    assert_eq!(instance_id, format!("{RENDER_CAPABILITY_ID}-compatible-1"));
+    let other = embedder.stop_compatible(RENDER_CAPABILITY_ID, Some("other"));
+    assert_eq!(
+        other.error.expect("another instance should not match").code,
+        EmbedderErrorCode::CompatibleInstanceNotActive,
+    );
+    let wrong_capability = embedder.kill_compatible(PROCESS_CAPABILITY_ID, Some(&instance_id));
+    assert_eq!(
+        wrong_capability
+            .error
+            .expect("a non-compatible capability should error")
+            .code,
+        EmbedderErrorCode::CapabilityNotCompatible,
+    );
     let stopped = embedder.stop_compatible(RENDER_CAPABILITY_ID, Some(&instance_id));
     assert_eq!(stopped.status, CompatibleLifecycleStatus::Stopped);
     let stopped_again = embedder.stop_compatible(RENDER_CAPABILITY_ID, Some(&instance_id));
-    assert_eq!(stopped_again.status, CompatibleLifecycleStatus::Error);
     assert_eq!(
         stopped_again
             .error
             .expect("stopped instance should not stop again")
             .code,
-        EmbedderErrorCode::InstanceNotRunning,
-    );
-
-    let wrong_capability = embedder.kill_compatible(PROCESS_CAPABILITY_ID, Some(&instance_id));
-    assert_eq!(wrong_capability.status, CompatibleLifecycleStatus::Error);
-    assert_eq!(
-        wrong_capability
-            .error
-            .expect("instance of another capability should not match")
-            .code,
-        EmbedderErrorCode::InstanceNotFound,
+        EmbedderErrorCode::CompatibleInstanceNotActive,
     );
 }
 
 #[test]
-fn compatible_kill_terminates_every_running_instance_of_a_capability() {
-    let fixture = BundleFixture::new("compatible-kill-all");
+fn compatible_capabilities_run_one_instance_at_a_time() {
+    let fixture = BundleFixture::new("compatible-one-instance");
     let mut embedder = development_embedder(&fixture, "linux");
 
-    let first = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
-    let second = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
-    assert_ne!(first.instance_id, second.instance_id);
+    let first = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
+    let second = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
+    assert_eq!(
+        second.error.expect("a second instance should error").code,
+        EmbedderErrorCode::CompatibleInstanceActive,
+    );
 
     let killed = embedder.kill_compatible(RENDER_CAPABILITY_ID, None);
     assert_eq!(killed.status, CompatibleLifecycleStatus::Killed);
-    let none_left = embedder.stop_compatible(RENDER_CAPABILITY_ID, None);
-    assert_eq!(none_left.status, CompatibleLifecycleStatus::Error);
+    let restarted = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
+    assert_ne!(restarted.instance_id, first.instance_id);
+}
+
+#[test]
+fn compatible_start_rejects_input_the_runtime_cannot_canonicalize() {
+    let fixture = BundleFixture::new("compatible-input");
+    let mut embedder = development_embedder(&fixture, "linux");
+
+    let invalid = embedder.start_compatible(RENDER_CAPABILITY_ID, "{");
+    assert_eq!(
+        invalid.error.expect("invalid JSON should error").code,
+        EmbedderErrorCode::InvalidInput,
+    );
+    let unsafe_number = embedder.start_compatible(RENDER_CAPABILITY_ID, r#"{"n":1e21}"#);
+    assert_eq!(
+        unsafe_number.error.expect("1e21 should error").code,
+        EmbedderErrorCode::InputNotCanonicalizable,
+    );
+    let duplicate = embedder.start_compatible(RENDER_CAPABILITY_ID, r#"{"a":1,"a":2}"#);
+    assert_eq!(
+        duplicate.error.expect("a duplicate name should error").code,
+        EmbedderErrorCode::InputNotCanonicalizable,
+    );
 }
 
 #[test]
@@ -244,7 +265,7 @@ fn lifecycle_operations_after_shutdown_are_rejected() {
     let mut embedder = development_embedder(&fixture, "linux");
     embedder.shutdown();
 
-    let start = embedder.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let start = embedder.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(
         start.error.expect("stopped start should error").code,
         EmbedderErrorCode::RuntimeStopped,
@@ -374,18 +395,18 @@ fn test_double_shares_compatible_lifecycle_and_evidence_boundary() {
         .with_compatible_target(RENDER_CAPABILITY_ID, vec!["linux".to_string()]);
     let events = collect_events(&mut double);
 
-    let started = double.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let started = double.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(started.status, CompatibleLifecycleStatus::Started);
     let first_instance = started.instance_id.expect("instance should start");
     let stopped = double.stop_compatible(RENDER_CAPABILITY_ID, Some(&first_instance));
     assert_eq!(stopped.status, CompatibleLifecycleStatus::Stopped);
 
-    let restarted = double.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let restarted = double.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(restarted.status, CompatibleLifecycleStatus::Started);
     let killed = double.kill_compatible(RENDER_CAPABILITY_ID, None);
     assert_eq!(killed.status, CompatibleLifecycleStatus::Killed);
 
-    let final_instance = double.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let final_instance = double.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(final_instance.status, CompatibleLifecycleStatus::Started);
     let shutdown = double.shutdown();
     assert_eq!(shutdown.killed_instances, 1);
@@ -417,7 +438,7 @@ fn test_double_platform_guard_matches_production_semantics() {
     let mut double = EmbedderTestDouble::new("local-default", "fixture-app", "1.0.0", "ios")
         .with_compatible_target(RENDER_CAPABILITY_ID, vec!["linux".to_string()]);
 
-    let outcome = double.start_compatible(RENDER_CAPABILITY_ID, &json!({}));
+    let outcome = double.start_compatible(RENDER_CAPABILITY_ID, "{}");
     assert_eq!(outcome.status, CompatibleLifecycleStatus::Error);
     assert_eq!(
         outcome.error.expect("platform guard should error").code,

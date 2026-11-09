@@ -2,11 +2,11 @@
 //! (spec 068 FR-006).
 
 use crate::{
-    CompatibleLifecycleOutcome, CompatibleStartOutcome, EMBEDDED_TRACE_API_VERSION,
-    EmbeddedTraceApi, EmbeddedTraceApiError, EmbeddedTraceDetail, EmbeddedTraceOutcome,
-    EmbeddedTracePage, EmbeddedTracePhase, EmbeddedTraceRecordInput, EmbeddedTraceSelectedTarget,
-    EmbedderCore, EmbedderError, EmbedderErrorCode, EventCallback, InstanceState, ShutdownOutcome,
-    SubmitOutcome, SubmitStatus, TraverseEmbedderApi,
+    CompatibleFinish, CompatibleLifecycle, CompatibleLifecycleOutcome, CompatibleStartOutcome,
+    EMBEDDED_TRACE_API_VERSION, EmbeddedTraceApi, EmbeddedTraceApiError, EmbeddedTraceDetail,
+    EmbeddedTraceOutcome, EmbeddedTracePage, EmbeddedTracePhase, EmbeddedTraceRecordInput,
+    EmbeddedTraceSelectedTarget, EmbedderCore, EmbedderError, EmbedderErrorCode, EventCallback,
+    ShutdownOutcome, SubmitOutcome, SubmitStatus, TraverseEmbedderApi,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -85,9 +85,12 @@ impl EmbedderTestDouble {
         capability_id: impl Into<String>,
         platforms: Vec<String>,
     ) -> Self {
+        let capability_id = capability_id.into();
+        let lifecycle =
+            CompatibleLifecycle::new(capability_id.clone(), platforms, self.core.platform.clone());
         self.core
             .compatible_targets
-            .insert(capability_id.into(), platforms);
+            .insert(capability_id, lifecycle);
         self
     }
 }
@@ -189,7 +192,7 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
         self.core.subscribe(callback);
     }
 
-    fn start_compatible(&mut self, capability_id: &str, input: &Value) -> CompatibleStartOutcome {
+    fn start_compatible(&mut self, capability_id: &str, input: &str) -> CompatibleStartOutcome {
         self.core.start_compatible(capability_id, input)
     }
 
@@ -199,7 +202,7 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
         instance_id: Option<&str>,
     ) -> CompatibleLifecycleOutcome {
         self.core
-            .transition_compatible(capability_id, instance_id, InstanceState::Stopped)
+            .finish_compatible(capability_id, instance_id, CompatibleFinish::Stopped)
     }
 
     fn kill_compatible(
@@ -208,7 +211,7 @@ impl TraverseEmbedderApi for EmbedderTestDouble {
         instance_id: Option<&str>,
     ) -> CompatibleLifecycleOutcome {
         self.core
-            .transition_compatible(capability_id, instance_id, InstanceState::Killed)
+            .finish_compatible(capability_id, instance_id, CompatibleFinish::Killed)
     }
 
     fn shutdown(&mut self) -> ShutdownOutcome {

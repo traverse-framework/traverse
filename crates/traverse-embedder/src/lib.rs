@@ -109,6 +109,10 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use traverse_contracts::{
+    CanonicalJsonError, CompatibleFinish, CompatibleLifecycle, CompatibleLifecycleError,
+    parse_canonicalizable,
+};
 use traverse_registry::{
     ApplicationManifestError, ApplicationManifestErrorCode, ApplicationManifestFailure,
     ApplicationRegistrationFailure, ApplicationRegistrationRequest, ApplicationRegistry,
@@ -459,10 +463,14 @@ pub enum EmbedderErrorCode {
     CapabilityNotCompatible,
     /// The capability's platform allowlist does not include this platform.
     PlatformNotSupported,
-    /// No instance with the given id exists for the capability.
-    InstanceNotFound,
+    /// An instance of the capability is already running (Spec 072 FR-003).
+    CompatibleInstanceActive,
     /// No running instance matches the request.
-    InstanceNotRunning,
+    CompatibleInstanceNotActive,
+    /// The input cannot be canonicalized (Spec 1722 FR-003).
+    InputNotCanonicalizable,
+    /// The input is not valid JSON.
+    InvalidInput,
     /// Bundle has no app `state_machine` or the orchestrator is not ready (Spec 139).
     AppStateMachineUnavailable,
     /// Submit payload is ambiguous between workflow/capability and `app_command` forms.
@@ -485,8 +493,10 @@ impl EmbedderErrorCode {
             Self::CompatibleLifecycleRequired => "compatible_lifecycle_required",
             Self::CapabilityNotCompatible => "capability_not_compatible",
             Self::PlatformNotSupported => "platform_not_supported",
-            Self::InstanceNotFound => "instance_not_found",
-            Self::InstanceNotRunning => "instance_not_running",
+            Self::CompatibleInstanceActive => "compatible_instance_active",
+            Self::CompatibleInstanceNotActive => "compatible_instance_not_active",
+            Self::InputNotCanonicalizable => "input_not_canonicalizable",
+            Self::InvalidInput => "invalid_input",
             Self::AppStateMachineUnavailable => "app_state_machine_unavailable",
             Self::AmbiguousSubmit => "ambiguous_submit",
             Self::InvalidAppCommand => "invalid_app_command",
@@ -593,19 +603,20 @@ pub trait TraverseEmbedderApi {
     /// subscribers observe the identical ordered stream.
     fn subscribe(&mut self, callback: EventCallback);
 
-    /// `compatible.start`: start a compatible-mode capability instance.
-    fn start_compatible(&mut self, capability_id: &str, input: &Value) -> CompatibleStartOutcome;
+    /// `compatible.start`: start a compatible-mode capability instance with
+    /// raw JSON `input` (Decision 129). Only one instance runs at a time.
+    fn start_compatible(&mut self, capability_id: &str, input: &str) -> CompatibleStartOutcome;
 
-    /// `compatible.stop`: gracefully stop one instance (`instance_id`) or
-    /// every running instance of the capability (`None`).
+    /// `compatible.stop`: gracefully stop the running instance. `instance_id`,
+    /// when given, must name it.
     fn stop_compatible(
         &mut self,
         capability_id: &str,
         instance_id: Option<&str>,
     ) -> CompatibleLifecycleOutcome;
 
-    /// `compatible.kill`: force-terminate one instance (`instance_id`) or
-    /// every running instance of the capability (`None`).
+    /// `compatible.kill`: force-terminate the running instance. `instance_id`,
+    /// when given, must name it.
     fn kill_compatible(
         &mut self,
         capability_id: &str,
@@ -620,29 +631,6 @@ pub trait TraverseEmbedderApi {
     /// linked runtime, conformance version, and bundle digests (spec 068
     /// FR-008, NFR-002).
     fn release_evidence(&self) -> Value;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InstanceState {
-    Started,
-    Stopped,
-    Killed,
-}
-
-impl InstanceState {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Stopped => "stopped",
-            Self::Killed => "killed",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct CompatibleInstance {
-    capability_id: String,
-    state: InstanceState,
 }
 
 struct EmbeddedTraceRecordInput {
@@ -671,14 +659,12 @@ pub(crate) struct EmbedderCore {
     app_id: String,
     app_version: String,
     platform: String,
-    compatible_targets: BTreeMap<String, Vec<String>>,
-    instances: BTreeMap<String, CompatibleInstance>,
+    compatible_targets: BTreeMap<String, CompatibleLifecycle>,
     subscribers: Vec<EventCallback>,
     history: Vec<Value>,
     next_event: u64,
     next_session: u64,
     next_request: u64,
-    next_instance: u64,
     trace_session: u64,
     next_trace: u64,
     traces: VecDeque<EmbeddedTraceDetail>,
@@ -697,15 +683,23 @@ impl EmbedderCore {
             workspace_id,
             app_id,
             app_version,
+            compatible_targets: compatible_targets
+                .into_iter()
+                .map(|(capability_id, platforms)| {
+                    let lifecycle = CompatibleLifecycle::new(
+                        capability_id.clone(),
+                        platforms,
+                        platform.clone(),
+                    );
+                    (capability_id, lifecycle)
+                })
+                .collect(),
             platform,
-            compatible_targets,
-            instances: BTreeMap::new(),
             subscribers: Vec::new(),
             history: Vec::new(),
             next_event: 0,
             next_session: 0,
             next_request: 0,
-            next_instance: 0,
             trace_session: NEXT_EMBEDDED_TRACE_SESSION.fetch_add(1, Ordering::Relaxed),
             next_trace: 0,
             traces: VecDeque::new(),
@@ -721,11 +715,6 @@ impl EmbedderCore {
     fn next_request_id(&mut self) -> String {
         self.next_request += 1;
         format!("req-{:08}", self.next_request)
-    }
-
-    fn next_instance_id(&mut self) -> String {
-        self.next_instance += 1;
-        format!("inst-{:08}", self.next_instance)
     }
 
     fn record_trace(&mut self, input: EmbeddedTraceRecordInput) {
@@ -890,171 +879,124 @@ impl EmbedderCore {
         }
     }
 
-    fn start_compatible(&mut self, capability_id: &str, input: &Value) -> CompatibleStartOutcome {
-        let error = if self.stopped {
-            Some(runtime_stopped_error())
-        } else {
-            match self.compatible_targets.get(capability_id) {
-                None => Some(EmbedderError::new(
-                    EmbedderErrorCode::CapabilityNotCompatible,
-                    format!(
-                        "capability '{capability_id}' is not a compatible-mode capability in this bundle"
-                    ),
-                )),
-                Some(platforms) if !platforms.iter().any(|p| p == &self.platform) => {
-                    Some(EmbedderError::new(
-                        EmbedderErrorCode::PlatformNotSupported,
-                        format!(
-                            "capability '{capability_id}' permits platforms [{}] but this embedder runs on '{}'",
-                            platforms.join(", "),
-                            self.platform
-                        ),
-                    ))
+    fn start_compatible(&mut self, capability_id: &str, input: &str) -> CompatibleStartOutcome {
+        match self.try_start_compatible(capability_id, input) {
+            Ok((instance_id, canonical_input)) => {
+                self.emit(
+                    "state_changed",
+                    None,
+                    json!({
+                        "capability_id": capability_id,
+                        "instance_id": instance_id,
+                        "state": "started",
+                        "previous_state": null,
+                        "input": canonical_input,
+                    }),
+                );
+                CompatibleStartOutcome {
+                    instance_id: Some(instance_id),
+                    status: CompatibleLifecycleStatus::Started,
+                    error: None,
                 }
-                Some(_) => None,
             }
-        };
-        if let Some(error) = error {
-            self.emit_error_event(None, &error, json!({ "capability_id": capability_id }));
-            return CompatibleStartOutcome {
-                instance_id: None,
-                status: CompatibleLifecycleStatus::Error,
-                error: Some(error),
-            };
-        }
-
-        let instance_id = self.next_instance_id();
-        self.instances.insert(
-            instance_id.clone(),
-            CompatibleInstance {
-                capability_id: capability_id.to_string(),
-                state: InstanceState::Started,
-            },
-        );
-        self.emit(
-            "state_changed",
-            None,
-            json!({
-                "capability_id": capability_id,
-                "instance_id": instance_id,
-                "state": InstanceState::Started.as_str(),
-                "previous_state": null,
-                "input": input,
-            }),
-        );
-        CompatibleStartOutcome {
-            instance_id: Some(instance_id),
-            status: CompatibleLifecycleStatus::Started,
-            error: None,
+            Err(error) => {
+                self.emit_error_event(None, &error, json!({ "capability_id": capability_id }));
+                CompatibleStartOutcome {
+                    instance_id: None,
+                    status: CompatibleLifecycleStatus::Error,
+                    error: Some(error),
+                }
+            }
         }
     }
 
-    fn transition_compatible(
+    /// Applies the shared Spec 072 rules (Decision 129). The started event's
+    /// `input` is the canonical input parsed back, as Decision 128 requires.
+    fn try_start_compatible(
+        &mut self,
+        capability_id: &str,
+        input: &str,
+    ) -> Result<(String, Value), EmbedderError> {
+        let lifecycle = self.compatible_lifecycle(capability_id)?;
+        let input = parse_canonicalizable(input.as_bytes()).map_err(|error| {
+            let code = match error {
+                CanonicalJsonError::InvalidJson => EmbedderErrorCode::InvalidInput,
+                _ => EmbedderErrorCode::InputNotCanonicalizable,
+            };
+            EmbedderError::new(code, error.to_string())
+        })?;
+        let started = lifecycle
+            .start(&input)
+            .map_err(|error| lifecycle_error(capability_id, lifecycle, error))?;
+        let canonical_input = serde_json::from_str(&started.canonical_input).unwrap_or(input);
+        Ok((started.instance_id, canonical_input))
+    }
+
+    fn finish_compatible(
         &mut self,
         capability_id: &str,
         instance_id: Option<&str>,
-        target_state: InstanceState,
+        finish: CompatibleFinish,
     ) -> CompatibleLifecycleOutcome {
-        if self.stopped {
-            let error = runtime_stopped_error();
-            self.emit_error_event(None, &error, json!({ "capability_id": capability_id }));
-            return CompatibleLifecycleOutcome {
-                status: CompatibleLifecycleStatus::Error,
-                error: Some(error),
-            };
-        }
-
-        let selected: Vec<String> = match instance_id {
-            Some(requested) => match self.instances.get(requested) {
-                Some(instance) if instance.capability_id == capability_id => {
-                    if instance.state == InstanceState::Started {
-                        vec![requested.to_string()]
-                    } else {
-                        let error = EmbedderError::new(
-                            EmbedderErrorCode::InstanceNotRunning,
-                            format!(
-                                "instance '{requested}' of capability '{capability_id}' is not running"
-                            ),
-                        );
-                        self.emit_error_event(
-                            None,
-                            &error,
-                            json!({ "capability_id": capability_id, "instance_id": requested }),
-                        );
-                        return CompatibleLifecycleOutcome {
-                            status: CompatibleLifecycleStatus::Error,
-                            error: Some(error),
-                        };
-                    }
+        let finished = self
+            .compatible_lifecycle(capability_id)
+            .and_then(|lifecycle| {
+                lifecycle
+                    .finish(instance_id)
+                    .map_err(|error| lifecycle_error(capability_id, lifecycle, error))
+            });
+        match finished {
+            Ok(finished) => {
+                self.emit_finished(capability_id, &finished, finish);
+                CompatibleLifecycleOutcome {
+                    status: match finish {
+                        CompatibleFinish::Stopped => CompatibleLifecycleStatus::Stopped,
+                        CompatibleFinish::Killed => CompatibleLifecycleStatus::Killed,
+                    },
+                    error: None,
                 }
-                _ => {
-                    let error = EmbedderError::new(
-                        EmbedderErrorCode::InstanceNotFound,
-                        format!(
-                            "no instance '{requested}' exists for capability '{capability_id}'"
-                        ),
-                    );
-                    self.emit_error_event(
-                        None,
-                        &error,
-                        json!({ "capability_id": capability_id, "instance_id": requested }),
-                    );
-                    return CompatibleLifecycleOutcome {
-                        status: CompatibleLifecycleStatus::Error,
-                        error: Some(error),
-                    };
+            }
+            Err(error) => {
+                self.emit_error_event(
+                    None,
+                    &error,
+                    json!({ "capability_id": capability_id, "instance_id": instance_id }),
+                );
+                CompatibleLifecycleOutcome {
+                    status: CompatibleLifecycleStatus::Error,
+                    error: Some(error),
                 }
-            },
-            None => self
-                .instances
-                .iter()
-                .filter(|(_, instance)| {
-                    instance.capability_id == capability_id
-                        && instance.state == InstanceState::Started
-                })
-                .map(|(id, _)| id.clone())
-                .collect(),
-        };
-
-        if selected.is_empty() {
-            let error = EmbedderError::new(
-                EmbedderErrorCode::InstanceNotRunning,
-                format!("capability '{capability_id}' has no running instances"),
-            );
-            self.emit_error_event(None, &error, json!({ "capability_id": capability_id }));
-            return CompatibleLifecycleOutcome {
-                status: CompatibleLifecycleStatus::Error,
-                error: Some(error),
-            };
-        }
-
-        for id in selected {
-            self.set_instance_state(&id, target_state);
-        }
-        CompatibleLifecycleOutcome {
-            status: match target_state {
-                InstanceState::Stopped => CompatibleLifecycleStatus::Stopped,
-                _ => CompatibleLifecycleStatus::Killed,
-            },
-            error: None,
+            }
         }
     }
 
-    fn set_instance_state(&mut self, instance_id: &str, target_state: InstanceState) {
-        let Some(instance) = self.instances.get_mut(instance_id) else {
-            return;
-        };
-        let previous = instance.state;
-        instance.state = target_state;
-        let capability_id = instance.capability_id.clone();
+    /// The capability's lifecycle, while the runtime accepts operations.
+    fn compatible_lifecycle(
+        &mut self,
+        capability_id: &str,
+    ) -> Result<&mut CompatibleLifecycle, EmbedderError> {
+        if self.stopped {
+            return Err(runtime_stopped_error());
+        }
+        self.compatible_targets.get_mut(capability_id).ok_or_else(|| {
+            EmbedderError::new(
+                EmbedderErrorCode::CapabilityNotCompatible,
+                format!(
+                    "capability '{capability_id}' is not a compatible-mode capability in this bundle"
+                ),
+            )
+        })
+    }
+
+    fn emit_finished(&mut self, capability_id: &str, instance_id: &str, finish: CompatibleFinish) {
         self.emit(
             "state_changed",
             None,
             json!({
                 "capability_id": capability_id,
                 "instance_id": instance_id,
-                "state": target_state.as_str(),
-                "previous_state": previous.as_str(),
+                "state": finish.as_str(),
+                "previous_state": "started",
             }),
         );
     }
@@ -1065,19 +1007,23 @@ impl EmbedderCore {
                 killed_instances: 0,
             };
         }
-        let running: Vec<String> = self
-            .instances
-            .iter()
-            .filter(|(_, instance)| instance.state == InstanceState::Started)
-            .map(|(id, _)| id.clone())
+        let killed: Vec<(String, String)> = self
+            .compatible_targets
+            .iter_mut()
+            .filter_map(|(capability_id, lifecycle)| {
+                lifecycle
+                    .shutdown()
+                    .map(|instance_id| (capability_id.clone(), instance_id))
+            })
             .collect();
-        let killed_instances = running.len();
-        for id in running {
-            self.set_instance_state(&id, InstanceState::Killed);
+        for (capability_id, instance_id) in &killed {
+            self.emit_finished(capability_id, instance_id, CompatibleFinish::Killed);
         }
         self.stopped = true;
         self.traces.clear();
-        ShutdownOutcome { killed_instances }
+        ShutdownOutcome {
+            killed_instances: killed.len(),
+        }
     }
 
     fn evidence(&self, runtime_implementation: &str, wasm_components: Value) -> Value {
@@ -1558,7 +1504,7 @@ impl TraverseEmbedderApi for BundleEmbedder {
         self.core.subscribe(callback);
     }
 
-    fn start_compatible(&mut self, capability_id: &str, input: &Value) -> CompatibleStartOutcome {
+    fn start_compatible(&mut self, capability_id: &str, input: &str) -> CompatibleStartOutcome {
         self.core.start_compatible(capability_id, input)
     }
 
@@ -1568,7 +1514,7 @@ impl TraverseEmbedderApi for BundleEmbedder {
         instance_id: Option<&str>,
     ) -> CompatibleLifecycleOutcome {
         self.core
-            .transition_compatible(capability_id, instance_id, InstanceState::Stopped)
+            .finish_compatible(capability_id, instance_id, CompatibleFinish::Stopped)
     }
 
     fn kill_compatible(
@@ -1577,7 +1523,7 @@ impl TraverseEmbedderApi for BundleEmbedder {
         instance_id: Option<&str>,
     ) -> CompatibleLifecycleOutcome {
         self.core
-            .transition_compatible(capability_id, instance_id, InstanceState::Killed)
+            .finish_compatible(capability_id, instance_id, CompatibleFinish::Killed)
     }
 
     fn shutdown(&mut self) -> ShutdownOutcome {
@@ -1725,6 +1671,37 @@ fn runtime_stopped_error() -> EmbedderError {
         EmbedderErrorCode::RuntimeStopped,
         "the embedded runtime was shut down and accepts no further operations",
     )
+}
+
+/// A shared lifecycle rule's failure with the runtime's code (Decision 128).
+fn lifecycle_error(
+    capability_id: &str,
+    lifecycle: &CompatibleLifecycle,
+    error: CompatibleLifecycleError,
+) -> EmbedderError {
+    let (code, message) = match error {
+        CompatibleLifecycleError::PlatformNotSupported => (
+            EmbedderErrorCode::PlatformNotSupported,
+            format!(
+                "capability '{capability_id}' permits platforms [{}] but this embedder runs on '{}'",
+                lifecycle.platforms().join(", "),
+                lifecycle.host_platform()
+            ),
+        ),
+        CompatibleLifecycleError::InstanceActive => (
+            EmbedderErrorCode::CompatibleInstanceActive,
+            format!("capability '{capability_id}' already has a running instance"),
+        ),
+        CompatibleLifecycleError::InstanceNotActive => (
+            EmbedderErrorCode::CompatibleInstanceNotActive,
+            format!("no matching running instance of capability '{capability_id}'"),
+        ),
+        CompatibleLifecycleError::InputNotCanonicalizable(error) => (
+            EmbedderErrorCode::InputNotCanonicalizable,
+            error.to_string(),
+        ),
+    };
+    EmbedderError::new(code, message)
 }
 
 fn map_manifest_failure(failure: &ApplicationManifestFailure) -> EmbedderError {
@@ -1875,11 +1852,19 @@ mod tests {
                 EmbedderErrorCode::PlatformNotSupported,
                 "platform_not_supported",
             ),
-            (EmbedderErrorCode::InstanceNotFound, "instance_not_found"),
             (
-                EmbedderErrorCode::InstanceNotRunning,
-                "instance_not_running",
+                EmbedderErrorCode::CompatibleInstanceActive,
+                "compatible_instance_active",
             ),
+            (
+                EmbedderErrorCode::CompatibleInstanceNotActive,
+                "compatible_instance_not_active",
+            ),
+            (
+                EmbedderErrorCode::InputNotCanonicalizable,
+                "input_not_canonicalizable",
+            ),
+            (EmbedderErrorCode::InvalidInput, "invalid_input"),
             (
                 EmbedderErrorCode::AppStateMachineUnavailable,
                 "app_state_machine_unavailable",
@@ -2020,13 +2005,6 @@ mod tests {
     }
 
     #[test]
-    fn instance_states_render_stable_strings() {
-        assert_eq!(InstanceState::Started.as_str(), "started");
-        assert_eq!(InstanceState::Stopped.as_str(), "stopped");
-        assert_eq!(InstanceState::Killed.as_str(), "killed");
-    }
-
-    #[test]
     fn runtime_errors_map_to_structured_values() {
         let value = runtime_error_value(&RuntimeError {
             code: RuntimeErrorCode::ExecutionFailed,
@@ -2061,19 +2039,6 @@ mod tests {
             .ok_or("empty path should be rejected")?;
         assert_eq!(error.code, EmbedderErrorCode::BundlePathInvalid);
         Ok(())
-    }
-
-    #[test]
-    fn set_instance_state_ignores_unknown_instances() {
-        let mut core = EmbedderCore::new(
-            "local-default".to_string(),
-            "app".to_string(),
-            "1.0.0".to_string(),
-            "linux".to_string(),
-            BTreeMap::new(),
-        );
-        core.set_instance_state("inst-missing", InstanceState::Killed);
-        assert!(core.history.is_empty());
     }
 
     #[test]

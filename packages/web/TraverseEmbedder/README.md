@@ -229,8 +229,8 @@ Boundary failures use stable `EmbedderErrorCode` values —
 `capability_not_compatible`, `platform_not_supported`,
 `compatible_instance_active`, `compatible_instance_not_active`,
 `input_not_canonicalizable`, `invalid_input`. The compatible lifecycle codes
-are `runtime.wasm`'s own (Spec 072, Decision 128); the Rust `traverse-embedder`
-crate still uses its earlier instance codes.
+are `runtime.wasm`'s own (Spec 072, Decision 128), and the Rust
+`traverse-embedder` crate reports the same ones (Decision 129).
 Runtime execution failures surface inside `error` events with the runtime's
 stable snake_case codes. Secrets never appear in events, errors, or evidence
 (spec 068 NFR-004).
