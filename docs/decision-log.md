@@ -7742,3 +7742,108 @@ both questions.
 
 Chosen by the maintainer on `#1823` (2026-11-06): the recommended option for
 all four questions.
+
+## Decision 130: Published Registry Records Conform to Spec 002 Provenance
+
+- **Date**: 2026-11-09
+- **Status**: Accepted
+- **Governing specs**: `002-capability-contracts`, `055-registry-sync`
+- **Related issues**: `registry#656`, `#1830`, `#1786`, `registry#623`
+
+### Context
+
+- Spec 002 allows four `provenance.source` values: `greenfield`,
+  `brownfield-extracted`, `ai-generated` and `ai-assisted`. It requires
+  `source`, `author` and `created_at`.
+- `#1786` found that the registry's `index-v416` publishes 25 records that
+  published `traverse-contracts` 0.16.2 cannot parse:
+  - 19 have `source: derived`. These include the five model-backed
+    capability versions that received Spec 026 rights in `registry#623`.
+  - 6 have `source: registry-wave2`, and also lack `author` and
+    `created_at`.
+- `traverse-cli app prepare` caches these records, but `app validate` and
+  `app register` then fail with `registry_reference_requires_resolution`.
+- The registry depends on `traverse-contracts`, but its Python publish gate
+  never checks `provenance`. Published records are immutable.
+
+### Decisions
+
+1. **Which side moves.** Options considered:
+   - The registry conforms to Spec 002.
+   - Spec 002 adds `derived`.
+   - Traverse accepts any `provenance.source` string.
+
+   Chosen: the registry conforms. Spec 002 is the contract, and the producer
+   meets it. This also works with every released `traverse-cli`. Adding
+   `derived` would still leave the 19 records unreadable by 0.16.2 and
+   earlier. Accepting any string would weaken contract validation, and the
+   wave2 records would still lack required fields.
+2. **The value that replaces `derived`.** Options considered:
+   - `ai-assisted`.
+   - `greenfield`.
+   - A separate call per record.
+
+   Chosen: `ai-assisted`. These records were written in AI-driven registry
+   sessions under owner direction, and 40 existing records already use the
+   value. Each record's `spec_ref` still says which earlier version it
+   builds on.
+3. **How wave2 records get the missing fields.** Options considered:
+   - Fill them from git history.
+   - Use the republish author and time.
+   - Use `greenfield` and fill the rest from git history.
+
+   Chosen: from git history. The rule is that provenance records how the
+   record was really authored. `source` is `ai-assisted`, as in Decision 2.
+   `author` is the original record's owner or committer, and `created_at` is
+   the time of the original record's first commit.
+4. **How the publish gate checks Spec 002.** Options considered:
+   - Parse every contract with the Rust `traverse-contracts` crate.
+   - Add a Python allowlist and required-field check.
+
+   Chosen: parse with `traverse-contracts`. The rule is that the registry
+   validates with the parser its consumers use. A second copy of Spec 002 in
+   Python could drift from the parser, which is how this defect happened.
+   Any other parse failure the gate finds is fixed the same way.
+5. **The 25 invalid versions.** Options considered:
+   - Deprecate them, and gate only active records.
+   - Keep them active, and gate only new records.
+   - Remove them from the index.
+
+   Chosen: deprecate them, and gate only active records. Each invalid
+   version is marked `deprecated` and names its fixed successor. The gate
+   parses every new or changed record and every active record. Published
+   records stay immutable, and old pins still resolve. An exact pin on a
+   deprecated version still won't parse in Traverse, so consumers move to the
+   successor.
+6. **The version bump.** Options considered:
+   - A patch for every affected version.
+   - A patch for each capability's latest version only.
+
+   Chosen: a patch for every affected version, for example
+   `audio.transcribe-speech` 1.2.0 → 1.2.1. A provenance-only fix is a patch
+   under semver. The new version keeps the original's behavior, artifact and
+   rights, and caret ranges pick it up automatically.
+7. **Who proves the five rights-backfilled versions now work.** Options
+   considered:
+   - A Traverse follow-up ticket.
+   - The proof runs in `registry#656`'s CI.
+
+   Chosen: a Traverse follow-up ticket, `#1830`. `registry#656` closes once its gate
+   and index are fixed. The Traverse ticket re-runs `#1786`'s live proof
+   against the patched versions with published `traverse-cli`, including
+   `app validate` on exact pins, and updates `docs/evidence/`. Proofs about
+   what a consumer can use belong to the consumer.
+
+### Consequences
+
+- In `registry#656`:
+  - The publish gate parses records with `traverse-contracts`.
+  - 25 patch versions are published with Spec 002 provenance.
+  - The 25 invalid versions are deprecated with a pointer to each successor.
+- The patches for the five rights-backfilled versions carry the same Spec
+  026 rights. Their rights records are digested and signed for the new
+  versions.
+- `#1830` re-runs the `#1786` live proof once the patches are
+  published. Until then, `app validate` fails for apps that pin the affected
+  versions.
+- Spec 002 does not change.
