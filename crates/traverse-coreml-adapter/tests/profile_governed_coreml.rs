@@ -17,7 +17,8 @@
     clippy::expect_used,
     clippy::unwrap_used,
     clippy::panic,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    clippy::too_many_lines
 )]
 
 use std::fs;
