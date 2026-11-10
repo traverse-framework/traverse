@@ -24,11 +24,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use traverse_coreml_adapter::{ComputeUnits, CoreMlAdapter};
 use traverse_runtime::exact_model::{
-    AcceleratorAdapter, CachedAcceleratorVariant, ExactModelHostConnector, ExactModelPin,
-    ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys, digest_hex,
+    digest_hex, AcceleratorAdapter, CachedAcceleratorVariant, ExactModelHostConnector,
+    ExactModelPin, ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
@@ -120,11 +120,9 @@ fn prepared_host() -> (ExactModelHostConnector, String, Vec<u8>, f64) {
     let register_ms = ms(register_started);
 
     let vector_json: Value = serde_json::from_slice(&vector).expect("vector");
-    let input = hex(
-        vector_json["cases"][0]["input_frame_hex"]
-            .as_str()
-            .expect("input"),
-    );
+    let input = hex(vector_json["cases"][0]["input_frame_hex"]
+        .as_str()
+        .expect("input"));
     (connector, digest, input, register_ms)
 }
 
@@ -211,14 +209,16 @@ fn profile_governed_coreml_overhead() {
         .read_model_output(result.artifact_ref.as_deref().unwrap_or(""), 4096)
         .expect("read_output");
     let read_output_ms = ms(read_started);
-    assert!(!output.is_empty(), "governed call must return an output frame");
+    assert!(
+        !output.is_empty(),
+        "governed call must return an output frame"
+    );
 
     // Raw adapter prediction of the same package variant (outside Spec 138
     // execute) — isolates Core ML MLMultiArray fill/predict/read from
     // digest/rights rechecks and connector glue.
     let mut raw_adapter = CoreMlAdapter::new(ComputeUnits::All, cache_dir("raw"));
-    let manifest: Value =
-        serde_json::from_slice(&read("model.manifest.json")).expect("manifest");
+    let manifest: Value = serde_json::from_slice(&read("model.manifest.json")).expect("manifest");
     let variant = &manifest["accelerator_variants"][0];
     let zip_path = variant["path"].as_str().expect("path");
     let vector_path = variant["conformance_vector_path"].as_str().expect("path");
@@ -234,7 +234,11 @@ fn profile_governed_coreml_overhead() {
     let raw_started = Instant::now();
     let raw_out = raw_adapter.predict(&cached, &input).expect("raw predict");
     let raw_adapter_predict_ms = ms(raw_started);
-    assert_eq!(raw_out.len(), output.len(), "raw and governed frames should match size");
+    assert_eq!(
+        raw_out.len(),
+        output.len(),
+        "raw and governed frames should match size"
+    );
 
     let end_to_end_ms = stage_input_ms + execute_total_ms + read_output_ms;
     let execute_minus_adapter_ms = (execute_total_ms - raw_adapter_predict_ms).max(0.0);
@@ -296,8 +300,14 @@ fn profile_governed_coreml_overhead() {
 
     if std::env::var_os("TRAVERSE_WRITE_PROFILE_EVIDENCE").is_some() {
         let path = PathBuf::from(EVIDENCE_DIR).join("governed-coreml-overhead-macos-profile.json");
-        fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&evidence).expect("json")))
-            .expect("write evidence");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&evidence).expect("json")
+            ),
+        )
+        .expect("write evidence");
         println!("wrote {}", path.display());
     }
 }
