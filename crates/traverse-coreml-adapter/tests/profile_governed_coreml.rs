@@ -24,11 +24,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use traverse_coreml_adapter::{ComputeUnits, CoreMlAdapter};
 use traverse_runtime::exact_model::{
-    digest_hex, AcceleratorAdapter, CachedAcceleratorVariant, ExactModelHostConnector,
-    ExactModelPin, ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys,
+    AcceleratorAdapter, CachedAcceleratorVariant, ExactModelHostConnector, ExactModelPin,
+    ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys, digest_hex,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
