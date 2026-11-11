@@ -1,6 +1,6 @@
 //! #1833: macOS profiling harness for governed Core ML overhead (Spec 138).
 //!
-//! Times one governed `coreml` call around the public ExactModelHostConnector
+//! Times one governed `coreml` call around the public `ExactModelHostConnector`
 //! path and attributes wall time to stable stage boundaries. Does **not**
 //! change Spec 138 checks or remove copies/rechecks.
 //!
@@ -12,7 +12,8 @@
 //!
 //! Optional: set `TRAVERSE_WRITE_PROFILE_EVIDENCE=1` to write JSON under
 //! `docs/evidence/`.
-#![cfg(target_vendor = "apple")]
+// Allows must precede the Apple-only cfg so Linux clippy still sees them while
+// linting this integration-test crate's module docs.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -20,6 +21,7 @@
     clippy::doc_markdown,
     clippy::too_many_lines
 )]
+#![cfg(target_vendor = "apple")]
 
 use std::fs;
 use std::path::PathBuf;
