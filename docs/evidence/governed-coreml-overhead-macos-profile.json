@@ -1,0 +1,35 @@
+{
+  "attribution_notes": [
+    "register includes Spec 138 registration (signature, rights, variant self-check/compile) and is excluded from the steady execute sum.",
+    "stage_input / read_output are public ModelIoStore frame copies around model.execute.",
+    "raw_adapter_predict is CoreMlAdapter.predict alone (MLMultiArray fill + Core ML prediction + output read) after a warm compile.",
+    "digest_rights_and_connector_glue_estimate = execute_total - raw_adapter_predict: digest/rights rechecks, policy/schema checks, cancel/deadline guards, and connector framing inside invoke. Spec 138 checks are unchanged.",
+    "Noise: OS scheduling and Core ML runtime variance; stage totals should reconcile to end-to-end within a few ms."
+  ],
+  "governing_spec": "138-governed-exact-model-execution",
+  "issue": "#1833",
+  "package": {
+    "digest": "fa77f9b79e47fc062fb72c728abc850e67bb30231b6b33dc98d0f8a4bd28607c",
+    "fixture": "fixtures/models/digits-onnx-coreml-1.0.0",
+    "model_id": "traverse.digits-onnx-coreml",
+    "version": "1.0.0"
+  },
+  "parent": "#1707",
+  "platform": {
+    "arch": "aarch64",
+    "compute_units": "all",
+    "os": "macos",
+    "placement": "coreml"
+  },
+  "spec_138_checks_weakened": false,
+  "stages_ms": {
+    "digest_rights_and_connector_glue_estimate": 113.408375,
+    "end_to_end_stage_sum": 113.970708,
+    "execute_total": 113.968917,
+    "raw_adapter_predict": 0.560542,
+    "read_output": 0.0011250000000000001,
+    "reconciliation_noise_ms": 0.0,
+    "register": 1180.619625,
+    "stage_input": 0.0006659999999999999
+  }
+}
