@@ -52,7 +52,7 @@ jobs:
             archive: traverse-mcp-aarch64-unknown-linux-gnu.tar.gz
             bin: traverse-mcp
             python: python3
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             archive: traverse-mcp-aarch64-apple-darwin.tar.gz
             bin: traverse-mcp

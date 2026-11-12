@@ -433,11 +433,12 @@ jobs:
 
   # #1663 (Decision 113, Spec 138 0.13.3): re-convert every committed Core ML
   # variant with the hash-locked converter environment and require the
-  # committed digest. Byte reproducibility is pinned to macOS arm64.
+  # committed digest. Byte reproducibility is pinned to macOS arm64; the
+  # pinned converter gives the same bytes on macOS 14, 15 and 26 (#1840).
   coreml-variant-reconvert:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout
@@ -464,7 +465,7 @@ jobs:
   coreml-adapter:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout
