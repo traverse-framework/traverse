@@ -186,6 +186,27 @@ const host = new ExactModelBrowserHost(pins, {
 });
 ```
 
+### Spec 045 ↔ 138 bridge resolver (#1835)
+
+Resolve mixed Spec 045 candidate lists in the browser before calling
+`ExactModelBrowserHost`. Ollama candidates are skipped without an HTTP probe;
+activated `exact-ref.wasm-cpu` pins are selected with `trust_class:
+verified_signed_package`.
+
+```ts
+import {
+  ExactModelBrowserHost,
+  resolveBrowserModelDependency,
+  exactRefPinFromSelected,
+} from "traverse-embedder-web";
+
+const { resolution, trust_class } = resolveBrowserModelDependency(
+  dependency,
+  { phase: "execution", requested_interface_id: "traverse.inference.generate", requested_placement: "browser" },
+  pins.map((pin) => [pin.model_id, pin.version]),
+);
+```
+
 ### Spec 104 guest `connector_invoke` (#1719)
 
 A capability guest can call a connector you answer asynchronously. The guest

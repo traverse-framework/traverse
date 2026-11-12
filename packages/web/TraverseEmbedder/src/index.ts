@@ -287,3 +287,32 @@ export type {
   MediatedConnectorRequest,
   MediatedConnectorResponse,
 } from "./mediatedConnector.js";
+
+export {
+  BrowserModelAvailabilityProbe,
+  EXACT_REF_WASM_CPU,
+  OLLAMA_LOCAL_GENERATE,
+  availabilityReady,
+  availabilityRejected,
+  exactRefPinFromSelected,
+  resolveBrowserModelDependency,
+  resolveModelDependency,
+  trustClassForProvider,
+} from "./modelDependencyResolution.js";
+export type {
+  ApplicationModelDependency,
+  BrowserModelResolutionResult,
+  ExecutionTarget,
+  InferenceTrustClass,
+  ModelAvailabilityProbe,
+  ModelCandidate,
+  ModelCandidateAvailability,
+  ModelCandidateEvaluation,
+  ModelCandidateReadiness,
+  ModelCandidateRejectionCode,
+  ModelResolutionEvidence,
+  ModelResolutionPhase,
+  ModelResolutionRequest,
+  ModelSelectionPolicy,
+  SelectedModelCandidate,
+} from "./modelDependencyResolution.js";
