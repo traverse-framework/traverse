@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### CI: macOS jobs move off the retired `macos-14` image (`#1840`)
+
+GitHub now rejects `macos-14` ("configuration not supported"), so
+`coreml-variant-reconvert`, `coreml-adapter` and the `aarch64-apple-darwin`
+MCP binary build run on `macos-15`. The pinned Core ML converter re-converts
+the committed variant to the same bytes there, so the byte-identical check is
+unchanged.
+
 ### The browser model host enforces host ceilings and interrupts calls mid-run (Decisions 104 and 131, Spec 138 0.16.2, `#1582`)
 
 - `ExactModelBrowserHost` takes `maxPackageBytes`, `maxMemoryBytes` and
