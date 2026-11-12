@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### The browser model host enforces host ceilings and interrupts calls mid-run (Decisions 104 and 131, Spec 138 0.16.2, `#1582`)
+
+- `ExactModelBrowserHost` takes `maxPackageBytes`, `maxMemoryBytes` and
+  `maxFuel`. Registration fails with `model_incompatible` /
+  `host_limit_exceeded` when a package exceeds them.
+- Each registered package's guest runs in its own reused Worker
+  (`modelWorker.js`, shipped in `dist/`). Cancellation or the deadline
+  terminates it mid-run, for execute and for `model_prepare` at
+  registration. Pass `createWorker` if your bundler does not emit the
+  Worker file, or `createWorker: null` to run inline as before.
+- A guest trap now fails with `execution_failed` ("model guest trapped")
+  instead of a raw `WebAssembly.RuntimeError`.
+- New exports: `createModelGuestHandler` and the `ModelGuestWorker`,
+  `ModelGuestRequest` and `ModelGuestReply` types.
+
 ### Native wasmtime interrupts model calls mid-run (Decision 104, Spec 138 0.16.1, `#1582`)
 
 On wasmtime, cancellation and deadlines now stop a running `model_execute`

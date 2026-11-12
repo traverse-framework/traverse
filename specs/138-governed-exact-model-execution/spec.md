@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.16.1
+**Version**: 0.16.2
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -259,6 +259,28 @@ Native wasmtime now interrupts a running guest mid-run, like `wasmi`:
 
 FR-029 and the prepare budget are clarified (both engines are now named);
 behaviour on `wasmi` is unchanged. Additive.
+
+**Amendment (2026-11-12, version 0.16.1 -> 0.16.2, approved under Decisions 104 and 131)**: `#1582` (web slice).
+The browser host meets FR-028 and FR-029:
+- **Host ceilings.** `ExactModelBrowserHost` takes `maxPackageBytes`,
+  `maxMemoryBytes` and `maxFuel`, with the native defaults. Registration
+  fails with `model_incompatible` / `host_limit_exceeded` when the manifest
+  and wasm bytes, or the declared `max_memory_bytes`, `max_fuel` or
+  `max_prepare_fuel`, exceed them. Execution uses manifest ∩ host memory.
+  The browser cannot meter fuel, so `maxFuel` is checked at registration
+  only (FR-030).
+- **Mid-run interruption.** Each registered package's guest runs in its own
+  reused Worker, which holds the compiled module and the ABI v3 snapshot.
+  Cancellation or the deadline terminates the Worker mid-run, for
+  `model_execute` and `model_prepare`, and the call fails with `cancelled` /
+  `timeout`. A terminated Worker's snapshot is gone, so the next call takes
+  the fresh path, as after an eviction. Where no Worker is available, the
+  guest runs inline and is checked before and after.
+- **Traps.** A guest trap fails with `execution_failed` on the web host, as
+  on native.
+
+FR-028 and FR-029 are unchanged; this records the web host's conformance.
+Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -992,7 +1014,8 @@ Traverse MUST:
   after it. On `wasmi` this is done by fuel slices with resumable
   out-of-fuel calls, checking between slices. On wasmtime it is done by
   epoch interruption, bumped by a watcher when the cancellation flag is set
-  or the deadline passes (0.16.1). A cancellation MUST only affect the
+  or the deadline passes (0.16.1). In the browser it is done by terminating
+  the package's guest Worker (0.16.2). A cancellation MUST only affect the
   execution it names.
 - **FR-030**: `max_fuel` is an engine-relative ceiling: each engine enforces
   it in its own units. A package's conformance vector MUST pass on every
