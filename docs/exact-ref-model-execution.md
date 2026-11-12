@@ -204,8 +204,8 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   guarantee that memory and those globals are the guest's only mutable state.
 - **Every execute** uses a fresh `Store` and instance.
   - **Fresh path.** The host runs `model_prepare` under `max_prepare_fuel` ∩
-    the host fuel ceiling (in fuel slices on `wasmi`, so cancellation and
-    deadlines interrupt it). It then snapshots memory and the exported
+    the host fuel ceiling. Cancellation and deadlines interrupt it on both
+    engines: fuel slices on `wasmi`, epoch interruption on wasmtime. It then snapshots memory and the exported
     mutable globals, and runs the v2 sequence.
   - **Snapshot path.** The host restores the snapshot and runs the v2
     sequence.
@@ -236,7 +236,7 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
 
 | Host | Engine | Host ceilings | Mid-run cancel/timeout |
 | --- | --- | --- | --- |
-| Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | `wasmi`: yes; wasmtime: #1582 |
+| Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | yes (`wasmi`: fuel slices; wasmtime: epoch interruption) |
 | Swift (`ExactModelHost`, over `traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (`ExactModelHostLimits`, phone-sized defaults) | yes (Swift `Task` cancellation; fuel slices) |
 | Web (`ExactModelBrowserHost`) | browser WebAssembly | #1582 | #1582 |
 | .NET (`ExactModelHost`, over `traverse_dotnet_host_model_call`, ADR-0081) | `wasmi` (Decision 111) | yes (`ExactModelHostLimits`, desktop defaults) | yes (`CancellationToken`; fuel slices) |
@@ -250,6 +250,13 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   flag (→ `cancelled`) and the deadline (→ `timeout`). The Swift host
   cancels only the named `execution_id`, so a late cancel never affects the
   next execution.
+- **wasmtime interruption** (Spec 138 0.16.1): the engine enables epoch
+  interruption. While a guest call runs, a watcher thread checks the cancel
+  flag every few milliseconds and waits for the deadline exactly. When
+  either fires it bumps the engine epoch, and the call traps at its next
+  epoch check. This covers `model_execute` and `model_prepare`; an
+  interrupted prepare keeps no snapshot. An already-cancelled call or an
+  expired deadline never starts the guest.
 - **Fuel is engine-relative:** each engine counts `max_fuel` in its own
   units. Size it so the package's conformance vector passes on every
   engine; `max_execution_ms` is the portable bound.

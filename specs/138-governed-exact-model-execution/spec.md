@@ -4,7 +4,7 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.16.0
+**Version**: 0.16.1
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -242,6 +242,23 @@ One-time placement preparation moves from the first call to registration:
 
 FR-053, FR-056, FR-060 and FR-062 are amended; FR-074 and FR-075 are new.
 Breaking for hosts: every registration API takes the policy.
+
+**Amendment (2026-11-12, version 0.16.0 -> 0.16.1, approved under Decision 104)**: `#1582` (wasmtime slice).
+Native wasmtime now interrupts a running guest mid-run, like `wasmi`:
+- **How.** The engine enables epoch interruption. While a guest call runs, a
+  watcher bumps the engine epoch when the call's cancellation flag is set or
+  its deadline passes, and the call traps at its next epoch check.
+- **What it covers.** It covers `model_execute` and `model_prepare`. The
+  prepare case was the gap, because FR-056 is a MUST: a cancel or deadline
+  during prepare on wasmtime used to let prepare run to the end and store a
+  snapshot.
+- **Outcome.** An interrupted call fails with `cancelled` / `timeout`, not
+  `execution_failed`, and an interrupted prepare keeps no snapshot.
+- **Before the call.** An already-cancelled call or an expired deadline
+  never starts the guest.
+
+FR-029 and the prepare budget are clarified (both engines are now named);
+behaviour on `wasmi` is unchanged. Additive.
 
 **Decision evidence**: Decision 91; Decision 92; ADR-0074 (Accepted).
 **Input**: Callweave portable governed model-execution slice request
@@ -624,8 +641,9 @@ optimizing its model) and skip that work on later calls.
     applications. There is no public warm-up command (FR-003).
 - **Prepare budget.**
   - `model_prepare` runs under its own fuel ceiling: manifest
-    `max_prepare_fuel` ∩ the host fuel ceiling. It runs in fuel slices like
-    execution (FR-029).
+    `max_prepare_fuel` ∩ the host fuel ceiling. It is interrupted mid-run
+    like execution (FR-029): fuel slices on `wasmi`, epoch interruption on
+    wasmtime (0.16.1).
   - Its memory is bounded by the same memory ceiling as execution.
   - A call's `max_fuel` (manifest ∩ policy ∩ per-call) covers only
     instantiation (including any start function) and the v2 sequence, on
@@ -972,8 +990,10 @@ Traverse MUST:
 - **FR-029**: Hosts SHOULD interrupt a running inference mid-run on
   cancellation (`cancelled`) or deadline (`timeout`), not only before and
   after it. On `wasmi` this is done by fuel slices with resumable
-  out-of-fuel calls, checking between slices. A cancellation MUST only
-  affect the execution it names.
+  out-of-fuel calls, checking between slices. On wasmtime it is done by
+  epoch interruption, bumped by a watcher when the cancellation flag is set
+  or the deadline passes (0.16.1). A cancellation MUST only affect the
+  execution it names.
 - **FR-030**: `max_fuel` is an engine-relative ceiling: each engine enforces
   it in its own units. A package's conformance vector MUST pass on every
   supported engine (wasmtime, `wasmi`, browser). `max_execution_ms` is the
