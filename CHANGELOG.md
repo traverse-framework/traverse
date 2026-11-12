@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Native wasmtime interrupts model calls mid-run (Decision 104, Spec 138 0.16.1, `#1582`)
+
+On wasmtime, cancellation and deadlines now stop a running `model_execute`
+or `model_prepare` mid-run, as on `wasmi`. Before, prepare ran to the end
+and stored a snapshot, and execute was checked only after it returned. An
+interrupted call fails with `cancelled` / `timeout`, and an interrupted
+prepare keeps no snapshot.
+
 ### The Rust embedder's `submit` takes raw JSON text (Decision 129, `#1826`)
 
 **Breaking (Rust):** `TraverseEmbedderApi::submit` takes the input as raw

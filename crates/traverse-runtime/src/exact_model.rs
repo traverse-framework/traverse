@@ -1825,6 +1825,10 @@ impl ExactModelHostConnector {
                 budget: self.host_limits.max_snapshot_bytes,
             };
             let key = normalize_digest(&manifest.wasm_digest);
+            let control = SliceControl {
+                cancel: &self.cancel,
+                deadline,
+            };
             let prepared = match self.engine {
                 ModelEngine::Wasmtime => execute_wasm_cpu_model(
                     &mut self.compiled,
@@ -1832,6 +1836,7 @@ impl ExactModelHostConnector {
                     &package.wasm,
                     &[],
                     &limits,
+                    &control,
                     &mut reuse,
                 ),
                 ModelEngine::Wasmi => execute_wasmi_model(
@@ -1840,10 +1845,7 @@ impl ExactModelHostConnector {
                     &package.wasm,
                     &[],
                     &limits,
-                    &SliceControl {
-                        cancel: &self.cancel,
-                        deadline,
-                    },
+                    &control,
                     &mut reuse,
                 ),
             };
@@ -2270,6 +2272,10 @@ impl HostConnectorPort for ExactModelHostConnector {
         }
         // `recheck` above proved the bytes still hash to `wasm_digest`.
         let key = normalize_digest(&package.manifest.wasm_digest);
+        let control = SliceControl {
+            cancel: &self.cancel,
+            deadline: started + timeout,
+        };
         let output = match self.engine {
             ModelEngine::Wasmtime => execute_wasm_cpu_model(
                 &mut self.compiled,
@@ -2277,6 +2283,7 @@ impl HostConnectorPort for ExactModelHostConnector {
                 &package.wasm,
                 &input,
                 &guest_limits,
+                &control,
                 &mut reuse,
             )?,
             ModelEngine::Wasmi => execute_wasmi_model(
@@ -2285,10 +2292,7 @@ impl HostConnectorPort for ExactModelHostConnector {
                 &package.wasm,
                 &input,
                 &guest_limits,
-                &SliceControl {
-                    cancel: &self.cancel,
-                    deadline: started + timeout,
-                },
+                &control,
                 &mut reuse,
             )?,
         };
@@ -2608,6 +2612,7 @@ fn execute_wasm_cpu_model(
     wasm: &[u8],
     input: &[u8],
     guest: &GuestLimits,
+    control: &SliceControl<'_>,
     reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     use wasmtime::{Linker, Store, StoreLimitsBuilder};
@@ -2623,6 +2628,9 @@ fn execute_wasm_cpu_model(
     store.limiter(|state| state);
     // Fuel is enabled on the engine config; set_fuel only fails when fuel is disabled.
     let _ = store.set_fuel(max_fuel);
+    // Epoch interruption is enabled on the engine config; the deadline is
+    // only reached when `interruptible` bumps the epoch to stop a call.
+    store.set_epoch_deadline(1);
 
     // Empty linker: deny-by-default (no WASI / no host imports).
     let linker = Linker::new(&engine);
@@ -2656,6 +2664,7 @@ fn execute_wasm_cpu_model(
             memory,
             prepare_fuel,
             max_memory_bytes,
+            control,
             reuse,
         )?;
     }
@@ -2676,23 +2685,15 @@ fn execute_wasm_cpu_model(
     // after a successful grow are not distinguishable from guest traps below.
     let _ = memory.write(&mut store, usize::try_from(in_ptr).unwrap_or(0), input);
 
-    let Some(out_len) = func
-        .call(
-            &mut store,
-            (
-                in_ptr,
-                i32::try_from(input.len()).unwrap_or(i32::MAX),
-                out_ptr,
-                out_cap,
-            ),
-        )
-        .ok()
-    else {
-        return Err(model_host_err(
-            HostConnectorErrorCode::ExecutionFailed,
-            "model_execute trap or fuel exhausted",
-        ));
-    };
+    let args = (
+        in_ptr,
+        i32::try_from(input.len()).unwrap_or(i32::MAX),
+        out_ptr,
+        out_cap,
+    );
+    let out_len = interruptible(&engine, &mut store, control, execute_failed, |store| {
+        func.call(store, args)
+    })?;
     let mut output = vec![0_u8; guest_execute_outcome(out_len, max_output_bytes)?];
     let _ = memory.read(&store, usize::try_from(out_ptr).unwrap_or(0), &mut output);
     Ok(output)
@@ -2708,6 +2709,7 @@ fn prepare_or_restore_wasmtime(
     memory: wasmtime::Memory,
     prepare_fuel: u64,
     memory_ceiling: u64,
+    control: &SliceControl<'_>,
     reuse: &mut SnapshotReuse<'_>,
 ) -> Result<(), HostConnectorError> {
     if let Some(snapshot) = reuse.usable(memory_ceiling) {
@@ -2738,10 +2740,10 @@ fn prepare_or_restore_wasmtime(
         .map_err(|_| missing_prepare())?;
     let saved = store.get_fuel().unwrap_or(0);
     let _ = store.set_fuel(prepare_fuel);
-    if prepare
-        .call(&mut *store, ())
-        .map_err(|_| prepare_failed())?
-        != 0
+    let engine = store.engine().clone();
+    if interruptible(&engine, store, control, prepare_failed, |store| {
+        prepare.call(store, ())
+    })? != 0
     {
         return Err(prepare_failed());
     }
@@ -2767,6 +2769,70 @@ fn prepare_or_restore_wasmtime(
         globals,
     });
     Ok(())
+}
+
+/// How often the wasmtime watcher re-reads the cancellation flag while a
+/// guest call runs. Deadlines are waited for exactly.
+#[cfg(feature = "wasmtime-executor")]
+const WASMTIME_CANCEL_POLL: Duration = Duration::from_millis(5);
+
+/// Runs one wasmtime guest call that cancellation and the deadline can stop
+/// mid-run (Decision 104, FR-029). A scoped watcher thread bumps the engine
+/// epoch when either fires, which traps the call at its next epoch check;
+/// the trap is then reported as `cancelled` / `timeout`. Both are checked
+/// before the call too, so an expired deadline never starts it.
+#[cfg(feature = "wasmtime-executor")]
+fn interruptible<R>(
+    engine: &wasmtime::Engine,
+    store: &mut wasmtime::Store<wasmtime::StoreLimits>,
+    control: &SliceControl<'_>,
+    trapped: fn() -> HostConnectorError,
+    call: impl FnOnce(&mut wasmtime::Store<wasmtime::StoreLimits>) -> wasmtime::Result<R>,
+) -> Result<R, HostConnectorError> {
+    let stop = || {
+        if control.cancel.load(Ordering::SeqCst) {
+            Some(model_host_err(
+                HostConnectorErrorCode::Cancelled,
+                "model.execute cancelled mid-run",
+            ))
+        } else if Instant::now() >= control.deadline {
+            Some(model_host_err(
+                HostConnectorErrorCode::Timeout,
+                "model.execute exceeded timeout mid-run",
+            ))
+        } else {
+            None
+        }
+    };
+    if let Some(error) = stop() {
+        return Err(error);
+    }
+    let done = AtomicBool::new(false);
+    let result = std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            while !done.load(Ordering::SeqCst) {
+                if let Some(error) = stop() {
+                    engine.increment_epoch();
+                    return Some(error);
+                }
+                let left = control.deadline.saturating_duration_since(Instant::now());
+                std::thread::park_timeout(left.min(WASMTIME_CANCEL_POLL));
+            }
+            None
+        });
+        let outcome = call(&mut *store);
+        done.store(true, Ordering::SeqCst);
+        watcher.thread().unpark();
+        // The watcher never panics, so joining it cannot fail.
+        (outcome, watcher.join().ok().flatten())
+    });
+    // A bump that landed after the call returned must not trap later calls.
+    store.set_epoch_deadline(1);
+    match result {
+        (Ok(value), _) => Ok(value),
+        (Err(_), Some(error)) => Err(error),
+        (Err(_), None) => Err(trapped()),
+    }
 }
 
 #[cfg(feature = "wasmtime-executor")]
@@ -2831,7 +2897,9 @@ impl CompiledGuests {
         let (engine, modules) = self.wasmtime.get_or_insert_with(|| {
             let mut config = wasmtime::Config::new();
             config.consume_fuel(true);
-            // Engine::new only fails on illegal config; consume_fuel config is always legal.
+            // Mid-run cancellation and deadlines (Decision 104, FR-029).
+            config.epoch_interruption(true);
+            // Engine::new only fails on illegal config; this config is always legal.
             #[allow(clippy::unwrap_used)]
             let engine = wasmtime::Engine::new(&config).unwrap();
             (engine, HashMap::new())
@@ -3400,6 +3468,7 @@ fn execute_wasm_cpu_model(
     _wasm: &[u8],
     _input: &[u8],
     _guest: &GuestLimits,
+    _control: &SliceControl<'_>,
     _reuse: &mut SnapshotReuse<'_>,
 ) -> Result<Vec<u8>, HostConnectorError> {
     Err(HostConnectorError {
@@ -5502,6 +5571,21 @@ mod tests {
             run(&mut host, &long, zero).expect_err("timeout").code,
             HostConnectorErrorCode::Timeout
         );
+        // A call that finishes inside its first slice is still held to
+        // the deadline after it returns.
+        let echo = add_variant(
+            &mut host,
+            wat::parse_str(FIXTURE_ECHO_WAT).expect("wat"),
+            |_| {},
+        );
+        let mut expired = serde_json::Map::new();
+        expired.insert("timeout_ms".to_string(), json!(0));
+        assert_eq!(
+            run(&mut host, &echo, expired)
+                .expect_err("late result")
+                .code,
+            HostConnectorErrorCode::Timeout
+        );
         // Cancellation observed at the next slice boundary.
         host.cancel.store(true, Ordering::SeqCst);
         assert_eq!(
@@ -5521,6 +5605,117 @@ mod tests {
                 .code,
             HostConnectorErrorCode::ExecutionFailed
         );
+    }
+
+    /// Fuel no test guest exhausts before a deadline or cancellation lands.
+    const SPIN_FUEL: u64 = 40_000_000_000;
+
+    /// Sets `cancel` after a short delay, while a guest call is running.
+    fn cancel_soon(cancel: &Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+        let cancel = Arc::clone(cancel);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            cancel.store(true, Ordering::SeqCst);
+        })
+    }
+
+    #[test]
+    fn wasmtime_engine_interrupts_execute_mid_run() {
+        let (mut host, _) = seeded_host();
+        host.engine = ModelEngine::Wasmtime;
+        let long = add_variant(&mut host, wat::parse_str(LOOPER_WAT).expect("wat"), |m| {
+            m.max_fuel = SPIN_FUEL;
+            m.max_execution_ms = 120_000;
+        });
+        // The deadline lands while the guest spins -> timeout.
+        let mut short = serde_json::Map::new();
+        short.insert("timeout_ms".to_string(), json!(50));
+        let started = Instant::now();
+        assert_eq!(
+            run(&mut host, &long, short).expect_err("timeout").code,
+            HostConnectorErrorCode::Timeout
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // A cancellation that lands while the guest spins -> cancelled.
+        let mut far = serde_json::Map::new();
+        far.insert("timeout_ms".to_string(), json!(60_000));
+        let canceller = cancel_soon(&host.cancel);
+        assert_eq!(
+            run(&mut host, &long, far.clone()).expect_err("cancel").code,
+            HostConnectorErrorCode::Cancelled
+        );
+        canceller.join().expect("canceller");
+        // A cancellation already set never starts the call.
+        assert_eq!(
+            run(&mut host, &long, far).expect_err("cancel").code,
+            HostConnectorErrorCode::Cancelled
+        );
+        // The connector never clears the caller-managed flag itself; once
+        // cleared, the next call on the same engine runs normally.
+        assert!(host.cancel.load(Ordering::SeqCst));
+        host.cancel.store(false, Ordering::SeqCst);
+        let echo = add_variant(
+            &mut host,
+            wat::parse_str(FIXTURE_ECHO_WAT).expect("wat"),
+            |_| {},
+        );
+        assert_eq!(
+            run(&mut host, &echo, serde_json::Map::new()).expect("echo"),
+            b"abc"
+        );
+        // A genuine trap is still `execution_failed`.
+        let mut low_fuel = serde_json::Map::new();
+        low_fuel.insert("max_fuel".to_string(), json!(1_000));
+        assert_eq!(
+            run(&mut host, &long, low_fuel).expect_err("fuel").code,
+            HostConnectorErrorCode::ExecutionFailed
+        );
+    }
+
+    #[test]
+    fn wasmtime_prepare_is_interrupted_mid_run_and_keeps_no_snapshot() {
+        let spin = v3_guest("(loop $spin (br $spin)) i32.const 0");
+        // A first package keeps its snapshot throughout.
+        let (mut host, _, _) =
+            admit_prepared_guest(ModelEngine::Wasmtime, v3_guest("i32.const 0"), |_| {});
+        let kept = host.snapshots.total_bytes();
+        assert!(kept > 0);
+        let mut package = fixture_package();
+        package.wasm.clone_from(&spin);
+        package.manifest.model_id = "fixture.prepared-v3".to_string();
+        package.manifest.wasm_digest = digest_hex(&spin);
+        package.manifest.schema_version = MODEL_PACKAGE_SCHEMA_VERSION_PREPARED.to_string();
+        package.manifest.abi_version = MODEL_GUEST_ABI_PREPARED;
+        package.manifest.max_memory_bytes = 4 * 65_536;
+        package.manifest.max_prepare_fuel = Some(SPIN_FUEL);
+        package.manifest.max_fuel = SPIN_FUEL;
+        let package = seal(package);
+        let digest = digest_hex(&package.manifest_bytes);
+        // The preparation budget lands while `model_prepare` spins: wasm-cpu
+        // is over budget, registration fails, and no snapshot is kept.
+        host.host_limits.max_preparation_ms = 50;
+        let started = Instant::now();
+        let error = host.admit_test(package.clone()).expect_err("over budget");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(
+            error.reason == Some(ModelFailureReason::PlacementUnavailable)
+                && error.message.contains("wasm-cpu over_budget"),
+            "{error:?}"
+        );
+        assert!(host.packages.resolve_offline(&digest).is_err());
+        assert_eq!(host.snapshots.total_bytes(), kept);
+        // A cancellation that lands inside `model_prepare` stops it with
+        // `cancelled`, not `execution_failed`, and stores nothing.
+        let canceller = cancel_soon(&host.cancel);
+        let far = Instant::now() + Duration::from_mins(1);
+        assert_eq!(
+            host.prepare_wasm_cpu(&package, &digest, far)
+                .expect_err("cancelled")
+                .code,
+            HostConnectorErrorCode::Cancelled
+        );
+        canceller.join().expect("canceller");
+        assert_eq!(host.snapshots.total_bytes(), kept);
     }
 
     #[test]
@@ -5950,25 +6145,29 @@ mod tests {
         );
         assert_eq!(host.snapshots.total_bytes(), kept);
         host.cancel.store(false, Ordering::SeqCst);
-        // On wasmtime prepare runs to completion and is then over budget,
-        // which drops the snapshot it stored.
-        let (mut host, digest_ok, _) =
-            admit_prepared_guest(ModelEngine::Wasmtime, v3_guest("i32.const 0"), |_| {});
-        let ok = host
-            .packages
-            .by_digest
-            .get(&digest_ok)
-            .cloned()
-            .expect("cached");
-        host.snapshots.clear();
-        let past = Instant::now();
-        std::thread::sleep(Duration::from_millis(2));
-        assert_eq!(
-            host.prepare_wasm_cpu(&ok, &digest_ok, past)
-                .expect("prepared"),
-            PlacementOutcome::OverBudget
-        );
-        assert_eq!(host.snapshots.total_bytes(), 0);
+        // An expired budget: wasmtime never starts prepare, and `wasmi`
+        // finishes it inside one slice and drops the snapshot it stored.
+        // Either way it is over budget and nothing is kept.
+        for engine in [ModelEngine::Wasmtime, ModelEngine::Wasmi] {
+            let (mut host, digest_ok, _) =
+                admit_prepared_guest(engine, v3_guest("i32.const 0"), |_| {});
+            let ok = host
+                .packages
+                .by_digest
+                .get(&digest_ok)
+                .cloned()
+                .expect("cached");
+            host.snapshots.clear();
+            let past = Instant::now();
+            std::thread::sleep(Duration::from_millis(2));
+            assert_eq!(
+                host.prepare_wasm_cpu(&ok, &digest_ok, past)
+                    .expect("prepared"),
+                PlacementOutcome::OverBudget,
+                "{engine:?}"
+            );
+            assert_eq!(host.snapshots.total_bytes(), 0, "{engine:?}");
+        }
         // Exhausting the prepare budget across several slices fails
         // registration.
         let (_, _, admitted) = admit_prepared_guest(ModelEngine::Wasmi, spin, |m| {
@@ -6499,9 +6698,21 @@ mod tests {
                 engine: ModelEngine::Wasmtime,
                 budget: u64::MAX,
             };
-            let error =
-                prepare_or_restore_wasmtime(&mut store, &instance, memory, 1, u64::MAX, &mut reuse)
-                    .expect_err("cannot grow");
+            let cancel = AtomicBool::new(false);
+            let control = SliceControl {
+                cancel: &cancel,
+                deadline: Instant::now() + Duration::from_secs(5),
+            };
+            let error = prepare_or_restore_wasmtime(
+                &mut store,
+                &instance,
+                memory,
+                1,
+                u64::MAX,
+                &control,
+                &mut reuse,
+            )
+            .expect_err("cannot grow");
             assert_eq!(error.code, HostConnectorErrorCode::ResourceExhausted);
         }
         {
