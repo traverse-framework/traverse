@@ -238,7 +238,7 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
 | --- | --- | --- | --- |
 | Rust native (`ExactModelHostConnector`) | wasmtime (default) or `wasmi` (`ModelEngine::Wasmi`) | yes (`HostModelLimits`) | yes (`wasmi`: fuel slices; wasmtime: epoch interruption) |
 | Swift (`ExactModelHost`, over `traverse_swift_host_model_call`, ADR-0078) | `wasmi` only (iOS forbids JIT) | yes (`ExactModelHostLimits`, phone-sized defaults) | yes (Swift `Task` cancellation; fuel slices) |
-| Web (`ExactModelBrowserHost`) | browser WebAssembly | #1582 | #1582 |
+| Web (`ExactModelBrowserHost`) | browser WebAssembly, one Worker per package | yes (`maxPackageBytes` / `maxMemoryBytes` / `maxFuel`; fuel checked at registration only) | yes (Worker termination; inline fallback checks before and after) |
 | .NET (`ExactModelHost`, over `traverse_dotnet_host_model_call`, ADR-0081) | `wasmi` (Decision 111) | yes (`ExactModelHostLimits`, desktop defaults) | yes (`CancellationToken`; fuel slices) |
 
 - **Host ceilings:** a host caps package bytes, guest memory, and fuel.
@@ -257,6 +257,20 @@ the signed v2 conformance guest, a bump allocator with echo semantics.
   epoch check. This covers `model_execute` and `model_prepare`; an
   interrupted prepare keeps no snapshot. An already-cancelled call or an
   expired deadline never starts the guest.
+
+- **Web interruption** (Spec 138 0.16.2, Decision 131): each registered
+  package's guest runs in its own reused module Worker, which holds the
+  compiled module and the ABI v3 snapshot. By default the host spawns the
+  shipped `modelWorker.js` with
+  `new Worker(new URL("./modelWorker.js", import.meta.url), { type: "module" })`,
+  which Vite and webpack 5 bundle without setup. If your bundler does not
+  emit that file, pass `createWorker: () => new Worker(yourUrl, { type: "module" })`.
+  An `AbortSignal` or the deadline terminates the Worker mid-run, for
+  execute and registration's `model_prepare` (`cancelled` / `timeout`). The
+  next call spawns a fresh Worker, which recompiles and re-prepares.
+  `createWorker: null`, or a runtime without `Worker` (Node), runs guests
+  inline, checked before and after only. `shutdown()` terminates every
+  Worker.
 - **Fuel is engine-relative:** each engine counts `max_fuel` in its own
   units. Size it so the package's conformance vector passes on every
   engine; `max_execution_ms` is the portable bound.

@@ -253,6 +253,7 @@ export {
   modelSigningKeyId,
   variantsToFetch,
   ADAPTER_COREML,
+  createModelGuestHandler,
 } from "./exactModel.js";
 export type {
   CommercialUse,
@@ -272,6 +273,9 @@ export type {
   ModelUsage,
   PackageStatus,
   PackageStatusEntry,
+  ModelGuestWorker,
+  ModelGuestRequest,
+  ModelGuestReply,
 } from "./exactModel.js";
 export {
   MODEL_RUNTIME_CONNECTOR_VERSION,

@@ -7847,3 +7847,60 @@ all four questions.
   published. Until then, `app validate` fails for apps that pin the affected
   versions.
 - Spec 002 does not change.
+
+## Decision 131: The Browser Model Host Runs Each Package's Guest in a Reused, Terminable Worker
+
+- **Date**: 2026-11-12
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1582`; precedent Decision 104 (items 7–8)
+
+### Context
+
+Decision 104 made host ceilings a MUST and mid-run interruption a SHOULD
+for every Spec 138 host, and left the web host to `#1582`, "Worker
+termination". `ExactModelBrowserHost` ran the guest on the calling thread,
+so a cancel or deadline was checked only after the guest returned, and it
+had no host ceilings. Decision 104 did not say how the Worker script reaches
+the app, or how long a Worker lives.
+
+### Decisions
+
+1. **How the host gets the Worker.** Options considered:
+   - Ship `modelWorker.js` and spawn it by default with
+     `new Worker(new URL("./modelWorker.js", import.meta.url), { type: "module" })`,
+     with a `createWorker` override.
+   - An opt-in `createWorker` factory only.
+   - Inline the Worker source and spawn it from a `blob:` URL.
+
+   Chosen: the default URL plus an override. Vite and webpack 5 bundle
+   that pattern with no setup, so most apps are interruptible without
+   doing anything. A factory serves bundlers that miss the pattern.
+   `createWorker: null`, or a runtime without `Worker` (Node), runs guests
+   inline with the old before/after checks. Opt-in only would leave most
+   apps silently uninterruptible. A `blob:` Worker is blocked by common
+   CSPs (`worker-src` without `blob:`) and needs an extra build step.
+2. **How long a Worker lives.** Options considered:
+   - One per registered package, reused across calls.
+   - A fresh Worker per call.
+
+   Chosen: one per package, reused. The Worker holds the compiled module and
+   the guest ABI v3 snapshot, so a call pays neither a compile nor a
+   snapshot copy. Requests to it run one at a time. Cancellation or the
+   deadline terminates it; the next call spawns a fresh one, which recompiles
+   and takes the fresh path, as after an eviction. The host keeps the
+   snapshot budget and least-recently-used eviction, and tells a Worker to
+   drop its snapshot. A per-call Worker would add Worker start-up, compile
+   and a snapshot copy to every call.
+
+### Consequences
+
+- Web host ceilings: `maxPackageBytes` / `maxMemoryBytes` / `maxFuel`
+  (defaults as native). Registration fails with `host_limit_exceeded`.
+  The browser cannot meter fuel, so `maxFuel` (and `max_prepare_fuel`
+  against it) is checked at registration only.
+- A trap now fails closed as `execution_failed` on the web host, inline or
+  in a Worker, as on native. It used to surface as a raw
+  `WebAssembly.RuntimeError`.
+- `shutdown()` terminates every guest Worker. A package whose registration
+  fails keeps no Worker.

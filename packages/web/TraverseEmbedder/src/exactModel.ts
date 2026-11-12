@@ -220,7 +220,9 @@ export type ModelFailureReason =
   | "output_limit_exceeded"
   // No listed placement could be prepared, or a call names a policy the
   // package was not registered under (Spec 138 0.12.0 / 0.16.0).
-  | "placement_unavailable";
+  | "placement_unavailable"
+  // A package's size or declared limits exceed the host ceilings (Spec 138 0.6.0, Decision 104).
+  | "host_limit_exceeded";
 
 /** Typed `model.execute` result with identity, placement, and redacted trace. */
 export type ExactModelExecution = {
@@ -700,6 +702,156 @@ type SnapshotReuse = {
   store(snapshot: Snapshot): void;
 };
 
+/** Host-side record of a snapshot a package's guest runner holds (FR-055). */
+type SnapshotEntry = { readonly memoryBytes: number; readonly bytes: number; used: number };
+
+/**
+ * One request to a package's guest runner (inline or a Worker, #1582). The
+ * runner holds the compiled module and the ABI v3 snapshot; the host decides
+ * whether a snapshot may be used and keeps the budget.
+ */
+export type ModelGuestRequest =
+  | {
+      readonly kind: "load";
+      readonly wasm: Uint8Array;
+      readonly abiVersion: number;
+      readonly snapshotGlobals?: readonly string[];
+    }
+  | {
+      readonly kind: "run";
+      /** Absent: run `model_prepare` only (registration). */
+      readonly input?: Uint8Array;
+      readonly maxOutputBytes: number;
+      readonly maxMemoryBytes: number;
+      readonly useSnapshot: boolean;
+    }
+  | { readonly kind: "drop" };
+
+/** A guest runner's reply: the output and any snapshot it stored, or a stable failure. */
+export type ModelGuestReply =
+  | {
+      readonly ok: true;
+      readonly output?: Uint8Array;
+      readonly snapshot?: { readonly memoryBytes: number; readonly bytes: number };
+    }
+  | { readonly ok: false; readonly code: string; readonly message: string; readonly reason?: ModelFailureReason };
+
+/**
+ * The guest side of the runner protocol. `modelWorker.js` wraps it in a
+ * Worker; the host calls it directly when no Worker is available.
+ */
+export function createModelGuestHandler(): (request: ModelGuestRequest) => Promise<ModelGuestReply> {
+  let module: WebAssembly.Module | undefined;
+  let abiVersion = MODEL_GUEST_ABI_VERSION as number;
+  let globals: readonly string[] | undefined;
+  let snapshot: Snapshot | undefined;
+  return async (request) => {
+    try {
+      if (request.kind === "drop") {
+        snapshot = undefined;
+        return { ok: true };
+      }
+      if (request.kind === "load") {
+        try {
+          module = await WebAssembly.compile(new Uint8Array(request.wasm));
+        } catch {
+          throw new ExactModelError("model_incompatible", "model wasm failed validation");
+        }
+        abiVersion = request.abiVersion;
+        globals = request.snapshotGlobals;
+        snapshot = undefined;
+        return { ok: true };
+      }
+      if (!module) {
+        throw new ExactModelError("execution_failed", "model guest is not loaded");
+      }
+      let stored: Snapshot | undefined;
+      const reuse: SnapshotReuse | undefined = globals
+        ? {
+            globals,
+            usable: (ceiling) =>
+              request.useSnapshot && snapshot && snapshot.memory.length <= ceiling ? snapshot : undefined,
+            store: (next) => {
+              snapshot = next;
+              stored = next;
+            },
+          }
+        : undefined;
+      const output = await runWasmCpu(module, request.input, request.maxOutputBytes, request.maxMemoryBytes, abiVersion, reuse);
+      return {
+        ok: true,
+        ...(output ? { output } : {}),
+        ...(stored ? { snapshot: { memoryBytes: stored.memory.length, bytes: snapshotBytes(stored) } } : {}),
+      };
+    } catch (error) {
+      if (error instanceof ExactModelError) {
+        return { ok: false, code: error.code, message: error.message, ...(error.reason ? { reason: error.reason } : {}) };
+      }
+      // A trap (unreachable, out-of-bounds, stack overflow) fails closed like native.
+      return { ok: false, code: "execution_failed", message: "model guest trapped" };
+    }
+  };
+}
+
+/**
+ * The part of a Worker the host uses (#1582). A browser `Worker` fits as is;
+ * other runtimes (for example Node `worker_threads`) need a small adapter.
+ */
+export type ModelGuestWorker = {
+  postMessage(message: unknown): void;
+  terminate(): void;
+  onmessage: ((event: { readonly data: unknown }) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+};
+
+/** Runs one package's guest requests in order, inline or in a Worker. */
+type GuestRunner = {
+  request(request: ModelGuestRequest): Promise<ModelGuestReply>;
+  terminate(): void;
+};
+
+function inlineRunner(): GuestRunner {
+  const handle = createModelGuestHandler();
+  return { request: handle, terminate: () => {} };
+}
+
+function workerRunner(worker: ModelGuestWorker): GuestRunner {
+  let nextId = 0;
+  const pending = new Map<number, (reply: ModelGuestReply) => void>();
+  const failAll = (message: string) => {
+    for (const resolve of pending.values()) {
+      resolve({ ok: false, code: "execution_failed", message });
+    }
+    pending.clear();
+  };
+  worker.onmessage = (event) => {
+    const { id, reply } = event.data as { id: number; reply: ModelGuestReply };
+    pending.get(id)?.(reply);
+    pending.delete(id);
+  };
+  worker.onerror = () => failAll("model guest worker failed");
+  return {
+    request: (request) =>
+      new Promise((resolve) => {
+        const id = nextId++;
+        pending.set(id, resolve);
+        worker.postMessage({ id, request });
+      }),
+    terminate: () => {
+      worker.terminate();
+      failAll("model guest worker terminated");
+    },
+  };
+}
+
+/** The default guest Worker: `modelWorker.js` next to this module, when the runtime has `Worker`. */
+function defaultModelWorker(): ModelGuestWorker | undefined {
+  if (typeof Worker !== "function") {
+    return undefined;
+  }
+  return new Worker(new URL("./modelWorker.js", import.meta.url), { type: "module" }) as unknown as ModelGuestWorker;
+}
+
 /** Encode Spec 138 little-endian guest frame. */
 export function encodeGuestFrame(dtype: number, dims: readonly number[], payload: Uint8Array): Uint8Array {
   const rank = dims.length;
@@ -849,7 +1001,32 @@ export type ExactModelBrowserHostOptions = {
    * placement over it is skipped. Defaults to five minutes.
    */
   readonly maxPreparationMs?: number;
+  /**
+   * Host ceilings (Spec 138 FR-028, Decision 104). Registration fails with
+   * `model_incompatible` / `host_limit_exceeded` when the manifest + wasm
+   * bytes, or the declared `max_memory_bytes`, `max_fuel` or
+   * `max_prepare_fuel`, exceed them. Execution uses manifest ∩ host memory.
+   * The browser cannot meter fuel, so `maxFuel` is checked at registration
+   * only. Defaults: 256 MiB, 1 GiB, 50,000,000,000.
+   */
+  readonly maxPackageBytes?: number;
+  readonly maxMemoryBytes?: number;
+  readonly maxFuel?: number;
+  /**
+   * Where each package's guest runs (#1582). By default every package gets
+   * its own module Worker (`modelWorker.js`, resolved next to this module),
+   * so cancellation and deadlines terminate a running inference mid-run.
+   * Pass a factory when your bundler does not emit that file. `null`, or a
+   * runtime without `Worker`, runs guests inline on the calling thread,
+   * where cancellation and deadlines are checked only before and after.
+   */
+  readonly createWorker?: (() => ModelGuestWorker) | null;
 };
+
+/** Default host ceilings (Decision 104), matching native `HostModelLimits`. */
+const DEFAULT_MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_MEMORY_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_MAX_FUEL = 50_000_000_000;
 
 /**
  * The execution policy a package is registered under (Spec 138 0.16.0,
@@ -909,11 +1086,14 @@ export class ExactModelBrowserHost {
   private readonly hostRequiresCommercial: boolean;
   private packageStatus = new Map<string, PackageStatusEntry>();
   private readonly maxSnapshotBytes: number;
-  private readonly snapshots = new Map<string, { snapshot: Snapshot; used: number }>();
+  private readonly snapshots = new Map<string, SnapshotEntry>();
   private snapshotTick = 0;
   private snapshotTotal = 0;
   private readonly maxPreparationMs: number;
   private readonly prepared = new Map<string, PlacementPreparation>();
+  private readonly limits: { readonly packageBytes: number; readonly memoryBytes: number; readonly fuel: number };
+  private readonly createWorker: (() => ModelGuestWorker | undefined) | null;
+  private readonly guests = new Map<string, PackageGuest>();
 
   constructor(pins: readonly ExactModelPin[], options: ExactModelBrowserHostOptions) {
     for (const pin of pins) {
@@ -931,6 +1111,55 @@ export class ExactModelBrowserHost {
     this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
     this.maxPreparationMs = options.maxPreparationMs ?? DEFAULT_MAX_PREPARATION_MS;
+    this.limits = {
+      packageBytes: options.maxPackageBytes ?? DEFAULT_MAX_PACKAGE_BYTES,
+      memoryBytes: options.maxMemoryBytes ?? DEFAULT_MAX_MEMORY_BYTES,
+      fuel: options.maxFuel ?? DEFAULT_MAX_FUEL,
+    };
+    this.createWorker = options.createWorker === undefined ? defaultModelWorker : options.createWorker;
+  }
+
+  private spawnRunner(): GuestRunner {
+    const worker = this.createWorker?.();
+    return worker ? workerRunner(worker) : inlineRunner();
+  }
+
+  /** The package's guest runner, created (and its module loaded) on first use. */
+  private guestFor(digest: string, pack: StoredPackage): PackageGuest {
+    let guest = this.guests.get(digest);
+    if (!guest) {
+      guest = new PackageGuest(pack, () => this.spawnRunner(), () => this.forgetSnapshot(digest));
+      this.guests.set(digest, guest);
+    }
+    return guest;
+  }
+
+  /**
+   * Run one guest request for a package: the snapshot is used when it fits
+   * the memory ceiling, and one the runner stored is admitted under the
+   * budget (FR-055).
+   */
+  private async runGuest(
+    digest: string,
+    pack: StoredPackage,
+    input: Uint8Array | undefined,
+    maxOutputBytes: number,
+    control: GuestControl,
+  ): Promise<Uint8Array> {
+    const maxMemoryBytes = Math.min(pack.manifest.max_memory_bytes, this.limits.memoryBytes);
+    const entry = this.snapshots.get(digest);
+    const useSnapshot = entry !== undefined && entry.memoryBytes <= maxMemoryBytes;
+    if (entry && useSnapshot) {
+      entry.used = ++this.snapshotTick;
+    }
+    const reply = await this.guestFor(digest, pack).run(
+      { kind: "run", ...(input ? { input } : {}), maxOutputBytes, maxMemoryBytes, useSnapshot },
+      control,
+    );
+    if (reply.snapshot) {
+      this.admitSnapshot(digest, reply.snapshot);
+    }
+    return reply.output ?? new Uint8Array();
   }
 
   /** The placement registration fixed for a package under `policyRef` (Decision 120). */
@@ -938,9 +1167,13 @@ export class ExactModelBrowserHost {
     return this.prepared.get(preparedKey(normalizeDigest(digest), policyRef));
   }
 
-  /** Invalidate every staged ref and drop every snapshot (FR-055). */
+  /** Invalidate every staged ref, drop every snapshot (FR-055), and stop every guest Worker. */
   shutdown(): void {
     this.io.shutdown();
+    for (const guest of this.guests.values()) {
+      guest.terminate();
+    }
+    this.guests.clear();
     this.snapshots.clear();
     this.snapshotTotal = 0;
   }
@@ -950,42 +1183,39 @@ export class ExactModelBrowserHost {
     return this.snapshotTotal;
   }
 
-  private dropSnapshot(digest: string): void {
+  /** Forget the host record of a package's snapshot (its runner no longer holds it). */
+  private forgetSnapshot(digest: string): void {
     const entry = this.snapshots.get(digest);
     if (entry) {
-      this.snapshotTotal -= snapshotBytes(entry.snapshot);
+      this.snapshotTotal -= entry.bytes;
       this.snapshots.delete(digest);
     }
   }
 
-  private snapshotReuse(digest: string, globals: readonly string[]): SnapshotReuse {
-    return {
-      globals,
-      usable: (memoryCeiling) => {
-        const entry = this.snapshots.get(digest);
-        if (!entry || entry.snapshot.memory.length > memoryCeiling) {
-          return undefined;
-        }
-        entry.used = ++this.snapshotTick;
-        return entry.snapshot;
-      },
-      store: (snapshot) => {
-        const bytes = snapshotBytes(snapshot);
-        if (bytes > this.maxSnapshotBytes) {
-          return;
-        }
-        this.dropSnapshot(digest);
-        const byAge = [...this.snapshots.entries()].sort((a, b) => a[1].used - b[1].used);
-        for (const [key] of byAge) {
-          if (this.snapshotTotal + bytes <= this.maxSnapshotBytes) {
-            break;
-          }
-          this.dropSnapshot(key);
-        }
-        this.snapshots.set(digest, { snapshot, used: ++this.snapshotTick });
-        this.snapshotTotal += bytes;
-      },
-    };
+  /** Drop a package's snapshot, in the host record and in its runner. */
+  private dropSnapshot(digest: string): void {
+    if (this.snapshots.has(digest)) {
+      this.forgetSnapshot(digest);
+      this.guests.get(digest)?.drop();
+    }
+  }
+
+  /** Admit a snapshot a runner just stored, evicting least recently used ones over budget. */
+  private admitSnapshot(digest: string, snapshot: { readonly memoryBytes: number; readonly bytes: number }): void {
+    this.forgetSnapshot(digest);
+    if (snapshot.bytes > this.maxSnapshotBytes) {
+      this.guests.get(digest)?.drop();
+      return;
+    }
+    const byAge = [...this.snapshots.entries()].sort((a, b) => a[1].used - b[1].used);
+    for (const [key] of byAge) {
+      if (this.snapshotTotal + snapshot.bytes <= this.maxSnapshotBytes) {
+        break;
+      }
+      this.dropSnapshot(key);
+    }
+    this.snapshots.set(digest, { ...snapshot, used: ++this.snapshotTick });
+    this.snapshotTotal += snapshot.bytes;
   }
 
   /** Replace the host-owned package status map (digest → status); takes effect at the next register or execute. */
@@ -1166,6 +1396,14 @@ export class ExactModelBrowserHost {
       );
     }
     this.checkRightsAndStatus(manifest, digest);
+    if (
+      manifestBytes.length + wasm.length > this.limits.packageBytes ||
+      manifest.max_memory_bytes > this.limits.memoryBytes ||
+      manifest.max_fuel > this.limits.fuel ||
+      (manifest.max_prepare_fuel ?? 0) > this.limits.fuel
+    ) {
+      throw incompatible("host_limit_exceeded", "package size or declared limits exceed the host ceilings");
+    }
     if (normalizeDigest(manifest.wasm_digest) !== (await digestHex(wasm))) {
       throw incompatible("digest_mismatch", "model wasm digest mismatch");
     }
@@ -1183,7 +1421,17 @@ export class ExactModelBrowserHost {
       wasm: new Uint8Array(wasm),
       ...(snapshotGlobals ? { snapshotGlobals } : {}),
     };
-    const preparation = await this.preparePlacement(pack, digest, policy, placements, options);
+    let preparation: PlacementPreparation;
+    try {
+      preparation = await this.preparePlacement(pack, digest, policy, placements, options);
+    } catch (error) {
+      // A package that never registered keeps no guest Worker.
+      if (!this.packages.has(digest)) {
+        this.guests.get(digest)?.terminate();
+        this.guests.delete(digest);
+      }
+      throw error;
+    }
     this.packages.set(digest, pack);
     this.prepared.set(preparedKey(digest, policy.policy_ref), preparation);
     return digest;
@@ -1219,10 +1467,17 @@ export class ExactModelBrowserHost {
       }
       if (pack.snapshotGlobals) {
         try {
-          await prepareWasmCpu(pack, this.snapshotReuse(digest, pack.snapshotGlobals));
+          await this.runGuest(digest, pack, undefined, 0, {
+            ...(options.signal ? { signal: options.signal } : {}),
+            deadline: attemptStarted + budget,
+          });
         } catch (error) {
           this.dropSnapshot(digest);
-          throw error;
+          if (error instanceof ExactModelError && error.code === "timeout") {
+            attempts.push({ placement: id, outcome: "over_budget", duration_ms: performance.now() - attemptStarted });
+            continue;
+          }
+          throw error instanceof ExactModelError && error.code === "cancelled" ? cancelled() : error;
         }
       }
       if (options.signal?.aborted) {
@@ -1329,15 +1584,10 @@ export class ExactModelBrowserHost {
     const ceiling = Math.min(args.max_output_bytes, pack.manifest.max_output_bytes);
     const timeout = Math.min(args.timeout_ms ?? pack.manifest.max_execution_ms, pack.manifest.max_execution_ms);
     const started = performance.now();
-    const reuse = pack.snapshotGlobals ? this.snapshotReuse(digest, pack.snapshotGlobals) : undefined;
-    const output = await runWasmCpu(
-      pack.wasm,
-      input,
-      ceiling,
-      pack.manifest.max_memory_bytes,
-      pack.manifest.abi_version,
-      reuse,
-    );
+    const output = await this.runGuest(digest, pack, input, ceiling, {
+      ...(args.signal ? { signal: args.signal } : {}),
+      deadline: started + timeout,
+    });
     const durationMs = performance.now() - started;
     if (args.signal?.aborted) {
       throw new ExactModelError("cancelled", "model.execute cancelled during invoke");
@@ -1383,40 +1633,127 @@ function effectivePlacements(policy: ExactModelPlacementPolicy): readonly string
   return placements;
 }
 
-/** Registration-time ABI v3 preparation: instantiate once and run `model_prepare`, storing the snapshot. */
-async function prepareWasmCpu(pack: StoredPackage, reuse: SnapshotReuse): Promise<void> {
-  let module: WebAssembly.Module;
-  try {
-    module = await WebAssembly.compile(new Uint8Array(pack.wasm));
-  } catch {
-    throw new ExactModelError("model_incompatible", "model wasm failed validation");
+/** Cancellation and the deadline (`performance.now()` ms) one guest request runs under. */
+type GuestControl = { readonly signal?: AbortSignal; readonly deadline: number };
+
+/**
+ * One package's guest runner, reused across calls (#1582): requests run one
+ * at a time. On a Worker, cancellation or the deadline terminates it
+ * mid-run; the next request spawns a fresh one, which reloads the module and
+ * has no snapshot. Inline, the request runs to completion and the caller
+ * checks cancellation and the deadline after it.
+ */
+class PackageGuest {
+  private runner: GuestRunner | undefined;
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private readonly pack: StoredPackage,
+    private readonly spawn: () => GuestRunner,
+    private readonly lostSnapshot: () => void,
+  ) {}
+
+  run(request: ModelGuestRequest, control: GuestControl): Promise<Extract<ModelGuestReply, { ok: true }>> {
+    const result = this.queue.then(() => this.runNow(request, control));
+    this.queue = result.catch(() => undefined);
+    return result;
   }
-  const instance = await WebAssembly.instantiate(module, {});
-  const memory = instance.exports.memory;
-  if (!(memory instanceof WebAssembly.Memory)) {
-    throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
+
+  /** Drop the runner's snapshot, after any request already queued. */
+  drop(): void {
+    const runner = this.runner;
+    this.queue = this.queue.then(() => (runner === this.runner ? runner?.request({ kind: "drop" }) : undefined));
   }
-  prepareOrRestore(instance, memory, pack.manifest.max_memory_bytes, reuse);
+
+  terminate(): void {
+    this.runner?.terminate();
+    this.runner = undefined;
+  }
+
+  private async runNow(
+    request: ModelGuestRequest,
+    control: GuestControl,
+  ): Promise<Extract<ModelGuestReply, { ok: true }>> {
+    const cancelled = () => new ExactModelError("cancelled", "model.execute cancelled mid-run");
+    const timedOut = () => new ExactModelError("timeout", "model.execute exceeded timeout mid-run");
+    if (control.signal?.aborted) {
+      throw cancelled();
+    }
+    if (performance.now() >= control.deadline) {
+      throw timedOut();
+    }
+    let interrupted: ExactModelError | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => interrupt(cancelled());
+    const interrupt = (error: ExactModelError) => {
+      if (!interrupted) {
+        interrupted = error;
+        // The terminated runner had this package's snapshot.
+        this.terminate();
+        this.lostSnapshot();
+      }
+    };
+    try {
+      control.signal?.addEventListener("abort", onAbort);
+      // The timer firing is the deadline: timers can run a fraction of a
+      // millisecond before `performance.now()` reaches it.
+      timer = setTimeout(() => interrupt(timedOut()), Math.max(0, control.deadline - performance.now()));
+      if (!this.runner) {
+        this.runner = this.spawn();
+        const loaded = await this.runner.request({
+          kind: "load",
+          wasm: this.pack.wasm,
+          abiVersion: this.pack.manifest.abi_version,
+          ...(this.pack.snapshotGlobals ? { snapshotGlobals: this.pack.snapshotGlobals } : {}),
+        });
+        if (interrupted) {
+          throw interrupted;
+        }
+        if (!loaded.ok) {
+          this.terminate();
+          throw new ExactModelError(loaded.code, loaded.message, loaded.reason);
+        }
+      }
+      const reply = await this.runner.request(request);
+      if (interrupted) {
+        throw interrupted;
+      }
+      if (!reply.ok) {
+        throw new ExactModelError(reply.code, reply.message, reply.reason);
+      }
+      return reply;
+    } finally {
+      clearTimeout(timer);
+      control.signal?.removeEventListener("abort", onAbort);
+    }
+  }
 }
 
+/**
+ * Instantiate a fresh guest and run it: `model_prepare` only when `input`
+ * is absent (registration), otherwise the v1/v2 sequence after restoring or
+ * running prepare (ABI v3).
+ */
 async function runWasmCpu(
-  wasm: Uint8Array,
-  input: Uint8Array,
+  module: WebAssembly.Module,
+  input: Uint8Array | undefined,
   maxOutputBytes: number,
   maxMemoryBytes: number,
   abiVersion: number,
   reuse: SnapshotReuse | undefined,
-): Promise<Uint8Array> {
-  const module = await WebAssembly.compile(new Uint8Array(wasm));
+): Promise<Uint8Array | undefined> {
   // Deny-by-default: no imports.
   const instance = await WebAssembly.instantiate(module, {});
   const memory = instance.exports.memory;
   const execute = instance.exports[MODEL_EXECUTE_EXPORT];
-  if (!(memory instanceof WebAssembly.Memory) || typeof execute !== "function") {
+  if (!(memory instanceof WebAssembly.Memory) || (input && typeof execute !== "function")) {
     throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
   }
   if (reuse) {
     prepareOrRestore(instance, memory, maxMemoryBytes, reuse);
+  }
+  if (!input) {
+    return undefined;
   }
   const [inPtr, outPtr] = abiVersion >= 2
     ? placeV2(instance, memory, input.length, maxOutputBytes, maxMemoryBytes)
