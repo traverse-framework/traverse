@@ -258,6 +258,7 @@ export type {
   CommercialUse,
   ExactModelBrowserHostOptions,
   ExactModelExecution,
+  ExactModelHostLimits,
   ExactModelPin,
   ModelDerivation,
   ModelFailureReason,

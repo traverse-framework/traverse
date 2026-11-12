@@ -183,6 +183,12 @@ import { ExactModelBrowserHost } from "traverse-embedder-web";
 const host = new ExactModelBrowserHost(pins, {
   trustedPublicKeysHex: [...],
   modelUsage: "non_commercial",
+  // Decision 104 / #1582: host ceilings; mid-run cancel/timeout terminate a Worker.
+  limits: {
+    maxPackageBytes: 256 * 1024 * 1024,
+    maxMemoryBytes: 1024 * 1024 * 1024,
+    maxFuel: 50_000_000_000,
+  },
 });
 ```
 

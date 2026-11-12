@@ -4,6 +4,11 @@
  */
 
 import { MODEL_PREPARE_EXPORT, checkGuestAbiV3 } from "./guestAbiV3.js";
+import {
+  GuestWorkerError,
+  runGuestInterruptible,
+  type GuestSnapshot,
+} from "./exactModelInterrupt.js";
 
 export { MODEL_PREPARE_EXPORT };
 
@@ -207,6 +212,7 @@ export type ModelFailureReason =
   | "target_unsupported"
   | "crypto_unavailable"
   | "candidate_unsupported"
+  | "host_limit_exceeded"
   | "usage_undeclared"
   | "usage_invalid"
   | "rights_policy_denied"
@@ -825,6 +831,23 @@ export class ModelIoStore {
   }
 }
 
+/**
+ * Host ceilings a package's declared limits must fit within (Decision 104 /
+ * `#1582`). Registration fails with `host_limit_exceeded`; execution uses
+ * manifest ∩ host ∩ per-call for memory. Fuel is enforced at registration on
+ * the browser (no engine fuel meter); mid-run cancel/timeout use Worker
+ * termination.
+ */
+export type ExactModelHostLimits = {
+  readonly maxPackageBytes?: number;
+  readonly maxMemoryBytes?: number;
+  readonly maxFuel?: number;
+};
+
+const DEFAULT_MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_MEMORY_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_MAX_FUEL = 50_000_000_000;
+
 export type ExactModelBrowserHostOptions = {
   /** Host-owned trusted Ed25519 public keys (hex, raw 32 bytes). Apps can never add trust. */
   readonly trustedPublicKeysHex: readonly string[];
@@ -849,6 +872,8 @@ export type ExactModelBrowserHostOptions = {
    * placement over it is skipped. Defaults to five minutes.
    */
   readonly maxPreparationMs?: number;
+  /** Host ceilings (Decision 104 / `#1582`). */
+  readonly limits?: ExactModelHostLimits;
 };
 
 /**
@@ -914,6 +939,9 @@ export class ExactModelBrowserHost {
   private snapshotTotal = 0;
   private readonly maxPreparationMs: number;
   private readonly prepared = new Map<string, PlacementPreparation>();
+  private readonly maxPackageBytes: number;
+  private readonly maxMemoryBytes: number;
+  private readonly maxFuel: number;
 
   constructor(pins: readonly ExactModelPin[], options: ExactModelBrowserHostOptions) {
     for (const pin of pins) {
@@ -931,6 +959,9 @@ export class ExactModelBrowserHost {
     this.hostRequiresCommercial = options.hostRequiresCommercial ?? false;
     this.maxSnapshotBytes = options.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
     this.maxPreparationMs = options.maxPreparationMs ?? DEFAULT_MAX_PREPARATION_MS;
+    this.maxPackageBytes = options.limits?.maxPackageBytes ?? DEFAULT_MAX_PACKAGE_BYTES;
+    this.maxMemoryBytes = options.limits?.maxMemoryBytes ?? DEFAULT_MAX_MEMORY_BYTES;
+    this.maxFuel = options.limits?.maxFuel ?? DEFAULT_MAX_FUEL;
   }
 
   /** The placement registration fixed for a package under `policyRef` (Decision 120). */
@@ -1169,6 +1200,18 @@ export class ExactModelBrowserHost {
     if (normalizeDigest(manifest.wasm_digest) !== (await digestHex(wasm))) {
       throw incompatible("digest_mismatch", "model wasm digest mismatch");
     }
+    const packageBytes = manifestBytes.byteLength + wasm.byteLength;
+    if (
+      packageBytes > this.maxPackageBytes ||
+      manifest.max_memory_bytes > this.maxMemoryBytes ||
+      manifest.max_fuel > this.maxFuel ||
+      (manifest.max_prepare_fuel ?? 0) > this.maxFuel
+    ) {
+      throw incompatible(
+        "host_limit_exceeded",
+        "package size or declared limits exceed the host ceilings",
+      );
+    }
     let snapshotGlobals: readonly string[] | undefined;
     if (manifest.abi_version === MODEL_GUEST_ABI_PREPARED) {
       const shape = checkGuestAbiV3(wasm);
@@ -1219,10 +1262,32 @@ export class ExactModelBrowserHost {
       }
       if (pack.snapshotGlobals) {
         try {
-          await prepareWasmCpu(pack, this.snapshotReuse(digest, pack.snapshotGlobals));
+          // A non-positive budget is already over; skip starting prepare.
+          if (budget <= 0) {
+            attempts.push({ placement: id, outcome: "over_budget", duration_ms: 0 });
+            continue;
+          }
+          const deadlineMs = Date.now() + budget;
+          await prepareWasmCpu(
+            pack,
+            this.snapshotReuse(digest, pack.snapshotGlobals),
+            Math.min(pack.manifest.max_memory_bytes, this.maxMemoryBytes),
+            options.signal ? { signal: options.signal, deadlineMs } : { deadlineMs },
+          );
         } catch (error) {
           this.dropSnapshot(digest);
-          throw error;
+          const mapped = mapGuestError(error);
+          // Mirror native: a prepare deadline is over_budget for this
+          // placement, not a hard registration timeout (Decision 120).
+          if (mapped.code === "timeout") {
+            attempts.push({
+              placement: id,
+              outcome: "over_budget",
+              duration_ms: performance.now() - attemptStarted,
+            });
+            continue;
+          }
+          throw mapped;
         }
       }
       if (options.signal?.aborted) {
@@ -1328,16 +1393,24 @@ export class ExactModelBrowserHost {
     }
     const ceiling = Math.min(args.max_output_bytes, pack.manifest.max_output_bytes);
     const timeout = Math.min(args.timeout_ms ?? pack.manifest.max_execution_ms, pack.manifest.max_execution_ms);
+    const memoryCeiling = Math.min(pack.manifest.max_memory_bytes, this.maxMemoryBytes);
     const started = performance.now();
+    const deadlineMs = Date.now() + Math.max(0, timeout);
     const reuse = pack.snapshotGlobals ? this.snapshotReuse(digest, pack.snapshotGlobals) : undefined;
-    const output = await runWasmCpu(
-      pack.wasm,
-      input,
-      ceiling,
-      pack.manifest.max_memory_bytes,
-      pack.manifest.abi_version,
-      reuse,
-    );
+    let output: Uint8Array;
+    try {
+      output = await runWasmCpu(
+        pack.wasm,
+        input,
+        ceiling,
+        memoryCeiling,
+        pack.manifest.abi_version,
+        reuse,
+        args.signal ? { signal: args.signal, deadlineMs } : { deadlineMs },
+      );
+    } catch (error) {
+      throw mapGuestError(error);
+    }
     const durationMs = performance.now() - started;
     if (args.signal?.aborted) {
       throw new ExactModelError("cancelled", "model.execute cancelled during invoke");
@@ -1383,22 +1456,46 @@ function effectivePlacements(policy: ExactModelPlacementPolicy): readonly string
   return placements;
 }
 
-/** Registration-time ABI v3 preparation: instantiate once and run `model_prepare`, storing the snapshot. */
-async function prepareWasmCpu(pack: StoredPackage, reuse: SnapshotReuse): Promise<void> {
-  let module: WebAssembly.Module;
-  try {
-    module = await WebAssembly.compile(new Uint8Array(pack.wasm));
-  } catch {
-    throw new ExactModelError("model_incompatible", "model wasm failed validation");
+function mapGuestError(error: unknown): ExactModelError {
+  if (error instanceof ExactModelError) {
+    return error;
   }
-  const instance = await WebAssembly.instantiate(module, {});
-  const memory = instance.exports.memory;
-  if (!(memory instanceof WebAssembly.Memory)) {
-    throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
+  if (error instanceof GuestWorkerError) {
+    return new ExactModelError(
+      error.code,
+      error.message,
+      error.reason as ModelFailureReason | undefined,
+    );
   }
-  prepareOrRestore(instance, memory, pack.manifest.max_memory_bytes, reuse);
+  return new ExactModelError(
+    "execution_failed",
+    error instanceof Error ? error.message : "guest worker failed",
+  );
 }
 
+/** Registration-time ABI v3 preparation in a Worker (Decision 104 / `#1582`). */
+async function prepareWasmCpu(
+  pack: StoredPackage,
+  reuse: SnapshotReuse,
+  maxMemoryBytes: number,
+  control: { readonly signal?: AbortSignal; readonly deadlineMs: number },
+): Promise<void> {
+  const result = await runGuestInterruptible(
+    {
+      kind: "prepare",
+      wasm: pack.wasm,
+      maxMemoryBytes,
+      snapshotGlobalNames: reuse.globals,
+    },
+    control,
+  );
+  if (result.kind !== "prepare") {
+    throw new ExactModelError("execution_failed", "model_prepare returned no snapshot");
+  }
+  reuse.store(result.snapshot);
+}
+
+/** Execute a guest in a Worker so cancel/deadline can terminate mid-run. */
 async function runWasmCpu(
   wasm: Uint8Array,
   input: Uint8Array,
@@ -1406,35 +1503,29 @@ async function runWasmCpu(
   maxMemoryBytes: number,
   abiVersion: number,
   reuse: SnapshotReuse | undefined,
+  control: { readonly signal?: AbortSignal; readonly deadlineMs: number },
 ): Promise<Uint8Array> {
-  const module = await WebAssembly.compile(new Uint8Array(wasm));
-  // Deny-by-default: no imports.
-  const instance = await WebAssembly.instantiate(module, {});
-  const memory = instance.exports.memory;
-  const execute = instance.exports[MODEL_EXECUTE_EXPORT];
-  if (!(memory instanceof WebAssembly.Memory) || typeof execute !== "function") {
-    throw new ExactModelError("model_incompatible", "model wasm missing memory or model_execute");
-  }
-  if (reuse) {
-    prepareOrRestore(instance, memory, maxMemoryBytes, reuse);
-  }
-  const [inPtr, outPtr] = abiVersion >= 2
-    ? placeV2(instance, memory, input.length, maxOutputBytes, maxMemoryBytes)
-    : placeV1(memory, input.length, maxOutputBytes, maxMemoryBytes);
-  new Uint8Array(memory.buffer, inPtr, input.length).set(input);
-  const outLen = Number(
-    (execute as (a: number, b: number, c: number, d: number) => number)(
-      inPtr,
-      input.length,
-      outPtr,
+  const cached: GuestSnapshot | undefined = reuse?.usable(maxMemoryBytes);
+  const result = await runGuestInterruptible(
+    {
+      kind: "execute",
+      wasm,
+      input,
       maxOutputBytes,
-    ),
+      maxMemoryBytes,
+      abiVersion,
+      ...(cached ? { snapshot: cached } : {}),
+      ...(reuse ? { snapshotGlobalNames: reuse.globals } : {}),
+    },
+    control,
   );
-  if (memory.buffer.byteLength > maxMemoryBytes) {
-    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
+  if (result.kind !== "execute") {
+    throw new ExactModelError("execution_failed", "model_execute returned no output");
   }
-  const length = guestExecuteOutcome(outLen, maxOutputBytes);
-  return new Uint8Array(memory.buffer.slice(outPtr, outPtr + length));
+  if (result.snapshot && reuse) {
+    reuse.store(result.snapshot);
+  }
+  return result.output;
 }
 
 /** Guest reject codes `model_execute` may return (Spec 138 0.14.0, Decision 115). */
@@ -1483,98 +1574,3 @@ function guestReject(code: number): ExactModelError {
   }
 }
 
-/**
- * Guest ABI v3 (Decision 110): restore the cached post-prepare snapshot into
- * this fresh instance, or run `model_prepare` and store a snapshot. The
- * browser has no fuel metering (FR-030); the memory ceiling is checked after
- * prepare as after `model_alloc`.
- */
-function prepareOrRestore(
-  instance: WebAssembly.Instance,
-  memory: WebAssembly.Memory,
-  maxMemoryBytes: number,
-  reuse: SnapshotReuse,
-): void {
-  const globals = reuse.globals.map((name) => [name, instance.exports[name] as WebAssembly.Global] as const);
-  const snapshot = reuse.usable(maxMemoryBytes);
-  if (snapshot) {
-    const missing = Math.ceil((snapshot.memory.length - memory.buffer.byteLength) / 65536);
-    if (missing > 0) {
-      memory.grow(missing);
-    }
-    new Uint8Array(memory.buffer).set(snapshot.memory);
-    for (const [name, value] of snapshot.globals) {
-      (instance.exports[name] as WebAssembly.Global).value = value;
-    }
-    return;
-  }
-  const prepare = instance.exports[MODEL_PREPARE_EXPORT];
-  if (typeof prepare !== "function") {
-    throw new ExactModelError("model_incompatible", "abi_version 3 model wasm missing model_prepare export");
-  }
-  let prepared: unknown;
-  try {
-    prepared = (prepare as () => unknown)();
-  } catch {
-    throw new ExactModelError("execution_failed", "model_prepare trapped");
-  }
-  if (prepared !== 0) {
-    throw new ExactModelError("execution_failed", "model_prepare returned non-zero");
-  }
-  if (memory.buffer.byteLength > maxMemoryBytes) {
-    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
-  }
-  reuse.store({
-    memory: new Uint8Array(memory.buffer.slice(0)),
-    globals: globals.map(([name, global]) => [name, global.value as number | bigint] as const),
-  });
-}
-
-/** Guest ABI v1: host-chosen fixed offsets, grown by the host. */
-function placeV1(memory: WebAssembly.Memory, inLen: number, outCap: number, maxMemoryBytes: number): [number, number] {
-  const inPtr = 64;
-  const outPtr = inPtr + inLen + 64;
-  const needed = outPtr + outCap;
-  if (needed > maxMemoryBytes) {
-    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
-  }
-  while (memory.buffer.byteLength < needed) {
-    memory.grow(1);
-  }
-  return [inPtr, outPtr];
-}
-
-/**
- * Guest ABI v2 (Decision 105): buffers come from the guest's `model_alloc`.
- * Regions must be positive, in bounds, and disjoint (same rules as native).
- */
-function placeV2(
-  instance: WebAssembly.Instance,
-  memory: WebAssembly.Memory,
-  inLen: number,
-  outCap: number,
-  maxMemoryBytes: number,
-): [number, number] {
-  const alloc = instance.exports[MODEL_ALLOC_EXPORT];
-  if (typeof alloc !== "function") {
-    throw new ExactModelError("model_incompatible", "abi_version 2 model wasm missing model_alloc export");
-  }
-  let inPtr: number;
-  let outPtr: number;
-  try {
-    inPtr = Number((alloc as (n: number) => number)(inLen));
-    outPtr = Number((alloc as (n: number) => number)(outCap));
-  } catch {
-    throw new ExactModelError("execution_failed", "model_alloc trapped");
-  }
-  if (memory.buffer.byteLength > maxMemoryBytes) {
-    throw new ExactModelError("resource_exhausted", "model memory ceiling exceeded");
-  }
-  const size = memory.buffer.byteLength;
-  const inEnd = inPtr + inLen;
-  const outEnd = outPtr + outCap;
-  if (!(inPtr > 0 && outPtr > 0 && inEnd <= size && outEnd <= size) || (inPtr < outEnd && outPtr < inEnd)) {
-    throw new ExactModelError("execution_failed", "model_alloc returned an invalid region");
-  }
-  return [inPtr, outPtr];
-}

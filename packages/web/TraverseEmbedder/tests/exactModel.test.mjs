@@ -995,3 +995,69 @@ test("browser host registers signed variants with f32_dtypes (#1703) and checks 
   }
 });
 
+
+test("host ceilings fail closed with host_limit_exceeded (Decision 104 / #1582)", async () => {
+  const pkg = fixture("fixture-echo-1.0.0");
+  const pin = await pinFor("fixture.echo", pkg.manifest);
+  const parsed = JSON.parse(new TextDecoder().decode(pkg.manifest));
+  const packageBytes = pkg.manifest.byteLength + pkg.wasm.byteLength;
+  for (const limits of [
+    { maxPackageBytes: packageBytes - 1 },
+    { maxMemoryBytes: parsed.max_memory_bytes - 1 },
+    { maxFuel: parsed.max_fuel - 1 },
+  ]) {
+    const host = new ExactModelBrowserHost([pin], { ...TRUST, limits });
+    await assert.rejects(
+      () => host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY),
+      (e) => e instanceof ExactModelError && e.code === "model_incompatible" && e.reason === "host_limit_exceeded",
+      JSON.stringify(limits),
+    );
+  }
+  const host = new ExactModelBrowserHost([pin], {
+    ...TRUST,
+    limits: {
+      maxPackageBytes: packageBytes,
+      maxMemoryBytes: parsed.max_memory_bytes,
+      maxFuel: parsed.max_fuel,
+    },
+  });
+  await host.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY);
+});
+
+test("worker termination interrupts a spinning guest mid-run (Decision 104 / #1582)", async () => {
+  const { default: wabtInit } = await import("wabt");
+  const wabt = await wabtInit();
+  const looper = new Uint8Array(
+    wabt
+      .parseWat(
+        "looper.wat",
+        `(module
+          (memory (export "memory") 1)
+          (func (export "model_execute") (param i32 i32 i32 i32) (result i32)
+            (loop $spin (br $spin))
+            i32.const 0))`,
+      )
+      .toBinary({}).buffer,
+  );
+  const pkg = fixture("fixture-echo-1.0.0");
+  const { bytes, sig } = resigned(pkg.manifest, (m) => {
+    m.wasm_digest = [...createHash("sha256").update(looper).digest()].map((b) => b.toString(16).padStart(2, "0")).join("");
+  });
+  const pin = await pinFor("fixture.echo", bytes);
+  const host = new ExactModelBrowserHost([pin], TRUST);
+  const digest = await host.registerPackage(bytes, looper, sig, POLICY);
+  const stage = () => host.io.stageModelInput(new Uint8Array([1]), 8);
+  await assert.rejects(
+    () => host.execute(executeArgs("fixture.echo", digest, stage(), "schema:fixture-in", { timeout_ms: 50 })),
+    (e) => e.code === "timeout",
+  );
+  const midway = new AbortController();
+  const pending = host.execute(
+    executeArgs("fixture.echo", digest, stage(), "schema:fixture-in", {
+      timeout_ms: 60_000,
+      signal: midway.signal,
+    }),
+  );
+  setTimeout(() => midway.abort(), 20);
+  await assert.rejects(() => pending, (e) => e.code === "cancelled");
+});
