@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.17.0 — 2026-11-12
+
+Minor lockstep release with breaking changes (one compatible lifecycle on
+every host, raw-JSON Rust embedder input, guests receive only the submitted
+input) and Spec 138 mid-run interruption on wasmtime and the web host. See
+[docs/releases/v0.17.0.md](docs/releases/v0.17.0.md).
+
 ### CI: macOS jobs move off the retired `macos-14` image (`#1840`)
 
 GitHub now rejects `macos-14` ("configuration not supported"), so
