@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.17.1 — 2026-11-13
+
+Lockstep patch: the first crates.io and product release of the v0.17.0
+changes, whose crates.io publish failed. See
+[docs/releases/v0.17.1.md](docs/releases/v0.17.1.md).
+
 - `Package.swift` now points at the `swift-host-v0.17.0` xcframework (`#1846`).
 
 ### `traverse-contracts` packages for crates.io again (`#1849`)
