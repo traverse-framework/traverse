@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `Package.swift` now points at the `swift-host-v0.17.0` xcframework (`#1846`).
+
 ## v0.17.0 — 2026-11-12
 
 Minor lockstep release with breaking changes (one compatible lifecycle on
@@ -16,6 +18,19 @@ GitHub now rejects `macos-14` ("configuration not supported"), so
 MCP binary build run on `macos-15`. The pinned Core ML converter re-converts
 the committed variant to the same bytes there, so the byte-identical check is
 unchanged.
+
+### The browser resolves Spec 045 model dependencies (Decision 95, `#1835`, `#1843`)
+
+- New `resolveBrowserModelDependency` and `BrowserModelAvailabilityProbe`
+  exports in `traverse-embedder-web`. They resolve a mixed candidate list
+  in the same heuristic order as the Rust runtime.
+- On a browser placement, `ollama.local.generate` candidates are always
+  unavailable and skipped, with no HTTP probe. Activated
+  `exact-ref.wasm-cpu` pins are selected. The resolution fails closed
+  when no browser-capable candidate remains.
+- The evidence records the selected candidate, the rejection reasons, the
+  placement and `trust_class`. `exactRefPinFromSelected` maps the
+  selection to an `ExactModelBrowserHost` pin.
 
 ### The browser model host enforces host ceilings and interrupts calls mid-run (Decisions 104 and 131, Spec 138 0.16.2, `#1582`)
 
