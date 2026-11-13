@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-android-host"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "jni",
  "serde_json",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-cli-rs"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -2690,7 +2690,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-contracts"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "semver",
  "serde",
@@ -2700,7 +2700,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-coreml-adapter"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "block2",
  "objc2",
@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-dotnet-host"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde_json",
  "traverse-model-host-frame",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-embedder"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "semver",
  "serde",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-expedition-wasm"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2742,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-mcp"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "ed25519-dalek",
  "semver",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-model-host-frame"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde_json",
  "traverse-runtime",
@@ -2767,14 +2767,14 @@ dependencies = [
 
 [[package]]
 name = "traverse-model-trainer"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "sha2 0.11.1",
 ]
 
 [[package]]
 name = "traverse-native-bridge"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2784,7 +2784,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-nested-wasm-spike"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "wasmi",
  "wat",
@@ -2805,7 +2805,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-registry-sync"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde_json",
  "sha2 0.11.1",
@@ -2814,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-runtime"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "aes-gcm",
  "chrono",
@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-runtime-wasm"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "semver",
  "serde",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "traverse-swift-host"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "serde",
  "serde_json",
