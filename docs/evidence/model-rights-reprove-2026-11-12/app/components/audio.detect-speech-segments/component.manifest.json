@@ -1,0 +1,32 @@
+{
+  "component_id": "rights-probe.audio.detect-speech-segments",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "capability_id": "audio.detect-speech-segments",
+  "capability_version": "1.2.1",
+  "registry_ref": {
+    "namespace": "audio",
+    "id": "audio.detect-speech-segments",
+    "version_range": "=1.2.1"
+  },
+  "runtime_constraints": {
+    "host_api_access": "none",
+    "network_access": "forbidden",
+    "filesystem_access": "none"
+  },
+  "permitted_targets": [
+    "local",
+    "browser",
+    "edge",
+    "device"
+  ],
+  "dependencies": [],
+  "connector_requirements": [],
+  "validation_evidence": [
+    {
+      "evidence_type": "published_registry_fixture",
+      "status": "passed",
+      "produced_by": "rights_probe"
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "app_id": "rights-probe",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "workspace_defaults": {
+    "workspace_id": "rights-live",
+    "registry_scope": "private"
+  },
+  "components": [
+    {
+      "component_id": "rights-probe.text.detect-entities",
+      "version": "1.0.0",
+      "digest": "sha256:f11f230260f0896d558051ee844de780cde9e5392f4d5219f9a9a84e6b15f6ec",
+      "manifest_path": "components/text.detect-entities/component.manifest.json"
+    },
+    {
+      "component_id": "rights-probe.text.redact-entities",
+      "version": "1.0.0",
+      "digest": "sha256:9f6fcff01b9b9045bcb1dc54d331a8ca3b3e9c1c2e0508b2b78629f227f06191",
+      "manifest_path": "components/text.redact-entities/component.manifest.json"
+    },
+    {
+      "component_id": "rights-probe.audio.detect-speech-segments",
+      "version": "1.0.0",
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "manifest_path": "components/audio.detect-speech-segments/component.manifest.json"
+    },
+    {
+      "component_id": "rights-probe.audio.transcribe-speech",
+      "version": "1.0.0",
+      "digest": "sha256:cdddb1478534405d609785deeabedc5f7d90a480c9e98afaab7f505e72bc77f4",
+      "manifest_path": "components/audio.transcribe-speech/component.manifest.json"
+    },
+    {
+      "component_id": "rights-probe.report.translate-fr-semantic",
+      "version": "1.0.0",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "manifest_path": "components/report.translate-fr-semantic/component.manifest.json"
+    }
+  ],
+  "workflows": [],
+  "model_dependencies": [],
+  "config_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "default_config": {},
+  "placement_policy": {
+    "preferred_targets": [
+      "local"
+    ],
+    "allow_fallback": false
+  },
+  "public_surfaces": [
+    "cli"
+  ]
+}

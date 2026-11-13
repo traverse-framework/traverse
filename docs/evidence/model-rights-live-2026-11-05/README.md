@@ -10,6 +10,8 @@ Evidence for `#1786`. It checks Traverse's Spec 026 model-rights handling agains
 
 Run `bash run.sh` to regenerate `proof/` from an empty `.work/` folder.
 
+> **Update (2026-11-12, `#1830`):** finding 1 is resolved. The registry republished the five agents as `ai-assisted` patch versions, and they now pass `app validate` and `app register` on exact pins. See [`../model-rights-reprove-2026-11-12/`](../model-rights-reprove-2026-11-12/).
+
 ## What was checked
 
 The rights-bearing version of each agent is pinned exactly in `app/`:
