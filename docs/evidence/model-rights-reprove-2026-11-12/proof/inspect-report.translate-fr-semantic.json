@@ -1,0 +1,238 @@
+{
+  "index_version": 427,
+  "records": [
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.2.1/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900",
+            "description": "Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/report-translate-fr-semantic/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "license_files": [
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "active",
+      "version": "1.2.1"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.2.0/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900",
+            "description": "Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/report-translate-fr-semantic/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "license_files": [
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "deprecated",
+      "version": "1.2.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.1.1/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900",
+            "description": "Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/report-translate-fr-semantic/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "license_files": [
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "active",
+      "version": "1.1.1"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.1.0/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "not stated",
+          "data_obligations": "not stated",
+          "derivation": {
+            "kind": "not stated"
+          },
+          "derivatives": "not stated",
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "license_files": [],
+          "notice_files": [],
+          "redistribution": "not stated",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "not stated",
+          "verification_status": "not stated"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "deprecated",
+      "version": "1.1.0"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.0.1/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "attribution_required": true,
+          "commercial_use": "allowed",
+          "data_obligations": "not stated",
+          "derivation": {
+            "converted_sha256": "8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900",
+            "description": "Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.",
+            "kind": "converted",
+            "tool_url": "https://github.com/traverse-framework/registry/blob/main/capability-src/report-translate-fr-semantic/data/README.md",
+            "transformations": [
+              "quantize",
+              "format-convert"
+            ]
+          },
+          "derivatives": "allowed",
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "license_files": [
+            {
+              "sha256": "9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE"
+            }
+          ],
+          "notice_files": [
+            {
+              "sha256": "87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696",
+              "url": "https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE"
+            }
+          ],
+          "redistribution": "allowed",
+          "shape": "object",
+          "spdx_expression": "Apache-2.0",
+          "usage_class": "unrestricted",
+          "verification_status": "maintainer-declared"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "active",
+      "version": "1.0.1"
+    },
+    {
+      "contract_url": "https://raw.githubusercontent.com/traverse-framework/registry/24a59f67dea1bbd3b704181b8e5ba84a26c58ad0/capabilities/report/report.translate-fr-semantic/1.0.0/contract.json",
+      "digest": "sha256:d70164a8b8d458c49980f94a087cbf9ea3c1e2b9febf298ffd37885f0634989f",
+      "id": "report.translate-fr-semantic",
+      "model_backed": true,
+      "models": [
+        {
+          "id": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+          "rights": "not recorded (legacy shape)",
+          "shape": "legacy"
+        }
+      ],
+      "namespace": "report",
+      "revocation": null,
+      "status": "deprecated",
+      "version": "1.0.0"
+    }
+  ],
+  "source_release": "index-v427",
+  "status": "ok",
+  "workspace": "rights-live"
+}

@@ -1,0 +1,13 @@
+audio.detect-speech-segments	snakers4/silero-vad	license_files	snakers4-silero-vad.LICENSE	1075	verified
+audio.detect-speech-segments	snakers4/silero-vad	notice_files	snakers4-silero-vad.NOTICE	514	verified
+audio.transcribe-speech	openai/whisper-tiny	license_files	openai-whisper-tiny.LICENSE-Apache-2.0	9156	verified
+audio.transcribe-speech	openai/whisper-tiny	license_files	openai-whisper-tiny.LICENSE-MIT	1063	verified
+audio.transcribe-speech	openai/whisper-tiny	notice_files	openai-whisper-tiny.NOTICE	716	verified
+audio.transcribe-speech	snakers4/silero-vad	license_files	snakers4-silero-vad.LICENSE	1075	verified
+audio.transcribe-speech	snakers4/silero-vad	notice_files	snakers4-silero-vad.NOTICE	514	verified
+report.translate-fr-semantic	sentence-transformers/paraphrase-MiniLM-L3-v2	license_files	paraphrase-MiniLM-L3-v2.LICENSE	9156	verified
+report.translate-fr-semantic	sentence-transformers/paraphrase-MiniLM-L3-v2	notice_files	paraphrase-MiniLM-L3-v2.NOTICE	468	verified
+text.detect-entities	dslim/distilbert-NER	license_files	dslim-distilbert-NER.LICENSE	9156	verified
+text.detect-entities	dslim/distilbert-NER	notice_files	dslim-distilbert-NER.NOTICE	376	verified
+text.redact-entities	dslim/distilbert-NER	license_files	dslim-distilbert-NER.LICENSE	9156	verified
+text.redact-entities	dslim/distilbert-NER	notice_files	dslim-distilbert-NER.NOTICE	376	verified

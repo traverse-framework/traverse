@@ -1,0 +1,347 @@
+[
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.0.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": "ok",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.detect-speech-segments",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.2.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.0.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.2.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.3.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": "ok",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "audio.transcribe-speech",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.3.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.0.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": "ok",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "report.translate-fr-semantic",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.2.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.detect-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.detect-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.0.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.detect-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.detect-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.detect-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.1.2"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.detect-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": "ok",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.detect-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.2.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.redact-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.0.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.redact-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.0.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.redact-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.redact-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.1.1"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.redact-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.1.2"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "default_policy": "permitted",
+    "deprecated": true,
+    "id": "text.redact-entities",
+    "provenance_source": "derived",
+    "status": "Deprecated",
+    "superseded_by": null,
+    "version": "1.2.0"
+  },
+  {
+    "allow_conditional_policy": "permitted",
+    "contract_parse_as_published": "ok",
+    "default_policy": "permitted",
+    "deprecated": false,
+    "id": "text.redact-entities",
+    "provenance_source": "ai-assisted",
+    "status": "Active",
+    "superseded_by": null,
+    "version": "1.2.1"
+  }
+]

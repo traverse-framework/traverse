@@ -1,0 +1,50 @@
+{
+  "index_version": 427,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.1",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.1",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": false,
+      "digest": "sha256:9acfc67c0052014ce8be7a383a2f9022a2ae3e9f3c4244e89d7ec9c8ca155b86",
+      "id": "audio.detect-speech-segments",
+      "license_expression": "Apache-2.0",
+      "namespace": "audio",
+      "redistribution": "allowed",
+      "status": "active",
+      "verification_status": "maintainer-declared",
+      "version": "1.0.1",
+      "yanked": false
+    }
+  ],
+  "source_commit": "24a59f67dea1bbd3b704181b8e5ba84a26c58ad0",
+  "source_release": "index-v427",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1794539772",
+  "workspace": "rights-live"
+}
