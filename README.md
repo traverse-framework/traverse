@@ -214,7 +214,7 @@ same Host ABI — the browser is one target among several, not the default.
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
 | **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned [`runtime.wasm`](runtime/runtime.wasm.sha256); rebuild/verify with `bash scripts/build-runtime-wasm.sh` / `bash scripts/ci/runtime_wasm_reproducibility_check.sh`) | Published (npm `traverse-embedder-web@0.17.0`) |
-| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.16.0`) |
+| **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.17.0`) |
 | **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.17.0) |
 | **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.17.0) |
 | **AI agent** | `traverse-mcp` stdio server | via the host embedder | Published on crates.io |
