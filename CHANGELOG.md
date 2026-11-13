@@ -4,6 +4,16 @@
 
 - `Package.swift` now points at the `swift-host-v0.17.0` xcframework (`#1846`).
 
+### `traverse-contracts` packages for crates.io again (`#1849`)
+
+The v0.17.0 crates.io publish failed. `traverse-contracts` used `include_str!`
+to read `contracts/connectors/traverse.audio-input/connector_contract.json`
+from outside the crate directory, which `cargo publish` doesn't package. The
+crate now embeds a byte-identical copy under
+`crates/traverse-contracts/data/`, and a test fails if the copy drifts. A new
+`crate-package` CI job (`scripts/ci/crate_package_check.sh`) packages and
+verifies every published crate on each PR.
+
 ## v0.17.0 — 2026-11-12
 
 Minor lockstep release with breaking changes (one compatible lifecycle on

@@ -1,0 +1,124 @@
+{
+  "kind": "connector_contract",
+  "schema_version": "1.0.0",
+  "connector_id": "traverse.audio-input",
+  "version": "1.0.0",
+  "capabilities_provided": [
+    "traverse.audio-input.capture",
+    "traverse.audio-input.permission"
+  ],
+  "required_config_schema": {
+    "type": "object",
+    "required": [
+      "authority_ref"
+    ],
+    "properties": {
+      "authority_ref": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "operation_envelopes": [
+    {
+      "operation_id": "audio.permission.request",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "success_schema": {
+        "type": "object",
+        "required": [
+          "permission_state",
+          "result_class"
+        ],
+        "properties": {
+          "permission_state": {
+            "type": "string",
+            "enum": [
+              "granted",
+              "denied",
+              "prompt_required",
+              "unavailable"
+            ]
+          },
+          "result_class": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "failure_classes": [
+        "unbound",
+        "incompatible",
+        "unconfigured",
+        "target_incompatible",
+        "input_limit_exceeded",
+        "cancelled",
+        "idempotency_conflict",
+        "policy_denied",
+        "unavailable"
+      ]
+    },
+    {
+      "operation_id": "audio.capture",
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "max_duration_ms",
+          "max_bytes"
+        ],
+        "properties": {
+          "max_duration_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60000
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          }
+        },
+        "additionalProperties": false
+      },
+      "success_schema": {
+        "type": "object",
+        "required": [
+          "artifact_ref",
+          "result_class"
+        ],
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "result_class": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "failure_classes": [
+        "unbound",
+        "incompatible",
+        "unconfigured",
+        "target_incompatible",
+        "input_limit_exceeded",
+        "cancelled",
+        "idempotency_conflict",
+        "policy_denied",
+        "unavailable"
+      ]
+    }
+  ],
+  "supported_placement_targets": [
+    "local",
+    "browser"
+  ],
+  "host_adapter_wit": {
+    "package": "traverse:audio-input",
+    "version": "1.0.0",
+    "path": "wit/capture.wit",
+    "interface": "capture"
+  }
+}

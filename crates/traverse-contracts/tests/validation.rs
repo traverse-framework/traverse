@@ -146,6 +146,25 @@ fn reference_connector_registry_includes_universal_local_connectors() {
 }
 
 #[test]
+fn audio_input_contract_copy_matches_repo() -> Result<(), String> {
+    // The crate embeds its own copy because `cargo publish` packages only the
+    // crate directory. Keep it byte-identical to the repository contract.
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: std::path::PathBuf| {
+        std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let embedded = read(crate_dir.join("data/traverse.audio-input.connector_contract.json"))?;
+    let repository = read(
+        crate_dir.join("../../contracts/connectors/traverse.audio-input/connector_contract.json"),
+    )?;
+    assert!(
+        embedded == repository,
+        "crates/traverse-contracts/data/traverse.audio-input.connector_contract.json drifted from contracts/connectors/traverse.audio-input/connector_contract.json"
+    );
+    Ok(())
+}
+
+#[test]
 fn activation_reference_catalog_loads_checked_in_audio_input_contract() -> Result<(), String> {
     let contract = activation_reference_connector_contracts()?
         .into_iter()

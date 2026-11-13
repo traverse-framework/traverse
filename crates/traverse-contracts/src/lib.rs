@@ -618,9 +618,18 @@ pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
     ]
 }
 
+/// Crate-local copy of
+/// `contracts/connectors/traverse.audio-input/connector_contract.json`.
+///
+/// `cargo publish` packages only this crate's directory, so the embedded
+/// contract must live inside it. The `audio_input_contract_copy_matches_repo`
+/// test fails when the copy drifts from the repository contract.
+const AUDIO_INPUT_CONNECTOR_CONTRACT: &str =
+    include_str!("../data/traverse.audio-input.connector_contract.json");
+
 /// Reference catalog used when an application is activated by a host.
 ///
-/// The audio authority has a checked-in WIT-pinned contract.  Parse that
+/// The audio authority has a checked-in WIT-pinned contract. Parse that
 /// contract here rather than duplicating its operation and configuration
 /// metadata in Rust, so activation registers the same artifact consumed by
 /// every host conformance fixture.
@@ -630,9 +639,7 @@ pub fn reference_connector_contracts() -> Vec<ConnectorContract> {
 /// Returns an error when the checked-in audio-input contract cannot be parsed
 /// or does not satisfy connector-contract validation.
 pub fn activation_reference_connector_contracts() -> Result<Vec<ConnectorContract>, String> {
-    load_activation_reference_connector_contracts(include_str!(
-        "../../../contracts/connectors/traverse.audio-input/connector_contract.json"
-    ))
+    load_activation_reference_connector_contracts(AUDIO_INPUT_CONNECTOR_CONTRACT)
 }
 
 /// Build the activation reference catalog from an audio-input connector JSON
