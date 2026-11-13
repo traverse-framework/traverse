@@ -1,0 +1,10 @@
+published audio.detect-speech-segments@1.2.0: status=deprecated superseded_by=1.2.1 successor_status=active successor_source=ai-assisted pass
+published audio.transcribe-speech@1.3.0: status=deprecated superseded_by=1.3.1 successor_status=active successor_source=ai-assisted pass
+published report.translate-fr-semantic@1.2.0: status=deprecated superseded_by=1.2.1 successor_status=active successor_source=ai-assisted pass
+published text.detect-entities@1.2.0: status=deprecated superseded_by=1.2.1 successor_status=active successor_source=ai-assisted pass
+published text.redact-entities@1.2.0: status=deprecated superseded_by=1.2.1 successor_status=active successor_source=ai-assisted pass
+synced audio.detect-speech-segments@1.2.0: status=deprecated superseded_by=None successor_status=None successor_source=None FAIL
+synced audio.transcribe-speech@1.3.0: status=deprecated superseded_by=None successor_status=None successor_source=None FAIL
+synced report.translate-fr-semantic@1.2.0: status=deprecated superseded_by=None successor_status=None successor_source=None FAIL
+synced text.detect-entities@1.2.0: status=deprecated superseded_by=None successor_status=None successor_source=None FAIL
+synced text.redact-entities@1.2.0: status=deprecated superseded_by=None successor_status=None successor_source=None FAIL

@@ -1,0 +1,81 @@
+report:report.translate-fr-semantic@1.2.1
+  status: active
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE (sha256 87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696)
+    derivation: converted (Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.; converted_sha256 8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+report:report.translate-fr-semantic@1.2.0
+  status: deprecated
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE (sha256 87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696)
+    derivation: converted (Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.; converted_sha256 8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+report:report.translate-fr-semantic@1.1.1
+  status: active
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE (sha256 87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696)
+    derivation: converted (Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.; converted_sha256 8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+report:report.translate-fr-semantic@1.1.0
+  status: deprecated
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: not stated
+    redistribution: not stated
+    derivatives: not stated
+    usage_class: not stated
+    license_files: none
+    notice_files: none
+    derivation: not stated
+    data_obligations: not stated
+    verification_status: not stated
+report:report.translate-fr-semantic@1.0.1
+  status: active
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/paraphrase-MiniLM-L3-v2.NOTICE (sha256 87acebfb32d1cf222f6f2edef24d94c7dd7e860b4a91afa01a5f0749b2536696)
+    derivation: converted (Per-tensor symmetric int8 of paraphrase-MiniLM-L3-v2 safetensors Linear weights; biases, LayerNorm, and token_type embeddings stay float32; packed into minilm-l3-fr-semantic-int8.bin.; converted_sha256 8ae804ef04a1ae3b90e2e07036f6df6d9885d3406133b3a18b519e118a02f900)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+report:report.translate-fr-semantic@1.0.0
+  status: deprecated
+  models:
+  - id: sentence-transformers/paraphrase-MiniLM-L3-v2
+    rights: not recorded (legacy shape)
+

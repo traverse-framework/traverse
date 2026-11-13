@@ -1,0 +1,63 @@
+{
+  "index_version": 427,
+  "records": [
+    {
+      "commercial_use": "allowed",
+      "deprecated": true,
+      "digest": "sha256:9f6fcff01b9b9045bcb1dc54d331a8ca3b3e9c1c2e0508b2b78629f227f06191",
+      "id": "text.redact-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "deprecated",
+      "verification_status": "maintainer-declared",
+      "version": "1.2.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": true,
+      "digest": "sha256:9f6fcff01b9b9045bcb1dc54d331a8ca3b3e9c1c2e0508b2b78629f227f06191",
+      "id": "text.redact-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "deprecated",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.1",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": true,
+      "digest": "sha256:cd6dc3d592c3f82e0e1887c6988868d3e5be202139d6af8ac66f2b6c44a1066f",
+      "id": "text.redact-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "deprecated",
+      "verification_status": "maintainer-declared",
+      "version": "1.1.0",
+      "yanked": false
+    },
+    {
+      "commercial_use": "allowed",
+      "deprecated": true,
+      "digest": "sha256:cd6dc3d592c3f82e0e1887c6988868d3e5be202139d6af8ac66f2b6c44a1066f",
+      "id": "text.redact-entities",
+      "license_expression": "Apache-2.0",
+      "namespace": "text",
+      "redistribution": "allowed",
+      "status": "deprecated",
+      "verification_status": "maintainer-declared",
+      "version": "1.0.0",
+      "yanked": false
+    }
+  ],
+  "source_commit": "24a59f67dea1bbd3b704181b8e5ba84a26c58ad0",
+  "source_release": "index-v427",
+  "stale": false,
+  "status": "ok",
+  "synced_at": "unix:1794539772",
+  "workspace": "rights-live"
+}

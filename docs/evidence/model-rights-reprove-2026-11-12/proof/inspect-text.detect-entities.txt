@@ -1,0 +1,96 @@
+text:text.detect-entities@1.2.1
+  status: active
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.NOTICE (sha256 6e32951997dcf92187f6e3330c9a274f6a5d088449bdb506b4eac55d227e2d2f)
+    derivation: converted (Per-tensor symmetric int8 on every Linear weight matrix from dslim/distilbert-NER onnx/model.onnx; biases and LayerNorm stay float32; packed into a flat little-endian .bin.; converted_sha256 12891d6c53ff7808d2dd6edfe78235cf7ad8d17a8ebdbd5d14f31a9b6998e120)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+text:text.detect-entities@1.2.0
+  status: deprecated
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.NOTICE (sha256 6e32951997dcf92187f6e3330c9a274f6a5d088449bdb506b4eac55d227e2d2f)
+    derivation: converted (Per-tensor symmetric int8 on every Linear weight matrix from dslim/distilbert-NER onnx/model.onnx; biases and LayerNorm stay float32; packed into a flat little-endian .bin.; converted_sha256 12891d6c53ff7808d2dd6edfe78235cf7ad8d17a8ebdbd5d14f31a9b6998e120)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+text:text.detect-entities@1.1.2
+  status: active
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.NOTICE (sha256 6e32951997dcf92187f6e3330c9a274f6a5d088449bdb506b4eac55d227e2d2f)
+    derivation: converted (Per-tensor symmetric int8 on every Linear weight matrix from dslim/distilbert-NER onnx/model.onnx; biases and LayerNorm stay float32; packed into a flat little-endian .bin.; converted_sha256 12891d6c53ff7808d2dd6edfe78235cf7ad8d17a8ebdbd5d14f31a9b6998e120)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+text:text.detect-entities@1.1.1
+  status: deprecated
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: not stated
+    redistribution: not stated
+    derivatives: not stated
+    usage_class: not stated
+    license_files: none
+    notice_files: none
+    derivation: not stated
+    data_obligations: not stated
+    verification_status: not stated
+text:text.detect-entities@1.1.0
+  status: deprecated
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: not stated
+    redistribution: not stated
+    derivatives: not stated
+    usage_class: not stated
+    license_files: none
+    notice_files: none
+    derivation: not stated
+    data_obligations: not stated
+    verification_status: not stated
+text:text.detect-entities@1.0.1
+  status: active
+  models:
+  - id: dslim/distilbert-NER
+    spdx_expression: Apache-2.0
+    attribution_required: true
+    commercial_use: allowed
+    redistribution: allowed
+    derivatives: allowed
+    usage_class: unrestricted
+    license_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.LICENSE (sha256 9825422b749bf6a6ccaf89c5f7dc79c8214428620ac35a688b77871220e66b5c)
+    notice_files: https://github.com/traverse-framework/registry/releases/download/artifacts/model-rights-026-backfill/dslim-distilbert-NER.NOTICE (sha256 6e32951997dcf92187f6e3330c9a274f6a5d088449bdb506b4eac55d227e2d2f)
+    derivation: converted (Per-tensor symmetric int8 on every Linear weight matrix from dslim/distilbert-NER onnx/model.onnx; biases and LayerNorm stay float32; packed into a flat little-endian .bin.; converted_sha256 12891d6c53ff7808d2dd6edfe78235cf7ad8d17a8ebdbd5d14f31a9b6998e120)
+    data_obligations: not stated
+    verification_status: maintainer-declared
+text:text.detect-entities@1.0.0
+  status: deprecated
+  models:
+  - id: dslim/distilbert-NER
+    rights: not recorded (legacy shape)
+

@@ -2,7 +2,23 @@
 
 ## Unreleased
 
+## v0.17.1 — 2026-11-13
+
+Lockstep patch: the first crates.io and product release of the v0.17.0
+changes, whose crates.io publish failed. See
+[docs/releases/v0.17.1.md](docs/releases/v0.17.1.md).
+
 - `Package.swift` now points at the `swift-host-v0.17.0` xcframework (`#1846`).
+
+### `traverse-contracts` packages for crates.io again (`#1849`)
+
+The v0.17.0 crates.io publish failed. `traverse-contracts` used `include_str!`
+to read `contracts/connectors/traverse.audio-input/connector_contract.json`
+from outside the crate directory, which `cargo publish` doesn't package. The
+crate now embeds a byte-identical copy under
+`crates/traverse-contracts/data/`, and a test fails if the copy drifts. A new
+`crate-package` CI job (`scripts/ci/crate_package_check.sh`) packages and
+verifies every published crate on each PR.
 
 ## v0.17.0 — 2026-11-12
 
