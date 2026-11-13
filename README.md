@@ -7,7 +7,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-core%20100%25-brightgreen)](https://github.com/traverse-framework/traverse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.95%2B-orange)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.16.2-blue)](https://github.com/traverse-framework/traverse/releases)
+[![Version](https://img.shields.io/badge/version-v0.17.0-blue)](https://github.com/traverse-framework/traverse/releases)
 [![Registry](https://img.shields.io/badge/registry-live%20catalog-6f42c1)](https://registry.traverse-framework.com/)
 
 **Define once. Run anywhere.**
@@ -142,7 +142,7 @@ three commands, using the `traverse-mcp` release binary
 (`traverse-mcp-vX.Y.Z`, published with each product tag from `v0.16.0`):
 
 ```bash
-curl -L https://github.com/traverse-framework/traverse/releases/download/traverse-mcp-v0.16.2/traverse-mcp-aarch64-apple-darwin.tar.gz | tar -xz
+curl -L https://github.com/traverse-framework/traverse/releases/download/traverse-mcp-v0.17.0/traverse-mcp-aarch64-apple-darwin.tar.gz | tar -xz
 ./traverse-mcp sync --out synced-state.json
 ./traverse-mcp prepare-cache --synced-state synced-state.json --cache traverse-cache --ref core/core.authorize@^1
 ```
@@ -160,7 +160,7 @@ and provenance verification, client configs and troubleshooting:
 
 Public packages are on [crates.io](https://crates.io) and
 [npmjs](https://www.npmjs.com/package/traverse-embedder-web), not GitHub
-Packages. Current release: **v0.16.2**.
+Packages. Current release: **v0.17.0**.
 
 ### Install the CLI
 
@@ -169,7 +169,7 @@ The Traverse CLI is published as **`traverse-cli-rs`** (binary name
 
 ```bash
 rustup toolchain install 1.95.0
-cargo +1.95.0 install traverse-cli-rs --version =0.16.2 --locked
+cargo +1.95.0 install traverse-cli-rs --version =0.17.0 --locked
 ```
 
 **Name clash:** crates.io [`traverse-cli`](https://crates.io/crates/traverse-cli)
@@ -184,21 +184,21 @@ runner guest from the `onnx-runner-v*` artifact release (not the product
 
 ```bash
 # Rust libraries
-cargo add traverse-runtime@0.16.2
-cargo add traverse-embedder@0.16.2
+cargo add traverse-runtime@0.17.0
+cargo add traverse-embedder@0.17.0
 # also: traverse-contracts, traverse-mcp, traverse-cli-rs,
 #       traverse-expedition-wasm
 
 # Web / TypeScript
-npm install traverse-embedder-web@0.16.2
+npm install traverse-embedder-web@0.17.0
 ```
 
-Swift, Maven, and NuGet packages are published as of `v0.16.2` (see the
+Swift, Maven, and NuGet packages are published as of `v0.17.0` (see the
 platform table below). The GitHub Release is
-[**Traverse v0.16.2**](https://github.com/traverse-framework/traverse/releases/tag/v0.16.2);
+[**Traverse v0.17.0**](https://github.com/traverse-framework/traverse/releases/tag/v0.17.0);
 binary artifacts (like the Swift xcframework) ship on their own
 `swift-host-v*` artifact releases, never marked Latest.
-See [docs/releases/v0.16.2.md](docs/releases/v0.16.2.md) and the
+See [docs/releases/v0.17.0.md](docs/releases/v0.17.0.md) and the
 [v0.16.0 upgrade guide](docs/upgrade-to-v0.16.0.md) (breaking model registration, canonical input, input schema and Registry rights changes).
 
 ---
@@ -213,10 +213,10 @@ same Host ABI — the browser is one target among several, not the default.
 | Platform | Embedder | WASM host | Status |
 |---|---|---|---|
 | **Linux / server / CLI** | `traverse-embedder` (Rust) · `traverse-cli` | Wasmtime | Published on crates.io |
-| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned [`runtime.wasm`](runtime/runtime.wasm.sha256); rebuild/verify with `bash scripts/build-runtime-wasm.sh` / `bash scripts/ci/runtime_wasm_reproducibility_check.sh`) | Published (npm `traverse-embedder-web@0.16.2`) |
+| **Browser** | `traverse-embedder-web` (TypeScript) | the browser's own `WebAssembly` (+ app-owned [`runtime.wasm`](runtime/runtime.wasm.sha256); rebuild/verify with `bash scripts/build-runtime-wasm.sh` / `bash scripts/ci/runtime_wasm_reproducibility_check.sh`) | Published (npm `traverse-embedder-web@0.17.0`) |
 | **iOS / macOS** | `packages/swift` — `TraverseEmbedder` Swift Package | wasmi | Published, pre-1.0 (SwiftPM, binary xcframework on `swift-host-v0.16.0`) |
-| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.16.2) |
-| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.16.2) |
+| **Android** | `packages/kotlin` — `TraverseEmbedder` Android library | Chicory | Published, pre-1.0 (Maven Central, `com.traverse-framework:traverse-embedder` 0.17.0) |
+| **Windows / WinUI** | `packages/dotnet` — `TraverseEmbedder` .NET library | Wasmtime .NET | Published, pre-1.0 (nuget.org, `TraverseEmbedder` 0.17.0) |
 | **AI agent** | `traverse-mcp` stdio server | via the host embedder | Published on crates.io |
 
 All five embedders run against one CI-enforced conformance suite (spec
@@ -243,13 +243,13 @@ Guides: [docs/wasm-microservice-authoring-guide.md](docs/wasm-microservice-autho
 
 ## Project state
 
-Traverse is **pre-1.0 (`v0.16.2`)** and spec-driven — every capability below is
+Traverse is **pre-1.0 (`v0.17.0`)** and spec-driven — every capability below is
 real, running, tested code.
 
 | | |
 |---|---|
-| **Runtime crates** | 17 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.16.2` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates. The unpublished model-host crates are built into the platform packages: `traverse-model-host-frame`, `traverse-android-host`, `traverse-dotnet-host` and `traverse-coreml-adapter`. `traverse-onnx-runner-guest` and `traverse-digits-mlp-guest` are model guests. `traverse-model-trainer` is an unpublished offline model trainer, and `traverse-nested-wasm-spike` is historical. |
-| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.16.2`), Web/TypeScript (npm `traverse-embedder-web@0.16.2`), Swift/iOS+macOS (wasmi, SwiftPM), Kotlin/Android (Chicory, Maven Central), and .NET/Windows (Wasmtime, nuget.org) all published and aligned on the same app-owned `runtime.wasm` orchestrator. |
+| **Runtime crates** | 17 in this repo; 6 published to [crates.io](https://crates.io/search?q=traverse-) at `0.17.0` (`traverse-contracts`, `traverse-runtime`, `traverse-embedder`, `traverse-mcp`, `traverse-cli-rs`, `traverse-expedition-wasm`). `traverse-native-bridge`, `traverse-runtime-wasm`, and `traverse-swift-host` ship the real nested-wasmi `runtime.wasm` path and are not yet published as crates. The unpublished model-host crates are built into the platform packages: `traverse-model-host-frame`, `traverse-android-host`, `traverse-dotnet-host` and `traverse-coreml-adapter`. `traverse-onnx-runner-guest` and `traverse-digits-mlp-guest` are model guests. `traverse-model-trainer` is an unpublished offline model trainer, and `traverse-nested-wasm-spike` is historical. |
+| **Platform SDKs** | 5 embedders on one `embedder-api/1.0.0` contract and one CI conformance suite — Rust (crates.io `0.17.0`), Web/TypeScript (npm `traverse-embedder-web@0.17.0`), Swift/iOS+macOS (wasmi, SwiftPM), Kotlin/Android (Chicory, Maven Central), and .NET/Windows (Wasmtime, nuget.org) all published and aligned on the same app-owned `runtime.wasm` orchestrator. |
 | **Registry** | [`traverse-framework/registry`](https://github.com/traverse-framework/registry) — its own repo (spec 051). `traverse-registry` on crates.io; live catalog at [registry.traverse-framework.com](https://registry.traverse-framework.com). |
 | **Governance** | Specs keep us honest (approved, immutable, merge-gating) — not the headline. List: `jq -r '.specs[].id' specs/governance/approved-specs.json` |
 | **Quality bar** | Core crates keep a hard coverage gate; every PR runs spec-alignment and a multi-OS CI matrix. Details live in CI, not in the pitch. |
@@ -383,7 +383,7 @@ Read the [UMA book](https://www.universalmicroservices.com/) and the
 
 ### Releases
 
-- [docs/releases/v0.16.2.md](docs/releases/v0.16.2.md) — current release notes
+- [docs/releases/v0.17.0.md](docs/releases/v0.17.0.md) — current release notes
 - [docs/releases/v0.14.0.md](docs/releases/v0.14.0.md) — prior release notes
 - [docs/releases/v0.13.0.md](docs/releases/v0.13.0.md) — prior release notes
 - [docs/releases/v0.12.0.md](docs/releases/v0.12.0.md) — prior release notes
