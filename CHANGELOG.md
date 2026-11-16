@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
+
 ## v0.17.1 — 2026-11-13
 
 Lockstep patch: the first crates.io and product release of the v0.17.0
