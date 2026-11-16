@@ -104,6 +104,11 @@ bash scripts/ci/embedder_conformance/rust_package.sh
 echo "local-preflight: RUN coverage gate"
 bash scripts/ci/coverage_gate.sh
 
+# #1865: the hosted workflow must keep a single PR run and the required job names.
+grep -q "cancel-in-progress: \${{ github.event_name == 'pull_request' }}" .github/workflows/ci.yml
+grep -q '^  repository-checks:' .github/workflows/ci.yml
+grep -q '^  coverage-gate:' .github/workflows/ci.yml
+
 echo "local-preflight: RUN spec alignment against $base_sha"
 GITHUB_BASE_SHA="$base_sha" GITHUB_HEAD_SHA="$(git rev-parse HEAD)" \
   bash scripts/ci/spec_alignment_check.sh "$pr_body"

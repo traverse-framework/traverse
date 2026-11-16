@@ -3,6 +3,8 @@
 ## Unreleased
 
 - `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
+- CI runs once per PR push, cancels only superseded PR runs, and splits
+  repository checks and coverage across parallel jobs (`#1865`).
 
 ## v0.17.1 — 2026-11-13
 

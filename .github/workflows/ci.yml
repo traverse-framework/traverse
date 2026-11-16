@@ -3,10 +3,17 @@ name: CI
 on:
   push:
     branches:
-      - "**"
+      - main
     tags:
       - "v*"
   pull_request:
+
+# A push to an open PR used to start this workflow twice (push + pull_request).
+# Branch pushes now wait for the pull_request event. Cancel only those PR runs;
+# a push to main or a release tag must run to completion.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   classify-changes:
@@ -117,7 +124,7 @@ jobs:
           cargo metadata --locked --format-version 1 > /dev/null
           echo "Cargo.lock resolves cleanly under --locked; lockfile is in sync."
 
-  repository-checks:
+  repository-smoke:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
     runs-on: ubuntu-latest
@@ -132,6 +139,12 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run expedition artifact smoke path
         run: TRAVERSE_REPO_ROOT="$PWD" bash scripts/ci/expedition_artifact_smoke.sh
@@ -211,12 +224,6 @@ jobs:
       - name: Run repository checks
         run: bash scripts/ci/repository_checks.sh
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run Rust checks
-        run: bash scripts/ci/rust_checks.sh
-
       - name: Check runtime wasm32 core build
         run: cargo check -p traverse-runtime --target wasm32-unknown-unknown --no-default-features
 
@@ -241,6 +248,147 @@ jobs:
       - name: Run Rust embedder package conformance
         run: bash scripts/ci/embedder_conformance/rust_package.sh
 
+  rust-lint:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run Rust fmt and clippy
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run scoped unsafe boundary check
+        run: bash scripts/ci/scoped_unsafe_boundary_check.sh
+
+      - name: Run contractual enforcement gate
+        run: bash scripts/ci/contractual_enforcement_gate.sh
+
+  rust-test-cli:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test traverse-cli-rs
+        run: cargo test -p traverse-cli-rs
+
+  rust-test-runtime:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test traverse-runtime
+        run: cargo test -p traverse-runtime
+
+  rust-test-rest:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the rest of the workspace
+        run: cargo test --workspace --exclude traverse-cli-rs --exclude traverse-runtime
+
+  repository-checks:
+    needs:
+      - classify-changes
+      - repository-smoke
+      - rust-lint
+      - rust-test-cli
+      - rust-test-runtime
+      - rust-test-rest
+    if: always() && !cancelled() && needs.classify-changes.result == 'success' && needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fail closed unless every repository shard succeeded
+        env:
+          SMOKE: ${{ needs.repository-smoke.result }}
+          LINT: ${{ needs.rust-lint.result }}
+          CLI: ${{ needs.rust-test-cli.result }}
+          RUNTIME: ${{ needs.rust-test-runtime.result }}
+          REST: ${{ needs.rust-test-rest.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for pair in \
+            "repository-smoke:${SMOKE}" \
+            "rust-lint:${LINT}" \
+            "rust-test-cli:${CLI}" \
+            "rust-test-runtime:${RUNTIME}" \
+            "rust-test-rest:${REST}"
+          do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            echo "${name}: ${result}"
+            if [[ "${result}" != "success" ]]; then
+              failed=1
+            fi
+          done
+          exit "${failed}"
 
   onnx-runner-packaged-cli:
     needs: classify-changes
@@ -581,10 +729,35 @@ jobs:
           name: android-emulator-test-reports
           path: packages/kotlin/TraverseEmbedder/traverse-embedder/build/reports/androidTests/
 
-  coverage-gate:
+  coverage-crates:
     needs: classify-changes
     if: needs.classify-changes.outputs.full_ci == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      crates: ${{ steps.list.outputs.crates }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: List coverage targets
+        id: list
+        run: |
+          set -euo pipefail
+          json="$(grep -Ev '^\s*(#|$)' ci/coverage-targets.txt | awk '{print $1}' | jq -R . | jq -sc .)"
+          echo "crates=${json}" >> "$GITHUB_OUTPUT"
+          echo "${json}"
+
+  coverage-crate:
+    needs:
+      - classify-changes
+      - coverage-crates
+    if: needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJson(needs.coverage-crates.outputs.crates) }}
 
     steps:
       - name: Checkout
@@ -598,6 +771,9 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: traverse-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -605,8 +781,27 @@ jobs:
       - name: Install WASM test target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Run coverage gate
+      - name: Run coverage gate for one crate
+        env:
+          COVERAGE_CRATE: ${{ matrix.crate }}
+          COVERAGE_TEST_THREADS: ""
         run: bash scripts/ci/coverage_gate.sh
+
+  coverage-gate:
+    needs:
+      - classify-changes
+      - coverage-crate
+    if: always() && !cancelled() && needs.classify-changes.result == 'success' && needs.classify-changes.outputs.full_ci == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fail closed unless every coverage shard succeeded
+        env:
+          RESULT: ${{ needs.coverage-crate.result }}
+        run: |
+          set -euo pipefail
+          echo "coverage-crate: ${RESULT}"
+          [[ "${RESULT}" == "success" ]]
 
   stress-test:
     needs: classify-changes

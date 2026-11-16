@@ -565,6 +565,35 @@ grep -q 'bash scripts/ci/rust_checks.sh' scripts/ci/local_preflight.sh
 grep -q 'cargo clippy --workspace --all-targets -- -D warnings' scripts/ci/rust_checks.sh
 grep -q 'bash scripts/ci/coverage_gate.sh' scripts/ci/local_preflight.sh
 
+# CI layout (#1865): one workflow run per PR push, cancel only PR runs, and
+# the required check names stay repository-checks and coverage-gate.
+if ! awk '
+  $0 ~ /^on:$/ { in_on = 1 }
+  in_on && /^jobs:$/ { in_on = 0 }
+  in_on && $0 ~ /^    branches:$/ { in_branches = 1; next }
+  in_branches && $0 ~ /^  [a-z]/ { in_branches = 0 }
+  in_branches && $0 ~ /^      - "\*\*"$/ { bad = 1 }
+  in_branches && $0 ~ /^      - main$/ { saw_main = 1 }
+  END { exit !(saw_main && !bad) }
+' .github/workflows/ci.yml; then
+  echo "ci.yml push branches must be main only (no \"**\")" >&2
+  exit 1
+fi
+grep -q "cancel-in-progress: \${{ github.event_name == 'pull_request' }}" .github/workflows/ci.yml
+grep -q 'cargo test -p traverse-cli-rs' .github/workflows/ci.yml
+grep -q 'cargo test -p traverse-runtime' .github/workflows/ci.yml
+grep -q 'cargo test --workspace --exclude traverse-cli-rs --exclude traverse-runtime' .github/workflows/ci.yml
+grep -q 'cargo clippy --workspace --all-targets -- -D warnings' .github/workflows/ci.yml
+grep -q 'bash scripts/ci/scoped_unsafe_boundary_check.sh' .github/workflows/ci.yml
+grep -q 'bash scripts/ci/contractual_enforcement_gate.sh' .github/workflows/ci.yml
+grep -q 'COVERAGE_CRATE: ${{ matrix.crate }}' .github/workflows/ci.yml
+grep -q '^  repository-checks:' .github/workflows/ci.yml
+grep -q '^  coverage-gate:' .github/workflows/ci.yml
+if COVERAGE_CRATE=not-a-crate bash scripts/ci/coverage_gate.sh >/dev/null 2>&1; then
+  echo "unknown COVERAGE_CRATE must fail the coverage gate" >&2
+  exit 1
+fi
+
 echo "Running bump_version.sh fixture tests (spec 048)..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/bump_version_test.sh"
 
