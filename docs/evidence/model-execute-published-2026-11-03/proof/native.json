@@ -1,5 +1,5 @@
 {
-  "host": "native: crates.io traverse-runtime 0.16.1, wasmtime",
+  "host": "native: crates.io traverse-runtime 0.17.1, wasmtime",
   "one_call_binding_output": {
     "model_evidence": {
       "digest": "a7a8aa35c79ed38e7e2646d1b4f531e5d3167949ac8bd3e4efc8bfd678b901d2",
