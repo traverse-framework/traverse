@@ -2133,6 +2133,25 @@
         "packages/swift/TraverseEmbedder/",
         "packages/kotlin/"
       ]
+    },
+    {
+      "id": "1774-onnxruntime-cpu-runner-family",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1774-onnxruntime-cpu-runner-family/spec.md",
+      "governs": [
+        "specs/1774-onnxruntime-cpu-runner-family/",
+        "docs/adr/0084-cross-host-onnxruntime-cpu-runner-family.md",
+        "docs/decision-log.md",
+        "specs/138-governed-exact-model-execution/spec.md",
+        "crates/traverse-runtime/",
+        "crates/traverse-native-bridge/",
+        "packages/web/TraverseEmbedder/",
+        "packages/swift/TraverseEmbedder/",
+        "packages/kotlin/",
+        "fixtures/cross-host/"
+      ]
     }
   ]
 }
