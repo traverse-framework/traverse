@@ -784,7 +784,7 @@ jobs:
       - name: Run coverage gate for one crate
         env:
           COVERAGE_CRATE: ${{ matrix.crate }}
-          COVERAGE_TEST_THREADS: ""
+          COVERAGE_TEST_THREADS: default
         run: bash scripts/ci/coverage_gate.sh
 
   coverage-gate:

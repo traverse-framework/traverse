@@ -81,14 +81,13 @@ for entry in "${targets[@]}"; do
   fi
 
   echo "Measuring line coverage for ${crate_name} with threshold ${minimum_percent}%"
-  # Unset COVERAGE_TEST_THREADS keeps the historical serial gate. CI sets it
-  # empty so each crate uses the runner's default test threads; a number pins it.
+  # Unset keeps the historical serial gate. CI sets "default" so each crate
+  # uses the runner's test threads; any other value is a thread count.
   cov_cmd=(cargo llvm-cov --package "${crate_name}" --lcov)
-  if [[ -z "${COVERAGE_TEST_THREADS+x}" ]]; then
-    cov_cmd+=(-- --test-threads=1)
-  elif [[ -n "${COVERAGE_TEST_THREADS}" ]]; then
-    cov_cmd+=(-- --test-threads="${COVERAGE_TEST_THREADS}")
-  fi
+  case "${COVERAGE_TEST_THREADS-1}" in
+    default) ;;
+    *) cov_cmd+=(-- --test-threads="${COVERAGE_TEST_THREADS-1}") ;;
+  esac
   coverage_output="$("${cov_cmd[@]}")"
   line_counts="$(
     awk -F '[:,]' '
