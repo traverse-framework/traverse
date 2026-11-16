@@ -8,6 +8,20 @@
   `ExactModelMediatedConnector::activated()` (`#1807`). Its results match the
   0.16.1 run.
 
+### Governed Core ML calls no longer hash the variant twice (`#1834`)
+
+- `AcceleratorAdapter` has a new `predict_verified` method with a default
+  implementation. `model.execute` calls it with the variant digests it just
+  re-checked (FR-021), as `VerifiedVariantDigests`.
+- The Core ML adapter uses those digests to key its loaded-model cache
+  instead of hashing the variant file again, and parses a conformance
+  vector's frame contract once instead of on every prediction.
+- Profile finding (`docs/evidence/governed-coreml-overhead-profile.md`): in
+  a release build a governed call on the digits fixture takes about 7 ms,
+  nearly all of it the mandatory FR-021 re-hash of the 15 MB package. The
+  114 ms recorded in `#1833` was a debug build.
+- No Spec 138 check changed.
+
 ## v0.17.1 — 2026-11-13
 
 Lockstep patch: the first crates.io and product release of the v0.17.0

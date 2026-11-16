@@ -1,11 +1,16 @@
 {
   "attribution_notes": [
+    "build_profile matters: SHA-256 is about 20x slower in a debug build, and the FR-021 re-check is nearly all of execute_total. Shipped hosts are release builds.",
+    "fr021_recheck re-hashes the manifest, WASM and variant bytes outside the connector, to size the mandatory Spec 138 FR-021 re-check inside execute_total.",
+    "adapter_predict_verified is CoreMlAdapter.predict_verified, the entry point model.execute uses since #1834: it reuses the digests the connector verified and a cached frame contract. raw_adapter_predict hashes the variant and its vector to key the same caches.",
     "register includes Spec 138 registration (signature, rights, variant self-check/compile) and is excluded from the steady execute sum.",
     "stage_input / read_output are public ModelIoStore frame copies around model.execute.",
     "raw_adapter_predict is CoreMlAdapter.predict alone (MLMultiArray fill + Core ML prediction + output read) after a warm compile.",
     "digest_rights_and_connector_glue_estimate = execute_total - raw_adapter_predict: digest/rights rechecks, policy/schema checks, cancel/deadline guards, and connector framing inside invoke. Spec 138 checks are unchanged.",
     "Noise: OS scheduling and Core ML runtime variance; stage totals should reconcile to end-to-end within a few ms."
   ],
+  "build_profile": "release",
+  "fr021_rechecked_bytes": 15098502,
   "governing_spec": "138-governed-exact-model-execution",
   "issue": "#1833",
   "package": {
@@ -23,13 +28,16 @@
   },
   "spec_138_checks_weakened": false,
   "stages_ms": {
-    "digest_rights_and_connector_glue_estimate": 113.408375,
-    "end_to_end_stage_sum": 113.970708,
-    "execute_total": 113.968917,
-    "raw_adapter_predict": 0.560542,
-    "read_output": 0.0011250000000000001,
+    "adapter_predict_verified": 0.03225,
+    "digest_rights_and_connector_glue_estimate": 7.119958,
+    "end_to_end_stage_sum": 7.183208,
+    "execute_total": 7.182541,
+    "fr021_recheck": 7.094709,
+    "raw_adapter_predict": 0.062583,
+    "read_output": 0.000334,
     "reconciliation_noise_ms": 0.0,
-    "register": 1180.619625,
-    "stage_input": 0.0006659999999999999
-  }
+    "register": 372.43808299999995,
+    "stage_input": 0.00033299999999999996
+  },
+  "trimmed_by": "#1834"
 }

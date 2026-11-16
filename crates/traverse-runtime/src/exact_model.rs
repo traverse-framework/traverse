@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 
 mod adapter;
 mod snapshot;
-pub use adapter::{AcceleratorAdapter, FuelMetering, PlacementEvidence, SelfCheckEvidence};
+pub use adapter::{
+    AcceleratorAdapter, FuelMetering, PlacementEvidence, SelfCheckEvidence, VerifiedVariantDigests,
+};
 use adapter::{SelfCheckKey, effective_placements, self_check};
 pub use snapshot::MODEL_PREPARE_EXPORT;
 use snapshot::{GlobalValue, Snapshot, SnapshotCache, check_v3_module};
@@ -949,6 +951,22 @@ fn variant_bytes_match(manifest: &ModelPackageManifest, cached: &CachedAccelerat
             digest_hex(&cached.bytes) == normalize_digest(&variant.digest)
                 && digest_hex(&cached.conformance_vector)
                     == normalize_digest(&variant.conformance_vector_digest)
+        })
+}
+
+/// The signed digests of a cached variant, for the adapter (see
+/// [`VerifiedVariantDigests`]). Only meaningful after `recheck` passed.
+fn verified_digests(
+    manifest: &ModelPackageManifest,
+    cached: &CachedAcceleratorVariant,
+) -> Option<VerifiedVariantDigests> {
+    manifest
+        .accelerator_variants
+        .as_ref()
+        .and_then(|variants| variants.iter().find(|variant| variant.path == cached.path))
+        .map(|variant| VerifiedVariantDigests {
+            variant: normalize_digest(&variant.digest),
+            conformance_vector: normalize_digest(&variant.conformance_vector_digest),
         })
 }
 
@@ -2247,9 +2265,12 @@ impl HostConnectorPort for ExactModelHostConnector {
         };
         let started = Instant::now();
         if let Some((adapter, variant)) = accelerator.as_mut() {
+            // `recheck` above proved the variant bytes hash to these digests.
+            let digests = verified_digests(&package.manifest, variant);
             let output = run_adapter(
                 adapter.as_mut(),
                 variant,
+                digests.as_ref(),
                 &input,
                 call_max_out,
                 &SliceControl {
@@ -2408,6 +2429,7 @@ fn prepared_adapter<'a>(
 fn run_adapter(
     adapter: &mut dyn AcceleratorAdapter,
     variant: &CachedAcceleratorVariant,
+    digests: Option<&VerifiedVariantDigests>,
     input: &[u8],
     max_output: u64,
     control: &SliceControl<'_>,
@@ -2430,7 +2452,10 @@ fn run_adapter(
     if let Some(error) = interrupted("before") {
         return Err(error);
     }
-    let output = adapter.predict(variant, input)?;
+    let output = match digests {
+        Some(digests) => adapter.predict_verified(variant, digests, input)?,
+        None => adapter.predict(variant, input)?,
+    };
     if let Some(error) = interrupted("after") {
         return Err(error);
     }
@@ -7023,6 +7048,108 @@ mod tests {
     fn unavailable(error: &HostConnectorError) -> bool {
         error.code == HostConnectorErrorCode::ModelUnavailable
             && error.reason == Some(ModelFailureReason::PlacementUnavailable)
+    }
+
+    /// Records which entry point the connector used and the digests it passed.
+    struct Recording {
+        verified: Vec<VerifiedVariantDigests>,
+        unverified: usize,
+    }
+
+    impl AcceleratorAdapter for Recording {
+        fn id(&self) -> &str {
+            ADAPTER_COREML
+        }
+
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn compute_units(&self) -> String {
+            "recording".to_string()
+        }
+
+        fn platform_version(&self) -> String {
+            "recording-os".to_string()
+        }
+
+        fn predict(
+            &mut self,
+            _variant: &CachedAcceleratorVariant,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            self.unverified += 1;
+            Ok(input.to_vec())
+        }
+
+        fn predict_verified(
+            &mut self,
+            _variant: &CachedAcceleratorVariant,
+            digests: &VerifiedVariantDigests,
+            input: &[u8],
+        ) -> Result<Vec<u8>, HostConnectorError> {
+            self.verified.push(digests.clone());
+            Ok(input.to_vec())
+        }
+    }
+
+    #[test]
+    fn the_adapter_receives_the_digests_the_connector_verified() {
+        let (model, vector) = (b"variant-bytes".to_vec(), b"vector-bytes".to_vec());
+        let manifest = variant_package_manifest(&model, &vector);
+        let mut cached = CachedAcceleratorVariant {
+            adapter: ADAPTER_COREML.to_string(),
+            path: "variants/coreml/model.mlpackage.zip".to_string(),
+            bytes: model.clone(),
+            conformance_vector_path: "variants/coreml/conformance.json".to_string(),
+            conformance_vector: vector.clone(),
+        };
+        let digests = verified_digests(&manifest, &cached).expect("declared variant");
+        assert_eq!(
+            digests,
+            VerifiedVariantDigests {
+                variant: digest_hex(&model),
+                conformance_vector: digest_hex(&vector),
+            }
+        );
+
+        let cancel = AtomicBool::new(false);
+        let control = SliceControl {
+            cancel: &cancel,
+            deadline: Instant::now() + Duration::from_mins(1),
+        };
+        let frame = float_frame(&[1.0]);
+        let mut adapter = Recording {
+            verified: Vec::new(),
+            unverified: 0,
+        };
+        let output = run_adapter(
+            &mut adapter,
+            &cached,
+            Some(&digests),
+            &frame,
+            4096,
+            &control,
+        )
+        .expect("verified");
+        assert_eq!(output, frame);
+        assert_eq!((adapter.verified.len(), adapter.unverified), (1, 0));
+        assert_eq!(adapter.verified[0], digests);
+
+        // Without verified digests the connector uses the plain entry point.
+        run_adapter(&mut adapter, &cached, None, &frame, 4096, &control).expect("plain");
+        assert_eq!((adapter.verified.len(), adapter.unverified), (1, 1));
+        assert_eq!(adapter.id(), ADAPTER_COREML);
+        assert!(adapter.available());
+        assert_eq!(adapter.compute_units(), "recording");
+        assert_eq!(adapter.platform_version(), "recording-os");
+
+        // A cached file the manifest does not declare has no verified digests.
+        cached.path = "variants/coreml/other.zip".to_string();
+        assert_eq!(verified_digests(&manifest, &cached), None);
+        let mut plain = manifest;
+        plain.accelerator_variants = None;
+        assert_eq!(verified_digests(&plain, &cached), None);
     }
 
     #[test]
