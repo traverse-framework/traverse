@@ -8,7 +8,7 @@ use traverse_runtime::exact_model::{
 };
 use traverse_runtime::executor::{ActivatedConnector, MediatedConnectorContext, WasmExecutor};
 use traverse_runtime::model_runtime_mediated::{
-    ExactModelMediatedConnector, MODEL_RUNTIME_CONNECTOR_VERSION, activate_exact_model_runtime,
+    ExactModelMediatedConnector, activate_exact_model_runtime,
 };
 
 const POLICY: &str = "policy:default-wasm-cpu";
@@ -85,15 +85,8 @@ fn main() {
         let unbound = scenario["unbound"] == json!(true);
         // Keeps a handle to read the frame back, which the one-call binding doesn't offer.
         let connector = Arc::new(ExactModelMediatedConnector::new(host));
-        let activated: Vec<ActivatedConnector> = if unbound {
-            Vec::new()
-        } else {
-            vec![ActivatedConnector {
-                connector_id: "traverse.model-runtime".to_string(),
-                version: MODEL_RUNTIME_CONNECTOR_VERSION.to_string(),
-                implementation: connector.clone(),
-            }]
-        };
+        let activated: Vec<ActivatedConnector> =
+            if unbound { Vec::new() } else { vec![connector.activated()] };
         let output = executor
             .run_bytes_with_mediated_connectors(
                 &guest,
@@ -156,7 +149,7 @@ fn main() {
         .expect("capability ran")
         .value;
     println!("{}", serde_json::to_string_pretty(&json!({
-        "host": "native: crates.io traverse-runtime 0.16.1, wasmtime",
+        "host": "native: crates.io traverse-runtime 0.17.1, wasmtime",
         "results": results, "one_call_binding_output": one_call,
     })).expect("json"));
 }
