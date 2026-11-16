@@ -7952,3 +7952,123 @@ the app, or how long a Worker lives.
 - Out of scope: the other index fields the evidence lists as dropped
   (`is_automatic_eligible`, `risk`, `risk_source`). They need their own
   decision.
+
+## Decision 133: Governed-Surface PRs Need an Independent Cross-Tool Review Before Merge
+
+- **Date**: 2026-11-16
+- **Status**: Accepted
+- **Governing specs**: none (org governance; lands as an amendment to `traverse-framework/.github` `docs/ai-agent-hardening.md` and `docs/quality-standards.md`)
+- **Related issues**: `traverse-framework/.github#55`
+
+### Context
+
+Agent-authored PRs are written by three tools (Claude Code, Codex, Cursor) and
+merged by the authoring agent once CI is green. Measured on 2026-11-16: of the
+last 40 merged non-bot PRs in each of `traverse`, `registry` and
+`reference-apps`, one had a review. 24% of merged non-bot PRs in `traverse`
+were titled as fixes (39 of 157), against 8–13% in the other repos. Every
+agent PR is opened from one GitHub account, so GitHub's required approving
+review cannot be used: an account cannot approve its own PR.
+
+### Decisions
+
+1. **Which PRs need review.** Options considered:
+   - Risk-based: only PRs touching governed surfaces.
+   - Every agent PR in every repo.
+   - All PRs in `traverse` and `registry` only.
+
+   Chosen: risk-based. Review effort goes where the fix rate comes from, and
+   docs and bot PRs stay fast. A per-repo list would be a repo-specific rule
+   and would leave `reference-apps` unreviewed.
+2. **How a repo classifies a PR.** Options considered:
+   - Review is required exactly when the repo's change classifier requires
+     full CI.
+   - A separate review-required path list per repo.
+   - Driven by the linked issue's labels.
+
+   Chosen: same as full CI. One classifier and one rule; a second list would
+   drift, and a label rule skips review on a mislabel. A repo without a
+   change classifier adds one.
+3. **What counts as independent.** Options considered:
+   - A different tool than the author, with a same-tool fresh-session
+     fallback.
+   - A different tool, no fallback.
+   - Any tool in a fresh session.
+
+   Chosen: a different tool, with fallback. Different models catch different
+   mistakes; the fallback keeps a PR from stalling when the other tools are
+   unavailable. Every fallback review is recorded as one.
+4. **How it is enforced.** Options considered:
+   - A required CI check on a structured review record.
+   - A separate GitHub identity per tool plus the ruleset's approving review.
+   - Convention only.
+
+   Chosen: a required check on a review record. The reviewer posts a PR
+   comment naming the reviewing tool, the commit SHA reviewed and the
+   verdict. The check passes only if a passing record exists for the head
+   commit from a tool other than the one in the branch prefix. It works with
+   one account and is auditable. The record is self-attested, which is
+   accepted.
+5. **Who starts the review.** Options considered:
+   - The author adds `needs-review`; another tool's ops loop works that
+     queue.
+   - A CI workflow runs a reviewer agent from another vendor.
+   - The author invokes another tool's CLI locally.
+
+   Chosen: the label queue. It reuses the claim model agents already follow
+   for Ready tickets and needs no new secrets or CI spend. An author-invoked
+   reviewer lets the author shape the reviewer's context.
+6. **When the fallback applies.** Options considered: after a fixed wait;
+   immediately; only with maintainer approval.
+
+   Chosen: after the PR has carried `needs-review` for 4 hours. That is
+   longer than a CI run, so another tool has a real chance to pick it up,
+   and the PR still merges the same day. One hour would be reached almost
+   every time; 24 hours would pile up conflicting PRs.
+7. **What happens on findings.** Options considered:
+   - The author fixes or rebuts; the same reviewer re-checks the new head;
+     a dispute escalates.
+   - The reviewer pushes fixes.
+   - Every blocking finding escalates to the maintainer.
+
+   Chosen: author fixes, reviewer re-checks. A changes-requested record
+   blocks merge. If author and reviewer still disagree after one round, the
+   PR gets `needs-enrico`. A reviewer that pushes fixes becomes a co-author,
+   leaving the final code unreviewed.
+8. **What the reviewer checks.** Options considered: a fixed rubric for what
+   CI cannot see; full local re-verification; the reviewer's own judgment.
+
+   Chosen: the fixed rubric. The diff matches the governing spec and
+   contract; failure modes and error paths are explicit; no gate was
+   weakened to pass; the change is the minimum needed; tests assert
+   behavior, not only coverage. Build, lint, coverage and spec alignment
+   stay with CI.
+9. **Exemptions among full-CI PRs.** Options considered: Dependabot and
+   release PRs; Dependabot only; none.
+
+   Chosen: Dependabot PRs and version-only release PRs are exempt. PRs from
+   human contributors get the maintainer's review instead.
+10. **How success is measured.** Options considered: fix-PR share plus
+    review statistics; fix-PR share only; findings per review.
+
+    Chosen: weekly per repo from `org-audit.yml`: share of merged PRs titled
+    as fixes, share of reviews done cross-tool versus fallback, and median
+    queue wait. The rule is revisited after 8 weeks. Findings per review
+    would reward nitpicking.
+11. **Rollout.** Options considered: warn first, then block; blocking at
+    once; a single-repo pilot.
+
+    Chosen: the check ships as a warning in the next minor governance
+    release, starting with `traverse` and `registry`, and becomes a required
+    check in the following release once the review queue works in all three
+    tools.
+
+### Consequences
+
+- `traverse-framework/.github` gains the rule text, the review-record
+  format, the rubric, a reusable check, and a `needs-review` label in every
+  repo.
+- Each tool's ops skill gains a "review queue" mode and must stop merging
+  its own governed-surface PRs without a passing record.
+- Repos without a change classifier need one before the check can run.
+- `org-audit.yml` reports the three measures weekly.
