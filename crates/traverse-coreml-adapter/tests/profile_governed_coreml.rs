@@ -31,7 +31,8 @@ use serde_json::{Value, json};
 use traverse_coreml_adapter::{ComputeUnits, CoreMlAdapter};
 use traverse_runtime::exact_model::{
     AcceleratorAdapter, CachedAcceleratorVariant, ExactModelHostConnector, ExactModelPin,
-    ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys, digest_hex,
+    ExecutionPolicy, ModelUsage, PlacementPolicy, TrustedModelKeys, VerifiedVariantDigests,
+    digest_hex,
 };
 use traverse_runtime::host_connector_dispatch::{
     HostConnectorHostRequest, HostConnectorPort, MODEL_EXECUTE_OPERATION, MODEL_RUNTIME_CONNECTOR,
@@ -243,6 +244,36 @@ fn profile_governed_coreml_overhead() {
         "raw and governed frames should match size"
     );
 
+    // #1834: the same prediction with digests the caller already verified,
+    // which is the path `model.execute` takes. It hashes nothing.
+    let verified = VerifiedVariantDigests {
+        variant: digest_hex(&cached.bytes),
+        conformance_vector: digest_hex(&cached.conformance_vector),
+    };
+    let verified_started = Instant::now();
+    let verified_out = raw_adapter
+        .predict_verified(&cached, &verified, &input)
+        .expect("verified predict");
+    let adapter_predict_verified_ms = ms(verified_started);
+    assert_eq!(verified_out, raw_out, "both entry points must agree");
+
+    // The FR-021 re-check: every execute re-hashes the cached manifest, WASM
+    // and variant files against the pin. Timed here on the same bytes.
+    let (manifest_bytes, wasm_bytes) = (read("model.manifest.json"), read("model.wasm"));
+    let recheck_started = Instant::now();
+    let rehashed = [
+        digest_hex(&manifest_bytes),
+        digest_hex(&wasm_bytes),
+        digest_hex(&cached.bytes),
+        digest_hex(&cached.conformance_vector),
+    ];
+    let fr021_recheck_ms = ms(recheck_started);
+    assert_eq!(rehashed[0], digest, "the manifest still hashes to the pin");
+    let rechecked_bytes = manifest_bytes.len()
+        + wasm_bytes.len()
+        + cached.bytes.len()
+        + cached.conformance_vector.len();
+
     let end_to_end_ms = stage_input_ms + execute_total_ms + read_output_ms;
     let execute_minus_adapter_ms = (execute_total_ms - raw_adapter_predict_ms).max(0.0);
     let residual_ms = (end_to_end_ms
@@ -254,7 +285,9 @@ fn profile_governed_coreml_overhead() {
 
     let evidence = json!({
         "issue": "#1833",
+        "trimmed_by": "#1834",
         "parent": "#1707",
+        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "governing_spec": "138-governed-exact-model-execution",
         "package": {
             "model_id": "traverse.digits-onnx-coreml",
@@ -273,12 +306,18 @@ fn profile_governed_coreml_overhead() {
             "stage_input": stage_input_ms,
             "execute_total": execute_total_ms,
             "raw_adapter_predict": raw_adapter_predict_ms,
+            "adapter_predict_verified": adapter_predict_verified_ms,
+            "fr021_recheck": fr021_recheck_ms,
             "digest_rights_and_connector_glue_estimate": execute_minus_adapter_ms,
             "read_output": read_output_ms,
             "end_to_end_stage_sum": end_to_end_ms,
             "reconciliation_noise_ms": residual_ms,
         },
+        "fr021_rechecked_bytes": rechecked_bytes,
         "attribution_notes": [
+            "build_profile matters: SHA-256 is about 20x slower in a debug build, and the FR-021 re-check is nearly all of execute_total. Shipped hosts are release builds.",
+            "fr021_recheck re-hashes the manifest, WASM and variant bytes outside the connector, to size the mandatory Spec 138 FR-021 re-check inside execute_total.",
+            "adapter_predict_verified is CoreMlAdapter.predict_verified, the entry point model.execute uses since #1834: it reuses the digests the connector verified and a cached frame contract. raw_adapter_predict hashes the variant and its vector to key the same caches.",
             "register includes Spec 138 registration (signature, rights, variant self-check/compile) and is excluded from the steady execute sum.",
             "stage_input / read_output are public ModelIoStore frame copies around model.execute.",
             "raw_adapter_predict is CoreMlAdapter.predict alone (MLMultiArray fill + Core ML prediction + output read) after a warm compile.",
