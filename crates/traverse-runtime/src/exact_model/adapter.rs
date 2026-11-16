@@ -53,6 +53,20 @@ impl PlacementEvidence {
     }
 }
 
+/// A variant's digests as the connector verified them for this call.
+///
+/// Every `model.execute` re-hashes the cached variant file and its
+/// conformance vector against the signed manifest (FR-021) before it calls
+/// the adapter. An adapter that keys a cache by digest can use these values
+/// instead of hashing the same bytes a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedVariantDigests {
+    /// Lowercase hex SHA-256 of the variant file bytes.
+    pub variant: String,
+    /// Lowercase hex SHA-256 of the conformance vector bytes.
+    pub conformance_vector: String,
+}
+
 /// A native accelerator adapter (FR-063 to FR-065). Implementations only
 /// run predictions; the connector enforces every Spec 138 rule around them.
 pub trait AcceleratorAdapter: Send {
@@ -88,6 +102,24 @@ pub trait AcceleratorAdapter: Send {
         variant: &CachedAcceleratorVariant,
         input: &[u8],
     ) -> Result<Vec<u8>, HostConnectorError>;
+
+    /// [`Self::predict`] for a variant whose bytes the connector has just
+    /// re-hashed (FR-021). `digests` are the verified digests of
+    /// `variant.bytes` and `variant.conformance_vector`. The default ignores
+    /// them; an adapter overrides this to skip hashing the bytes again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Spec 138 error when the prediction fails.
+    fn predict_verified(
+        &mut self,
+        variant: &CachedAcceleratorVariant,
+        digests: &VerifiedVariantDigests,
+        input: &[u8],
+    ) -> Result<Vec<u8>, HostConnectorError> {
+        let _ = digests;
+        self.predict(variant, input)
+    }
 }
 
 /// Placement ids a policy may name (FR-060, FR-066).

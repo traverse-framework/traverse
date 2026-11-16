@@ -41,7 +41,8 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSInteger, NSNumber, NSProcessInfo, NSString, NSURL,
 };
 use traverse_runtime::exact_model::{
-    ADAPTER_COREML, AcceleratorAdapter, CachedAcceleratorVariant, digest_hex, encode_guest_frame,
+    ADAPTER_COREML, AcceleratorAdapter, CachedAcceleratorVariant, VariantFrameContract,
+    VerifiedVariantDigests, digest_hex, encode_guest_frame,
 };
 use traverse_runtime::host_connector_dispatch::{HostConnectorError, HostConnectorErrorCode};
 
@@ -127,6 +128,8 @@ pub struct CoreMlAdapter {
     compute_units: ComputeUnits,
     cache_dir: PathBuf,
     models: HashMap<String, LoadedModel>,
+    /// Parsed frame contracts, keyed by conformance-vector digest.
+    contracts: HashMap<String, VariantFrameContract>,
 }
 
 // SAFETY: the adapter is only ever used through `&mut self` (the connector
@@ -146,21 +149,42 @@ impl CoreMlAdapter {
             compute_units,
             cache_dir,
             models: HashMap::new(),
+            contracts: HashMap::new(),
         }
     }
 
+    /// The loaded model for a variant file, keyed by `digest`: the SHA-256
+    /// of `variant.bytes`, which the caller has already computed or verified.
     fn load(
         &mut self,
         variant: &CachedAcceleratorVariant,
+        digest: &str,
     ) -> Result<&LoadedModel, HostConnectorError> {
-        let digest = digest_hex(&variant.bytes);
-        if !self.models.contains_key(&digest) {
-            let loaded = self.compile(&variant.bytes, &self.cache_dir.join(&digest))?;
-            self.models.insert(digest.clone(), loaded);
+        if !self.models.contains_key(digest) {
+            let loaded = self.compile(&variant.bytes, &self.cache_dir.join(digest))?;
+            self.models.insert(digest.to_string(), loaded);
         }
         self.models
-            .get(&digest)
+            .get(digest)
             .ok_or_else(|| failed("Core ML model cache lost an entry"))
+    }
+
+    /// The frame contract of a conformance vector, keyed by `digest`: the
+    /// SHA-256 of `variant.conformance_vector`. Parsing the vector costs
+    /// time proportional to its size, so it is parsed once per digest.
+    fn contract(
+        &mut self,
+        variant: &CachedAcceleratorVariant,
+        digest: &str,
+    ) -> Result<VariantFrameContract, HostConnectorError> {
+        if let Some(contract) = self.contracts.get(digest) {
+            return Ok(*contract);
+        }
+        let contract = variant
+            .frame_contract()
+            .ok_or_else(|| failed("variant conformance vector has no frame contract"))?;
+        self.contracts.insert(digest.to_string(), contract);
+        Ok(contract)
     }
 
     fn compile(&self, zip: &[u8], directory: &Path) -> Result<LoadedModel, HostConnectorError> {
@@ -354,8 +378,26 @@ impl AcceleratorAdapter for CoreMlAdapter {
         variant: &CachedAcceleratorVariant,
         input: &[u8],
     ) -> Result<Vec<u8>, HostConnectorError> {
-        objc2::exception::catch(AssertUnwindSafe(|| self.predict_frame(variant, input)))
-            .unwrap_or_else(|_| Err(failed("Core ML raised an exception")))
+        // No caller-verified digests: hash the bytes to key the caches.
+        let digests = VerifiedVariantDigests {
+            variant: digest_hex(&variant.bytes),
+            conformance_vector: digest_hex(&variant.conformance_vector),
+        };
+        self.predict_verified(variant, &digests, input)
+    }
+
+    /// The connector re-hashes the variant on every `model.execute`
+    /// (FR-021) and passes the digests, so this path hashes nothing (#1834).
+    fn predict_verified(
+        &mut self,
+        variant: &CachedAcceleratorVariant,
+        digests: &VerifiedVariantDigests,
+        input: &[u8],
+    ) -> Result<Vec<u8>, HostConnectorError> {
+        objc2::exception::catch(AssertUnwindSafe(|| {
+            self.predict_frame(variant, digests, input)
+        }))
+        .unwrap_or_else(|_| Err(failed("Core ML raised an exception")))
     }
 }
 
@@ -363,13 +405,12 @@ impl CoreMlAdapter {
     fn predict_frame(
         &mut self,
         variant: &CachedAcceleratorVariant,
+        digests: &VerifiedVariantDigests,
         input: &[u8],
     ) -> Result<Vec<u8>, HostConnectorError> {
-        let contract = variant
-            .frame_contract()
-            .ok_or_else(|| failed("variant conformance vector has no frame contract"))?;
+        let contract = self.contract(variant, &digests.conformance_vector)?;
         let (shape, values) = input_frame(input, contract.input_dtype)?;
-        let loaded = self.load(variant)?;
+        let loaded = self.load(variant, &digests.variant)?;
         if shape != loaded.input_shape {
             return Err(frame_mismatch(
                 "input frame dims do not match the variant's input shape",
