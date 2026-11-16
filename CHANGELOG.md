@@ -12,6 +12,10 @@
 - `traverse-registry` is pinned to `=0.32.0`, which carries the field.
 
 - `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
+- The `#1776` published-package demo's native host runs on crates.io
+  `traverse-runtime` 0.17.1 and activates the connector with
+  `ExactModelMediatedConnector::activated()` (`#1807`). Its results match the
+  0.16.1 run.
 
 ## v0.17.1 — 2026-11-13
 
