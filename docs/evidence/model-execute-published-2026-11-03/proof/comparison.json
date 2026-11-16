@@ -1,7 +1,7 @@
 {
   "all_identical": true,
   "hosts": {
-    "native": "native: crates.io traverse-runtime 0.16.1, wasmtime",
+    "native": "native: crates.io traverse-runtime 0.17.1, wasmtime",
     "node": "node v24.16.0",
     "browser": "browser: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/3.6556.2 Chrome/152.0.7977.167 Safari/537.36"
   },
@@ -13,9 +13,9 @@
     "model.wasm": "954ca59b005699efcd126cde69446c7a935bfccd9561dd248ddd844246ea10a9"
   },
   "crates": [
-    "traverse-contracts 0.16.1 7cc964f74c5aae0dbf24b25b149976cccaace0e3c104543dd288d77e5b67d4cb",
-    "traverse-registry 0.29.0 f6dcd99577f7e7d738654272f4879036db3a335faa73bf276ab7d38243dffea4",
-    "traverse-runtime 0.16.1 3f0c8e5797f95775230c4d5ab42ce42d34ecc1b554be220614695cb3ae1db20c"
+    "traverse-contracts 0.17.1 717107cb129f61ff53ff1ac0b37b3b6c50772aab530140291f7d4ff40f19279d",
+    "traverse-registry 0.31.0 748aea09de47a1a01bbd5ddccf3c8e44f342dfbe69cb1f363f8f31a855622430",
+    "traverse-runtime 0.17.1 0cb8e132ac9601c3b2f06870b6d5b0015610dfe237b0cee89b99166d826e493a"
   ],
   "scenarios": [
     {

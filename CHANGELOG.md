@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The `#1776` published-package demo's native host runs on crates.io
+  `traverse-runtime` 0.17.1 and activates the connector with
+  `ExactModelMediatedConnector::activated()` (`#1807`). Its results match the
+  0.16.1 run.
+
 ## v0.17.1 — 2026-11-13
 
 Lockstep patch: the first crates.io and product release of the v0.17.0
