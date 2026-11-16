@@ -7904,3 +7904,51 @@ the app, or how long a Worker lives.
   `WebAssembly.RuntimeError`.
 - `shutdown()` terminates every guest Worker. A package whose registration
   fails keeps no Worker.
+
+## Decision 132: Registry Sync Keeps `superseded_by`, and `registry inspect` Shows the Successor
+
+- **Date**: 2026-11-15
+- **Status**: Accepted
+- **Governing specs**: `055-registry-sync`
+- **Related issues**: `#1848`, `registry#672`, `#1830`
+
+### Context
+
+- The registry index publishes `superseded_by` on a deprecated capability
+  version, naming the version that replaces it (for example
+  `text.detect-entities@1.2.0` → `1.2.1`).
+- `#1830`'s live re-proof
+  (`docs/evidence/model-rights-reprove-2026-11-12/proof/sync-fidelity.txt`)
+  found that `traverse-cli registry sync` drops the field from every record.
+  `registry inspect` therefore shows that a version is deprecated, but not
+  which version to move to.
+- Spec 055 FR-014 only requires sync to keep the Spec 026 fields (`ai`,
+  `status`, `model_usage`, `revocation`), so no approved spec covered this.
+- The synced record type, `PublicRegistryCapabilityRecord`, lives in the
+  `traverse-registry` crate (registry repository). It has no
+  `superseded_by` field, which is why the value is lost on deserialize.
+
+### Decisions
+
+1. **Whether sync fidelity covers `superseded_by`.** Options considered:
+   - Keep the field through sync and show it in `registry inspect`.
+   - Keep the field in the synced state but leave `registry inspect`
+     unchanged.
+   - Close as won't-do; the index stays the only place to find a successor.
+
+   Chosen: keep it and show it. A deprecation a user cannot act on is only
+   half a signal: the successor is the actionable part, and the publisher
+   already declares it. Keeping it without showing it would help tools but
+   not the person reading `registry inspect`.
+
+### Consequences
+
+- Spec 055 is amended (v1.3.0) in the implementation PR: sync keeps
+  `superseded_by` unchanged, and `registry inspect` shows it on deprecated
+  versions in text and JSON output. A version without one prints
+  `not stated`, as for any undeclared field (FR-015).
+- The implementation is blocked on `registry#672`: the `traverse-registry`
+  crate must carry the field and release before Traverse can pin it.
+- Out of scope: the other index fields the evidence lists as dropped
+  (`is_automatic_eligible`, `risk`, `risk_source`). They need their own
+  decision.

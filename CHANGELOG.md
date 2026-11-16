@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
+
 ### Governed Core ML calls no longer hash the variant twice (`#1834`)
 
 - `AcceleratorAdapter` has a new `predict_verified` method with a default
