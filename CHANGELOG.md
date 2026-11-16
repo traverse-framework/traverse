@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `registry inspect` shows which version replaces a deprecated one (`#1848`)
+
+- `registry sync` keeps `superseded_by` from the index (Spec 055 v1.3.0
+  FR-023, Decision 132). It was dropped before.
+- `registry inspect` prints `superseded_by` on every deprecated version, and
+  `not stated` when the publisher gave none. JSON output always has the
+  `superseded_by` key.
+- `traverse-registry` is pinned to `=0.32.0`, which carries the field.
+
 - `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
 
 ## v0.17.1 — 2026-11-13

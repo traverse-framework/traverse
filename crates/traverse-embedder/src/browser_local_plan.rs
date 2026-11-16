@@ -749,6 +749,7 @@ mod tests {
             contract_digest: digest_for(&format!("c{}", contract.id.replace(['.', '-'], ""))),
             contract_url: format!("file:///cache/{}.json", contract.id),
             deprecated: false,
+            superseded_by: None,
             summary: String::new(),
             description: String::new(),
             use_cases: Vec::new(),

@@ -172,6 +172,7 @@ mod tests {
                 contract_digest: sha256(&fs::read(&contract).expect("kit contract")),
                 contract_url: format!("file://{}", contract.display()),
                 deprecated: false,
+                superseded_by: None,
                 summary: "Normalize participants".to_string(),
                 description: String::new(),
                 use_cases: Vec::new(),

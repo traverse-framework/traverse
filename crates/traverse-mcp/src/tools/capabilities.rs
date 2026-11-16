@@ -250,6 +250,7 @@ mod search_tests {
             contract_digest: format!("sha256:{}", "b".repeat(64)),
             contract_url: format!("https://example.test/{id}.json"),
             deprecated: false,
+            superseded_by: None,
             summary: format!("{id} summary"),
             description: description.to_string(),
             use_cases: vec![PublicUseCaseSummary {

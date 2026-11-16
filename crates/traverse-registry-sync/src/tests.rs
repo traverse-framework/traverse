@@ -34,6 +34,7 @@ fn index_fixture(index_version: u64) -> PublicRegistryIndex {
             contract_digest: "sha256:5647c39a".to_string(),
             contract_url: "https://example.test/contract.json".to_string(),
             deprecated: false,
+            superseded_by: None,
             summary: String::new(),
             description: String::new(),
             use_cases: Vec::new(),
