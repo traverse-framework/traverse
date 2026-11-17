@@ -1,7 +1,7 @@
 {
   "governing_spec": "138-governed-exact-model-execution",
   "package_dir": "digits-mlp-1.0.0",
-  "trusted_public_key_hex": "97002eba1e28b582a739eb48750a5f0822b2bbcb61e6bcedd2fada36b51af355",
+  "trusted_public_key_hex": "717be8d616fa9852aa67f57df6f4dc878b4de10c3f316f5f07f5c5196e1cd19c",
   "pin": {
     "model_id": "traverse.digits-mlp",
     "version": "1.0.0",
@@ -12,7 +12,7 @@
       "license_id": "CC-BY-4.0",
       "commercial_use": "allowed"
     },
-    "key_id": "ed25519:455dffb093163d8439b544cc4f0ea79e33a07b20594c4739a8bbb4c0819d2d67"
+    "key_id": "ed25519:f7e881d62c246c73ed0a68d1e456731fc7541029aceed6796bcabe6b984fc1bd"
   },
   "request": {
     "policy_ref": "policy-1",

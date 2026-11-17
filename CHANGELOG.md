@@ -8,8 +8,15 @@
   is committed under `keys/model-signing/` and listed in
   `TRAVERSE_MODEL_SIGNING_KEYS` in the Rust runtime and the web embedder
   (Decision 103). Trust stays opt-in: a host must pass the keys itself.
-- No package is signed with it yet. `digits-mlp-1.0.0` is re-signed in a
-  later change.
+- `digits-mlp-1.0.0` is now signed with it by the protected
+  `Sign model packages` workflow, and the `signed-digits-mlp.json`
+  conformance vector pins that key. A host trusting only
+  `TRAVERSE_MODEL_SIGNING_KEYS` registers the package; a host trusting only
+  the test key rejects it with `key_untrusted`.
+- `scripts/fixtures/sign-model-fixtures.mjs` no longer re-signs
+  `digits-mlp-1.0.0`. It checks that the committed signature still verifies
+  against the production public key and fails if the manifest changed.
+- The other fixture packages stay signed with the test-only key.
 
 ### `registry inspect` shows which version replaces a deprecated one (`#1848`)
 

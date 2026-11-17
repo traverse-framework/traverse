@@ -635,6 +635,20 @@ test("TRAVERSE_MODEL_SIGNING_KEYS mirrors keys/model-signing", async () => {
   assert.deepEqual([...TRAVERSE_MODEL_SIGNING_KEYS].sort(), committed.sort());
 });
 
+// #1567: the digits package ships production-signed. A host trusting only
+// TRAVERSE_MODEL_SIGNING_KEYS registers it; one trusting only the test key
+// rejects it with key_untrusted.
+test("digits-mlp is production-signed and the test key does not verify it", async () => {
+  const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-mlp.json", MODELS), "utf8"));
+  const pkg = fixture(vector.package_dir);
+  assert.deepEqual([vector.trusted_public_key_hex], [...TRAVERSE_MODEL_SIGNING_KEYS]);
+  assert.notEqual(vector.pin.key_id, TEST_KEY.key_id);
+  const production = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [...TRAVERSE_MODEL_SIGNING_KEYS], modelUsage: "commercial" });
+  assert.equal(await production.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), vector.pin.digest);
+  const testOnly = new ExactModelBrowserHost([vector.pin], TRUST);
+  await assert.rejects(() => testOnly.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), reason("key_untrusted"));
+});
+
 // Guest ABI v3 (Decision 110, #1626): the same signed vector native hosts
 // run, on the fresh path and the snapshot path, with reuse on and off.
 const V3_VECTOR = JSON.parse(readFileSync(new URL("conformance/signed-prepared-v3.json", MODELS), "utf8"));

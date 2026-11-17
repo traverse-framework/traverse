@@ -1571,8 +1571,9 @@ mod tests {
 
     /// End to end with only the CLI (DoD): package the trained digits model
     /// from its unsigned manifest + wasm, then sign, pin, verify, and run the
-    /// cross-engine conformance vector. The CLI-built package is byte-identical
-    /// to the checked-in fixture that the native and web suites register.
+    /// cross-engine conformance vector. The checked-in fixture is
+    /// production-signed (#1567), so the CLI signs its copy with the test key:
+    /// same manifest digest and outputs, different `key_id`.
     #[test]
     fn digits_packages_end_to_end_with_only_the_cli() {
         let fixture = repo("fixtures/models/digits-mlp-1.0.0");
@@ -1585,6 +1586,8 @@ mod tests {
             &fs::read(repo("fixtures/models/conformance/signed-digits-mlp.json")).expect("vector"),
         )
         .expect("vector json");
+        let mut test_pin = vector["pin"].clone();
+        test_pin["key_id"] = json!(test_key("key_id"));
 
         let digest = json_out(cli(&["digest", path(&manifest), "--json"]));
         assert_eq!(digest, json!({ "digest": vector["pin"]["digest"] }));
@@ -1602,11 +1605,6 @@ mod tests {
         ]));
         assert_eq!(signed["key_id"], json!(test_key("key_id")));
         assert_eq!(signed["digest"], vector["pin"]["digest"]);
-        assert_eq!(
-            fs::read(dir.join(SIGNATURE_FILE)).expect("sig"),
-            fs::read(fixture.join(SIGNATURE_FILE)).expect("fixture sig"),
-            "CLI signature is byte-identical to the checked-in fixture"
-        );
         assert!(
             cli(&["sign", path(&manifest), "--key", path(&key)])
                 .expect("sign")
@@ -1614,7 +1612,7 @@ mod tests {
         );
 
         let pin = json_out(cli(&["pin", path(&dir), "--json"]));
-        assert_eq!(pin, vector["pin"]);
+        assert_eq!(pin, test_pin);
         assert!(
             cli(&["pin", path(&dir)])
                 .expect("pin")
@@ -1678,7 +1676,7 @@ mod tests {
         {
             assert_eq!(case["output_frame_hex"], expected["output_frame_hex"]);
         }
-        assert_eq!(written["pin"], vector["pin"]);
+        assert_eq!(written["pin"], test_pin);
 
         let checked = json_out(cli(&[
             "conformance",
@@ -1720,6 +1718,46 @@ mod tests {
                 .expect("generate")
                 .contains("identical on wasmtime and wasmi")
         );
+    }
+
+    /// #1567: the checked-in digits package carries the production signature.
+    /// It verifies against `TRAVERSE_MODEL_SIGNING_KEYS` and is rejected with
+    /// `key_untrusted` by a host that trusts only the test key, so a test-key
+    /// re-sign cannot slip back in.
+    #[test]
+    fn checked_in_digits_package_is_production_signed() {
+        let fixture = repo("fixtures/models/digits-mlp-1.0.0");
+        let production: Vec<String> = traverse_runtime::exact_model::TRAVERSE_MODEL_SIGNING_KEYS
+            .iter()
+            .map(|key| hex_encode(key))
+            .collect();
+        assert_eq!(production.len(), 1);
+        let vector: Value = serde_json::from_slice(
+            &fs::read(repo("fixtures/models/conformance/signed-digits-mlp.json")).expect("vector"),
+        )
+        .expect("vector json");
+        assert_eq!(vector["trusted_public_key_hex"], json!(production[0]));
+        assert_ne!(vector["pin"]["key_id"], json!(test_key("key_id")));
+
+        let verified = json_out(cli(&[
+            "verify",
+            path(&fixture),
+            "--trusted-key",
+            &production[0],
+            "--json",
+        ]));
+        assert_eq!(verified["ok"], json!(true), "{verified}");
+        let pin = json_out(cli(&["pin", path(&fixture), "--json"]));
+        assert_eq!(pin, vector["pin"]);
+
+        let untrusted = json_out(cli(&[
+            "verify",
+            path(&fixture),
+            "--trusted-key",
+            &test_key("public_key_hex"),
+            "--json",
+        ]));
+        assert_eq!(untrusted["error"]["reason"], json!("key_untrusted"));
     }
 
     /// Decision 115: the package-time preflight runs the built package on both

@@ -681,10 +681,21 @@ mod tests {
         decode(&model_call(&TEST_PROFILE, handle, &frame(header, segments)).expect("envelope ok")).0
     }
 
+    fn digits_vector() -> Value {
+        serde_json::from_slice(&read("conformance/signed-digits-mlp.json")).expect("vector")
+    }
+
     fn digits_pin() -> Value {
-        let vector: Value =
-            serde_json::from_slice(&read("conformance/signed-digits-mlp.json")).expect("vector");
-        vector["pin"].clone()
+        digits_vector()["pin"].clone()
+    }
+
+    /// The test key (fixture packages) plus the production key the digits
+    /// package is signed with (#1567).
+    fn trusted_keys() -> Value {
+        json!([
+            key("public_key_hex"),
+            digits_vector()["trusted_public_key_hex"]
+        ])
     }
 
     fn limits() -> Value {
@@ -694,7 +705,7 @@ mod tests {
     fn create(pins: Value) -> u64 {
         let response = call(
             0,
-            &json!({ "op": "create", "pins": pins, "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits(), "model_usage": "commercial" }),
+            &json!({ "op": "create", "pins": pins, "trusted_public_keys_hex": trusted_keys(), "limits": limits(), "model_usage": "commercial" }),
             &[],
         );
         assert_eq!(response["ok"], json!(true), "{response}");
@@ -913,7 +924,7 @@ mod tests {
             0,
             &json!({
                 "op": "create", "pins": [pin.clone()],
-                "trusted_public_keys_hex": [key("public_key_hex")], "model_usage": "commercial",
+                "trusted_public_keys_hex": trusted_keys(), "model_usage": "commercial",
                 "limits": { "max_package_bytes": 128 * 1024 * 1024, "max_memory_bytes": 256 * 1024 * 1024, "max_fuel": 20_000_000_000_u64 },
             }),
             &[],
@@ -993,7 +1004,7 @@ mod tests {
                         profile,
                         0,
                         &frame(
-                            &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits, "model_usage": "commercial" }),
+                            &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": trusted_keys(), "limits": limits, "model_usage": "commercial" }),
                             &[],
                         ),
                     )
@@ -1054,7 +1065,7 @@ mod tests {
                 &TEST_PROFILE,
                 0,
                 &frame(
-                    &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": [key("public_key_hex")], "limits": bad, "model_usage": "commercial" }),
+                    &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": trusted_keys(), "limits": bad, "model_usage": "commercial" }),
                     &[],
                 ),
             )
@@ -1231,7 +1242,7 @@ mod tests {
             json!({
                 "op": "create",
                 "pins": [pin.clone()],
-                "trusted_public_keys_hex": [key("public_key_hex")],
+                "trusted_public_keys_hex": trusted_keys(),
                 "limits": { "max_package_bytes": 64_000_000, "max_memory_bytes": 67_108_864, "max_fuel": 10_000_000_000_u64, "max_preparation_ms": 120_000 },
                 "model_usage": "commercial",
                 "accelerators": accelerators,
@@ -1378,7 +1389,7 @@ mod tests {
                 &ANDROID,
                 0,
                 &frame(
-                    &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": [key("public_key_hex")], "limits": limits(), "model_usage": "commercial" }),
+                    &json!({ "op": "create", "pins": [pin.clone()], "trusted_public_keys_hex": trusted_keys(), "limits": limits(), "model_usage": "commercial" }),
                     &[],
                 ),
             )
@@ -1532,7 +1543,7 @@ mod tests {
         // Host ceilings reject at registration.
         let tight = call(
             0,
-            &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": [key("public_key_hex")],
+            &json!({ "op": "create", "pins": [pin], "trusted_public_keys_hex": trusted_keys(),
                      "model_usage": "commercial",
                      "limits": { "max_package_bytes": 100, "max_memory_bytes": 1_048_576, "max_fuel": 1_000_000 } }),
             &[],
