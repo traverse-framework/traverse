@@ -804,7 +804,10 @@ pub fn sign_model_manifest(secret_key: &[u8; 32], manifest_bytes: &[u8]) -> Mode
 /// [`TrustedModelKeys::trust`]. Nothing trusts these by default. During a
 /// rotation both the outgoing and incoming keys are listed for one minor
 /// release; a revoked key is removed in an emergency patch release.
-pub const TRAVERSE_MODEL_SIGNING_KEYS: &[[u8; 32]] = &[];
+pub const TRAVERSE_MODEL_SIGNING_KEYS: &[[u8; 32]] = &[[
+    0x71, 0x7b, 0xe8, 0xd6, 0x16, 0xfa, 0x98, 0x52, 0xaa, 0x67, 0xf5, 0x7d, 0xf6, 0xf4, 0xdc, 0x87,
+    0x8b, 0x4d, 0xe1, 0x0c, 0x3f, 0x31, 0x6f, 0x5f, 0x07, 0xf5, 0xc5, 0x19, 0x6e, 0x1c, 0xd1, 0x9c,
+]];
 
 /// Host-owned set of trusted Ed25519 model-signing keys. Application
 /// manifests can never add trust (Decision 101).

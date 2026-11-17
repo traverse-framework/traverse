@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### First production model-signing key (`#1567`)
+
+- The public key `ed25519:f7e881d62c246c73ed0a68d1e456731fc7541029aceed6796bcabe6b984fc1bd`
+  is committed under `keys/model-signing/` and listed in
+  `TRAVERSE_MODEL_SIGNING_KEYS` in the Rust runtime and the web embedder
+  (Decision 103). Trust stays opt-in: a host must pass the keys itself.
+- No package is signed with it yet. `digits-mlp-1.0.0` is re-signed in a
+  later change.
+
 ### `registry inspect` shows which version replaces a deprecated one (`#1848`)
 
 - `registry sync` keeps `superseded_by` from the index (Spec 055 v1.3.0
