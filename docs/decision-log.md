@@ -8113,3 +8113,43 @@ and shared cross-host conformance are release requirements.
 - Perch stays an external, evaluation-only fixture; generic fixtures prove the
   product capability.
 - Accelerator profiles remain separate approved work.
+
+## Decision 135: Correct the digits-mlp Manifest Text at the Next Key Rotation
+
+- **Date**: 2026-11-17
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1891`, `#1884`, `#1567`
+
+### Context
+
+Since #1888, `digits-mlp-1.0.0` is signed with the production key, but its
+manifest's `rights.redistribution` text still says "signed with the test-only
+key (no production trust)". The text is part of the signed manifest bytes, so
+any edit needs a new production signature. The `Sign model packages` workflow
+signs only what is already on `main`, and since #1888 the fixture check fails
+whenever the committed signature does not match the manifest. A standalone
+text fix therefore cannot reach `main` with green checks.
+
+### Decision
+
+The text is corrected as part of the next re-sign that is needed anyway: the
+yearly key rotation (#1884), which re-signs every published package. #1891 is
+closed in favour of #1884.
+
+### Alternatives considered
+
+- Let the workflow sign an open PR's head: rejected for now because it widens
+  what the signing key may sign (content not yet on `main`) and would need a
+  Spec 138 amendment and an ADR.
+- Let CI tolerate a "signature pending" state: rejected because it adds a
+  code path whose only purpose is to allow an unsigned production package on
+  `main`.
+
+### Consequences
+
+- The wrong text ships until the rotation, no later than 2027-11-16. The
+  signature, pin, and rights fields hosts enforce are unaffected; only the
+  free-text description is stale.
+- The rotation must still solve how a changed manifest gets signed before it
+  lands on `main`; #1884 carries that question.
