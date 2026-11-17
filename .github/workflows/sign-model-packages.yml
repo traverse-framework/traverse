@@ -43,6 +43,8 @@ jobs:
       # Actions may not create pull requests in this repository, so the
       # workflow pushes the signing branch; the maintainer opens the PR.
       - name: Push the signing branch
+        env:
+          PACKAGES: ${{ github.event.inputs.packages }}
         shell: bash
         run: |
           set -euo pipefail
