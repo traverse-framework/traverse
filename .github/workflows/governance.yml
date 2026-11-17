@@ -1,4 +1,5 @@
-# Org-wide governance baseline gate — see traverse-framework/.github (governance v1.0.1).
+# Org-wide governance baseline gate — see traverse-framework/.github
+# (pin in .governance-version).
 name: governance
 
 on:
@@ -6,7 +7,12 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   baseline:
     uses: traverse-framework/.github/.github/workflows/reusable-governance.yml@bootstrap-governance
+
+  review-record:
+    # Decision 133 / #1867: warning-mode cross-tool review record.
+    uses: traverse-framework/.github/.github/workflows/reusable-review-record.yml@bootstrap-governance

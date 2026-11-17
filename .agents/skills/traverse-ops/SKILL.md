@@ -30,7 +30,7 @@ TRAVERSE OPS
    - set Project 1 `Status` to `In Progress`
 9. Use a dedicated `codex/issue-NNN-*` branch.
 10. Keep work scoped to the claimed issue and governing spec.
-11. Open a dedicated PR using the org body superset (`## Summary`, `## Governing Spec`, `## Project Item`, `## Definition of Done`, `## Validation`) with validation evidence, then immediately queue it: `gh pr merge <N> --squash --auto`. Do not poll checks — continue the loop and release on a later pass once merged. This repo requires branches up to date with `main` (strict checks): rebase when behind, or auto-merge cannot fire.
+11. Open a dedicated PR using the org body superset (`## Summary`, `## Governing Spec`, `## Project Item`, `## Definition of Done`, `## Validation`) with validation evidence. For full-CI PRs follow **Merge Gate** (add `needs-review`, wait for a passing review record) before squash-merge. Continue the drain loop while CI/review runs. This repo requires branches up to date with `main`: rebase when behind.
 12. The stop condition is strict: no mergeable or fixable open PRs, no Ready
     Project 1 tickets that pass pre-flight, no uncompleted `agent:codex`
     tickets, and only explicitly blocked work remains. If a Ready ticket is
@@ -91,6 +91,7 @@ tickets for useful adjacent improvements instead of expanding an active slice.
 - **Ready-ticket worker**: claim one Ready Project 1 issue and implement it end to end.
 - **PR finisher**: inspect open PRs, fix CI/review issues, update stale branches, and merge when green if allowed.
 - **Backlog gardener**: audit Project 1 statuses, labels, blockers, notes, and missing tickets.
+- **Review queue**: drain `needs-review` PRs from other tools per Decision 133.
 
 ## Stop Condition
 
@@ -109,6 +110,45 @@ Only stop when one of these is true:
 
 When stopping for a blocker, report the exact blocked PR or ticket, what was
 verified, and what external action would unblock the next pass.
+
+## Review Queue (Decision 133)
+
+Before claiming new Ready work, drain the cross-tool review queue:
+
+1. List open PRs labelled `needs-review` whose head branch prefix is a **different**
+   tool than this session (`claude/`, `codex/`, or `cursor/`).
+2. Claim one (comment that this tool is reviewing; do not review your own prefix
+   except via the 4-hour fallback below).
+3. In a **fresh** context, review the PR head against the rubric in
+   `traverse-framework/.github` `docs/ai-agent-hardening.md` (governing-spec match,
+   explicit failure modes, no weakened gates, minimality, behavior-asserting tests).
+4. Post a single PR comment whose body starts with the HTML review-record header
+   (`tool`, `commit` = current head SHA, `verdict` = `pass` or `changes-requested`,
+   `fallback`).
+5. On `changes-requested`: wait for the author to fix or rebut, then re-check the
+   new head. After one unresolved round, add `needs-enrico`.
+
+Same-tool fallback: only if `needs-review` has been on the PR for ≥ 4 hours, and
+only in a fresh session. Record `fallback: true`. Never review your own branch
+prefix without that recorded fallback.
+
+## Merge Gate (Decision 133)
+
+For a PR this tool authored that the change classifier sends to full CI:
+
+1. When CI is green, add the `needs-review` label if it is missing.
+2. Do **not** merge until a passing review record exists for the current head
+   commit from a different tool (or a recorded same-tool fallback after 4 hours).
+3. In governance 1.3.x the CI check warns when the record is missing; still treat
+   the record as required for merge in this skill.
+4. Dependabot and version-only release PRs are exempt; docs-only PRs are exempt
+   via `pr_change_classification.sh`.
+5. Then squash-merge, set Project 1 to Done, and continue the drain loop.
+
+Never use `--no-verify` or redirect `core.hooksPath`. First push: write the PR
+body file and push with `TRAVERSE_PR_BODY=/path/to/body.md git push -u origin HEAD`
+(or `.git/traverse-pr-body.md`). When a new failure costs a full CI round-trip,
+add a symptom/cause/fix entry to `docs/agent-pitfalls.md` in the hardening PR.
 
 ## Guardrails
 

@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c '\nimport json,re,sys\nraw=sys.stdin.read()\ntry: data=json.loads(raw) if raw.strip() else {}\nexcept Exception: raise SystemExit(0)\ncmd=((data.get(\"tool_input\") or data.get(\"input\") or {}).get(\"command\") or data.get(\"command\") or \"\")\nif not cmd: raise SystemExit(0)\nif re.search(r\"\\bgit\\s+(commit|push)\\b\", cmd) and re.search(r\"(--no-verify|\\s-n\\b)\", cmd):\n    print(\"Traverse guard: refusing git commit/push with --no-verify. Run the hooks.\", file=sys.stderr); raise SystemExit(2)\nif re.search(r\"\\bgit\\s+config\\b.*core\\.hooksPath\", cmd):\n    print(\"Traverse guard: refusing to redirect core.hooksPath.\", file=sys.stderr); raise SystemExit(2)\nfor path in [\"specs/governance/approved-specs.json\",\".governance-version\",\"scripts/ci/coverage_gate.sh\"]:\n    if path in cmd and re.search(r\"(>|tee\\b|\\bmv\\s|\\bcp\\s)\", cmd):\n        print(f\"Traverse guard: refusing shell write targeting {path}.\", file=sys.stderr); raise SystemExit(2)\n'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|StrReplace|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c '\nimport json,sys\nraw=sys.stdin.read()\ntry: data=json.loads(raw) if raw.strip() else {}\nexcept Exception: raise SystemExit(0)\ninp=data.get(\"tool_input\") or data.get(\"input\") or data\npath=inp.get(\"path\") or inp.get(\"file_path\") or \"\"\nfor p in [\"specs/governance/approved-specs.json\",\".governance-version\",\"scripts/ci/coverage_gate.sh\"]:\n    if path.endswith(p) or path==p:\n        print(f\"Traverse guard: refusing edit to {p}. See exception-process.md\", file=sys.stderr); raise SystemExit(2)\n'"
+          }
+        ]
+      }
+    ]
+  }
+}

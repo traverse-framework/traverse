@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Agent review hooks, first-push preflight, and pitfalls (`#1867`, `#1877`, `#1878`)
+
+- Pin `.governance-version` to `v1.3.0` and run the warning-mode review-record
+  check from `.github/workflows/governance.yml` (Decision 133).
+- Pre-push hook accepts `TRAVERSE_PR_BODY` / `.git/traverse-pr-body.md` on first
+  push and scales docs-only pushes to PR-body + spec-alignment only.
+- Commit guards block `--no-verify` and protected-file edits; pitfalls live in
+  `docs/agent-pitfalls.md`. Ops skills gain a review-queue mode and merge gate.
+
 ### First production model-signing key (`#1567`)
 
 - The public key `ed25519:f7e881d62c246c73ed0a68d1e456731fc7541029aceed6796bcabe6b984fc1bd`

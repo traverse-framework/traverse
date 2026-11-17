@@ -68,6 +68,17 @@ jq -r '.specs[].id' specs/governance/approved-specs.json
 ```
 
 <!-- MANUAL ADDITIONS START -->
+
+## Lazy-read map (repo-specific)
+
+| Task touches | Read first |
+|---|---|
+| failed local coverage / llvm-cov | `docs/agent-pitfalls.md` |
+| first push / pre-push hook | `docs/agent-pitfalls.md`, `scripts/ci/install_pre_push_hook.sh` |
+| Project GraphQL cost errors | `docs/agent-pitfalls.md` |
+| spec-alignment on decision-log / CI files | `docs/agent-pitfalls.md` |
+| org gates, CLA, claim rules | `.governance-version` → `traverse-framework/.github` docs |
+
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
