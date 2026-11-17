@@ -6,8 +6,14 @@
 //
 // The key is TEST-ONLY. No embedder trusts it by default.
 //
+// Exception (#1567, Decision 103): `digits-mlp-1.0.0` is production-signed by
+// the `Sign model packages` workflow. This script never re-signs it; it
+// re-derives the manifest, checks the checked-in `model.sig.json` still
+// verifies against the committed production public key in keys/model-signing/,
+// and pins the vector to that key.
+//
 //   node scripts/fixtures/sign-model-fixtures.mjs
-import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +105,7 @@ const fixtures = [
   {
     dir: "digits-mlp-1.0.0",
     model_id: "traverse.digits-mlp",
+    production_signed: true,
     attribution:
       "Weights trained by Traverse on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0)",
     input: ["schema:traverse-digits-mlp-in", "schema:traverse-digits-mlp-out"],
@@ -144,6 +151,7 @@ const fixtures = [
 ];
 
 const pins = {};
+const productionKeys = {};
 for (const fixture of fixtures) {
   const dir = join(modelsDir, fixture.dir);
   const wasmPath = join(dir, "model.wasm");
@@ -194,7 +202,31 @@ for (const fixture of fixtures) {
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(dir, "model.manifest.json"), manifestBytes);
-  signPackage(dir, manifest, manifestBytes);
+  if (fixture.production_signed) {
+    adoptProductionSignature(dir, manifest, manifestBytes);
+  } else {
+    signPackage(dir, manifest, manifestBytes);
+  }
+}
+
+// Production-signed packages keep the workflow's signature; a manifest change
+// invalidates it, and the only fix is a new `Sign model packages` run.
+function adoptProductionSignature(dir, manifest, manifestBytes) {
+  const signature = JSON.parse(readFileSync(join(dir, "model.sig.json"), "utf8"));
+  const keyFile = join(root, "keys", "model-signing", `${signature.key_id.replace(":", "-")}.pub`);
+  if (signature.alg !== "ed25519" || !existsSync(keyFile)) {
+    throw new Error(`${dir}: model.sig.json is not signed by a committed production key`);
+  }
+  const raw = Buffer.from(readFileSync(keyFile, "utf8").trim(), "hex");
+  if (`ed25519:${sha256(raw)}` !== signature.key_id) {
+    throw new Error(`${keyFile}: file name does not match the key's key_id`);
+  }
+  const publicKeyObject = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: raw.toString("base64url") }, format: "jwk" });
+  if (!verify(null, manifestBytes, publicKeyObject, Buffer.from(signature.signature, "hex"))) {
+    throw new Error(`${dir}: production signature no longer matches the manifest; re-run the Sign model packages workflow`);
+  }
+  productionKeys[manifest.model_id] = raw.toString("hex");
+  pins[manifest.model_id] = pinFor(manifest, manifestBytes, signature.key_id);
 }
 
 function signPackage(dir, manifest, manifestBytes) {
@@ -203,7 +235,11 @@ function signPackage(dir, manifest, manifestBytes) {
     key_id: keyId,
     signature: sign(null, manifestBytes, privateKey).toString("hex"),
   });
-  pins[manifest.model_id] = {
+  pins[manifest.model_id] = pinFor(manifest, manifestBytes, keyId);
+}
+
+function pinFor(manifest, manifestBytes, pinKeyId) {
+  return {
     model_id: manifest.model_id,
     version: manifest.version,
     digest: sha256(manifestBytes),
@@ -213,7 +249,7 @@ function signPackage(dir, manifest, manifestBytes) {
       license_id: manifest.rights.license_id,
       commercial_use: manifest.rights.commercial_use,
     },
-    key_id: keyId,
+    key_id: pinKeyId,
   };
 }
 
@@ -252,7 +288,7 @@ const testRows = readFileSync(join(root, "fixtures", "datasets", "uci-optdigits"
 writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
   governing_spec: "138-governed-exact-model-execution",
   package_dir: "digits-mlp-1.0.0",
-  trusted_public_key_hex: publicKey.toString("hex"),
+  trusted_public_key_hex: productionKeys["traverse.digits-mlp"],
   pin: pins["traverse.digits-mlp"],
   request: {
     policy_ref: "policy-1",
