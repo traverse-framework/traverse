@@ -805,9 +805,12 @@ jobs:
 
   stress-test:
     needs: classify-changes
-    if: needs.classify-changes.outputs.full_ci == 'true'
+    # No job-level `if`: branch protection requires each
+    # `ThreadPoolExecutor stress (<target>)` check, and a skipped matrix job
+    # reports only the unexpanded name (#1894). On docs-only changes every leg
+    # runs on ubuntu-latest and skips its steps.
     name: ThreadPoolExecutor stress (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ needs.classify-changes.outputs.full_ci == 'true' && matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -826,18 +829,22 @@ jobs:
 
     steps:
       - name: Checkout
+        if: needs.classify-changes.outputs.full_ci == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Rust
+        if: needs.classify-changes.outputs.full_ci == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
           targets: wasm32-wasip1
 
       - name: Cache cargo
+        if: needs.classify-changes.outputs.full_ci == 'true'
         uses: Swatinem/rust-cache@v2
 
       - name: Run ThreadPoolExecutor stress tests
+        if: needs.classify-changes.outputs.full_ci == 'true'
         env:
           TRAVERSE_STRESS_SECONDS: "60"
         run: cargo test -p traverse-runtime --test thread_pool_stress -- --ignored --nocapture
