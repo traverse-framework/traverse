@@ -47,7 +47,9 @@ export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
  * Decision 103), mirroring `keys/model-signing/*.pub` exactly. Opt-in only:
  * pass them in `trustedPublicKeysHex`. Nothing trusts them by default.
  */
-export const TRAVERSE_MODEL_SIGNING_KEYS: readonly string[] = [];
+export const TRAVERSE_MODEL_SIGNING_KEYS: readonly string[] = [
+  "717be8d616fa9852aa67f57df6f4dc878b4de10c3f316f5f07f5c5196e1cd19c",
+];
 
 export type CommercialUse = "allowed" | "restricted" | "prohibited";
 
