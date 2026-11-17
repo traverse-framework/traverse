@@ -8288,3 +8288,72 @@ Project-wide rules for agent-originated workflows:
   read commands, and no approve command.
 - reference-apps records the app-level choices (home and model modes) in its
   own decision log.
+
+## Decision 137: Authoring Journeys Draft and Run Locally, Host No Model, and Keep Nothing Unless Saved
+
+- **Date**: 2026-11-17
+- **Status**: Accepted
+- **Governing specs**: `100-capability-package-authoring`,
+  `113-declarative-workflow-planning`
+- **Related issues**: `traverse-framework/reference-apps#291`
+- **Builds on**: Decision 80 (deterministic `workflow plan` / `workflow
+  promote`), Decision 136 rule 1 (natural language becomes a structured
+  target that a human confirms)
+
+### Context
+
+reference-apps#291 asks for a progressive journey from a workflow
+description to a governed app shell, so a developer can consume a capability
+before meeting contracts, registry, WASM, hosts, traces, MCP and governance.
+Its September decision inventory (input form, automation boundary, data
+retention) was never decided. Capability authoring is already skill-first
+plain English (`traverse-capability-author`), and `traverse-workflow-planner`
+already turns a business workflow into a capability gap list.
+
+### Decision
+
+Project-wide rules for authoring journeys (any guided path from a workflow
+description to an app shell and new capabilities):
+
+1. **Input is structured; plain English is an optional untrusted draft.** The
+   journey's input is the structured workflow description that `workflow
+   plan` accepts. Plain English may be turned into that structure as a draft
+   the user confirms (Decision 136 rule 1). It never executes or publishes
+   anything by itself.
+2. **Drafts may run locally; publication stays governed.** A journey may
+   generate the app shell and reviewable drafts, and may build and run a
+   draft capability locally (local bundle, test-only key, never synced or
+   published), clearly labelled as unpublished and untrusted. Registry
+   publication, trust, and production activation follow the normal governed
+   process. A journey never opens a publication PR on its own.
+3. **The journey hosts no model.** The plain-English step runs as a skill in
+   the user's own AI coding tool. The journey receives only the structured
+   draft, and docs state that prompt handling is that tool's policy.
+4. **Nothing is kept unless the user saves it.** Drafts and the app shell are
+   ordinary files in the user's project. Local-run inputs and traces stay in
+   memory for that run and are written to the project only when the user
+   saves them. Nothing leaves the device.
+
+### Alternatives considered
+
+- Structured input only: rejected because the median developer meets the
+  format before seeing value, which is the problem #291 describes.
+- Plain English as the primary input: rejected because the structure the
+  user must review is hidden and it drifts toward natural-language authority.
+- Drafts only, no local run: rejected because a novice cannot see a new
+  capability work inside the journey.
+- Automatically opening a publication PR: rejected because it turns unvetted
+  drafts into review load and makes publication feel like a default.
+- A built-in local or hosted model: rejected because the journey would then
+  own prompt retention, consent, and egress, while skill-first authoring
+  already works in the user's own tool.
+- A local cache with auto-expiry, or writing every run into the project:
+  rejected because user payloads would sit on disk, or in a folder that may be
+  committed, without the user asking.
+
+### Consequences
+
+- `traverse-workflow-planner` (claude-skills) emits the structured workflow
+  description and explicit open decisions, not only a gap list.
+- reference-apps records the #291 app-level choices (prototype shape and
+  evaluation) in its own decision log.
