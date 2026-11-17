@@ -2,7 +2,7 @@
 
 **Feature Branch**: `055-registry-sync`
 **Created**: 2026-07-06
-**Status**: Approved — v1.1.0 model-rights inspection amend (#1727, registry spec 026) approved 2026-10-27; v1.2.0 shared sync crate and file-output mode (#1751, Decision 121) approved 2026-10-29
+**Status**: Approved — v1.1.0 model-rights inspection amend (#1727, registry spec 026) approved 2026-10-27; v1.2.0 shared sync crate and file-output mode (#1751, Decision 121) approved 2026-10-29; v1.3.0 `superseded_by` kept by sync and shown by inspect (#1848, Decision 132) approved 2026-11-16
 **Input**: GitHub issue #542, registry decision log entries 6-7, registry specs `001-registry-foundation` and `003-index-release-pipeline`, and Traverse spec `054-public-scope-registry-ref`.
 
 ## Purpose
@@ -33,6 +33,7 @@ Traverse MUST provide `traverse-cli registry sync` so a workspace can consume th
 - **FR-020** *(v1.2.0)*: The shared crate MUST support a file-output mode. It writes one synced-state file (the same document and FR-008 metadata as the workspace state, with `workspace_id` `traverse-mcp`) to a caller-chosen path. The write MUST be atomic per FR-007: on any failure no partial file is left and an existing file is kept.
 - **FR-021** *(v1.2.0)*: A caller MAY pin one `index-vN` release instead of the highest one. A malformed pin fails with `registry_release_invalid` before any network access. A pin with no such release fails with `registry_index_release_missing`, and a release without an `index.json` asset fails with `registry_index_asset_missing`. The written state records the release tag it used.
 - **FR-022** *(v1.2.0)*: When the GitHub release asset reports a `sha256:` digest, the fetched `index.json` bytes MUST match it, or sync fails with `registry_index_digest_mismatch` and writes nothing.
+- **FR-023** *(v1.3.0, #1848, Decision 132)*: Sync MUST keep each record's `superseded_by` unchanged in the synced state, and MUST omit it for a record that does not carry one. `registry inspect` MUST show `superseded_by` for every version that declares one and for every `deprecated` version. A `deprecated` version without one prints `not stated`. In JSON output the `superseded_by` key is always present, and is `null` for a version that is not deprecated and declares no successor. The value is declared metadata only (FR-017).
 
 ## Command Shape
 
@@ -63,6 +64,7 @@ Successful JSON output MUST include at least:
 6. **Given** a synced index with a revoked version carrying a revocation record, **When** `registry inspect` runs, **Then** that version shows `status: revoked` and its revocation record, and every model rights field is shown.
 7. **Given** a model reference without `data_obligations`, **When** it is inspected, **Then** `data_obligations` shows `not stated`.
 8. **Given** synced versions with `allowed` and `conditional` model commercial-use rights, **When** `registry search --model-commercial-use conditional` runs, **Then** only the `conditional` version is returned.
+9. **Given** a synced deprecated version whose index row has `superseded_by: 1.2.1`, **When** `registry inspect` runs, **Then** that version shows `superseded_by: 1.2.1`; a deprecated version without one shows `superseded_by: not stated`.
 
 ## Out of Scope
 

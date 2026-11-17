@@ -75,10 +75,22 @@ fn object_models(record: &PublicRegistryCapabilityRecord) -> impl Iterator<Item 
         })
 }
 
-/// Lifecycle status, revocation record and per-model rights, as JSON.
+/// The successor to show for a record (Spec 055 FR-023): the declared
+/// `superseded_by`, or `not stated` on a deprecated version without one.
+/// `None` when the record is not deprecated and declares no successor.
+fn successor_label(record: &PublicRegistryCapabilityRecord) -> Option<&str> {
+    match record.superseded_by.as_deref() {
+        Some(successor) => Some(successor),
+        None if record.lifecycle_status() == PublicRecordStatus::Deprecated => Some(NOT_STATED),
+        None => None,
+    }
+}
+
+/// Lifecycle status, successor, revocation record and per-model rights, as JSON.
 pub(crate) fn record_rights_json(record: &PublicRegistryCapabilityRecord) -> Value {
     json!({
         "status": status_label(record.lifecycle_status()),
+        "superseded_by": successor_label(record),
         "revocation": record.revocation.as_ref().map(|revocation| json!({
             "reason": revocation.reason,
             "evidence_url": revocation.evidence_url,
@@ -159,6 +171,9 @@ pub(crate) fn render_record_rights(
         "  status: {}",
         status_label(record.lifecycle_status())
     )?;
+    if let Some(successor) = successor_label(record) {
+        writeln!(output, "  superseded_by: {successor}")?;
+    }
     if let Some(revocation) = &record.revocation {
         writeln!(
             output,
@@ -413,6 +428,32 @@ mod tests {
         deprecated.status = None;
         deprecated.deprecated = true;
         assert!(matches_status(&deprecated, "deprecated"));
+    }
+
+    #[test]
+    fn deprecated_version_shows_its_successor_or_not_stated() {
+        let active = plain_record();
+        assert_eq!(record_rights_json(&active)["superseded_by"], Value::Null);
+        let mut human = String::new();
+        render_record_rights(&active, &mut human).expect("render");
+        assert!(!human.contains("superseded_by"));
+
+        let mut deprecated = plain_record();
+        deprecated.deprecated = true;
+        assert_eq!(record_rights_json(&deprecated)["superseded_by"], NOT_STATED);
+        let mut human = String::new();
+        render_record_rights(&deprecated, &mut human).expect("render");
+        assert!(human.contains("  status: deprecated\n  superseded_by: not stated\n"));
+
+        deprecated.superseded_by = Some("1.2.1".to_string());
+        assert_eq!(record_rights_json(&deprecated)["superseded_by"], "1.2.1");
+        let mut human = String::new();
+        render_record_rights(&deprecated, &mut human).expect("render");
+        assert!(human.contains("  status: deprecated\n  superseded_by: 1.2.1\n"));
+
+        let mut declared = plain_record();
+        declared.superseded_by = Some("2.0.0".to_string());
+        assert_eq!(record_rights_json(&declared)["superseded_by"], "2.0.0");
     }
 
     #[test]

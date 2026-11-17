@@ -2338,6 +2338,7 @@ mod tests {
             contract_digest: contract_digest.clone(),
             contract_url: "https://example.test/process.json".to_string(),
             deprecated: false,
+            superseded_by: None,
             summary: String::new(),
             description: String::new(),
             use_cases: Vec::new(),

@@ -338,6 +338,7 @@ mod tests {
             contract_digest: sha256_prefixed(&kit_contract_bytes()),
             contract_url: format!("file://{}", contract.display()),
             deprecated: false,
+            superseded_by: None,
             summary: "Normalize raw participants into canonical records.".to_string(),
             description: "Verified public kit fixture for Mode B prepare.".to_string(),
             use_cases: vec![PublicUseCaseSummary {
