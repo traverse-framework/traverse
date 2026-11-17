@@ -12,6 +12,8 @@
 - `traverse-registry` is pinned to `=0.32.0`, which carries the field.
 
 - `Package.swift` now points at the `swift-host-v0.17.1` xcframework (`#1851`).
+- CI runs once per PR push, cancels only superseded PR runs, and splits
+  repository checks and coverage across parallel jobs (`#1865`).
 - The `#1776` published-package demo's native host runs on crates.io
   `traverse-runtime` 0.17.1 and activates the connector with
   `ExactModelMediatedConnector::activated()` (`#1807`). Its results match the

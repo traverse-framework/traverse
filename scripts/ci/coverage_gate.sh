@@ -19,6 +19,22 @@ if [[ ${#targets[@]} -eq 0 ]]; then
   exit 0
 fi
 
+# CI runs one crate per matrix leg. An unknown crate fails before any build.
+if [[ -n "${COVERAGE_CRATE:-}" ]]; then
+  filtered=()
+  for entry in "${targets[@]}"; do
+    crate_name="$(awk '{print $1}' <<<"${entry}")"
+    if [[ "${crate_name}" == "${COVERAGE_CRATE}" ]]; then
+      filtered+=("${entry}")
+    fi
+  done
+  if [[ ${#filtered[@]} -eq 0 ]]; then
+    echo "COVERAGE_CRATE=${COVERAGE_CRATE} is not listed in ${TARGETS_FILE}" >&2
+    exit 1
+  fi
+  targets=("${filtered[@]}")
+fi
+
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "cargo-llvm-cov is required for the coverage gate." >&2
   exit 1
@@ -65,7 +81,14 @@ for entry in "${targets[@]}"; do
   fi
 
   echo "Measuring line coverage for ${crate_name} with threshold ${minimum_percent}%"
-  coverage_output="$(cargo llvm-cov --package "${crate_name}" --lcov -- --test-threads=1)"
+  # Unset keeps the historical serial gate. CI sets "default" so each crate
+  # uses the runner's test threads; any other value is a thread count.
+  cov_cmd=(cargo llvm-cov --package "${crate_name}" --lcov)
+  case "${COVERAGE_TEST_THREADS-1}" in
+    default) ;;
+    *) cov_cmd+=(-- --test-threads="${COVERAGE_TEST_THREADS-1}") ;;
+  esac
+  coverage_output="$("${cov_cmd[@]}")"
   line_counts="$(
     awk -F '[:,]' '
       /^SF:/ { current_file = substr($0, 4); next }
