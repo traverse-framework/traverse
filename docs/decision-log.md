@@ -8207,3 +8207,84 @@ minor release.
 - Apps that pin `traverse.digits-mlp` by digest (App-References, traverseweb)
   move to `1.0.1` within the overlap window.
 - Key rotation (`#1884`) re-signs only packages that are not superseded.
+
+## Decision 136: An AI Agent Proposes a Structured Target; a Human Approves Out of Band; Replans Cover Only the Remainder
+
+- **Date**: 2026-11-17
+- **Status**: Accepted
+- **Governing specs**: `108-governed-runtime-workflow-composition`,
+  `109-runtime-workflow-proposals`, `113-declarative-workflow-planning`
+- **Related issues**: `traverse-framework/reference-apps#288`, `#1896`
+- **Builds on**: reference-apps#288 D1 (2026-09-06: browser/local and
+  external proposer modes, local default, external opt-in with declared
+  egress and redaction) and D2 (always explicit review before execution)
+
+### Context
+
+reference-apps#288 asks for a reference app in which an AI agent proposes a
+multi-step workflow from contracts, a human reviews it, Traverse validates and
+executes it, and a failed step leads to a reviewed replan. Spec 113 and
+Spec 1277 already provide a deterministic planner that composes candidate
+workflows from a structured target and starting facts, and Spec 1277 forbids
+that planner from using model output. `traverse-mcp` has tested planning and
+proposal functions (`tools/workflow_plan.rs`, `tools/proposals.rs`), but its
+stdio server does not expose them: an MCP client can only search, describe,
+validate, and execute entrypoints. Whether the review seat is human-only or a
+role an automated checker may fill was left open in the #288 thread.
+
+### Decision
+
+Project-wide rules for agent-originated workflows:
+
+1. **The agent produces a structured target, not a graph.** The agent turns a
+   natural-language goal into a Spec 113 structured target and starting
+   facts, plus explicit questions where it is unsure. The deterministic
+   planner produces the candidate workflows. The agent never invents graph
+   edges or field mappings. The planner's reach is the agent's reach, and
+   docs state that ceiling.
+2. **The reviewer is a human, for now.** A person confirms the target,
+   selects the plan, and clears `mapping_unconfirmed` mappings. The record
+   names the reviewer as a role, so an independent automated reviewer can be
+   admitted later only by a separate decision that settles its scope,
+   independence (verdict recomputable by a third party), and accountability.
+3. **Approval is out of band.** Over MCP the agent may submit a target and
+   read candidate plans, but no MCP tool approves. The human approves in a
+   separate surface the host runs (a local page or CLI prompt), which mints a
+   single-use approval token bound to the proposal digest. Execution requires
+   that token, so an agent cannot approve its own proposal.
+4. **A replan covers only the remainder.** When an approved step fails, the
+   completed steps' outputs, bound to their trace digests, become starting
+   facts of a new structured target. The planner proposes only the remaining
+   part, excluding the failed capability version, and the result needs fresh
+   out-of-band approval. There is no automatic retry.
+
+### Alternatives considered
+
+- The agent proposes the full graph (Spec 109 proposal): rejected because
+  model-invented mappings need heavier review, results are not reproducible,
+  and it duplicates planner logic under weaker guarantees.
+- Show the agent's graph next to the planner's: deferred as a later
+  evaluation, not part of a first proof.
+- Reviewer as a role (human or independent checker) now, or a split where a
+  checker approves unambiguous plans: rejected for now because the remaining
+  judgment is about the user's own intent, and admitting a checker needs its
+  own scope, independence, and accountability policy.
+- Approval through the MCP client's tool-call confirmation: rejected because
+  it is the agent asking to approve itself, and clients differ or auto-allow.
+- Approval through MCP elicitation: rejected for now because client support
+  is uneven and the client, not the host, renders what the human approves.
+- Fresh full replan from the original goal: rejected because completed steps
+  would run again and duplicate side effects.
+- Agent chooses remainder or full replan per case: rejected as two paths to
+  build and test with a harder-to-pin failure scenario.
+
+### Consequences
+
+- Spec amendments are needed before implementation: Spec 109 (host-minted,
+  digest-bound approval token from an out-of-band surface; no MCP approve
+  tool) and Spec 113 (completed outputs as trace-bound starting facts for a
+  remainder replan).
+- `traverse-mcp` stdio exposes target submission, planning, and proposal
+  read commands, and no approve command.
+- reference-apps records the app-level choices (home and model modes) in its
+  own decision log.
