@@ -5,6 +5,7 @@
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
 **Version**: 0.16.2
+**Amendment (2026-11-16, version 0.16.2 -> 0.17.0, approved under Decision 134 / ADR-0084 / #1859):** Adds the provider registration boundary for Spec `1774-onnxruntime-cpu-runner-family`. Applications continue to call only the provider-neutral Spec 138 operation. A model may select the `onnxruntime-cpu` provider through host-owned placement policy, binding a signed runner-family release and fixed memory profile; it MUST NOT name a browser, Node, native target, or ONNX Runtime artifact. The new provider is CPU-only and supported only when every target profile required by Spec 1774 is released and conformant. Existing `wasm-cpu` and accelerator behavior is unchanged.
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.

@@ -8072,3 +8072,44 @@ review cannot be used: an account cannot approve its own PR.
   its own governed-surface PRs without a passing record.
 - Repos without a change classifier need one before the check can run.
 - `org-audit.yml` reports the three measures weekly.
+## Decision 134: Govern ONNX Runtime as a Complete Cross-Host CPU Capability
+
+- **Date**: 2026-11-16
+- **Status**: Accepted
+- **Governing specs**: `1774-onnxruntime-cpu-runner-family`,
+  `138-governed-exact-model-execution`
+- **Related issues**: `#1859`, `#1866`, `#1868`–`#1875`
+
+### Context
+
+Callweave's Perch evaluation graph exposed a large-graph compatibility gap,
+but it is a downstream showcase rather than Traverse product scope. A
+browser-only ORT integration would violate Traverse's portability boundary;
+forcing the browser Emscripten artifact onto native hosts would be equally
+host-coupled.
+
+### Decision
+
+Traverse provides one CPU-only, provider-neutral `onnxruntime-cpu` capability
+across browser, Node, Rust/native, Swift, Kotlin/Android, and .NET. A signed
+runner-family manifest binds exact target artifacts as one release. Hosts use
+their appropriate Worker or native isolation implementation, while exposing
+one normalized contract. Activation is verified before registration and
+execution is offline. Fixed signed memory profiles, deterministic termination,
+and shared cross-host conformance are release requirements.
+
+### Alternatives considered
+
+- Release browser ORT Web alone: rejected because the capability must not
+  exclude Traverse native products.
+- Let each SDK use ORT directly: rejected because trust, limits, evidence,
+  and updates would drift.
+- Embed a runner in every model package: rejected because provenance,
+  revocation, and security updates would require repackaging every model.
+
+### Consequences
+
+- The complete target matrix is required for the first public release.
+- Perch stays an external, evaluation-only fixture; generic fixtures prove the
+  product capability.
+- Accelerator profiles remain separate approved work.
