@@ -8113,3 +8113,97 @@ and shared cross-host conformance are release requirements.
 - Perch stays an external, evaluation-only fixture; generic fixtures prove the
   product capability.
 - Accelerator profiles remain separate approved work.
+
+## Decision 135: Changes to Production-Signed Model Manifests Ship as a Signed Patch Version from a Pinned PR Commit
+
+- **Date**: 2026-11-17
+- **Status**: Accepted
+- **Governing specs**: `138-governed-exact-model-execution`
+- **Related issues**: `#1891`, `#1567`, `#1888`, `#1884`
+- **Amends**: Decision 103, rule 7 (CI signing workflow)
+
+### Context
+
+`digits-mlp-1.0.0` has been production-signed since `#1567` / `#1888`, but its
+signed manifest's `rights.redistribution` still says "signed with the
+test-only key (no production trust)". Any edit to the manifest invalidates the
+signature. Under Decision 103 rule 7 the `Sign model packages` workflow signs
+the manifest as it is on `main`, and since `#1888` CI fails on purpose when a
+committed signature does not match its manifest. A manifest change therefore
+could not reach `main` with CI green, and the next re-sign that is needed
+anyway is the key rotation `#1884`, due 2027-11-16.
+
+### Decision
+
+Project-wide rules for any change to a production-signed model package's
+manifest:
+
+1. **Sign a pinned PR commit.** The `Sign model packages` workflow is still
+   dispatched from `main` in the `model-signing` environment (required
+   reviewer = the maintainer). It takes a full 40-character commit SHA input,
+   signs the listed packages' manifests at that commit, and pushes a signing
+   branch built on that commit. The manifest change and its signature merge to
+   `main` together through one normal PR, so `main` never carries a manifest
+   whose signature does not verify.
+2. **The workflow guards what it signs.** It refuses to sign unless the pinned
+   commit is the head of an open PR to `main` and its diff from `main` touches
+   only the listed packages' directories under `fixtures/models/` and their
+   entries in the fixture generator. A manifest change that also needs code
+   changes lands in two PRs, code first. The signing PR still needs a passing
+   Decision 133 review record before merge, like any other PR.
+3. **Any change to signed manifest bytes is a new patch version.** A
+   metadata-only change to a production-signed package (model bytes
+   unchanged) publishes a new patch version in a new directory (for example
+   `digits-mlp-1.0.0` → `digits-mlp-1.0.1`). A version always identifies
+   exactly one manifest and one digest.
+4. **The superseded version keeps working for one minor release.** It stays
+   signed and loadable, is marked superseded in docs and the CHANGELOG, and
+   repo tests and conformance fixtures move to the new version. Its directory
+   is removed in the next minor release, the same overlap window Decision 103
+   uses for key rotation.
+5. **Production manifests make no signing claims.** Rights text covers rights
+   only; signing status comes only from verification against
+   `TRAVERSE_MODEL_SIGNING_KEYS`. The fixture generator refuses signing or key
+   wording in the rights fields of production-signed packages. Test-only
+   fixtures (`echo`, `classifier`, `responder`) keep their truthful "test-only
+   key" wording.
+
+For `#1891` this means: `digits-mlp-1.0.1` with `rights.redistribution`
+"Redistribution permitted under CC BY 4.0 with the attribution above", signed
+from a pinned PR commit; `digits-mlp-1.0.0` superseded and removed in the next
+minor release.
+
+### Alternatives considered
+
+- Tolerated pending-signature marker on `main`, refused on release tags:
+  rejected because it adds a code path whose only job is to let an unverified
+  production package sit on `main`.
+- Wait for the next re-sign that is needed anyway: rejected because the next
+  scheduled one is the `#1884` rotation, so the false text would ship to
+  hosts for about a year.
+- Pinned commit guarded only by the environment approval: rejected because a
+  mis-pasted SHA or an unrelated change could be production-signed.
+- Also require a cross-tool review record before signing: rejected as a
+  second gate in front of the maintainer's own approval of a small, scoped
+  diff; the review still happens before merge.
+- Keep the version and change only the digest: rejected because two signed
+  manifests would share one version and digest pins would break at once.
+- Remove the superseded version at once, or keep it forever: rejected because
+  the first breaks digest pins with no overlap and the second makes every
+  rotation re-sign packages that carry wrong text.
+- Name the production key or key id in the rights text: rejected because
+  rotation or revocation makes it stale again.
+- Apply the no-signing-claims check to test fixtures too: rejected because it
+  churns test fixtures and removes a visible "not for production" marker that
+  cannot go stale.
+
+### Consequences
+
+- Spec 138 is amended (signing workflow input, the scoped-diff guard, the
+  patch-version and supersede rules, and the production rights-text rule) in
+  the implementation PR for `#1891`.
+- The signing workflow gains a required `sha` input and the scoped-diff guard;
+  its branch is built on the pinned commit instead of `main`.
+- Apps that pin `traverse.digits-mlp` by digest (App-References, traverseweb)
+  move to `1.0.1` within the overlap window.
+- Key rotation (`#1884`) re-signs only packages that are not superseded.
