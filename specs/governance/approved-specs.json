@@ -2212,6 +2212,18 @@
         "crates/traverse-mcp/src/lib.rs",
         "crates/traverse-mcp/tests/registry_tiered_trust.rs"
       ]
+    },
+    {
+      "id": "526-embedded-verified-cache-lifecycle",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/526-embedded-verified-cache-lifecycle/spec.md",
+      "governs": [
+        "specs/526-embedded-verified-cache-lifecycle/",
+        "crates/traverse-runtime/src/embedded_cache.rs",
+        "crates/traverse-runtime/tests/offline_cache_execution.rs"
+      ]
     }
   ]
 }
