@@ -2,7 +2,9 @@
 
 **Feature Branch**: `523-private-registry-source-override`
 **Created**: 2026-07-28
-**Status**: Draft
+**Status**: Approved (2026-11-17)
+**Version**: 1.0.0
+**Approval**: Owner-approved 2026-11-17 (#1901). Implemented in #843.
 **Input**: GitHub issue #842, `traverse-framework/registry` `docs/decision-log.md` (private-registry brainstorm, same session), spec `055-registry-sync`, spec `056-capability-publish`.
 
 ## Purpose
@@ -43,3 +45,5 @@ This spec covers making the source repo configurable and reachable when private 
 ## Note on approval
 
 This spec was drafted by an agent (Claude Code) working from `traverse-framework/registry` issue #842 and a same-session brainstorm with the repo owner about the private-registry *scope* decision (GitHub-repo-based, not a new protocol). Per this repo's spec-then-implementation precedent (and `registry`'s own no-self-approval-of-specs rule, which this agent defaults to here absent confirmation this repo's rule differs), this spec stays **Draft** and unregistered in `specs/governance/approved-specs.json` pending the repo owner's explicit sign-off -- implementation proceeds under it in the interim, consistent with how `registry`'s own spec `007-workflow-registry-traversal` was implemented while still Draft.
+
+**Approved 2026-11-17**: the repo owner signed off on this spec (#1901), and it is now registered in `specs/governance/approved-specs.json`.

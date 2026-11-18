@@ -2165,6 +2165,17 @@
         "crates/traverse-runtime/src/data_store.rs",
         "crates/traverse-contracts/"
       ]
+    },
+    {
+      "id": "523-private-registry-source-override",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/523-private-registry-source-override/spec.md",
+      "governs": [
+        "specs/523-private-registry-source-override/",
+        "crates/traverse-cli/src/main.rs"
+      ]
     }
   ]
 }
