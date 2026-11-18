@@ -2,7 +2,9 @@
 
 **Feature Branch**: `codex/issue-846-verified-cache-lifecycle`
 **Created**: 2026-07-28
-**Status**: Draft — successor specification requiring maintainer approval before implementation.
+**Status**: Approved (2026-11-18)
+**Version**: 1.0.0
+**Approval**: Owner-approved 2026-11-18 (#1911). The governed-files list was corrected at approval: the registry crate lives in `traverse-framework/registry` (Spec 051).
 **Input**: Issue #846, Decision 38, `524-production-app-readiness`, and Spec 080.
 
 ## Purpose
@@ -77,8 +79,9 @@ already active verified generation.
 ## Governed Files and Conformance
 
 Future implementation scope is limited to
-`crates/traverse-registry/src/embedded_cache_lifecycle.rs`,
-`crates/traverse-registry/tests/embedded_cache_lifecycle_conformance.rs`,
+`crates/traverse-registry/src/embedded_cache_lifecycle.rs` and
+`crates/traverse-registry/tests/embedded_cache_lifecycle_conformance.rs` in
+`traverse-framework/registry` (the registry crate moved there under Spec 051),
 `crates/traverse-runtime/src/embedded_cache.rs`,
 `crates/traverse-runtime/tests/offline_cache_execution.rs`, host package
 adapters, and normative fixtures in this directory. The independent suite
