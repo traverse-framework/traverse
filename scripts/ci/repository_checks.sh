@@ -188,6 +188,10 @@ required_files=(
   "scripts/ci/publish_runtime_wasm_release_test.sh"
   "scripts/ci/checkout_target_dir.sh"
   "scripts/ci/checkout_target_dir_test.sh"
+  "scripts/model-signing/check-signing-scope.sh"
+  "scripts/model-signing/check-signing-scope_test.sh"
+  "scripts/fixtures/production-rights-text.mjs"
+  "scripts/fixtures/production-rights-text.test.mjs"
 )
 
 for file in "${required_files[@]}"; do
@@ -602,6 +606,12 @@ bash "$(pwd)/scripts/ci/publish_runtime_wasm_release_test.sh"
 
 echo "Running checkout_target_dir.sh fixture tests (#1801)..."
 bash "$(pwd)/scripts/ci/checkout_target_dir_test.sh"
+
+echo "Running model-signing scope guard tests (Decision 135, #1891)..."
+bash "$(pwd)/scripts/model-signing/check-signing-scope_test.sh"
+
+echo "Running production rights-text guard tests (Decision 135, #1891)..."
+node --test "$(pwd)/scripts/fixtures/production-rights-text.test.mjs"
 
 echo "Running new-capability scaffold smoke..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/new_capability_scaffold_smoke.sh"

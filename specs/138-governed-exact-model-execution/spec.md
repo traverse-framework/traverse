@@ -4,8 +4,9 @@
 **Created**: 2026-09-16
 **Status**: Approved (2026-09-16)
 **Canonical governing ID**: `138-governed-exact-model-execution`
-**Version**: 0.16.2
+**Version**: 0.18.0
 **Amendment (2026-11-16, version 0.16.2 -> 0.17.0, approved under Decision 134 / ADR-0084 / #1859):** Adds the provider registration boundary for Spec `1774-onnxruntime-cpu-runner-family`. Applications continue to call only the provider-neutral Spec 138 operation. A model may select the `onnxruntime-cpu` provider through host-owned placement policy, binding a signed runner-family release and fixed memory profile; it MUST NOT name a browser, Node, native target, or ONNX Runtime artifact. The new provider is CPU-only and supported only when every target profile required by Spec 1774 is released and conformant. Existing `wasm-cpu` and accelerator behavior is unchanged.
+**Amendment (2026-11-18, version 0.17.0 -> 0.18.0, approved under Decision 135 / #1891)**: Changes to production-signed model manifests. The `Sign model packages` workflow signs at a pinned commit (the head of an open PR to `main` whose diff touches only the listed packages and the fixture generator, or the head of `main`), so a manifest and its signature merge together (FR-076, FR-077). Any change to signed manifest bytes ships as a new patch version, and the superseded version stays loadable for one minor release (FR-078, FR-079). Production rights text makes no signing claims (FR-080). Amends Decision 103 rule 7 and FR-051. Also records the 0.17.0 version that Decision 134's amendment above introduced. No format or host-API change.
 **Extends**: `137-host-connector-command-dispatch`,
 `044-application-bundle-manifest`, `526-embedded-verified-cache-lifecycle`,
 `1259-portable-authority-contracts`, and Registry signed-artifact verification.
@@ -1320,6 +1321,36 @@ Traverse MUST:
   MUST equal the registered policy, otherwise the call fails with
   `model_unavailable` / `placement_unavailable`. An invalid list still
   fails with `policy_denied`. They are removed in the next major version.
+- **FR-076**: (0.18.0, Decision 135) The signing workflow MUST take the
+  packages and a full 40-character commit SHA, and sign the packages' manifests
+  as they are at that commit. Its signing branch MUST be built on that commit.
+  The guard, the CLI that signs, and the trusted public keys MUST come from
+  `main`; only package files come from the pinned commit. If the pinned PR
+  head moves between the scope check and the checkout, the run MUST fail.
+- **FR-077**: (0.18.0, Decision 135) Before the signing secret is used, the
+  workflow MUST refuse to sign unless the SHA is either:
+  - the head of `main` (re-signing reviewed content, for example during a key
+    rotation); or
+  - the head of exactly one open PR to `main` whose changed paths (including
+    rename sources) all lie under `fixtures/models/<listed package>/` or are
+    the fixture generator `scripts/fixtures/sign-model-fixtures.mjs`.
+
+  The generator is checked at file level; the PR's Decision 133 review checks
+  that only the listed packages' entries changed. A manifest change that also
+  needs code changes lands in two PRs, code first.
+- **FR-078**: (0.18.0, Decision 135) Any change to a production-signed
+  package's manifest bytes, including a metadata-only change, MUST ship as a
+  new patch version in a new package directory. A version identifies exactly
+  one manifest and one digest.
+- **FR-079**: (0.18.0, Decision 135) A superseded production package MUST stay
+  signed and loadable, marked superseded in docs and the CHANGELOG, for one
+  minor release, and its directory MUST be removed in the next minor release.
+  Repository tests and conformance fixtures MUST move to the new version. Key
+  rotation re-signs only packages that are not superseded.
+- **FR-080**: (0.18.0, Decision 135) The rights fields of a production-signed
+  package that is not superseded MUST NOT mention signing or keys. The fixture
+  generator MUST refuse such text. Test-only fixtures keep their "test-only
+  key" wording.
 
 ## Acceptance scenarios
 
@@ -1472,6 +1503,17 @@ Traverse MUST:
     registered under `[coreml, wasm-cpu]` with `cpu_only` compute units
     registers, its first call succeeds within the call deadline, and the
     registration time is recorded.
+36. (0.18.0, Decision 135) The signing-scope guard accepts a PR head whose
+    diff touches only the listed packages and the generator, and the head of
+    `main`. It refuses, before the secret is used:
+    - a diff touching any other path, an unlisted package, or a package that
+      only shares a name prefix;
+    - a SHA that is not an open PR's head, a closed PR, a PR to another
+      branch, or two PRs with the same head;
+    - a short, uppercase, or symbolic SHA, and no or path-like package names.
+37. (0.18.0, Decision 135) The fixture generator refuses a production-signed,
+    non-superseded package whose rights text mentions signing or keys, and
+    accepts the same text on a test-only fixture or a superseded package.
 
 ## Compatibility and non-goals
 

@@ -1,29 +1,94 @@
 name: Sign model packages
 
-# Decision 103 (#1567): re-sign Spec 138 model packages with the production
+# Decision 103 (#1567): sign Spec 138 model packages with the production
 # model-signing key. Manual dispatch only, in the protected `model-signing`
 # environment (required reviewer = the maintainer). The secret is never
 # available to pull_request workflows.
+#
+# Decision 135 (#1891): the job signs the packages at a pinned commit, which
+# must be the head of an open PR to main whose diff touches only the listed
+# packages and the fixture generator, or the head of main itself (re-signing
+# reviewed content, e.g. a key rotation). The signing branch is built on that
+# commit, so the manifest change and its signature merge together. The guard,
+# the CLI and the trusted public keys all come from main; only the package
+# files come from the pinned commit.
 on:
   workflow_dispatch:
     inputs:
       packages:
         description: >-
           Space-separated package directories under fixtures/models/
-          (for example: digits-mlp-1.0.0).
+          (for example: digits-mlp-1.0.1).
+        required: true
+      sha:
+        description: >-
+          Full 40-character commit SHA to sign at: the head of the open PR
+          that adds the packages, or the head of main.
         required: true
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   sign:
     runs-on: ubuntu-latest
     environment: model-signing
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Check the signing scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGES: ${{ github.event.inputs.packages }}
+          SIGN_SHA: ${{ github.event.inputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a packages <<< "${PACKAGES}"
+          work="${RUNNER_TEMP}/scope"
+          mkdir -p "${work}"
+          main_sha="$(git rev-parse HEAD)"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" \
+            --jq '.[] | {number, state, base: {ref: .base.ref}, head: {sha: .head.sha}}' \
+            | jq -s . > "${work}/pulls.json"
+          : > "${work}/files.txt"
+          number="$(jq -r --arg sha "${SIGN_SHA}" '[.[] | select(.head.sha == $sha) | .number] | if length == 1 then .[0] else "" end' "${work}/pulls.json")"
+          if [[ -n "${number}" ]]; then
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${number}/files?per_page=100" \
+              --jq '.[] | .filename, (.previous_filename // empty)' > "${work}/files.txt"
+          fi
+          scope="$(SIGN_SHA="${SIGN_SHA}" SIGN_MAIN_SHA="${main_sha}" \
+            SIGN_PULLS_JSON="${work}/pulls.json" SIGN_FILES="${work}/files.txt" \
+            bash scripts/model-signing/check-signing-scope.sh "${packages[@]}")"
+          echo "Signing scope: ${scope}"
+          read -r kind pr <<< "${scope}"
+          echo "kind=${kind}" >> "${GITHUB_OUTPUT}"
+          echo "pr=${pr:-}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out the pinned commit
+        env:
+          SIGN_SHA: ${{ github.event.inputs.sha }}
+          KIND: ${{ steps.scope.outputs.kind }}
+          PR: ${{ steps.scope.outputs.pr }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${KIND}" == "pr" ]]; then
+            git fetch --no-tags --depth=1 origin "refs/pull/${PR}/head"
+            pinned="$(git rev-parse FETCH_HEAD)"
+          else
+            pinned="$(git rev-parse HEAD)"
+          fi
+          if [[ "${pinned}" != "${SIGN_SHA}" ]]; then
+            echo "The pinned commit moved after the scope check; dispatch again with the new head." >&2
+            exit 1
+          fi
+          git worktree add --detach "${RUNNER_TEMP}/pinned" "${SIGN_SHA}"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,14 +103,18 @@ jobs:
         run: |
           set -euo pipefail
           read -r -a packages <<< "${PACKAGES}"
-          bash scripts/model-signing/sign-packages.sh "${packages[@]}"
+          SIGN_PACKAGES_ROOT="${RUNNER_TEMP}/pinned" \
+            bash scripts/model-signing/sign-packages.sh "${packages[@]}"
 
       # Actions may not create pull requests in this repository, so the
-      # workflow pushes the signing branch; the maintainer opens the PR.
+      # workflow pushes the signing branch, built on the pinned commit.
       - name: Push the signing branch
         env:
           PACKAGES: ${{ github.event.inputs.packages }}
+          KIND: ${{ steps.scope.outputs.kind }}
+          PR: ${{ steps.scope.outputs.pr }}
         shell: bash
+        working-directory: ${{ runner.temp }}/pinned
         run: |
           set -euo pipefail
           branch="model-signing/run-${GITHUB_RUN_ID}"
@@ -57,6 +126,10 @@ jobs:
             echo "Signatures unchanged; nothing to push."
             exit 0
           fi
-          git commit -m "chore(models): re-sign ${PACKAGES} with the production model-signing key"
+          git commit -m "chore(models): sign ${PACKAGES} with the production model-signing key"
           git push origin "${branch}"
-          echo "::notice::Signed packages pushed to ${branch}. Open a PR from it to main."
+          if [[ "${KIND}" == "pr" ]]; then
+            echo "::notice::Signed packages pushed to ${branch} on top of PR #${PR}'s head. Fast-forward the PR branch to it."
+          else
+            echo "::notice::Signed packages pushed to ${branch}. Open a PR from it to main."
+          fi
