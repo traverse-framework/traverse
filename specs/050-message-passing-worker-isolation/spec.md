@@ -2,14 +2,16 @@
 
 **Feature Branch**: `050-message-passing-worker-isolation`
 **Created**: 2026-07-03
-**Status**: Draft — architecture decision only, no implementation approved
+**Status**: Approved (2026-11-17) — architecture direction and guardrails only; implementation remains gated (see Deferral Conditions)
+**Version**: 1.0.0
+**Approval**: Owner-approved 2026-11-17 (#1903) as direction only. The guardrails below bind other specs now; no worker code may be built until the Deferral Conditions are met.
 **Input**: `spec 047` delivers thread-pool executor (Option A). This spec captures the Option C architecture so that no decision in 047, the HTTP API, or the MCP surface accidentally closes the door on it. Implementation is gated on v1 shipping and real multi-capability production workloads to design against.
 
 ## Purpose
 
 This spec records the intended v2 execution isolation architecture for Traverse: each registered capability type gets a dedicated worker with its own mailbox, lifecycle, and failure boundary. A panicking or hanging capability cannot affect any other capability's execution or the runtime's own state.
 
-This is a **draft spec**. It will not move to `approved` until:
+This spec is **approved as an architecture direction only**. Implementation will not be approved until:
 - `spec 047` (thread pool executor) is merged and stable
 - At least one real downstream production workload has been observed to need stronger isolation than a shared thread pool provides
 - A concrete implementation plan is proposed and reviewed
@@ -54,20 +56,20 @@ Each capability type has exactly one worker. The worker owns its executor instan
 
 ## Deferral Conditions
 
-This spec moves from Draft to Approved only when:
+Implementation of this spec (the files listed below) may be approved only when:
 
 1. A concrete stress test demonstrates that spec-047 thread pool is insufficient for a real workload
 2. The implementation plan for worker lifecycle management (start, restart, shutdown, drain) is reviewed and approved
 3. WASM worker support on the browser target is validated in `traverse-framework/App-References`
 
-## What Must NOT Be Decided Before This Spec Is Approved
+## What Must NOT Be Decided Before Implementation Is Approved
 
 To keep the Option C path open, no other spec may:
 - Assume `CapabilityExecutor::execute()` is always called on a pool thread (the trait must remain agnostic)
 - Hard-code a Rayon dependency into the public `TraverseRuntime` constructor
 - Introduce per-capability mutable state that would be unsafe to move to a dedicated thread
 
-## Files This Spec Will Govern (when approved)
+## Files This Spec Will Govern (when implementation is approved)
 
 - `crates/traverse-runtime/src/executor/worker.rs` (new)
 - `crates/traverse-runtime/src/executor/worker_router.rs` (new)

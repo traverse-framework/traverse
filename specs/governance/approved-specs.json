@@ -2176,6 +2176,16 @@
         "specs/523-private-registry-source-override/",
         "crates/traverse-cli/src/main.rs"
       ]
+    },
+    {
+      "id": "050-message-passing-worker-isolation",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/050-message-passing-worker-isolation/spec.md",
+      "governs": [
+        "specs/050-message-passing-worker-isolation/"
+      ]
     }
   ]
 }
