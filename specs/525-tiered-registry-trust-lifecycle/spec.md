@@ -2,7 +2,9 @@
 
 **Feature Branch**: `codex/issue-845-tiered-registry-trust`
 **Created**: 2026-07-28
-**Status**: Draft — successor specification requiring maintainer approval before implementation.
+**Status**: Approved (2026-11-18)
+**Version**: 1.0.0
+**Approval**: Owner-approved 2026-11-18 (#1909). The governed-files list was corrected at approval: the registry crate lives in `traverse-framework/registry` (Spec 051), and traverse-cli commands live in `src/main.rs`.
 **Input**: Issue #845, Decision 38, and `524-production-app-readiness`.
 
 ## Purpose
@@ -96,9 +98,10 @@ requires a successor-spec amendment:
 
 - `contracts/registry/tiered-registry-trust.schema.json` and
   `contracts/registry/production-lockfile.schema.json`;
-- `crates/traverse-registry/src/tiered_trust.rs` and
-  `crates/traverse-registry/tests/tiered_trust_conformance.rs`;
-- `crates/traverse-cli/src/commands/registry.rs` and
+- in `traverse-framework/registry`: `crates/traverse-registry/src/tiered_trust.rs`
+  and `crates/traverse-registry/tests/tiered_trust_conformance.rs` (the
+  registry crate moved there under Spec 051);
+- `crates/traverse-cli/src/main.rs` (the CLI has no `src/commands/` module) and
   `crates/traverse-cli/tests/registry_tiered_trust.rs`;
 - `crates/traverse-mcp/src/lib.rs` and
   `crates/traverse-mcp/tests/registry_tiered_trust.rs`; and
