@@ -2196,6 +2196,22 @@
       "governs": [
         "specs/524-production-app-readiness/"
       ]
+    },
+    {
+      "id": "525-tiered-registry-trust-lifecycle",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/525-tiered-registry-trust-lifecycle/spec.md",
+      "governs": [
+        "specs/525-tiered-registry-trust-lifecycle/",
+        "contracts/registry/tiered-registry-trust.schema.json",
+        "contracts/registry/production-lockfile.schema.json",
+        "crates/traverse-cli/src/main.rs",
+        "crates/traverse-cli/tests/registry_tiered_trust.rs",
+        "crates/traverse-mcp/src/lib.rs",
+        "crates/traverse-mcp/tests/registry_tiered_trust.rs"
+      ]
     }
   ]
 }
