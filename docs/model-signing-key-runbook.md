@@ -39,23 +39,53 @@ capability-artifact key (Spec 124).
 
 ## Signing packages
 
-1. Run **Actions → Sign model packages → Run workflow**. Set `packages` to
-   the package directories under `fixtures/models/`, for example
-   `digits-mlp-1.0.0`.
-2. Approve the `model-signing` environment gate.
-3. The job re-signs each package's exact manifest bytes, verifies it against
-   the committed public keys, and pushes `model-signing/run-<id>`.
-4. GitHub Actions can't open PRs in this repository, so **open the PR from
-   that branch** yourself.
-5. Update any conformance vector that pins the package (its `pin.key_id` and
-   trusted key) in the same PR.
+The workflow signs at a pinned commit (Decision 135, Spec 138 FR-076–FR-080):
+either the head of an open PR to `main`, or the head of `main`.
+
+### A new or changed package (normal case)
+
+Any change to a production-signed manifest ships as a **new patch version**
+in a new directory (for example `digits-mlp-1.0.1`); the old version stays
+loadable for one minor release, then is removed.
+
+1. Land any code changes first, in their own PR.
+2. Open the **signing PR**. It may change only
+   `fixtures/models/<package>/` and the package's entry in
+   `scripts/fixtures/sign-model-fixtures.mjs`. Production rights text must
+   not mention signing or keys; the generator refuses it. CI on this PR stays
+   red until the signature is added, because the generator rejects an
+   unsigned production package.
+3. Run **Actions → Sign model packages → Run workflow** from `main`. Set
+   `packages` to the package directories (for example `digits-mlp-1.0.1`) and
+   `sha` to the signing PR's **full head commit SHA**.
+4. Approve the `model-signing` environment gate.
+5. Before the secret is used, the job refuses unless that SHA is the PR's
+   current head and the PR's diff stays inside the listed packages and the
+   generator. It then signs, verifies against the committed public keys, and
+   pushes `model-signing/run-<id>` **on top of the PR's head**.
+6. Fast-forward the PR branch to `model-signing/run-<id>` (or cherry-pick
+   its one commit). The manifest and its signature merge together.
+7. Move tests, conformance vectors and docs to the new version in a
+   follow-up PR, and mark the old version superseded.
+
+If the PR head moves after you dispatch, the run fails; dispatch again with
+the new head.
+
+### Re-signing what is already on `main` (key rotation)
+
+Set `sha` to the current head of `main`. The job signs the packages as they
+are on `main` and pushes `model-signing/run-<id>`. GitHub Actions can't open
+PRs in this repository, so open the PR from that branch yourself, and update
+any conformance vector that pins the package (its `pin.key_id` and trusted
+key) in the same PR.
 
 ## Planned rotation (yearly, overlap window)
 
 1. Generate the new key (setup steps 1, 4 and 5). **Add** it to
    `keys/model-signing/` and to both constants. The old key stays.
 2. Replace the environment secret with the new key, then re-sign every
-   published package with the workflow and merge.
+   published package that is not superseded, with `sha` set to the head of
+   `main`, and merge.
 3. Ship one minor release with both keys trusted. Hosts on that release
    accept old and new signatures.
 4. In the next minor release, remove the old `.pub` file and constant

@@ -17,6 +17,7 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from "nod
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertNoSigningClaims } from "./production-rights-text.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const modelsDir = join(root, "fixtures", "models");
@@ -106,6 +107,10 @@ const fixtures = [
     dir: "digits-mlp-1.0.0",
     model_id: "traverse.digits-mlp",
     production_signed: true,
+    // Decision 135: its signed rights text wrongly mentions the test key, so
+    // it is superseded by digits-mlp-1.0.1 and removed in the next minor
+    // release. Its bytes stay as signed until then.
+    superseded_by: "digits-mlp-1.0.1",
     attribution:
       "Weights trained by Traverse on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0)",
     input: ["schema:traverse-digits-mlp-in", "schema:traverse-digits-mlp-out"],
@@ -162,6 +167,7 @@ for (const fixture of fixtures) {
   if (fixture.prebuilt_manifest) {
     const manifestBytes = readFileSync(join(dir, "model.manifest.json"));
     const manifest = JSON.parse(manifestBytes);
+    assertNoSigningClaims(fixture, manifest.rights);
     if (manifest.wasm_digest !== sha256(wasm)) {
       throw new Error(`${fixture.dir}: manifest wasm_digest does not match model.wasm; re-run model package-onnx`);
     }
@@ -200,6 +206,7 @@ for (const fixture of fixtures) {
     offline_allowed: true,
     ...(fixture.max_prepare_fuel ? { max_prepare_fuel: fixture.max_prepare_fuel } : {}),
   };
+  assertNoSigningClaims(fixture, manifest.rights);
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(dir, "model.manifest.json"), manifestBytes);
   if (fixture.production_signed) {

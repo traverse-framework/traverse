@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Signing changed model manifests from a pinned PR commit (`#1891`, Decision 135)
+
+- The `Sign model packages` workflow takes a required `sha` input and signs
+  the packages as they are at that commit. Before it touches the signing
+  secret, it refuses unless the commit is the head of `main` or the head of
+  an open PR to `main` whose diff touches only the listed packages and
+  `scripts/fixtures/sign-model-fixtures.mjs`. For a PR, the signing branch is
+  built on its head, so a manifest and its signature merge together.
+- The fixture generator refuses signing or key wording in the rights text of
+  production-signed packages that are not superseded.
+- `digits-mlp-1.0.0` is marked superseded by `digits-mlp-1.0.1`, which lands
+  in a follow-up signing PR. Spec 138 is amended to 0.18.0 (FR-076–FR-080).
+
 ### Agent review hooks, first-push preflight, and pitfalls (`#1867`, `#1877`, `#1878`)
 
 - Pin `.governance-version` to `v1.3.0` and run the warning-mode review-record
