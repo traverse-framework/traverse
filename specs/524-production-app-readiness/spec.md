@@ -2,7 +2,9 @@
 
 **Feature Branch**: `524-production-app-readiness`
 **Created**: 2026-07-28
-**Status**: Draft — approved planning baseline; each implementation slice requires normal governance approval.
+**Status**: Approved (2026-11-18) — planning baseline; each implementation slice requires its own approved successor spec.
+**Version**: 1.0.0
+**Approval**: Owner-approved 2026-11-18 (#1907) as the v1 planning baseline (Decision 38). Not an implementation authorization.
 **Input**: Maintainer-approved brainstorming and Decisions 34–38 in `docs/decision-log.md`.
 
 ## Purpose
