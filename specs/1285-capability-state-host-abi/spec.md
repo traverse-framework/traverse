@@ -1,6 +1,7 @@
 # Feature Specification: Capability-Side WASM Host ABI for Managed State
 
-**Status**: Draft (co-designed with repo owner via `/brainstorm`; awaiting formal approval / move to `approved`)
+**Status**: Approved (2026-11-17)
+**Approval**: Owner-approved 2026-11-17 (#1899); co-designed via `/brainstorm`. Implemented in #1293.
 **Canonical governing ID**: `1285-capability-state-host-abi`
 **Version**: 1.0.0
 **Extends**: `002-capability-contracts`, `014-service-type-taxonomy` (Traverse Spec ID 014 / issue 208), `RuntimeDataStore` / DataStore surface
