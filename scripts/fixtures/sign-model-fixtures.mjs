@@ -15,7 +15,7 @@
 //   node scripts/fixtures/sign-model-fixtures.mjs
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertNoSigningClaims } from "./production-rights-text.mjs";
 
@@ -155,8 +155,12 @@ const fixtures = [
   },
 ];
 
+// Pins by model_id (one version per model) and by package directory, which
+// stays unambiguous while a superseded version and its successor coexist
+// (Decision 135).
 const pins = {};
-const productionKeys = {};
+const pinsByDir = {};
+const productionKeysByDir = {};
 for (const fixture of fixtures) {
   const dir = join(modelsDir, fixture.dir);
   const wasmPath = join(dir, "model.wasm");
@@ -177,9 +181,9 @@ for (const fixture of fixtures) {
   const manifest = {
     schema_version: fixture.schema_version ?? "2.0.0",
     model_id: fixture.model_id,
-    version: "1.0.0",
+    version: fixture.version ?? "1.0.0",
     wasm_digest: sha256(wasm),
-    registry_ref: `${common.registry}:${fixture.model_id}@1.0.0`,
+    registry_ref: `${common.registry}:${fixture.model_id}@${fixture.version ?? "1.0.0"}`,
     executable_format: "traverse-model-wasm",
     abi_version: fixture.abi_version ?? 1,
     input_schema_ref: fixture.input[0],
@@ -219,6 +223,11 @@ for (const fixture of fixtures) {
 // Production-signed packages keep the workflow's signature; a manifest change
 // invalidates it, and the only fix is a new `Sign model packages` run.
 function adoptProductionSignature(dir, manifest, manifestBytes) {
+  if (!existsSync(join(dir, "model.sig.json"))) {
+    throw new Error(
+      `${basename(dir)}: awaiting its production signature; dispatch Sign model packages with this PR's head SHA (Decision 135)`,
+    );
+  }
   const signature = JSON.parse(readFileSync(join(dir, "model.sig.json"), "utf8"));
   const keyFile = join(root, "keys", "model-signing", `${signature.key_id.replace(":", "-")}.pub`);
   if (signature.alg !== "ed25519" || !existsSync(keyFile)) {
@@ -232,8 +241,8 @@ function adoptProductionSignature(dir, manifest, manifestBytes) {
   if (!verify(null, manifestBytes, publicKeyObject, Buffer.from(signature.signature, "hex"))) {
     throw new Error(`${dir}: production signature no longer matches the manifest; re-run the Sign model packages workflow`);
   }
-  productionKeys[manifest.model_id] = raw.toString("hex");
-  pins[manifest.model_id] = pinFor(manifest, manifestBytes, signature.key_id);
+  productionKeysByDir[basename(dir)] = raw.toString("hex");
+  recordPin(dir, manifest, pinFor(manifest, manifestBytes, signature.key_id));
 }
 
 function signPackage(dir, manifest, manifestBytes) {
@@ -242,7 +251,12 @@ function signPackage(dir, manifest, manifestBytes) {
     key_id: keyId,
     signature: sign(null, manifestBytes, privateKey).toString("hex"),
   });
-  pins[manifest.model_id] = pinFor(manifest, manifestBytes, keyId);
+  recordPin(dir, manifest, pinFor(manifest, manifestBytes, keyId));
+}
+
+function recordPin(dir, manifest, pin) {
+  pinsByDir[basename(dir)] = pin;
+  pins[manifest.model_id] = pin;
 }
 
 function pinFor(manifest, manifestBytes, pinKeyId) {
@@ -295,8 +309,8 @@ const testRows = readFileSync(join(root, "fixtures", "datasets", "uci-optdigits"
 writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
   governing_spec: "138-governed-exact-model-execution",
   package_dir: "digits-mlp-1.0.0",
-  trusted_public_key_hex: productionKeys["traverse.digits-mlp"],
-  pin: pins["traverse.digits-mlp"],
+  trusted_public_key_hex: productionKeysByDir["digits-mlp-1.0.0"],
+  pin: pinsByDir["digits-mlp-1.0.0"],
   request: {
     policy_ref: "policy-1",
     data_classification: "sensitive",
