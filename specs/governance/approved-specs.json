@@ -2186,6 +2186,16 @@
       "governs": [
         "specs/050-message-passing-worker-isolation/"
       ]
+    },
+    {
+      "id": "524-production-app-readiness",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/524-production-app-readiness/spec.md",
+      "governs": [
+        "specs/524-production-app-readiness/"
+      ]
     }
   ]
 }
