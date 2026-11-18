@@ -2152,6 +2152,19 @@
         "packages/kotlin/",
         "fixtures/cross-host/"
       ]
+    },
+    {
+      "id": "1285-capability-state-host-abi",
+      "version": "1.0.0",
+      "status": "approved",
+      "immutable": true,
+      "path": "specs/1285-capability-state-host-abi/spec.md",
+      "governs": [
+        "specs/1285-capability-state-host-abi/",
+        "crates/traverse-runtime/src/executor/",
+        "crates/traverse-runtime/src/data_store.rs",
+        "crates/traverse-contracts/"
+      ]
     }
   ]
 }
