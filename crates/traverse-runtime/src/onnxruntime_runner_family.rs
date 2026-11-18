@@ -1,8 +1,8 @@
 //! Feasibility model for the signed, cross-host `onnxruntime-cpu` runner family.
 
-use crate::exact_model::{ModelPackageSignature, sign_model_manifest};
 #[cfg(test)]
 use crate::exact_model::digest_hex;
+use crate::exact_model::{ModelPackageSignature, sign_model_manifest};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -145,6 +145,7 @@ mod tests {
             "cpu-512m"
         );
         assert!(f.select("browser", "00").is_err());
+        assert!(f.select("unsupported-host", &browser).is_err());
     }
     #[test]
     fn incomplete_or_revoked_family_fails_closed() {
@@ -154,6 +155,13 @@ mod tests {
         let mut f = family();
         f.revoked = true;
         assert!(f.validate().is_err());
+    }
+
+    #[test]
+    fn malformed_artifact_digest_fails_closed() {
+        let mut f = family();
+        f.artifacts.get_mut("browser").expect("browser").digest = "not-a-digest".into();
+        assert_eq!(f.validate(), Err("runner artifact metadata is invalid"));
     }
     #[test]
     fn signed_canonical_bytes_are_stable() {
