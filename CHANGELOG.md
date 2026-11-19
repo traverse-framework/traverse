@@ -4,13 +4,21 @@
 
 ### Rotating the production model-signing key (`#1913`)
 
-- A second production public key,
-  `ed25519:98339458ddb2a5b42ef5fa0d7c836c2c17f05113e1b5e95e0d7c58d8fbbd108b`, is
-  committed under `keys/model-signing/` and added to
-  `TRAVERSE_MODEL_SIGNING_KEYS` in the Rust runtime and the web embedder. The
-  first key is being retired because its private key left the protected
-  signing environment; no release has trusted it. It stays listed only until
-  `digits-mlp-1.0.0` is re-signed with the new key, then a follow-up removes it.
+- The production model-signing key is now
+  `ed25519:98339458ddb2a5b42ef5fa0d7c836c2c17f05113e1b5e95e0d7c58d8fbbd108b`.
+  The first key,
+  `ed25519:f7e881d62c246c73ed0a68d1e456731fc7541029aceed6796bcabe6b984fc1bd`, is
+  revoked because its private key left the protected signing environment. It
+  is removed from `keys/model-signing/` and `TRAVERSE_MODEL_SIGNING_KEYS` in the
+  Rust runtime and the web embedder. No release ever trusted it, and a test
+  keeps it out of the constant.
+- `digits-mlp-1.0.0` and `digits-mlp-1.0.1` are signed with the new key, and
+  the `signed-digits-mlp.json` conformance vector pins it. Hosts or apps that
+  pinned the old `key_id` must update their pin.
+- `repository_checks.sh` now runs the fixture generator and fails if any
+  production-signed package lacks a valid production signature, or if
+  `fixtures/models` differs from what the generator writes. Before this, an
+  unsigned production package could merge with CI green.
 
 ### Signing changed model manifests from a pinned PR commit (`#1891`, Decision 135)
 

@@ -613,6 +613,16 @@ bash "$(pwd)/scripts/model-signing/check-signing-scope_test.sh"
 echo "Running production rights-text guard tests (Decision 135, #1891)..."
 node --test "$(pwd)/scripts/fixtures/production-rights-text.test.mjs"
 
+# #1913: the generator must succeed (every production-signed package carries a
+# signature from a committed production key) and leave fixtures unchanged.
+echo "Checking model fixtures are signed and up to date (#1913)..."
+node "$(pwd)/scripts/fixtures/sign-model-fixtures.mjs"
+if ! git diff --quiet -- fixtures/models; then
+  git diff --stat -- fixtures/models >&2
+  echo "fixtures/models is stale; run node scripts/fixtures/sign-model-fixtures.mjs and commit the result." >&2
+  exit 1
+fi
+
 echo "Running new-capability scaffold smoke..."
 TRAVERSE_REPO_ROOT="$(pwd)" bash "$(pwd)/scripts/ci/new_capability_scaffold_smoke.sh"
 
