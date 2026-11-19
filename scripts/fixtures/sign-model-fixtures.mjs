@@ -129,6 +129,30 @@ const fixtures = [
       max_execution_ms: 1000,
     },
   },
+  // Successor of digits-mlp-1.0.0 (Decision 135, #1891): same model.wasm,
+  // rights text without signing claims. Production-signed.
+  {
+    dir: "digits-mlp-1.0.1",
+    version: "1.0.1",
+    model_id: "traverse.digits-mlp",
+    production_signed: true,
+    attribution:
+      "Weights trained by Traverse on \"Optical Recognition of Handwritten Digits\" by E. Alpaydin and C. Kaynak, UCI Machine Learning Repository, https://doi.org/10.24432/C50P49 (CC BY 4.0)",
+    input: ["schema:traverse-digits-mlp-in", "schema:traverse-digits-mlp-out"],
+    rights: {
+      license_id: "CC-BY-4.0",
+      redistribution: "Redistribution permitted under CC BY 4.0 with the attribution above",
+      commercial_use: "allowed",
+      source_url: "https://archive.ics.uci.edu/dataset/80/optical+recognition+of+handwritten+digits",
+    },
+    limits: {
+      max_memory_bytes: 131072,
+      max_fuel: 200000,
+      max_input_bytes: 268,
+      max_output_bytes: 64,
+      max_execution_ms: 1000,
+    },
+  },
   // Runner-built package (Decision 105, #1591): model.wasm and the unsigned
   // model.manifest.json come from `traverse-cli model package-onnx` (see
   // scripts/ci/onnx_runner_guest_check.sh); this script only signs the
