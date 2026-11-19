@@ -1,0 +1,76 @@
+{
+  "skill_name": "traverse-app-builder",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "I need to add an expense-approval flow to my app that's built with Traverse (traverse-framework/traverse) — before you build anything, can you check if something like that already exists in the registry?",
+      "expected_output": "Runs the registry-discovery flow (traverse-cli registry sync + reading the synced index.json, or capability discover against a bundle manifest) before proposing to author anything new. Explains the public index is a thin pointer (id/version/digests/URLs, no description) and that contract_url must be fetched to actually evaluate a candidate. Does not jump straight into contract-authoring steps without checking first.",
+      "files": [],
+      "assertions": [
+        "Checks the registry before proposing to author a new capability — e.g. runs or clearly describes `traverse-cli registry sync` and/or `traverse-cli capability discover`, rather than jumping straight into writing a new contract.json",
+        "Explains that the public registry index is a thin pointer (id/version/digests/URLs) with no summary or description field, and that a candidate's contract_url must be fetched to actually judge whether it fits",
+        "Distinguishes the public registry index (registry sync) from a local app bundle's own declared capabilities (capability discover) rather than conflating the two",
+        "Does not fabricate or assume the existence of a specific pre-built 'expense-approval' capability without actually checking"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Build me a Traverse workflow that captures a customer request, validates it, and generates a quote. Use the plan-then-seal path and seal it when ready.",
+      "expected_output": "Follows Decision 80: discover/plan candidates (or explain MCP plan_workflow / future CLI workflow plan), decompose into atomic capabilities, pause for explicit seal confirmation before writing workflow.json/known_compositions, then require CLI validate. Does not auto-seal.",
+      "files": [],
+      "assertions": [
+        "Uses or clearly describes planner/MCP candidate planning (plan_workflow or CLI workflow plan) rather than only hand-writing a workflow from scratch without discovery",
+        "Decomposes into distinct atomic capabilities (capture, validate, generate-quote) rather than one monolithic capability",
+        "Pauses for explicit human seal confirmation before writing workflow.json or known_compositions",
+        "Treats CLI validate (app validate / agent inspect as appropriate) as required session DoD after seal"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The planner returned three different candidate workflows for my goal. Seal the best one and write the files.",
+      "expected_output": "Presents the candidates, asks the user which to seal (or otherwise waits for explicit choice/confirmation), and refuses to write sealed artifacts until confirmation. Does not silently pick a winner.",
+      "files": [],
+      "assertions": [
+        "Surfaces that multiple candidates exist rather than hiding them",
+        "Asks the user to choose or confirm before sealing",
+        "Refuses to write workflow.json / known_compositions without explicit seal confirmation",
+        "Does not auto-seal based on ranking, order, or 'best guess'"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Plan a Traverse workflow for 'summarize uploaded PDF and email the summary' but the registry has no email-sending capability yet. Seal whatever you can.",
+      "expected_output": "Detects the gap, authors (or proposes authoring) the missing atomic capability, re-plans, and refuses to seal a partial/placeholder workflow. Does not seal incomplete graphs.",
+      "files": [],
+      "assertions": [
+        "Identifies missing capabilities as a gap rather than sealing a partial workflow",
+        "Routes into atomic capability authoring for the gap (contract/WASM/manifest) or clearly requires that step before seal",
+        "Re-plans or states re-plan after the gap is closed",
+        "Refuses to seal placeholder or incomplete workflows"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "There's only one valid planner candidate. Just seal it and write workflow.json without asking me.",
+      "expected_output": "Refuses to auto-seal even when a single candidate exists; still requires explicit seal confirmation.",
+      "files": [],
+      "assertions": [
+        "Refuses the request to seal without confirmation",
+        "States that Decision 80 requires an explicit seal gate even for a sole candidate",
+        "Does not write workflow.json solely because only one candidate exists"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Can I write my business logic once with Traverse and have it run on both a desktop app and in a browser?",
+      "expected_output": "Honest yes-with-caveats: one WASM binary + Runtime generic over host executor; native and browser shipped; does not overclaim Swift/Kotlin/.NET/edge/cloud or a single parity command.",
+      "files": [],
+      "assertions": [
+        "Answers yes and explains the real underlying mechanism (single WASM binary + contract enforced by a runtime generic over the host executor)",
+        "Correctly states that native and browser are the two targets actually shipped today",
+        "Does not overclaim other targets unprompted — e.g. does not imply iOS/Swift, Kotlin/Android, .NET, edge, or cloud are ready today",
+        "Does not claim a single command automatically verifies behavior across targets"
+      ]
+    }
+  ]
+}

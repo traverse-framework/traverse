@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### One source for agent skills (`traverse-framework/.github#58`)
+
+- `.agents/skills/` is the only skill source. `scripts/agent/sync_skills.sh`
+  (vendored from governance v1.5.0) generates the committed Claude Code
+  (`.claude/skills/`) and Cursor (`.cursor/skills/`) copies, and the
+  governance workflow's drift check fails when a copy differs.
+- `traverse-ops` is reconciled into one tool-neutral source. It claims with
+  `scripts/agent/claim.sh` instead of per-tool steps, and keeps the
+  execution-only scope from the Claude copy.
+- The speckit skills and `traverse-app-builder` now have Claude Code and
+  Cursor copies too.
+
 ### Conformance and tests move to `digits-mlp-1.0.1` (`#1891`, Decision 135)
 
 - The `signed-digits-mlp.json` conformance vector, and the Rust, web, Swift,
