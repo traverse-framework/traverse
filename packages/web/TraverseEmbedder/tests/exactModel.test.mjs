@@ -166,7 +166,10 @@ test("trained digits MLP (#1461) matches the native vector and clears the accura
   const run = async (frame) => {
     const input_ref = host.io.stageModelInput(frame, 268);
     const result = await host.execute(
-      executeArgs(vector.pin.model_id, digest, input_ref, vector.request.input_schema_ref, { max_output_bytes: 64 }),
+      executeArgs(vector.pin.model_id, digest, input_ref, vector.request.input_schema_ref, {
+        max_output_bytes: 64,
+        model_ref: { model_id: vector.pin.model_id, version: vector.pin.version, digest },
+      }),
     );
     return host.io.readModelOutput(result.output_ref, 64);
   };

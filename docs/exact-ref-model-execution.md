@@ -439,9 +439,9 @@ key in `fixtures/models/test-signing-key.json`. No host trusts that key by
 default; production signing is `#1567`. `echo`, `classifier`, and `responder`
 are hand-written deterministic fixtures. `fixture-echo-v2-1.0.0` and
 `fixture-prepared-v3-1.0.0` are the guest ABI v2 and v3 conformance guests.
-`digits-mlp-1.0.0` is a real trained model (below).
+`digits-mlp-1.0.1` is a real trained model (below).
 
-## Trained model: `digits-mlp-1.0.0` (Spec 138 0.5.0, Decision 102)
+## Trained model: `digits-mlp-1.0.1` (Spec 138 0.5.0, Decision 102)
 
 A 64 → 32 (ReLU) → 10 MLP (2,410 `f32` weights) trained on the UCI Optical
 Recognition of Handwritten Digits dataset (CC BY 4.0). It scores **96.10%
@@ -454,7 +454,7 @@ trainer, the native wasmtime host, and the browser host.
 | Trainer (seeded, offline) | `crates/traverse-model-trainer` → `cargo run --release -p traverse-model-trainer` |
 | Weights (pinned) | `crates/traverse-digits-mlp-guest/weights/digits-mlp-1.0.0.bin{,.sha256}` |
 | Guest (`no_std` on wasm32, audited ABI boundary per ADR-0077) | `crates/traverse-digits-mlp-guest` (its own `[workspace]`) |
-| Signed package | `fixtures/models/digits-mlp-1.0.0/` |
+| Signed package | `fixtures/models/digits-mlp-1.0.1/` (production-signed). `digits-mlp-1.0.0/` ships the same `model.wasm`, is superseded (Decision 135, #1891), and is removed in the next minor release |
 | Conformance vector | `fixtures/models/conformance/signed-digits-mlp.json` |
 
 **Frames.** The input is dtype `2` (`f32`), dims `[64]`: the 8×8 raw pixel
@@ -477,9 +477,11 @@ must be regenerated in order:
 1. `cargo run --release -p traverse-model-trainer` rewrites the weights and
    their digest.
 2. `cargo build --release --target wasm32-unknown-unknown` in the guest
-   crate, then copy the `.wasm` to `fixtures/models/digits-mlp-1.0.0/model.wasm`.
-3. `node scripts/fixtures/sign-model-fixtures.mjs` re-signs and regenerates
-   the vector.
+   crate, then copy the `.wasm` into a **new patch version** directory under
+   `fixtures/models/` (a production-signed package never changes in place).
+3. Open a signing PR and run the `Sign model packages` workflow at its head
+   (see `docs/model-signing-key-runbook.md`), then run
+   `node scripts/fixtures/sign-model-fixtures.mjs` to regenerate the vector.
 4. Update the pinned accuracy count in the tests.
 
 `scripts/ci/digits_mlp_guest_check.sh` fails CI if the checked-in

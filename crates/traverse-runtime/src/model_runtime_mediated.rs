@@ -475,9 +475,9 @@ mod tests {
         let mut host = ExactModelHostConnector::new(vec![package_pin.clone()], keys);
         host.model_usage = Some(ModelUsage::Commercial);
         host.register_package(
-            &read("fixtures/models/digits-mlp-1.0.0/model.manifest.json")?,
-            read("fixtures/models/digits-mlp-1.0.0/model.wasm")?,
-            &read("fixtures/models/digits-mlp-1.0.0/model.sig.json")?,
+            &read("fixtures/models/digits-mlp-1.0.1/model.manifest.json")?,
+            read("fixtures/models/digits-mlp-1.0.1/model.wasm")?,
+            &read("fixtures/models/digits-mlp-1.0.1/model.sig.json")?,
             &PlacementPolicy {
                 policy_ref: "policy-1".to_string(),
                 ..PlacementPolicy::default()

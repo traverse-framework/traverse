@@ -1576,7 +1576,7 @@ mod tests {
     /// same manifest digest and outputs, different `key_id`.
     #[test]
     fn digits_packages_end_to_end_with_only_the_cli() {
-        let fixture = repo("fixtures/models/digits-mlp-1.0.0");
+        let fixture = repo("fixtures/models/digits-mlp-1.0.1");
         let dir = unsigned_copy(&fixture.join(MANIFEST_FILE), &fixture.join(WASM_FILE));
         let key = dir.join("key.hex");
         fs::write(&key, test_key("secret_key_hex")).expect("key");
@@ -1636,7 +1636,7 @@ mod tests {
         assert!(
             cli(&["verify", path(&dir), "--trusted-key", &public])
                 .expect("verify")
-                .starts_with("verified traverse.digits-mlp@1.0.0")
+                .starts_with("verified traverse.digits-mlp@1.0.1")
         );
 
         let mut args = vec![
@@ -1720,13 +1720,14 @@ mod tests {
         );
     }
 
-    /// #1567: the checked-in digits package carries the production signature.
+    /// #1567, #1891: the checked-in digits package (now 1.0.1) carries the
+    /// production signature.
     /// It verifies against `TRAVERSE_MODEL_SIGNING_KEYS` and is rejected with
     /// `key_untrusted` by a host that trusts only the test key, so a test-key
     /// re-sign cannot slip back in.
     #[test]
     fn checked_in_digits_package_is_production_signed() {
-        let fixture = repo("fixtures/models/digits-mlp-1.0.0");
+        let fixture = repo("fixtures/models/digits-mlp-1.0.1");
         let production: Vec<String> = traverse_runtime::exact_model::TRAVERSE_MODEL_SIGNING_KEYS
             .iter()
             .map(|key| hex_encode(key))
@@ -1761,6 +1762,17 @@ mod tests {
             "--json",
         ]));
         assert_eq!(untrusted["error"]["reason"], json!("key_untrusted"));
+
+        // #1891: the superseded 1.0.0 stays loadable until the next minor
+        // release removes it.
+        let superseded = json_out(cli(&[
+            "verify",
+            path(&repo("fixtures/models/digits-mlp-1.0.0")),
+            "--trusted-key",
+            &signer,
+            "--json",
+        ]));
+        assert_eq!(superseded["ok"], json!(true), "{superseded}");
     }
 
     /// Decision 115: the package-time preflight runs the built package on both

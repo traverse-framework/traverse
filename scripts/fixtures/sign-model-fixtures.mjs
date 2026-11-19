@@ -324,7 +324,7 @@ writeJson(join(modelsDir, "conformance", "signed-classifier.json"), {
 
 // Trained digits MLP vector: the first 10 held-out test rows through the
 // signed package; native and browser must match byte-for-byte.
-const digitsWasm = readFileSync(join(modelsDir, "digits-mlp-1.0.0", "model.wasm"));
+const digitsWasm = readFileSync(join(modelsDir, "digits-mlp-1.0.1", "model.wasm"));
 const testRows = readFileSync(join(root, "fixtures", "datasets", "uci-optdigits", "optdigits.tes"), "utf8")
   .trim()
   .split("\n")
@@ -332,9 +332,9 @@ const testRows = readFileSync(join(root, "fixtures", "datasets", "uci-optdigits"
   .map((line) => line.split(",").map(Number));
 writeJson(join(modelsDir, "conformance", "signed-digits-mlp.json"), {
   governing_spec: "138-governed-exact-model-execution",
-  package_dir: "digits-mlp-1.0.0",
-  trusted_public_key_hex: productionKeysByDir["digits-mlp-1.0.0"],
-  pin: pinsByDir["digits-mlp-1.0.0"],
+  package_dir: "digits-mlp-1.0.1",
+  trusted_public_key_hex: productionKeysByDir["digits-mlp-1.0.1"],
+  pin: pinsByDir["digits-mlp-1.0.1"],
   request: {
     policy_ref: "policy-1",
     data_classification: "sensitive",
