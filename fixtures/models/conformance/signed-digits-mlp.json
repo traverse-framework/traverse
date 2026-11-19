@@ -1,11 +1,11 @@
 {
   "governing_spec": "138-governed-exact-model-execution",
-  "package_dir": "digits-mlp-1.0.0",
+  "package_dir": "digits-mlp-1.0.1",
   "trusted_public_key_hex": "0442d5043b28f42a61131ffdf9bde3a1941a8932c858ef99882d7e802004a4a9",
   "pin": {
     "model_id": "traverse.digits-mlp",
-    "version": "1.0.0",
-    "digest": "987aef02d0ba2172afb150775e10097d4668e5b358133fbbc3e3e68864d4b20a",
+    "version": "1.0.1",
+    "digest": "63bf99e9aa4959fc371be425c7092bd3c6034e162908229a843cf700c5579a23",
     "offline_allowed": true,
     "target": "wasm-cpu",
     "rights": {

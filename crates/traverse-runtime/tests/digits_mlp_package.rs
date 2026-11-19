@@ -1,5 +1,5 @@
 //! First trained Spec 138 exact-ref package (Decision 102, `#1461`): the
-//! checked-in, signed `digits-mlp-1.0.0` MLP runs through the governed
+//! checked-in, signed `digits-mlp-1.0.1` MLP runs through the governed
 //! `register_package` → `model.execute` path on `wasm-cpu`, and must clear
 //! the ≥ 95% held-out accuracy floor on the vendored UCI optdigits test split.
 #![cfg(feature = "wasmtime-executor")]
@@ -44,7 +44,7 @@ fn registered_host() -> (ExactModelHostConnector, ExactModelPin) {
     keys.trust(&public).expect("trust");
     let mut host = ExactModelHostConnector::new(vec![pin.clone()], keys);
     host.model_usage = Some(ModelUsage::Commercial);
-    let dir = "fixtures/models/digits-mlp-1.0.0";
+    let dir = "fixtures/models/digits-mlp-1.0.1";
     host.register_package(
         &read(&format!("{dir}/model.manifest.json")),
         read(&format!("{dir}/model.wasm")),

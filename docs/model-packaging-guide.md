@@ -241,7 +241,7 @@ Traverse's own production key, and its custody and rotation, are covered in
 This packages the trained digits MLP from its unsigned manifest and
 `model.wasm`. CI runs the same flow
 (`crates/traverse-cli/src/model_cli.rs`, the end-to-end test), and the result
-is byte-identical to `fixtures/models/digits-mlp-1.0.0`, which the native and
+is byte-identical to `fixtures/models/digits-mlp-1.0.1`, which the native and
 web suites register.
 
 ```bash

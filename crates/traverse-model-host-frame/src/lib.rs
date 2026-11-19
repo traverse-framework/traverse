@@ -717,9 +717,9 @@ mod tests {
             handle,
             &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
-                ("manifest", &read("digits-mlp-1.0.0/model.manifest.json")),
-                ("wasm", &read("digits-mlp-1.0.0/model.wasm")),
-                ("signature", &read("digits-mlp-1.0.0/model.sig.json")),
+                ("manifest", &read("digits-mlp-1.0.1/model.manifest.json")),
+                ("wasm", &read("digits-mlp-1.0.1/model.wasm")),
+                ("signature", &read("digits-mlp-1.0.1/model.sig.json")),
             ],
         )
     }
@@ -1520,8 +1520,8 @@ mod tests {
             &json!({ "op": "register", "policy": { "policy_ref": "policy-1" } }),
             &[
                 ("manifest", b"{}"),
-                ("wasm", &read("digits-mlp-1.0.0/model.wasm")),
-                ("signature", &read("digits-mlp-1.0.0/model.sig.json")),
+                ("wasm", &read("digits-mlp-1.0.1/model.wasm")),
+                ("signature", &read("digits-mlp-1.0.1/model.sig.json")),
             ],
         );
         assert_eq!(tampered["ok"], json!(false));

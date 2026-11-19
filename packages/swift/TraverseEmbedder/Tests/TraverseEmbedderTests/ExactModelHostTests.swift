@@ -44,9 +44,9 @@ final class ExactModelHostTests: XCTestCase {
 
     private func registerDigits(_ host: ExactModelHost) async throws -> String {
         try await host.registerPackage(
-            manifest: try fixture("digits-mlp-1.0.0/model.manifest.json"),
-            wasm: try fixture("digits-mlp-1.0.0/model.wasm"),
-            signature: try fixture("digits-mlp-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
+            manifest: try fixture("digits-mlp-1.0.1/model.manifest.json"),
+            wasm: try fixture("digits-mlp-1.0.1/model.wasm"),
+            signature: try fixture("digits-mlp-1.0.1/model.sig.json"), policy: .init(policyRef: "policy-1"))
     }
 
     private static func run(_ host: ExactModelHost, _ pin: ExactModelPin, _ frame: Data, timeoutMs: Int? = nil) async throws -> ExactModelExecution {
@@ -219,8 +219,8 @@ final class ExactModelHostTests: XCTestCase {
         let (host, _, _) = try await digitsHost()
         do {
             _ = try await host.registerPackage(manifest: Data("{}".utf8),
-                                               wasm: try fixture("digits-mlp-1.0.0/model.wasm"),
-                                               signature: try fixture("digits-mlp-1.0.0/model.sig.json"), policy: .init(policyRef: "policy-1"))
+                                               wasm: try fixture("digits-mlp-1.0.1/model.wasm"),
+                                               signature: try fixture("digits-mlp-1.0.1/model.sig.json"), policy: .init(policyRef: "policy-1"))
             XCTFail("tampered manifest registered")
         } catch let error as ExactModelError {
             XCTAssertEqual(error.reason, "signature_invalid")

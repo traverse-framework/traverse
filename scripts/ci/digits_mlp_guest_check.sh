@@ -6,12 +6,14 @@
 # 2. The no_std guest passes its host tests (bit-identical to the trainer on
 #    the full held-out split) and clippy on both host and wasm32.
 # 3. Rebuilding the guest with the pinned toolchain yields byte-identical
-#    `fixtures/models/digits-mlp-1.0.0/model.wasm`, which imports nothing.
+#    `fixtures/models/digits-mlp-1.0.1/model.wasm`, which imports nothing.
+#    The superseded `digits-mlp-1.0.0` (#1891) ships the same bytes.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 guest_dir="${repo_root}/crates/traverse-digits-mlp-guest"
-package_wasm="${repo_root}/fixtures/models/digits-mlp-1.0.0/model.wasm"
+package_wasm="${repo_root}/fixtures/models/digits-mlp-1.0.1/model.wasm"
+superseded_wasm="${repo_root}/fixtures/models/digits-mlp-1.0.0/model.wasm"
 target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}/digits-mlp-guest"
 
 sha256() {
@@ -44,6 +46,10 @@ actual="$(sha256 "${built}")"
 if [[ "${actual}" != "${expected}" ]]; then
   echo "Rebuilt digits guest ${actual} does not match checked-in model.wasm ${expected}." >&2
   echo "Rebuild with the pinned toolchain, copy it to ${package_wasm}, and re-run scripts/fixtures/sign-model-fixtures.mjs." >&2
+  exit 1
+fi
+if [[ "$(sha256 "${superseded_wasm}")" != "${expected}" ]]; then
+  echo "${superseded_wasm} must stay byte-identical to ${package_wasm} until it is removed." >&2
   exit 1
 fi
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Conformance and tests move to `digits-mlp-1.0.1` (`#1891`, Decision 135)
+
+- The `signed-digits-mlp.json` conformance vector, and the Rust, web, Swift,
+  .NET and Kotlin tests, now use the production-signed `digits-mlp-1.0.1`.
+  Only the pin changes (`version` 1.0.1 and the new manifest digest); every
+  output frame stays byte-identical.
+- `digits-mlp-1.0.0` is superseded. It stays loadable (a CLI test still
+  verifies it) and is removed in the next minor release. Its `model.wasm` must
+  stay byte-identical to 1.0.1's; `digits_mlp_guest_check.sh` enforces this.
+- Hosts and apps that pin `traverse.digits-mlp@1.0.0` should move to 1.0.1.
+
 ### Rotating the production model-signing key (`#1913`)
 
 - The production model-signing key is now
