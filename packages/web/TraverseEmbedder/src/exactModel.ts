@@ -49,6 +49,7 @@ export const MODEL_SIGNATURE_ALG_ED25519 = "ed25519" as const;
  */
 export const TRAVERSE_MODEL_SIGNING_KEYS: readonly string[] = [
   "717be8d616fa9852aa67f57df6f4dc878b4de10c3f316f5f07f5c5196e1cd19c",
+  "0442d5043b28f42a61131ffdf9bde3a1941a8932c858ef99882d7e802004a4a9",
 ];
 
 export type CommercialUse = "allowed" | "restricted" | "prohibited";
