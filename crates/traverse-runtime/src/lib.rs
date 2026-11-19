@@ -13,6 +13,8 @@ pub mod exact_model;
 pub mod host_connector_dispatch;
 /// Spec 104 mediated binding for `traverse.model-runtime` (#1719).
 pub mod model_runtime_mediated;
+/// Feasibility runner-family manifest for Spec 1774.
+pub mod onnxruntime_runner_family;
 pub use capability_metadata::{
     CapabilityMetadataIndex, ContractHydrationCache, DEFAULT_HYDRATION_CACHE_CAPACITY,
     HydrationError, HydrationEvidence, HydrationEvidenceKind, HydrationKey, IndexedCapability,
