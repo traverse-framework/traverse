@@ -40,6 +40,12 @@ pub struct RunnerFamilyManifest {
 }
 
 impl RunnerFamilyManifest {
+    /// Validates the complete signed-runner family metadata before selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the family is revoked, its target matrix differs from
+    /// the governed profiles, or an artifact lacks required provenance metadata.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema_version != "1.0.0"
             || self.family_id.trim().is_empty()
@@ -73,10 +79,21 @@ impl RunnerFamilyManifest {
         Ok(())
     }
 
+    /// Serializes this manifest deterministically for signing and verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error when the manifest cannot be encoded as JSON.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(self)
     }
 
+    /// Selects the exact verified artifact for a governed host profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the family is invalid, the profile is absent, or the
+    /// caller's expected digest does not match the recorded artifact digest.
     pub fn select(
         &self,
         profile: &str,
@@ -94,7 +111,11 @@ impl RunnerFamilyManifest {
     }
 }
 
-#[must_use]
+/// Signs the deterministic runner-family manifest with the supplied release key.
+///
+/// # Errors
+///
+/// Returns a serialization error when the manifest cannot be canonicalized.
 pub fn sign_runner_family(
     secret: &[u8; 32],
     manifest: &RunnerFamilyManifest,
@@ -110,6 +131,7 @@ fn digest(value: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     fn artifact(tag: &str) -> RunnerArtifact {
