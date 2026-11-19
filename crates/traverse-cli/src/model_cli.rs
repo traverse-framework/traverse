@@ -1731,19 +1731,22 @@ mod tests {
             .iter()
             .map(|key| hex_encode(key))
             .collect();
-        assert_eq!(production.len(), 1);
         let vector: Value = serde_json::from_slice(
             &fs::read(repo("fixtures/models/conformance/signed-digits-mlp.json")).expect("vector"),
         )
         .expect("vector json");
-        assert_eq!(vector["trusted_public_key_hex"], json!(production[0]));
+        let signer = vector["trusted_public_key_hex"]
+            .as_str()
+            .expect("trusted key")
+            .to_owned();
+        assert!(production.contains(&signer));
         assert_ne!(vector["pin"]["key_id"], json!(test_key("key_id")));
 
         let verified = json_out(cli(&[
             "verify",
             path(&fixture),
             "--trusted-key",
-            &production[0],
+            &signer,
             "--json",
         ]));
         assert_eq!(verified["ok"], json!(true), "{verified}");

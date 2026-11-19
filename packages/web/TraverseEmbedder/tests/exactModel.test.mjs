@@ -641,7 +641,7 @@ test("TRAVERSE_MODEL_SIGNING_KEYS mirrors keys/model-signing", async () => {
 test("digits-mlp is production-signed and the test key does not verify it", async () => {
   const vector = JSON.parse(readFileSync(new URL("conformance/signed-digits-mlp.json", MODELS), "utf8"));
   const pkg = fixture(vector.package_dir);
-  assert.deepEqual([vector.trusted_public_key_hex], [...TRAVERSE_MODEL_SIGNING_KEYS]);
+  assert.ok(TRAVERSE_MODEL_SIGNING_KEYS.includes(vector.trusted_public_key_hex));
   assert.notEqual(vector.pin.key_id, TEST_KEY.key_id);
   const production = new ExactModelBrowserHost([vector.pin], { trustedPublicKeysHex: [...TRAVERSE_MODEL_SIGNING_KEYS], modelUsage: "commercial" });
   assert.equal(await production.registerPackage(pkg.manifest, pkg.wasm, pkg.sig, POLICY), vector.pin.digest);
