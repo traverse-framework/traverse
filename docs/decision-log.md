@@ -8364,7 +8364,7 @@ description to an app shell and new capabilities):
 - **Status**: Accepted
 - **Governing specs**: `1774-onnxruntime-cpu-runner-family`,
   `138-governed-exact-model-execution`
-- **Related issues**: `#1926`, `#1868`–`#1875`, `#1859`
+- **Related issues**: `#1926`, `#1928`, `#1868`–`#1875`, `#1859`
 - **Refines**: Decision 134
 
 ### Context
@@ -8465,7 +8465,7 @@ Project-wide rules for the `onnxruntime-cpu` runner family:
 ### Consequences
 
 - `#1869`–`#1875` move back to Ready once `#1926` lands the pin.
-- `#1868` adds the `runner-signing` environment and key; the maintainer
-  generates the key.
+- `#1928` adds the `runner-signing` environment, key and signing workflow;
+  the maintainer generates the key.
 - Host packages grow by their target's ORT artifact size.
 - Spec 1774 needs no amendment: these rules fill in values the spec left open.
