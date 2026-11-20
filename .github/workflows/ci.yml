@@ -696,7 +696,9 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ env.API_LEVEL }}-x86_64-google_apis
+          # #1925: bump the suffix to discard a cached AVD whose snapshot no
+          # longer matches the runner's emulator or that carries stale APKs.
+          key: avd-${{ env.API_LEVEL }}-x86_64-google_apis-v2
 
       - name: Create the emulator snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -720,7 +722,12 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: packages/kotlin/TraverseEmbedder
-          script: gradle --no-daemon :traverse-embedder:connectedDebugAndroidTest
+          # #1925: the cached data image can hold a test APK signed by an
+          # earlier runner's throwaway debug keystore, which makes the install
+          # fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE. Remove it first.
+          script: |
+            adb uninstall dev.traverse.embedder.test || true
+            gradle --no-daemon :traverse-embedder:connectedDebugAndroidTest
 
       - name: Upload instrumented test reports
         if: failure()
