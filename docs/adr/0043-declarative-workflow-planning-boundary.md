@@ -1,6 +1,7 @@
 # ADR-0043: Plan Workflows as a Deterministic, Data-Dependency-Only Reader, Never an Auto-Chooser
 
-- Status: Accepted (amended 2026-08-23 for Decision 62)
+- Status: Accepted (amended 2026-08-23 for Decision 62; amended and approved
+  2026-11-20 for Decision 136 / #1896)
 - Governing specs: `108-governed-runtime-workflow-composition`, `113-declarative-workflow-planning` (v0.2.0)
 - Related issues: #865, #1089, #1098; registry #305
 
@@ -53,6 +54,16 @@ produces a draft, not an authority. The planner is a new phase (P0) of the
 this exact gap as its own boundary.
 
 ## Consequences
+
+### Proposed Decision 136 amendment
+
+For agent-originated workflows, the agent supplies a structured target and
+reads deterministic candidates but cannot approve execution. The host renders
+the selected proposal in a local CLI prompt and issues a signed, single-use,
+digest-bound token after human confirmation. A failed execution may replan
+only the uncompleted remainder from bounded trace-bound output references;
+the host resolves authorized values locally, excludes the failed capability
+version, and requires fresh approval.
 
 A planner call against today's registry finds candidates wherever a
 capability's `outputs.schema` structurally satisfies another's
