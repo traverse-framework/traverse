@@ -194,6 +194,10 @@ required_files=(
   "scripts/fixtures/production-rights-text.test.mjs"
   "scripts/agent/sync_skills.sh"
   "scripts/agent/skills_drift_check.sh"
+  "scripts/agent/claim.sh"
+  "scripts/agent/release.sh"
+  "scripts/agent/claim_lib.sh"
+  ".agent-claim.json"
 )
 
 for file in "${required_files[@]}"; do

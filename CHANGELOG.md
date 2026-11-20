@@ -14,6 +14,13 @@
 - The speckit skills and `traverse-app-builder` now have Claude Code and
   Cursor copies too.
 
+### Shared claim and release scripts (`traverse-framework/.github#57`)
+
+- `scripts/agent/claim.sh`, `release.sh` and `claim_lib.sh` are vendored
+  unchanged from governance v1.4.0. `.agent-claim.json` holds this repo's
+  Project 1 ids. `AGENTS.md` now points at the scripts instead of listing a
+  command sequence that checked only for Claude claims.
+
 ### Conformance and tests move to `digits-mlp-1.0.1` (`#1891`, Decision 135)
 
 - The `signed-digits-mlp.json` conformance vector, and the Rust, web, Swift,
