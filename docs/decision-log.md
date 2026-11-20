@@ -8357,3 +8357,115 @@ description to an app shell and new capabilities):
   description and explicit open decisions, not only a gap list.
 - reference-apps records the #291 app-level choices (prototype shape and
   evaluation) in its own decision log.
+
+## Decision 138: The `onnxruntime-cpu` Runner Family Is Built From One Pinned ORT Release Tag, Bundled in Host Packages, and Signed With Its Own Key
+
+- **Date**: 2026-11-20
+- **Status**: Accepted
+- **Governing specs**: `1774-onnxruntime-cpu-runner-family`,
+  `138-governed-exact-model-execution`
+- **Related issues**: `#1926`, `#1868`–`#1875`, `#1859`
+- **Refines**: Decision 134
+
+### Context
+
+Spec 1774 FR-001 requires every target artifact in the runner family to carry
+an exact digest, source revision, reproducible build flags, license and
+provenance, and a fixed memory profile. Nothing recorded which ONNX Runtime
+release to use, how to build it, or what the memory profiles are, so all seven
+spikes (`#1869`–`#1875`) were blocked: choosing an artifact inside a spike
+would have been an unapproved supply-chain decision.
+
+### Decision
+
+Project-wide rules for the `onnxruntime-cpu` runner family:
+
+1. **Built from source.** Traverse CI builds every target (browser, Node,
+   Rust/native, Swift, Kotlin/Android, .NET) from upstream ORT source with
+   recorded CPU-only flags. Upstream prebuilt binaries are not used.
+2. **One revision per family release.** All six targets in a release are
+   built from the same upstream ORT source revision. A target that cannot
+   build at a new revision holds back the whole release.
+3. **Revision rule.** A release pins an upstream stable release tag
+   (`vX.Y.Z`), never a branch: the newest one that builds and passes
+   conformance on all six targets when the pin PR opens. The manifest records
+   the tag and the full commit SHA.
+4. **Reproducibility.** Each target builds with a pinned toolchain image or
+   version and recorded flags. Release CI builds twice and the digests must
+   match where the toolchain allows it (WASM, Linux). Elsewhere the recipe and
+   toolchain digests are recorded and a scheduled rebuild must match.
+5. **Memory profiles are a small shared ladder.** Packages choose one named
+   tier, the same on every target. Browser and Node WASM memory is created at
+   the tier size and does not grow. A target that cannot enforce a tier
+   rejects registration (FR-005).
+6. **First ladder:** `cpu-256m` (256 MiB), `cpu-1g` (1 GiB), `cpu-2g`
+   (2 GiB). Each ceiling covers the whole runner: weights, arena and I/O.
+   Graphs that need more than 2 GiB are out of scope for the first family.
+7. **Model packages bind a range, not a release.** A signed package names the
+   family id, a compatible semver range and a memory tier. Hosts use the
+   newest unrevoked release in range. Minor and patch releases are ORT updates
+   that pass the same conformance suite; a major release marks a behaviour or
+   op-set break. ORT updates therefore never force re-signing models.
+8. **Security updates: triage, then release and revoke.** Within 7 days of an
+   upstream ORT security advisory, record whether it affects the CPU-only
+   build. If it does, ship a family patch release at the fixed tag and revoke
+   the affected releases. If not, record the "not affected" finding on the
+   tracking issue.
+9. **Separate signing key.** The family manifest is signed with its own
+   ed25519 key in its own GitHub environment (`runner-signing`), with the
+   public key committed under `keys/` and the same approval flow as model
+   signing. The maintainer generates and holds it; agents never handle it.
+10. **Provenance record plus SBOM.** Each family release commits a provenance
+    JSON (tag, commit SHA, toolchain versions and digests, flags, per-target
+    artifact digests) and ORT's MIT `LICENSE` and third-party notices. CI emits
+    an SPDX SBOM per artifact, and the manifest binds its digest.
+11. **Bundled in host packages.** Each host package (npm, crates/native,
+    Swift, AAR, NuGet) ships its target's artifact; the family manifest lists
+    the digests. No activation-time download exists (FR-003).
+12. **Downloads happen in CI only.** CI may fetch the pinned ORT tag
+    (commit SHA verified) and pinned toolchains. Locally, agents ask the
+    maintainer before each download, naming the file, source and size.
+13. **Work split.** `#1926` pins the tag, records provenance, and adds the
+    shared build recipe, rebuild check and the browser/Node WASM builds. Each
+    native spike (`#1871`–`#1874`) adds its own target to that workflow. The
+    "all six at one tag" guarantee is complete when the last native spike
+    lands, and is checked by the release gate (FR-011).
+
+### Alternatives considered
+
+- Pinning upstream prebuilt binaries by digest: rejected because we cannot
+  reproduce them, they include non-CPU execution providers, and upstream ORT
+  Web grows memory by default, so FR-005 could not be enforced.
+- Building only the WASM targets from source: rejected because one family
+  manifest would carry two provenance models.
+- Per-target ORT revisions: rejected because op coverage and numerics would
+  drift between hosts, against FR-008.
+- Pinning the previous minor line, or choosing per PR: rejected because the
+  first lags on fixes and the second makes every pin a judgment call.
+- Bit-for-bit reproducibility on every target: rejected for now because the
+  Apple, Windows and Android toolchains make it impractical, and it would
+  block the first release for months.
+- Per-model memory ceilings, or a single ceiling: rejected because the first
+  makes the set of profiles to test unbounded, and the second wastes memory
+  on small models while capping large ones.
+- Binding a model to one exact family release: rejected because every ORT
+  update would mean re-signing every model, the cost Decision 134 already
+  rejected.
+- Rebuilding on every advisory, or only at scheduled re-pins: rejected
+  because the first churns on GPU-only advisories and the second leaves known
+  vulnerabilities live.
+- Reusing the model-signing key: rejected because one compromise would hit
+  both trust chains.
+- Fetching runners into a cache at activation, or optional add-on packages:
+  rejected because the first adds a network step and a cache-miss failure
+  mode to every host, and the second doubles the packages to version together.
+- A standing local download permission: rejected because builds belong in CI
+  and the maintainer reviews anything fetched to their machine.
+
+### Consequences
+
+- `#1869`–`#1875` move back to Ready once `#1926` lands the pin.
+- `#1868` adds the `runner-signing` environment and key; the maintainer
+  generates the key.
+- Host packages grow by their target's ORT artifact size.
+- Spec 1774 needs no amendment: these rules fill in values the spec left open.
