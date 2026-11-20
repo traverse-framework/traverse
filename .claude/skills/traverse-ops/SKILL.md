@@ -1,12 +1,13 @@
 ---
 name: traverse-ops
-description: Start or resume the standard Traverse operating model when the user says TRAVERSE OPS, asks to start Traverse ops/dev work, asks for the ready-ticket worker, PR finisher, or backlog gardener, or wants Claude Code to pick ready Project 1 work and run the Traverse coordination process. Execution only — picks up existing Ready tickets; not for planning, brainstorming, or spec creation.
+description: Start or resume the standard Traverse operating model when the user says TRAVERSE OPS, asks to start Traverse ops/dev work, asks for the ready-ticket worker, PR finisher, or backlog gardener, or wants the agent to pick ready Project 1 work and run the Traverse coordination process. Execution only — picks up existing Ready tickets; not for planning, brainstorming, or spec creation.
 ---
 
-# Traverse Ops (Claude Code)
+<!-- GENERATED from .agents/skills by scripts/agent/sync_skills.sh. Edit the source, then re-run the script. -->
 
-Use this skill when the user wants Claude Code to start or resume the standard
-Traverse operating model.
+# Traverse Ops
+
+Use this skill when the user wants this agent (Claude Code, Codex or Cursor) to start or resume the standard Traverse operating model. It is the single source for every tool; `scripts/agent/sync_skills.sh` generates the Claude Code and Cursor copies.
 
 Canonical trigger:
 
@@ -14,82 +15,67 @@ Canonical trigger:
 TRAVERSE OPS
 ```
 
-This skill is **execution-only**: it drives already-Ready Project 1 tickets
-through implementation to a PR. It is not the entry point for planning,
-brainstorming new features, defining new specs, or creating new tickets —
+This skill is **execution-only**. It drives already-Ready Project 1 tickets
+through implementation to a merged PR. It is not the entry point for planning,
+brainstorming new features, defining new specs, or creating new tickets;
 handle those as a normal conversation.
 
 ## Workflow
 
-1. Read the constitution in `traverse-framework/.github` (governance version
-   1.0.0) before implementation work.
-2. Read `AGENTS.md` and follow the agent coordination rules.
+1. Read `AGENTS.md` and follow the agent coordination rules.
+2. Read the constitution (via `traverse-framework/.github`, pinned in `.governance-version`) only when the ticket touches architecture, contracts, or versioned surfaces — lazy-read map in the org's `docs/ai-agent-hardening.md`.
 3. Inspect current GitHub and Project 1 state.
 4. Prefer finishing existing open PRs before claiming new Ready work.
-5. If no active PR needs attention, pick one Ready Project 1 issue.
-6. Before work on an issue, run the Codex pre-flight checks:
-   - issue must not have `agent:codex`
-   - no remote `codex/issue-NNN-*` branch may exist
-7. If pre-flight passes, claim the issue:
-   - add `agent:claude`
-   - set Project 1 `Status` to `In Progress`
-8. Use a dedicated `claude/issue-NNN-*` branch.
-9. Keep work scoped to the claimed issue and governing spec.
-10. Open a dedicated PR with validation evidence.
+5. Keep cycling through open PRs and Ready Project 1 issues until no actionable
+   Ready tickets remain. Do not stop after one PR, one issue, or one merge.
+6. If no active PR needs attention, pick the next Ready Project 1 issue.
+7. Before work on an issue, run `scripts/agent/claim.sh <N> <tool> --dry-run`
+   (`<tool>` is `claude`, `codex` or `cursor`). It checks that the issue is
+   Ready, carries no `agent:*` label, and has no `*/issue-<N>-*` branch or open
+   PR from any tool. If it refuses, pick another ticket.
+8. Claim with `scripts/agent/claim.sh <N> <tool>`. That adds `agent:<tool>`,
+   sets Project 1 to In Progress, and posts the audit comment.
+9. Use the branch it prints (`<tool>/issue-<N>-*`).
+10. Keep work scoped to the claimed issue and governing spec.
+11. Open a dedicated PR using the org body superset (`## Summary`, `## Governing Spec`, `## Project Item`, `## Definition of Done`, `## Validation`) with validation evidence. For full-CI PRs follow **Merge Gate** (add `needs-review`, wait for a passing review record) before squash-merge. Continue the drain loop while CI/review runs. This repo requires branches up to date with `main`: rebase when behind.
+12. The stop condition is strict: no mergeable or fixable open PRs, no Ready
+    Project 1 tickets that pass pre-flight, no uncompleted tickets carrying
+    this tool's `agent:*` label, and only explicitly blocked work remains. If a Ready ticket is
+    blocked, update its ticket/Project state with the concrete blocker before
+    continuing to the next Ready ticket.
 
-## Pre-flight and Claim Commands
+### Continuation Rule (mandatory)
 
-```bash
-# 1. Check for Codex claim
-gh issue view <NUMBER> --repo traverse-framework/Traverse --json labels
-# If labels include agent:codex → STOP; choose a different ticket.
+Do **not** end a turn after claiming a ticket, opening/queuing/rebasing a PR,
+posting a status update, or completing one ticket. Each of those is an
+intermediate state change, not a completion boundary. In the same active
+Traverse Ops run, immediately resume at workflow step 3 and take the next
+actionable operation: finish an open PR, reconcile a merged ticket, or claim
+and execute the next eligible Ready ticket.
 
-# 2. Check for Codex branch
-git ls-remote --heads origin | grep "issue-<NUMBER>-"
-# If a codex/issue-<NUMBER>-* branch exists → STOP; choose a different ticket.
+Only send a final response when the strict stop condition above has been
+verified in that same run. The final response must state which stop condition
+was met. If execution time or context is constrained, continue with the
+smallest next concrete state change rather than returning a progress-only
+message.
 
-# 3. Claim (only if pre-flight passes)
-gh issue edit <NUMBER> --repo traverse-framework/Traverse --add-label "agent:claude"
+## Gates & Failure Playbook
 
-# Get project item ID with bounded output
-gh project item-list 1 --owner traverse-framework --format json --limit 300 \
-  --jq '.items[] | select(.content.number == <NUMBER>) | .id'
-
-# Set Status → In Progress (org Project 1; it has no Agent field —
-# the agent:claude label is the ownership marker)
-gh project item-edit --project-id PVT_kwDOEbiBt84Bbyp1 \
-  --id <ITEM_ID> \
-  --field-id PVTSSF_lADOEbiBt84Bbyp1zhWglqM \
-  --single-select-option-id 47fc9ee4
-```
-
-Status option IDs for reference: Ready `f75ad846`, In Progress `47fc9ee4`,
-Done `98236657`, Blocked `294b89f5`.
+Every PR must pass the org gates `cla / cla` and `baseline / governance-baseline` plus this repo's CI. When a governance gate fails, don't debug from scratch — use the failure playbook in `traverse-framework/.github` `docs/runbook.md` (CLA `recheck` comment; re-runs pin stale gate snapshots, push a commit instead; secret-visibility check). Dependabot PRs get their bodies auto-filled by the org `dependabot-hygiene` workflow — never hand-write them; for one that predates it, comment `@dependabot rebase`, queue `gh pr merge --squash --auto`, and let CI decide.
 
 ## Token Discipline
 
-Use a lean-by-default operating style so long-running Traverse ops sessions do
-not waste context on raw logs.
+Org-canon token rules live in `traverse-framework/.github` `docs/ai-agent-hardening.md`
+(pinned via `.governance-version`): bounded `--limit` queries with server-side `--jq`,
+no raw board/CI/test log dumps, targeted diffs before large ones, short progress
+updates. Traverse-specific additions:
 
-- Prefer targeted GitHub queries over full board dumps. For Ready work, use
-  `gh project item-list 1 --owner traverse-framework --format json --limit 300 --jq '...'`
-  and return only issue number, title, labels, and item id.
-- Do not paste full `gh project item-list`, `gh pr checks --watch`, test, clippy,
-  coverage, or CI logs into the conversation. Summarize pass/fail counts and
-  only quote the failing lines needed to fix the issue.
-- Use `git diff --stat`, `git diff --name-only`, and focused file hunks before
-  large diffs. Open exact line ranges only when a decision depends on them.
-- Use `rg` with narrow patterns before broad recursive reads. Avoid reading
-  generated files, target directories, lockfile-scale artifacts, and full specs
-  unless the active issue requires them.
-- Keep progress updates short: current action, discovered blocker if any, and
-  next action. Avoid repeating unchanged state.
-- After CI starts, poll with bounded output. If checks are pending, report only
-  changed status; if a job fails, fetch that job log and extract the actionable
-  failure.
-- Prefer local reproduction of a failing gate before fetching large remote logs.
-- In final updates, include merged PRs, validations, and next recommended issue;
-  do not restate every command output.
+- After CI starts, poll with bounded output; on failure fetch only that job's log
+  and extract the actionable lines.
+- Prefer local reproduction (`cargo test`, `bash scripts/ci/spec_alignment_check.sh`)
+  before fetching large remote logs.
+- Final updates: merged PRs, validations, next recommended issue — not every
+  command output.
 
 ## Minimality Ladder
 
@@ -114,14 +100,23 @@ tickets for useful adjacent improvements instead of expanding an active slice.
 - **Backlog gardener**: audit Project 1 statuses, labels, blockers, notes, and missing tickets.
 - **Review queue**: drain `needs-review` PRs from other tools per Decision 133.
 
+## Stop Condition
 
-## Continuous Operation
+Traverse ops is a drain loop, not a single-ticket worker. Continue alternating
+between the PR finisher and Ready-ticket worker lanes until Project 1 has no
+actionable Ready work left.
 
-Keep draining the whole Ready backlog in one session — do not stop after one
-ticket. When a PR goes CI-green: follow **Merge Gate** (add `needs-review`, wait for record), then merge, mark Done,
-and immediately claim the next Ready ticket or fix the next open PR. A PR still
-running CI never blocks starting the next ticket. Only stop when no Ready issue
-is unclaimed AND every open Claude PR is merged or genuinely blocked.
+Only stop when one of these is true:
+
+- all open PRs are merged, blocked by an external dependency, or no longer
+  actionable for this tool;
+- every Ready Project 1 ticket has either been completed or moved out of Ready
+  with a concrete blocker recorded;
+- a required external permission, token, network/API quota, or user decision
+  prevents both PR finishing and Ready-ticket progress.
+
+When stopping for a blocker, report the exact blocked PR or ticket, what was
+verified, and what external action would unblock the next pass.
 
 ## Review Queue (Decision 133)
 
@@ -155,7 +150,7 @@ For a PR this tool authored that the change classifier sends to full CI:
    the record as required for merge in this skill.
 4. Dependabot and version-only release PRs are exempt; docs-only PRs are exempt
    via `pr_change_classification.sh`.
-5. Then squash-merge, set Project 1 to Done, and continue the drain loop.
+5. Then squash-merge, run `scripts/agent/release.sh <N> Done`, and continue the drain loop.
 
 Never use `--no-verify` or redirect `core.hooksPath`. First push: write the PR
 body file and push with `TRAVERSE_PR_BODY=/path/to/body.md git push -u origin HEAD`
@@ -166,7 +161,7 @@ add a symptom/cause/fix entry to `docs/agent-pitfalls.md` in the hardening PR.
 
 - Do not mark work `In Progress` unless a real dev thread has started it.
 - Do not use labels as status; Project 1 status is the actionability source of truth.
-- Do not claim work already owned by Codex.
+- Do not claim work another tool owns (`claim.sh` refuses it).
 - Do not broaden scope beyond the issue and governing spec.
 - Create future tickets for non-blocking improvements instead of expanding an active slice.
 

@@ -1,17 +1,22 @@
 ---
-name: "traverse-ops"
-description: "Start or resume the standard Traverse operating model when the user says TRAVERSE OPS, asks to start Traverse ops/dev work, asks for the ready-ticket worker, PR finisher, or backlog gardener, or wants Codex to pick ready Project 1 work and run the Traverse coordination process."
+name: traverse-ops
+description: Start or resume the standard Traverse operating model when the user says TRAVERSE OPS, asks to start Traverse ops/dev work, asks for the ready-ticket worker, PR finisher, or backlog gardener, or wants the agent to pick ready Project 1 work and run the Traverse coordination process. Execution only — picks up existing Ready tickets; not for planning, brainstorming, or spec creation.
 ---
 
 # Traverse Ops
 
-Use this skill when the user wants Codex to start or resume the standard Traverse operating model.
+Use this skill when the user wants this agent (Claude Code, Codex or Cursor) to start or resume the standard Traverse operating model. It is the single source for every tool; `scripts/agent/sync_skills.sh` generates the Claude Code and Cursor copies.
 
 Canonical trigger:
 
 ```text
 TRAVERSE OPS
 ```
+
+This skill is **execution-only**. It drives already-Ready Project 1 tickets
+through implementation to a merged PR. It is not the entry point for planning,
+brainstorming new features, defining new specs, or creating new tickets;
+handle those as a normal conversation.
 
 ## Workflow
 
@@ -22,18 +27,18 @@ TRAVERSE OPS
 5. Keep cycling through open PRs and Ready Project 1 issues until no actionable
    Ready tickets remain. Do not stop after one PR, one issue, or one merge.
 6. If no active PR needs attention, pick the next Ready Project 1 issue.
-7. Before work on an issue, run the Claude pre-flight checks from `AGENTS.md`:
-   - issue must not have `agent:claude`
-   - no remote `claude/issue-NNN-*` branch may exist
-8. If pre-flight passes, claim the issue:
-   - add `agent:codex`
-   - set Project 1 `Status` to `In Progress`
-9. Use a dedicated `codex/issue-NNN-*` branch.
+7. Before work on an issue, run `scripts/agent/claim.sh <N> <tool> --dry-run`
+   (`<tool>` is `claude`, `codex` or `cursor`). It checks that the issue is
+   Ready, carries no `agent:*` label, and has no `*/issue-<N>-*` branch or open
+   PR from any tool. If it refuses, pick another ticket.
+8. Claim with `scripts/agent/claim.sh <N> <tool>`. That adds `agent:<tool>`,
+   sets Project 1 to In Progress, and posts the audit comment.
+9. Use the branch it prints (`<tool>/issue-<N>-*`).
 10. Keep work scoped to the claimed issue and governing spec.
 11. Open a dedicated PR using the org body superset (`## Summary`, `## Governing Spec`, `## Project Item`, `## Definition of Done`, `## Validation`) with validation evidence. For full-CI PRs follow **Merge Gate** (add `needs-review`, wait for a passing review record) before squash-merge. Continue the drain loop while CI/review runs. This repo requires branches up to date with `main`: rebase when behind.
 12. The stop condition is strict: no mergeable or fixable open PRs, no Ready
-    Project 1 tickets that pass pre-flight, no uncompleted `agent:codex`
-    tickets, and only explicitly blocked work remains. If a Ready ticket is
+    Project 1 tickets that pass pre-flight, no uncompleted tickets carrying
+    this tool's `agent:*` label, and only explicitly blocked work remains. If a Ready ticket is
     blocked, update its ticket/Project state with the concrete blocker before
     continuing to the next Ready ticket.
 
@@ -102,7 +107,7 @@ actionable Ready work left.
 Only stop when one of these is true:
 
 - all open PRs are merged, blocked by an external dependency, or no longer
-  actionable for Codex;
+  actionable for this tool;
 - every Ready Project 1 ticket has either been completed or moved out of Ready
   with a concrete blocker recorded;
 - a required external permission, token, network/API quota, or user decision
@@ -143,7 +148,7 @@ For a PR this tool authored that the change classifier sends to full CI:
    the record as required for merge in this skill.
 4. Dependabot and version-only release PRs are exempt; docs-only PRs are exempt
    via `pr_change_classification.sh`.
-5. Then squash-merge, set Project 1 to Done, and continue the drain loop.
+5. Then squash-merge, run `scripts/agent/release.sh <N> Done`, and continue the drain loop.
 
 Never use `--no-verify` or redirect `core.hooksPath`. First push: write the PR
 body file and push with `TRAVERSE_PR_BODY=/path/to/body.md git push -u origin HEAD`
@@ -154,7 +159,7 @@ add a symptom/cause/fix entry to `docs/agent-pitfalls.md` in the hardening PR.
 
 - Do not mark work `In Progress` unless a real dev thread has started it.
 - Do not use labels as status; Project 1 status is the actionability source of truth.
-- Do not claim work already owned by Claude Code.
+- Do not claim work another tool owns (`claim.sh` refuses it).
 - Do not broaden scope beyond the issue and governing spec.
 - Create future tickets for non-blocking improvements instead of expanding an active slice.
 

@@ -192,6 +192,8 @@ required_files=(
   "scripts/model-signing/check-signing-scope_test.sh"
   "scripts/fixtures/production-rights-text.mjs"
   "scripts/fixtures/production-rights-text.test.mjs"
+  "scripts/agent/sync_skills.sh"
+  "scripts/agent/skills_drift_check.sh"
   "scripts/agent/claim.sh"
   "scripts/agent/release.sh"
   "scripts/agent/claim_lib.sh"
