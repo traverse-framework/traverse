@@ -38,6 +38,13 @@ other tests' processes.
 - **Snapshot cache:** `actions/cache` keeps the AVD and a boot snapshot,
   keyed by API level, ABI and target. The test step boots from it with
   `-no-snapshot-save`, so every run starts from the same clean state.
+- **Stale test APK:** the cache is saved at the end of a cache-miss run,
+  after the test APK was installed, so the cached data image keeps an APK
+  signed by that runner's throwaway debug keystore. The test step runs
+  `adb uninstall dev.traverse.embedder.test` before the Gradle task, so a new
+  keystore never hits `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (#1925). If the
+  emulator log says the snapshot is an incompatible version, bump the cache
+  key suffix to regenerate it.
 - **Quiet emulator:** headless, no audio, no camera, no boot animation,
   `swiftshader_indirect` GPU, and animations disabled for the test run.
 - **Isolation:** the Android Test Orchestrator with `clearPackageData` runs
