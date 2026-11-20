@@ -4,8 +4,9 @@ Canonical agent instructions (scope, structure, commands, style, governance) liv
 
 ## Agent Coordination
 
-Claim and release with the shared scripts, which are vendored from
-`traverse-framework/.github` v1.4.0. Don't run the steps by hand. The ids live in
+Claim and release with the shared scripts, vendored from
+`traverse-framework/.github` at the version in `.governance-version`. Don't run
+the steps by hand. The ids live in
 `.agent-claim.json`.
 
 ```bash
