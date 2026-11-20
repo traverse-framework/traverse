@@ -4,46 +4,20 @@ Canonical agent instructions (scope, structure, commands, style, governance) liv
 
 ## Agent Coordination
 
-**Before starting any work on an issue**, run these pre-flight checks:
-
-### 1. Check for Claude Code claim
-
-```bash
-gh issue view <NUMBER> --repo traverse-framework/traverse --json labels
-```
-
-If the labels include `agent:claude` → **STOP**. Report:
-> Issue #\<NUMBER\> is claimed by Claude Code. Choose a different ticket.
-
-### 2. Check for Claude Code branch
+Claim and release with the shared scripts, which are vendored from
+`traverse-framework/.github` v1.4.0. Don't run the steps by hand. The ids live in
+`.agent-claim.json`.
 
 ```bash
-git ls-remote --heads origin | grep "issue-<NUMBER>-"
+scripts/agent/claim.sh <issue> <claude|codex|cursor> --dry-run   # check only
+scripts/agent/claim.sh <issue> <claude|codex|cursor>             # claim
+scripts/agent/release.sh <issue> <Ready|Blocked|Done>            # release
 ```
 
-If a `claude/issue-<NUMBER>-*` branch exists → **STOP**. Report:
-> A Claude Code branch already exists for issue #\<NUMBER\>. Choose a different ticket.
-
-### 3. Claim the ticket (only if pre-flight passes)
-
-```bash
-# Add label (the ownership marker — the live org Project 1 has no Agent field)
-gh issue edit <NUMBER> --repo traverse-framework/traverse --add-label "agent:codex"
-
-# Get project item ID with bounded output
-# Keep Project reads in bounded pages: large `project item-list` GraphQL
-# requests can exceed GitHub's per-query cost limit even with account quota.
-gh project item-list 1 --owner traverse-framework --format json --limit 100 \
-  --jq '.items[] | select(.content.number == <NUMBER>) | .id'
-
-# Set Status → In Progress
-gh project item-edit --project-id PVT_kwDOEbiBt84Bbyp1 \
-  --id <ITEM_ID> \
-  --field-id PVTSSF_lADOEbiBt84Bbyp1zhWglqM \
-  --single-select-option-id 47fc9ee4
-```
-
-Status option IDs for reference: Ready `f75ad846`, In Progress `47fc9ee4`, Done `98236657`, Blocked `294b89f5`.
+`claim.sh` changes nothing unless the issue is open, its Project 1 status is
+Ready, it carries no `agent:*` label, and no `*/issue-<N>-*` branch or open PR
+from any tool exists. If it refuses, pick another ticket; never "help" a
+claimed one. Work on the branch it prints (`<tool>/issue-<N>-...`).
 
 ## Active Technologies
 - Rust 1.95+; host packages in TypeScript, Swift, Kotlin, and .NET + Cargo workspace, serde, semver, existing registry and embedder packages (524-production-app-readiness)
