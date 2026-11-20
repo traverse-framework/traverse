@@ -1475,7 +1475,7 @@
     },
     {
       "id": "109-runtime-workflow-proposals",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/109-runtime-workflow-proposals/spec.md",
@@ -1527,7 +1527,7 @@
     },
     {
       "id": "113-declarative-workflow-planning",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "status": "approved",
       "immutable": true,
       "path": "specs/113-declarative-workflow-planning/spec.md",

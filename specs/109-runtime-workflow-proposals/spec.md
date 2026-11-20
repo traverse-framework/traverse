@@ -2,9 +2,14 @@
 
 **Status**: Approved
 **Canonical governing ID**: `109-runtime-workflow-proposals`  
-**Version**: 0.1.0  
+**Version**: 1.1.0
 **Implements phase**: P1 of `108-governed-runtime-workflow-composition`  
 **Input**: Issue #1089; decisions on #865.
+
+**Amendment (approved 2026-11-20, version 1.0.0 -> 1.1.0, Decision 136 / #1896):**
+approval for an agent-originated proposal is a host-owned, out-of-band action.
+The initial host surface is a local CLI prompt. MCP can submit targets and
+read plans/proposals, but cannot mint or approve a token.
 
 ## Purpose
 
@@ -41,6 +46,15 @@ workflow proposal that executes as a bounded sequential DAG.
   audience, authenticated approver/principal, tenant/workspace scope, exact
   proposal and snapshot digest, permitted effects/connectors, maximum use
   count, expiry, revocation behavior, and replay prevention.
+- **FR-006b**: A host MUST render the proposal in an out-of-band approval
+  surface and mint a signed, single-use token only after authenticated human
+  confirmation. The initial surface is a local CLI prompt. No MCP command,
+  client callback, or agent may mint, approve, or clear an approval token.
+- **FR-006c**: Before executing any authorized side effect, the host MUST
+  verify the token's signature, proposal and snapshot digests, scope, expiry,
+  and permitted authority, then atomically record its nonce as consumed. A
+  missing, invalid, expired, revoked, scope-mismatched, digest-mismatched, or
+  consumed token MUST fail closed with a stable secret-free code.
 - **FR-007**: P1 MUST accept only acyclic graphs below configured node, edge,
   mapping, payload, validation-time, execution-time, and resource limits, and
   execute one node at a time in deterministic topological order.
@@ -87,6 +101,9 @@ workflow proposal that executes as a bounded sequential DAG.
    connector without declared egress authority is rejected before invocation.
 7. An expired, revoked, replayed, or differently scoped approval token is
    rejected before side effects occur.
+8. An MCP client can read an approval-required proposal but cannot mint a
+   token; a local CLI prompt mints one token after human confirmation, and a
+   second execution attempt with it is rejected as replayed.
 
 ## Out of scope
 

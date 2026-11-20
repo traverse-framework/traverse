@@ -2,9 +2,15 @@
 
 **Status**: Approved
 **Canonical governing ID**: `113-declarative-workflow-planning`
-**Version**: 0.2.0
+**Version**: 1.2.0
 **Implements phase**: P0 of `108-governed-runtime-workflow-composition` (precedes the P1 proposal-submission surface)
 **Input**: Decision 59 (`docs/decision-log.md`); traverse #1098; registry #305.
+
+**Amendment (approved 2026-11-20, version 1.1.0 -> 1.2.0, Decision 136 / #1896):**
+a failed approved workflow may be replanned only for its remaining work. Its
+completed outputs enter planning as bounded, schema-validated references bound
+to trace digests; hosts resolve authorized values locally and raw prior output
+does not enter MCP or the planner.
 
 **Amendment (2026-08-23, version 0.1.0 -> 0.2.0, approved 2026-08-23)**: implementing this
 spec's real unblock condition (registry `#305`'s backfill) surfaced a direct conflict
@@ -90,6 +96,15 @@ remain entirely owned by `109`–`112`.
   registry/manifest snapshot. It MUST NOT mutate the registry, the workflow
   catalog, or any manifest, and MUST NOT persist a candidate plan as a
   reusable workflow.
+- **FR-009**: A remainder replan MUST accept only completed-step output
+  references that are bounded, schema-validated, and bound to the completed
+  trace digest. The host resolves authorized values locally; the planner and
+  MCP surface MUST NOT receive raw secrets, credentials, or unrestricted prior
+  outputs.
+- **FR-010**: A remainder replan MUST exclude the failed capability version,
+  propose only not-yet-completed work, and require fresh out-of-band approval
+  before execution. Missing, tampered, expired, unbound, or schema-invalid
+  references MUST fail closed.
 
 ## Acceptance scenarios
 
@@ -111,6 +126,9 @@ remain entirely owned by `109`–`112`.
 5. A goal whose valid chain space exceeds the bound returns the bounded
    subset plus `plan_search_truncated: true`, never an unbounded result or
    a silent failure.
+6. After an approved step fails, a replan receives only trace-bound completed
+   output references, excludes the failed capability version, and cannot run
+   until a new approval token is minted.
 
 ## Out of scope
 
