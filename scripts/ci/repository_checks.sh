@@ -397,9 +397,17 @@ grep -q '"status": "complete"' scripts/ci/traverse_starter_example_smoke.sh
 grep -q "bash scripts/ci/runtime_home_smoke.sh" docs/local-runtime-home.md
 grep -q "label: Definition of done" .github/ISSUE_TEMPLATE/task.yml
 grep -q "label: Validation" .github/ISSUE_TEMPLATE/task.yml
-grep -q "Specs Are Versioned, Immutable, and Merge-Gating" .specify/memory/constitution.md
+# The local constitution points at the org constitution (.github#59) and keeps
+# only the Traverse-specific rules; the org principles are not copied here.
+grep -q "traverse-framework/.github" .specify/memory/constitution.md
 grep -q "Non-Functional Requirements" .specify/memory/constitution.md
 grep -q "Enterprise Quality Standards" .specify/memory/constitution.md
+grep -q "### Small, Verifiable v0.1" .specify/memory/constitution.md
+grep -q "### Product Constraints" .specify/memory/constitution.md
+if grep -q "^### I\. Capability-First Boundaries" .specify/memory/constitution.md; then
+  echo "error: .specify/memory/constitution.md copies the org constitution; keep only the pointer and Traverse-specific rules" >&2
+  exit 1
+fi
 grep -q "Non-Functional Requirements" specs/001-foundation-v0-1/spec.md
 grep -q "Non-Negotiable Quality Standards" specs/001-foundation-v0-1/spec.md
 grep -q "AI Review Process" docs/ai-review-process.md

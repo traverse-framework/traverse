@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### No second copy of the org constitution (`traverse-framework/.github#59`)
+
+- `.specify/memory/constitution.md` is now a pointer to the org constitution
+  in `traverse-framework/.github`, plus the two Traverse-specific sections it
+  had (Small, Verifiable v0.1 and Product Constraints). It no longer restates
+  the org principles or calls itself authoritative.
+- `scripts/ci/repository_checks.sh` checks for the pointer and the
+  Traverse-specific sections, and fails if the org principles are copied back.
+- `AGENTS.md` no longer writes a governance version in prose.
+
 ### One source for agent skills (`traverse-framework/.github#58`)
 
 - `.agents/skills/` is the only skill source. `scripts/agent/sync_skills.sh`
