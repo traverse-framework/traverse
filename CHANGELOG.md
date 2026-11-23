@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Speckit skills read the org constitution (#1932)
+
+- `speckit-analyze` and `speckit-plan` fetch the org constitution at the
+  pinned `.governance-version` and apply the local Traverse-Specific Rules on
+  top. They stop if the fetch fails instead of validating against the pointer.
+- `speckit-constitution` no longer treats `.specify/memory/constitution.md` as
+  a template to overwrite. It edits only the Traverse-Specific Rules section
+  and sends org-level changes to `traverse-framework/.github`.
+- `README.md` describes the file as a pointer, not a mirror.
+- `scripts/ci/repository_checks.sh` fails if the skills regress.
+
 ### No second copy of the org constitution (`traverse-framework/.github#59`)
 
 - `.specify/memory/constitution.md` is now a pointer to the org constitution

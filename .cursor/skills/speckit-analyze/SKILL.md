@@ -26,7 +26,7 @@ Identify inconsistencies, duplications, ambiguities, and underspecified items ac
 
 **STRICTLY READ-ONLY**: Do **not** modify any files. Output a structured analysis report. Offer an optional remediation plan (user must explicitly approve before any follow-up editing commands would be invoked manually).
 
-**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.analyze`.
+**Constitution Authority**: The project constitution — the org constitution in `traverse-framework/.github` at the pinned `.governance-version`, plus the Traverse-Specific Rules in `.specify/memory/constitution.md` — is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.analyze`.
 
 ## Execution Steps
 
@@ -70,7 +70,8 @@ Load only the minimal necessary context from each artifact:
 
 **From constitution:**
 
-- Load `.specify/memory/constitution.md` for principle validation
+- Load the org constitution for principle validation (`.specify/memory/constitution.md` is only a pointer to it): `gh api -H "Accept: application/vnd.github.raw" "repos/traverse-framework/.github/contents/constitution.md?ref=$(tr -d '[:space:]' < .governance-version)"`. If it cannot be fetched, stop and report that; do not validate against the pointer alone.
+- Load the `## Traverse-Specific Rules` section of `.specify/memory/constitution.md`; these rules apply in addition to the org principles
 
 ### 3. Build Semantic Models
 
