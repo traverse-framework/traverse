@@ -103,8 +103,11 @@ comments = json.load(open(comments_path))
 labels = json.loads(labels_json) if labels_json else []
 events = json.loads(events_json) if events_json else []
 
+# The record must open the comment (docs/ai-agent-hardening.md: "body starts
+# with this HTML comment header"); a header quoted later in a comment is not a
+# record. Leading whitespace is tolerated.
 header_re = re.compile(
-    r"<!--\s*traverse-review-record\s*\n"
+    r"\A\s*<!--\s*traverse-review-record\s*\n"
     r"tool:\s*(?P<tool>\S+)\s*\n"
     r"commit:\s*(?P<commit>[0-9a-fA-F]{40})\s*\n"
     r"verdict:\s*(?P<verdict>pass|changes-requested)\s*\n"
@@ -116,7 +119,7 @@ header_re = re.compile(
 matches = []
 for comment in comments:
     body = comment.get("body") or ""
-    m = header_re.search(body)
+    m = header_re.match(body)
     if not m:
         continue
     matches.append({
