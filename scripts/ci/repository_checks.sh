@@ -408,6 +408,17 @@ if grep -q "^### I\. Capability-First Boundaries" .specify/memory/constitution.m
   echo "error: .specify/memory/constitution.md copies the org constitution; keep only the pointer and Traverse-specific rules" >&2
   exit 1
 fi
+# The speckit skills read the org constitution, not the pointer alone, and
+# speckit-constitution edits only the Traverse-specific rules (#1932).
+for skill in speckit-analyze speckit-plan; do
+  grep -q "repos/traverse-framework/.github/contents/constitution.md" ".agents/skills/${skill}/SKILL.md"
+  grep -q "Traverse-Specific Rules" ".agents/skills/${skill}/SKILL.md"
+done
+grep -q "Edit only the \`## Traverse-Specific Rules\` section" .agents/skills/speckit-constitution/SKILL.md
+if grep -q "This file is a TEMPLATE" .agents/skills/speckit-constitution/SKILL.md; then
+  echo "error: speckit-constitution treats .specify/memory/constitution.md as a template and would overwrite the pointer" >&2
+  exit 1
+fi
 grep -q "Non-Functional Requirements" specs/001-foundation-v0-1/spec.md
 grep -q "Non-Negotiable Quality Standards" specs/001-foundation-v0-1/spec.md
 grep -q "AI Review Process" docs/ai-review-process.md

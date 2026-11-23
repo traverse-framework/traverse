@@ -305,7 +305,7 @@ in parallel.
 |---|---|---|
 | Claude Code | [`CLAUDE.md`](CLAUDE.md) | Project context, governance rules, speckit workflow |
 | Codex | [`AGENTS.md`](AGENTS.md) | Project context, coordination rules, speckit workflow |
-| All agents | [`.specify/memory/constitution.md`](.specify/memory/constitution.md) | Governing constitution — mirrors [`traverse-framework/.github`](https://github.com/traverse-framework/.github) at the version in [`.governance-version`](.governance-version) |
+| All agents | [`.specify/memory/constitution.md`](.specify/memory/constitution.md) | Pointer to the org constitution in [`traverse-framework/.github`](https://github.com/traverse-framework/.github) (adopted release in [`.governance-version`](.governance-version)), plus the Traverse-specific rules |
 
 Workflow: read your entry-point file → claim the ticket (check `agent:claude` /
 `agent:codex` labels and existing branches) → branch `NNN-feature-name` → write
