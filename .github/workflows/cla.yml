@@ -1,4 +1,4 @@
-# Org-wide CLA gate — see traverse-framework/.github (governance v1.0.1).
+# Org-wide CLA gate — see traverse-framework/.github; the adopted release is in .governance-version.
 name: cla
 
 on:
