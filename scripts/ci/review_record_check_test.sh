@@ -153,6 +153,39 @@ WARN_ONLY=0 assert_exit 1 run_check "$tmpdir/cr.json" | grep -q 'changes-request
 # 8. Warning mode exits 0 on missing record
 WARN_ONLY=1 assert_exit 0 run_check <(echo '[]') | grep -q 'WARN'
 
+# 9. A header that does not open the comment is not a record
+python3 - <<PY
+import json
+from pathlib import Path
+body = """Quoting the earlier review:
+
+<!-- traverse-review-record
+tool: codex
+commit: $SHA
+verdict: pass
+fallback: false
+-->
+ok"""
+Path("$tmpdir/quoted.json").write_text(json.dumps([{"body": body, "created_at": "2026-11-16T10:00:00Z"}]))
+PY
+WARN_ONLY=0 assert_exit 1 run_check "$tmpdir/quoted.json" | grep -q 'no traverse-review-record'
+
+# 10. Leading whitespace before the header is still a record
+python3 - <<PY
+import json
+from pathlib import Path
+body = """
+  <!-- traverse-review-record
+tool: codex
+commit: $SHA
+verdict: pass
+fallback: false
+-->
+ok"""
+Path("$tmpdir/ws.json").write_text(json.dumps([{"body": body, "created_at": "2026-11-16T10:00:00Z"}]))
+PY
+LABELS='[]' assert_exit 0 run_check "$tmpdir/ws.json" | grep -q 'cross-tool pass'
+
 echo "review_record_check_test: all cases passed"
 
 # Docs-only paths: same signal as full_ci=false (#1867).
