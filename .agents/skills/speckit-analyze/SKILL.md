@@ -68,7 +68,7 @@ Load only the minimal necessary context from each artifact:
 
 **From constitution:**
 
-- Load the org constitution for principle validation (`.specify/memory/constitution.md` is only a pointer to it): `gh api -H "Accept: application/vnd.github.raw" "repos/traverse-framework/.github/contents/constitution.md?ref=$(tr -d '[:space:]' < .governance-version)"`. If it cannot be fetched, stop and report that; do not validate against the pointer alone.
+- Load the org constitution for principle validation (`.specify/memory/constitution.md` is only a pointer to it): `gh api -H "Accept: application/vnd.github.raw" "repos/traverse-framework/.github/contents/constitution.md?ref=$(tr -d '[:space:]' < .governance-version)"`. If the fetch fails, stop and report it; do not validate against the pointer alone.
 - Load the `## Traverse-Specific Rules` section of `.specify/memory/constitution.md`; these rules apply in addition to the org principles
 
 ### 3. Build Semantic Models
