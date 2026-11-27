@@ -188,6 +188,8 @@ required_files=(
   "scripts/ci/publish_runtime_wasm_release_test.sh"
   "scripts/ci/checkout_target_dir.sh"
   "scripts/ci/checkout_target_dir_test.sh"
+  "scripts/ci/speckit_constitution_check.sh"
+  "scripts/ci/speckit_constitution_check_test.sh"
   "scripts/model-signing/check-signing-scope.sh"
   "scripts/model-signing/check-signing-scope_test.sh"
   "scripts/fixtures/production-rights-text.mjs"
@@ -408,17 +410,8 @@ if grep -q "^### I\. Capability-First Boundaries" .specify/memory/constitution.m
   echo "error: .specify/memory/constitution.md copies the org constitution; keep only the pointer and Traverse-specific rules" >&2
   exit 1
 fi
-# The speckit skills read the org constitution, not the pointer alone, and
-# speckit-constitution edits only the Traverse-specific rules (#1932).
-for skill in speckit-analyze speckit-plan; do
-  grep -q "repos/traverse-framework/.github/contents/constitution.md" ".agents/skills/${skill}/SKILL.md"
-  grep -q "Traverse-Specific Rules" ".agents/skills/${skill}/SKILL.md"
-done
-grep -q "Edit only the \`## Traverse-Specific Rules\` section" .agents/skills/speckit-constitution/SKILL.md
-if grep -q "This file is a TEMPLATE" .agents/skills/speckit-constitution/SKILL.md; then
-  echo "error: speckit-constitution treats .specify/memory/constitution.md as a template and would overwrite the pointer" >&2
-  exit 1
-fi
+# The speckit skills read the org constitution and stop if they cannot (#1932, #1936).
+bash scripts/ci/speckit_constitution_check.sh
 grep -q "Non-Functional Requirements" specs/001-foundation-v0-1/spec.md
 grep -q "Non-Negotiable Quality Standards" specs/001-foundation-v0-1/spec.md
 grep -q "AI Review Process" docs/ai-review-process.md
@@ -631,6 +624,9 @@ bash "$(pwd)/scripts/ci/publish_runtime_wasm_release_test.sh"
 
 echo "Running checkout_target_dir.sh fixture tests (#1801)..."
 bash "$(pwd)/scripts/ci/checkout_target_dir_test.sh"
+
+echo "Running speckit constitution check tests (#1936)..."
+bash "$(pwd)/scripts/ci/speckit_constitution_check_test.sh"
 
 echo "Running model-signing scope guard tests (Decision 135, #1891)..."
 bash "$(pwd)/scripts/model-signing/check-signing-scope_test.sh"

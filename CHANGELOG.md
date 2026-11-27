@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Speckit constitution checks name what is missing (#1936)
+
+- `speckit-constitution` now stops and reports if it cannot fetch the org
+  constitution, like `speckit-analyze` and `speckit-plan`.
+- The #1932 checks moved to `scripts/ci/speckit_constitution_check.sh`. They
+  require the `.governance-version` fetch and the stop-on-failure sentence in
+  all three skills, and each failure prints the skill and the missing text.
+  `speckit_constitution_check_test.sh` removes each guarded phrase and expects
+  the check to fail with that message.
+
 ### Speckit skills read the org constitution (#1932)
 
 - `speckit-analyze` and `speckit-plan` fetch the org constitution at the

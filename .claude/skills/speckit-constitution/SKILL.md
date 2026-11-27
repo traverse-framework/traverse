@@ -26,6 +26,7 @@ Follow this execution flow:
 
 1. Read `.specify/memory/constitution.md` and the org constitution:
    `gh api -H "Accept: application/vnd.github.raw" "repos/traverse-framework/.github/contents/constitution.md?ref=$(tr -d '[:space:]' < .governance-version)"`.
+   If the fetch fails, stop and report it: step 2 needs the org text to decide where the change belongs, and the pointer alone is not enough.
 
 2. Decide where the requested change belongs:
    - **An org principle, Non-Functional Requirement, quality standard, workflow or amendment rule** (anything in the org constitution): do NOT edit this repo. Stop and tell the user the change must be proposed in `traverse-framework/.github` through its amendment process, then adopted here by bumping `.governance-version` (a maintainer step).
